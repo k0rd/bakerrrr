@@ -31,7 +31,8 @@
     "armed_assault": 56,
     "wildlife_harassment": 2,
     "wildlife_hunting": 4,
-    "explosive_discharge": 68
+    "explosive_discharge": 68,
+    "homicide": 92
   },
   "tiers": [
     {

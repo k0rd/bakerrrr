@@ -14,6 +14,7 @@ from game.appearance_loadout import (
     tattoo_service_metadata,
 )
 from game.components import Inventory, NPCSocial, PlayerAssets, Position, VehicleState
+from game.cultivation_runtime import seed_packet_metadata
 from game.economy import item_market_bias, item_trade_pressure_bias, store_supply_profile
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor
 from game.items import ITEM_CATALOG
@@ -324,6 +325,8 @@ class TradeSystem(System):
         "leaf_clippings": 5,
         "moss_scrapings": 6,
         "vine_cuttings": 5,
+        "seed_packet": 10,
+        "plant_pot": 18,
         "herbal_poultice": 24,
         "hydrating_tonic": 20,
         "calming_tincture": 20,
@@ -1617,6 +1620,8 @@ class TradeSystem(System):
                 ("calming_tincture", 9),
                 ("mortar_kit", 5),
                 ("pruning_shears", 5),
+                ("seed_packet", 6),
+                ("plant_pot", 4),
                 ("energy_bar", 10),
                 ("mint_strip", 8),
             ),
@@ -1643,6 +1648,8 @@ class TradeSystem(System):
                 ("leaf_clippings", 3),
                 ("moss_scrapings", 3),
                 ("vine_cuttings", 3),
+                ("seed_packet", 9),
+                ("plant_pot", 6),
             ),
         },
         "soup_kitchen": {
@@ -2348,6 +2355,12 @@ class TradeSystem(System):
             seed_token = f"{self.sim.seed}:{prop['id']}:{cycle_index}:{len(entries)}"
             if item_id == TATTOO_SERVICE_ITEM_ID:
                 entry_metadata = tattoo_service_metadata(seed_token=seed_token, prop=prop)
+            elif item_id == "seed_packet":
+                entry_metadata = seed_packet_metadata(
+                    self.sim,
+                    seed_token=f"{seed_token}:{archetype}",
+                    source_kind="store_stock",
+                )
             elif is_appearance_item(item_id, item_catalog=ITEM_CATALOG):
                 entry_metadata = cosmetic_variant_metadata(
                     item_id,

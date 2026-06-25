@@ -462,13 +462,23 @@ class CriminalDriveSystem(System):
             self._advance_org_plans(organization_eid, current_tick=current_tick)
 
     def _cancel_actor_activity(self, actor_eid, *, reason):
+        assigned_rows = tuple(
+            actor_assigned_crime_plans(
+                self.sim,
+                actor_eid,
+                include_inactive=False,
+                current_tick=getattr(self.sim, "tick", 0),
+            )
+        )
         state = criminal_drive_state(self.sim, actor_eid, create=False)
+        if state is None and assigned_rows:
+            state = criminal_drive_state(self.sim, actor_eid, create=True)
         if state is None:
             return
         state.cooldown_until_tick = max(_safe_int(getattr(self.sim, "tick", 0), default=0) + 32, _safe_int(state.cooldown_until_tick, default=0))
         state.last_failure_tick = int(getattr(self.sim, "tick", 0))
         clear_criminal_drive_activity(state)
-        for row in actor_assigned_crime_plans(self.sim, actor_eid, include_inactive=False, current_tick=getattr(self.sim, "tick", 0)):
+        for row in assigned_rows:
             cancel_organization_crime_plan(
                 self.sim,
                 _safe_int(row.get("organization_eid"), default=0),

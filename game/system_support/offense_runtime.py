@@ -50,7 +50,8 @@ WILDLIFE_OFFENSE_CONTEXTS = frozenset({
     "wildlife_harassment",
     "wildlife_hunting",
 })
-VIOLENT_OFFENSE_CONTEXTS = ASSAULT_OFFENSE_CONTEXTS | frozenset({"explosive_discharge"})
+HOMICIDE_OFFENSE_CONTEXTS = frozenset({"homicide"})
+VIOLENT_OFFENSE_CONTEXTS = ASSAULT_OFFENSE_CONTEXTS | frozenset({"explosive_discharge"}) | HOMICIDE_OFFENSE_CONTEXTS
 OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS = VIOLENT_OFFENSE_CONTEXTS | frozenset({
     "trespass",
     "tamper",
@@ -71,6 +72,7 @@ DEFAULT_ACTION_OFFENSE_CONTEXT_BONUS = {
     "wildlife_harassment": 2,
     "wildlife_hunting": 4,
     "explosive_discharge": 68,
+    "homicide": 92,
 }
 
 DEFAULT_OFFENSE_TIERS = (

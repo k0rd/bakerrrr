@@ -62,6 +62,8 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "ground_item_index",
     "ground_item_order",
     "next_ground_item_order",
+    "_pending_stream_unloads",
+    "_stream_unload_flush_active",
 }
 _SKIP_SNAPSHOT_VALUE = object()
 
@@ -475,7 +477,7 @@ def snapshot_chunk_state(sim, key):
     }
 
 
-def unload_chunk_state(sim, key):
+def unload_chunk_state(sim, key, *, rebuild_indexes=True):
     key = _chunk_key(key)
     if key is None:
         return None
@@ -502,7 +504,68 @@ def unload_chunk_state(sim, key):
     sim.chunk_property_records.pop(key, None)
     sim.chunk_ground_item_records.pop(key, None)
     sim.chunk_population_records.pop(key, None)
-    if hasattr(sim, "rebuild_spatial_indexes"):
+    if rebuild_indexes and hasattr(sim, "rebuild_spatial_indexes"):
+        sim.rebuild_spatial_indexes()
+    return snapshot
+
+
+def _merge_snapshot_record_rows(existing_rows, incoming_rows):
+    merged = []
+    seen = set()
+    for row in tuple(existing_rows or ()) + tuple(incoming_rows or ()):
+        if isinstance(row, dict):
+            key = str(row.get("id", "") or "").strip()
+            if not key:
+                key = repr(sorted(row.items()))
+        else:
+            key = row
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(copy.deepcopy(row))
+    return merged
+
+
+def merge_unload_chunk_state(sim, key, *, rebuild_indexes=True):
+    key = _chunk_key(key)
+    if key is None:
+        return None
+
+    existing = sim.chunk_saved_states.get(key)
+    if not isinstance(existing, dict):
+        return unload_chunk_state(sim, key, rebuild_indexes=rebuild_indexes)
+
+    snapshot = snapshot_chunk_state(sim, key)
+    if snapshot is None:
+        sim.chunk_property_records.pop(key, None)
+        sim.chunk_ground_item_records.pop(key, None)
+        sim.chunk_population_records.pop(key, None)
+        return None
+
+    for section in ("properties", "ground_items", "entities", "stores"):
+        bucket = existing.setdefault(section, {})
+        if isinstance(bucket, dict):
+            bucket.update(copy.deepcopy(snapshot.get(section, {}) or {}))
+
+    for section in ("property_records", "ground_item_records", "population_records"):
+        existing[section] = _merge_snapshot_record_rows(
+            existing.get(section, ()),
+            snapshot.get(section, ()),
+        )
+
+    for ground_item_id in list(snapshot.get("ground_items", {}).keys()):
+        sim.ground_items.pop(ground_item_id, None)
+    for property_id in list(snapshot.get("stores", {}).keys()):
+        sim.stores.pop(property_id, None)
+    for property_id in list(snapshot.get("properties", {}).keys()):
+        sim.properties.pop(property_id, None)
+    for eid in list(snapshot.get("entities", {}).keys()):
+        sim.remove_entity(int(eid))
+
+    sim.chunk_property_records.pop(key, None)
+    sim.chunk_ground_item_records.pop(key, None)
+    sim.chunk_population_records.pop(key, None)
+    if rebuild_indexes and hasattr(sim, "rebuild_spatial_indexes"):
         sim.rebuild_spatial_indexes()
     return snapshot
 

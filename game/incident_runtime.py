@@ -10,6 +10,7 @@ from __future__ import annotations
 
 DEFAULT_INCIDENT_MERGE_RULES = {
     "action_offense": {"ticks": 6, "radius": 2},
+    "homicide": {"ticks": 18, "radius": 3},
     "property_trespass": {"ticks": 12, "radius": 1},
     "property_tamper": {"ticks": 16, "radius": 1},
     "item_stolen": {"ticks": 14, "radius": 2},
@@ -20,6 +21,7 @@ DEFAULT_INCIDENT_MERGE_RULES = {
 
 DEFAULT_INCIDENT_MAX_AGE = {
     "action_offense": 140,
+    "homicide": 420,
     "property_trespass": 180,
     "property_tamper": 240,
     "item_stolen": 260,
@@ -39,6 +41,7 @@ INCIDENT_KIND_LABELS = {
     "action_offense": "trouble",
     "camera_alert": "camera sighting",
     "disturbance": "disturbance",
+    "homicide": "homicide",
     "item_stolen": "theft",
     "property_tamper": "tampering",
     "property_trespass": "trespass",
@@ -59,6 +62,7 @@ INCIDENT_CONTEXT_LABELS = {
     "armed_assault": "armed violence",
     "contraband_use": "contraband use",
     "explosive_discharge": "explosive discharge",
+    "homicide": "homicide",
     "item_theft": "theft",
     "melee_assault": "assault",
     "not_for_sale_attempt": "testing a sale boundary",
@@ -73,6 +77,7 @@ INCIDENT_CONTEXT_ACTION_LABELS = {
     "armed_assault": "using a weapon",
     "contraband_use": "using contraband",
     "explosive_discharge": "setting off explosives",
+    "homicide": "killing someone",
     "item_theft": "taking something",
     "melee_assault": "attacking someone",
     "not_for_sale_attempt": "testing a sale boundary",
@@ -407,6 +412,8 @@ def _incident_max_propagation(kind, severity=0, *, official_reportable=False):
         base = 1
     elif kind_key == "action_offense":
         base = 1 if severity < 30 else 2
+    elif kind_key == "homicide":
+        base = 2
     elif kind_key == "property_trespass":
         base = 1 if severity < 15 else 2
     else:

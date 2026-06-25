@@ -13,7 +13,15 @@ from engine.events import Event
 from engine.visibility import has_line_of_sight
 
 from game.components import Inventory, PlayerAssets, Position
-from game.flora_runtime import flora_records_in_rect, load_flora_catalog
+from game.flora_runtime import (
+    flora_harvest_context,
+    flora_harvest_remaining,
+    flora_harvest_updates_after_pick,
+    flora_patch_harvestable,
+    flora_records_in_rect,
+    load_flora_catalog,
+    normalize_flora_harvest_state,
+)
 from game.item_semantics import identify_item_for_actor
 from game.items import ITEM_CATALOG, item_display_name
 from game.json_metadata import split_object_document
@@ -433,7 +441,7 @@ def nearest_harvestable_flora(sim, x, y, z=0, *, radius=1, preferred_dir=None, e
             target = (int(x) + dx, int(y) + dy, int(z))
     rows = []
     for record in getattr(sim, "flora_patches", {}).values() if isinstance(getattr(sim, "flora_patches", None), dict) else ():
-        if not isinstance(record, dict) or str(record.get("stage", "")).strip().lower() == "picked":
+        if not isinstance(record, dict) or not flora_patch_harvestable(record):
             continue
         rx, ry, rz = _safe_int(record.get("x"), 0), _safe_int(record.get("y"), 0), _safe_int(record.get("z"), 0)
         if rz != int(z):
@@ -456,6 +464,8 @@ def nearest_harvestable_flora(sim, x, y, z=0, *, radius=1, preferred_dir=None, e
 def _harvest_units(record, tool):
     form = str(record.get("growth_form", "") or "").strip().lower()
     base = 1
+    if form == "flower":
+        base = 2
     if form in {"shrub", "vine", "reed"}:
         base = 2
     if str(record.get("rarity", "")).strip().lower() == "rare":
@@ -490,7 +500,8 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
     if not isinstance(record, dict):
         sim.emit(Event("flora_harvest_blocked", eid=eid, flora_id=flora_id, reason="no_flora"))
         return False
-    if str(record.get("stage", "")).strip().lower() == "picked":
+    record = normalize_flora_harvest_state(record)
+    if not flora_patch_harvestable(record):
         sim.emit(Event("flora_harvest_blocked", eid=eid, flora_id=record.get("id"), plant_name=record.get("name"), reason="picked"))
         return False
     form = str(record.get("growth_form", "") or "").strip().lower()
@@ -509,10 +520,16 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         return False
     item_id = INGREDIENT_ITEM_BY_FORM.get(form, "leaf_clippings")
     plant_id = _key(record.get("plant_id"))
-    class_id = plant_chemistry_class(sim, plant_id)
-    units = _harvest_units(record, tool)
+    class_id = _key(record.get("chemistry_class")) or plant_chemistry_class(sim, plant_id)
+    harvest_context = flora_harvest_context(sim, record)
+    base_units = _harvest_units(record, tool) + int(harvest_context.get("unit_bonus", 0) or 0)
+    units = max(1, int(round(float(base_units) * float(harvest_context.get("yield_factor", 1.0) or 1.0))))
     quality_value = _safe_float(tool.get("quality"), 1.0)
     quality = "clean" if quality_value >= 1.0 else "rough"
+    if str(harvest_context.get("bloom_state")) == "closed":
+        quality = "tight"
+    elif str(harvest_context.get("bloom_state")) == "night_open" and quality_value >= 0.75:
+        quality = "bright"
     metadata = {
         "source": "flora",
         "source_context": "harvested",
@@ -521,8 +538,13 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         "growth_form": form,
         "chemistry_class": class_id,
         "harvest_method": method,
+        "plant_part": str(harvest_context.get("plant_part") or "").strip().lower(),
+        "bloom_state": str(harvest_context.get("bloom_state") or "").strip().lower(),
+        "day_phase": str(harvest_context.get("day_phase") or "").strip().lower(),
+        "harvest_hour": int(harvest_context.get("harvest_hour", 0) or 0),
         "material_units": int(units),
         "quality": quality,
+        "quality_hint": str(harvest_context.get("quality_hint") or "").strip().lower(),
         "harvested_tick": _safe_int(getattr(sim, "tick", 0), 0),
         "legal_status": "legal",
     }
@@ -543,18 +565,22 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
     if not added:
         sim.emit(Event("flora_harvest_blocked", eid=eid, flora_id=record.get("id"), plant_name=record.get("name"), reason="inventory_full"))
         return False
-    _update_flora_record(
-        sim,
-        record.get("id"),
-        {
-            "stage": "picked",
-            "harvested_by_eid": eid,
-            "harvested_tick": _safe_int(getattr(sim, "tick", 0), 0),
-            "harvest_method": method,
-            "output_item_id": item_id,
-            "output_instance_id": instance_id,
-        },
+    harvest_updates = flora_harvest_updates_after_pick(
+        record,
+        eid=eid,
+        tick=getattr(sim, "tick", 0),
+        method=method,
+        item_id=item_id,
+        instance_id=instance_id,
     )
+    updated_record = _update_flora_record(sim, record.get("id"), harvest_updates) or harvest_updates
+    try:
+        from game.cultivation_runtime import sync_cultivation_from_flora_patch
+
+        sync_cultivation_from_flora_patch(sim, updated_record)
+    except Exception:
+        pass
+    remaining_after = flora_harvest_remaining(updated_record)
     sim.emit(Event(
         "flora_harvested",
         eid=eid,
@@ -568,6 +594,15 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         output_item_id=item_id,
         output_item_name=item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG),
         output_instance_id=instance_id,
+        plant_part=metadata.get("plant_part"),
+        bloom_state=metadata.get("bloom_state"),
+        day_phase=metadata.get("day_phase"),
+        harvest_hour=metadata.get("harvest_hour"),
+        quality=metadata.get("quality"),
+        harvest_count=_safe_int(updated_record.get("harvest_count"), 1),
+        harvest_limit=_safe_int(updated_record.get("harvest_limit"), 1),
+        harvest_remaining=remaining_after,
+        harvest_exhausted=remaining_after <= 0,
         x=int(record.get("x", 0) or 0),
         y=int(record.get("y", 0) or 0),
         z=int(record.get("z", 0) or 0),

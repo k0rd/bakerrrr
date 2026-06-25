@@ -1081,7 +1081,44 @@ class PygameView:
             116,
         )
         kind = str(kind or "flower").strip().lower()
-        if kind in {"flower", "flower_cluster"}:
+        if kind == "seedling":
+            stem_w = max(1, px // 20)
+            base_y = px - max(2, px // 6)
+            self.pygame.draw.line(overlay, stem, (px // 2, base_y), (px // 2, max(4, px // 2)), stem_w)
+            leaf_r = max(2, px // 10)
+            self.pygame.draw.ellipse(overlay, soft, (px // 2 - leaf_r * 2, px // 2 - leaf_r // 2, leaf_r * 2, leaf_r))
+            self.pygame.draw.ellipse(overlay, soft, (px // 2, px // 2 - leaf_r // 2, leaf_r * 2, leaf_r))
+            self.pygame.draw.arc(overlay, deep, (px // 3, px // 2, px // 3, px // 3), 3.1, 6.0, max(1, px // 24))
+        elif kind == "young":
+            stem_w = max(1, px // 18)
+            base_y = px - 2
+            for cx, top_y, lean in (
+                (px // 3, max(4, px // 3), -max(1, px // 12)),
+                (px // 2, max(3, px // 4), 0),
+                (px - px // 3, max(4, px // 3), max(1, px // 12)),
+            ):
+                self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 174), (px // 2, base_y), (cx + lean, top_y), stem_w)
+                self.pygame.draw.circle(overlay, soft, (cx + lean, top_y), max(1, px // 16))
+        elif kind == "withered":
+            stem_w = max(1, px // 20)
+            base_y = px - 2
+            points = ((px // 3, base_y), (px // 2, px // 2), (px - px // 4, max(4, px // 3)))
+            self.pygame.draw.lines(overlay, (frame[0], frame[1], frame[2], 150), False, points, stem_w)
+            self.pygame.draw.ellipse(overlay, (frame[0], frame[1], frame[2], 78), (px // 4, px - max(5, px // 4), px // 2, max(3, px // 6)))
+            self.pygame.draw.arc(overlay, deep, (px // 3, px // 3, px // 2, px // 2), 0.4, 2.8, max(1, px // 24))
+        elif kind in {"flower_bud", "flower_closed"}:
+            stem_w = max(1, px // 18)
+            center_x = px // 2
+            top_y = max(3, px // 3)
+            self.pygame.draw.line(overlay, stem, (center_x, px - 2), (center_x, top_y + max(2, px // 8)), stem_w)
+            bud_w = max(4, px // 4)
+            bud_h = max(5, px // 3)
+            bud_rect = self.pygame.Rect(center_x - bud_w // 2, top_y, bud_w, bud_h)
+            self.pygame.draw.ellipse(overlay, (frame[0], frame[1], frame[2], 166), bud_rect)
+            self.pygame.draw.arc(overlay, deep, bud_rect.inflate(-1, -1), 1.1, 5.1, max(1, px // 22))
+            cap_y = top_y + bud_h - max(1, px // 8)
+            self.pygame.draw.line(overlay, stem, (center_x - bud_w // 3, cap_y), (center_x + bud_w // 3, cap_y), stem_w)
+        elif kind in {"flower", "flower_cluster", "flower_night"}:
             stem_w = max(1, px // 18)
             centers = (
                 (px // 2, max(3, px // 3)),
@@ -1090,9 +1127,13 @@ class PygameView:
             ) if kind == "flower_cluster" else ((px // 2, max(3, px // 3)),)
             self.pygame.draw.line(overlay, stem, (px // 2, px - 2), (px // 2, max(3, px // 3)), stem_w)
             for cx, cy in centers:
-                r = max(2, px // 9)
-                petal_r = max(1, px // 16)
-                for dx, dy in ((0, -r), (r, 0), (0, r), (-r, 0)):
+                r = max(2, px // 8 if kind == "flower_night" else px // 9)
+                petal_r = max(1, px // 15 if kind == "flower_night" else px // 16)
+                petals = ((0, -r), (r, 0), (0, r), (-r, 0))
+                if kind == "flower_night":
+                    petals = petals + ((r - 1, -r + 1), (-r + 1, -r + 1))
+                    self.pygame.draw.circle(overlay, (soft[0], soft[1], soft[2], 42), (cx, cy), max(3, px // 4))
+                for dx, dy in petals:
                     self.pygame.draw.circle(overlay, (frame[0], frame[1], frame[2], 186), (cx + dx, cy + dy), petal_r)
                 self.pygame.draw.circle(overlay, soft, (cx, cy), max(1, px // 18))
             if kind == "flower_cluster":

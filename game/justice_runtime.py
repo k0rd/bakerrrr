@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from game.components import FinancialProfile
 
 
@@ -24,6 +26,7 @@ INCIDENT_REPEAT_COOLDOWNS = {
     "melee_assault": 16,
     "armed_assault": 18,
     "explosive_discharge": 22,
+    "homicide": 28,
 }
 
 INCIDENT_LABELS = {
@@ -36,6 +39,7 @@ INCIDENT_LABELS = {
     "melee_assault": "armed melee assault",
     "armed_assault": "armed assault",
     "explosive_discharge": "explosive discharge",
+    "homicide": "homicide",
 }
 
 
@@ -396,6 +400,8 @@ def justice_snapshot(sim, offender_eid):
             "custody_tick": -10_000,
             "held_by_eid": None,
             "latest_incident": None,
+            "incident_type_counts": {},
+            "homicide_count": 0,
             "held_property_count": 0,
             "held_property_site_id": "",
             "held_property_site_name": "",
@@ -424,6 +430,11 @@ def justice_snapshot(sim, offender_eid):
         }
     incidents = record.get("incidents", [])
     latest = incidents[-1] if incidents else None
+    incident_type_counts = Counter(
+        _text(incident.get("type")).lower()
+        for incident in incidents
+        if isinstance(incident, dict) and _text(incident.get("type"))
+    )
     tier = wanted_tier_for(record.get("active_score", 0), in_custody=bool(record.get("in_custody", False)))
     return {
         "eid": int(record["eid"]),
@@ -439,6 +450,8 @@ def justice_snapshot(sim, offender_eid):
         "custody_tick": int(record.get("custody_tick", -10_000)),
         "held_by_eid": record.get("held_by_eid"),
         "latest_incident": dict(latest) if isinstance(latest, dict) else None,
+        "incident_type_counts": dict(incident_type_counts),
+        "homicide_count": int(incident_type_counts.get("homicide", 0)),
         "held_property_count": int(sum(max(1, _safe_int(entry.get("quantity"), default=1)) for entry in record.get("held_property_entries", ()) if isinstance(entry, dict))),
         "held_property_site_id": _text(record.get("held_property_site_id")),
         "held_property_site_name": _text(record.get("held_property_site_name")),
@@ -686,6 +699,8 @@ def _incident_weight(incident_type, *, severity=0, witnessed=False):
         return min(26, 16 + (severity // 10) + witnessed_bonus)
     if incident_type == "explosive_discharge":
         return min(32, 22 + (severity // 8) + witnessed_bonus)
+    if incident_type == "homicide":
+        return min(54, 36 + (severity // 5) + witnessed_bonus)
     return min(10, 3 + (severity // 24) + witnessed_bonus)
 
 

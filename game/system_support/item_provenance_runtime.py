@@ -465,12 +465,17 @@ def match_item_against_reported_crime(sim, item_entry, *, offender_eid=None, ins
             elif source_owner_eid is not None and incident.get("owner_eid") is not None and int(source_owner_eid) == int(incident.get("owner_eid")):
                 match_kind = "reported_stolen"
         else:
-            violent = kind == "action_offense" and _text(incident.get("context")).lower() in {
-                "unarmed_assault",
-                "melee_assault",
-                "armed_assault",
-                "explosive_discharge",
-            }
+            violent = (
+                kind == "homicide"
+                or kind == "action_offense"
+                and _text(incident.get("context")).lower() in {
+                    "unarmed_assault",
+                    "melee_assault",
+                    "armed_assault",
+                    "explosive_discharge",
+                    "homicide",
+                }
+            )
             if violent:
                 if source_victim_eid is not None and incident.get("victim_eid") is not None and int(source_victim_eid) == int(incident.get("victim_eid")):
                     match_kind = "incident_evidence"

@@ -284,6 +284,7 @@ class RunEpilogueLedgerSystem(System):
             "explosive_discharge": "an explosion",
             "fire_weapon": "gunfire",
             "forced_breach": "a forced breach",
+            "homicide": "a killing",
             "melee_assault": "a melee assault",
             "melee_attack": "an assault",
             "unarmed_assault": "an assault",

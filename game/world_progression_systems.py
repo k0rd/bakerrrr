@@ -6,7 +6,7 @@ from engine.buildings import building_exterior_profile, layout_chunk_building, w
 from engine.events import Event
 from engine.fixtures import generate_chunk_fixture_records
 from engine.underground import UNDERGROUND_ACCESS_SERVICE, chunk_underground_site_plans
-from engine.persistence import restore_chunk_state, unload_chunk_state
+from engine.persistence import restore_chunk_state
 from engine.sites import layout_chunk_site, site_gameplay_profile
 from engine.systems import System
 from engine.tilemap import Tile
@@ -1157,9 +1157,6 @@ class WorldStreamingSystem(System):
             )
         if not report.get("changed"):
             return
-
-        for cx, cy in report["unloaded"]:
-            unload_chunk_state(self.sim, (cx, cy))
 
         if report["focus_changed"]:
             cx, cy = report["focus"]

@@ -93,6 +93,8 @@ def _peace_dispatch_bonus(tags):
         bonus = max(bonus, 0.18)
     if cleaned & {"explosive_discharge", "explosion", "fire"}:
         bonus = max(bonus, 0.24)
+    if cleaned & {"homicide", "death"}:
+        bonus = max(bonus, 0.3)
     return bonus
 
 

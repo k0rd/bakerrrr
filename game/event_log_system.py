@@ -458,6 +458,12 @@ class EventLogSystem(System):
         self.sim.events.subscribe("hunting_carcass_blocked", self.on_hunting_carcass_blocked)
         self.sim.events.subscribe("flora_harvested", self.on_flora_harvested)
         self.sim.events.subscribe("flora_harvest_blocked", self.on_flora_harvest_blocked)
+        self.sim.events.subscribe("flora_planted", self.on_flora_planted)
+        self.sim.events.subscribe("flora_planting_blocked", self.on_flora_planting_blocked)
+        self.sim.events.subscribe("flora_crossbred", self.on_flora_crossbred)
+        self.sim.events.subscribe("flora_crossbreed_blocked", self.on_flora_crossbreed_blocked)
+        self.sim.events.subscribe("potted_plant_placed", self.on_potted_plant_placed)
+        self.sim.events.subscribe("potted_plant_picked_up", self.on_potted_plant_picked_up)
         self.sim.events.subscribe("herbal_medicine_crafted", self.on_herbal_medicine_crafted)
         self.sim.events.subscribe("herbal_recipe_purchased", self.on_herbal_recipe_purchased)
         self.sim.events.subscribe("hunter_party_carcass_dressed", self.on_hunter_party_carcass_dressed)
@@ -2537,6 +2543,7 @@ class EventLogSystem(System):
         output_name = str(event.data.get("output_item_name") or "plant material").strip() or "plant material"
         units = int(event.data.get("material_units", 1) or 1)
         method = str(event.data.get("harvest_method") or "harvest").replace("_", " ").strip()
+        plant_part = str(event.data.get("plant_part") or "").replace("_", " ").strip().lower()
         tool_id = str(event.data.get("tool_item_id") or "").strip().lower()
         if tool_id:
             tool_name = item_display_name(tool_id, item_catalog=ITEM_CATALOG)
@@ -2545,9 +2552,21 @@ class EventLogSystem(System):
             tool_phrase = " by hand"
         else:
             tool_phrase = ""
+        exhausted = bool(event.data.get("harvest_exhausted"))
+        remaining = int(event.data.get("harvest_remaining", 0) or 0)
+        if exhausted:
+            tail = " The patch is picked over now."
+        elif remaining > 0:
+            tail = f" The patch still has {remaining} small cut{'s' if remaining != 1 else ''} left."
+        else:
+            tail = ""
+        if plant_part and plant_part not in {"plant material", "leaf", "open blossom"}:
+            output_phrase = f"{plant_part} as {output_name}"
+        else:
+            output_phrase = output_name
         _log_player_feedback(
             self.sim,
-            f"You {method} {plant_name}{tool_phrase} and pack {output_name} ({units} unit{'s' if units != 1 else ''}).",
+            f"You {method} {plant_name}{tool_phrase} and pack {output_phrase} ({units} unit{'s' if units != 1 else ''}).{tail}",
             kind="craft",
         )
 
@@ -2570,6 +2589,84 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, "No room for the plant material. Free up space and try again.", kind="craft")
             return
         _log_player_feedback(self.sim, "That plant cannot be harvested right now.", kind="craft")
+
+    def on_flora_planted(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        plant_name = str(event.data.get("plant_name") or "plant").strip() or "plant"
+        container = str(event.data.get("container_kind") or "ground").replace("_", " ").strip() or "ground"
+        failed = bool(event.data.get("failed"))
+        if failed:
+            _log_player_feedback(
+                self.sim,
+                f"You plant {plant_name}, but this place is wrong for it. The start is already withering.",
+                kind="craft",
+            )
+            return
+        if container == "pot":
+            _log_player_feedback(self.sim, f"You settle {plant_name} into a plant pot.", kind="craft")
+        elif container == "planter":
+            _log_player_feedback(self.sim, f"You plant {plant_name} in the planter.", kind="craft")
+        else:
+            _log_player_feedback(self.sim, f"You plant {plant_name} in the ground.", kind="craft")
+
+    def on_flora_planting_blocked(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        reason = str(event.data.get("reason", "blocked") or "blocked").strip().lower()
+        plant_name = str(event.data.get("plant_name") or "that plant").strip() or "that plant"
+        container = str(event.data.get("container_kind") or "").replace("_", " ").strip()
+        if reason == "wrong_container":
+            _log_player_feedback(self.sim, f"{plant_name} will not take in a pot. Try a planter or suitable ground.", kind="craft")
+        elif reason == "no_empty_pot":
+            _log_player_feedback(self.sim, f"You need an empty plant pot for {plant_name}.", kind="craft")
+        elif reason == "bad_ground":
+            _log_player_feedback(self.sim, "That ground will not take a planting.", kind="craft")
+        elif reason == "consume_failed":
+            _log_player_feedback(self.sim, f"{plant_name} would not leave your pack cleanly.", kind="craft")
+        elif reason == "no_target":
+            _log_player_feedback(self.sim, "Aim at a planter or open ground, or carry an empty plant pot.", kind="craft")
+        else:
+            target = f" in the {container}" if container else ""
+            _log_player_feedback(self.sim, f"You cannot plant {plant_name}{target} right now.", kind="craft")
+
+    def on_flora_crossbred(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        pollen = str(event.data.get("pollen_plant_name") or "one plant").strip() or "one plant"
+        target = str(event.data.get("target_plant_name") or "the other").strip() or "the other"
+        output = str(event.data.get("output_item_name") or "hybrid seed packet").strip() or "hybrid seed packet"
+        _log_player_feedback(
+            self.sim,
+            f"You dust {target} with {pollen} and collect {output}.",
+            kind="craft",
+        )
+
+    def on_flora_crossbreed_blocked(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        reason = str(event.data.get("reason", "blocked") or "blocked").strip().lower()
+        target = str(event.data.get("target_name") or "that plant").strip() or "that plant"
+        if reason == "target_not_open":
+            _log_player_feedback(self.sim, f"{target} is not open enough to take pollen right now.", kind="craft")
+        elif reason == "incompatible":
+            _log_player_feedback(self.sim, f"The pollen will not take on {target}.", kind="craft")
+        elif reason == "spent_fertility":
+            _log_player_feedback(self.sim, f"{target} has no fertile blooms left.", kind="craft")
+        elif reason == "inventory_full":
+            _log_player_feedback(self.sim, "No room for the seed packet. Free up space and try again.", kind="craft")
+        else:
+            _log_player_feedback(self.sim, "That cross will not take right now.", kind="craft")
+
+    def on_potted_plant_placed(self, event):
+        if event.data.get("eid") == self.player_eid:
+            item_name = str(event.data.get("item_name") or "potted plant").strip() or "potted plant"
+            _log_player_feedback(self.sim, f"Set down {item_name}.", kind="interaction")
+
+    def on_potted_plant_picked_up(self, event):
+        if event.data.get("eid") == self.player_eid:
+            item_name = str(event.data.get("item_name") or "potted plant").strip() or "potted plant"
+            _log_player_feedback(self.sim, f"Picked up {item_name}. Growth pauses while you carry it.", kind="pickup")
 
     def on_herbal_medicine_crafted(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -6604,6 +6701,8 @@ class EventLogSystem(System):
         contraband_count = int(event.data.get("contraband_item_count", 0) or 0)
         stolen_count = int(event.data.get("stolen_item_count", 0) or 0)
         evidence_surcharge = int(event.data.get("evidence_surcharge", 0) or 0)
+        homicide_surcharge = int(event.data.get("homicide_surcharge", 0) or 0)
+        homicide_count = int(event.data.get("homicide_count", 0) or 0)
         weapon_count = int(event.data.get("weapon_item_count", 0) or 0)
         match_labels = [str(label).strip() for label in list(event.data.get("incident_match_labels", ()) or ()) if str(label).strip()]
         posture_label = str(event.data.get("protective_posture_label", "") or "").strip()
@@ -6652,6 +6751,9 @@ class EventLogSystem(System):
                 summary += f" Base fine {base_fine}c."
         if evidence_surcharge > 0:
             summary += f" Evidence surcharge {evidence_surcharge}c."
+        if homicide_surcharge > 0:
+            count_text = f" for {homicide_count} homicide record(s)" if homicide_count > 0 else ""
+            summary += f" Homicide penalty {homicide_surcharge}c{count_text}."
         if restitution_due > 0:
             site_word = "site" if restitution_property_count == 1 else "sites"
             summary += f" Restitution {restitution_due}c across {restitution_property_count} damaged {site_word}."

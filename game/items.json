@@ -3872,6 +3872,33 @@
     "legal_status": "legal",
     "effects": []
   },
+  "seed_packet": {
+    "name": "Seed Packet",
+    "glyph": "'",
+    "stack_max": 1,
+    "tags": [
+      "cultivation",
+      "seed",
+      "plantable",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "plant_pot": {
+    "name": "Plant Pot",
+    "glyph": "o",
+    "stack_max": 1,
+    "inventory_slot_cost": 1,
+    "tags": [
+      "cultivation",
+      "container",
+      "plant_pot",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
   "emergency_blanket": {
     "name": "Emergency Blanket",
     "glyph": "{",

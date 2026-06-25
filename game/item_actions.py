@@ -50,6 +50,7 @@ from game.system_support.item_provenance_runtime import (
     stamp_item_provenance,
 )
 from game.justice_dispatch_runtime import request_player_justice_dispatch
+from game.cultivation_runtime import try_use_cultivation_item
 from game.system_support.player_feedback import _log_player_feedback
 from game.skills import actor_skill
 from game.weapons import roll_weapon_instance, weapon_by_id
@@ -1208,6 +1209,18 @@ class ItemActionRuntime:
         )
         if lead_result is not None:
             return bool(lead_result)
+
+        cultivation_result = try_use_cultivation_item(
+            self.sim,
+            eid,
+            entry,
+            x,
+            y,
+            z,
+            reason=reason,
+        )
+        if cultivation_result is not None:
+            return bool(cultivation_result)
 
         effects = item_def.get("effects", [])
         if not effects:

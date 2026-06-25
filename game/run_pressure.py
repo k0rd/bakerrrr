@@ -362,6 +362,7 @@ class RunPressureSystem(System):
             "melee_assault": 3,
             "armed_assault": 4,
             "explosive_discharge": 5,
+            "homicide": 7,
             "not_for_sale_attempt": 1,
         }.get(context, 0)
 

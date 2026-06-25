@@ -39,6 +39,7 @@ VIGILANTE_RESPONSE_BASE = {
     "melee_assault": 7,
     "armed_assault": 8,
     "explosive_discharge": 10,
+    "homicide": 12,
 }
 VIGILANTE_DENIAL_TICKS = {
     "property_trespass": 150,
@@ -48,6 +49,7 @@ VIGILANTE_DENIAL_TICKS = {
     "melee_assault": 320,
     "armed_assault": 360,
     "explosive_discharge": 420,
+    "homicide": 520,
 }
 
 
@@ -332,7 +334,7 @@ class OrganizationResponseSystem(System):
                 int(denial["watchfulness"]),
             )
         state["property_denials"][property_id] = denial
-        watch_action = "deny_entry" if reason in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge"} else "deny_service"
+        watch_action = "deny_entry" if reason in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge", "homicide"} else "deny_service"
         if target_eid is not None:
             record_organization_watchlist(
                 self.sim,
@@ -451,7 +453,7 @@ class OrganizationResponseSystem(System):
         if event.data.get("offender_eid") != self.player_eid:
             return
         context = _text(event.data.get("context")).lower()
-        if context not in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge"}:
+        if context not in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge", "homicide"}:
             return
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
@@ -493,9 +495,15 @@ class OrganizationResponseSystem(System):
         elif kind == "item_stolen":
             reason = "item_stolen"
             prop = self._property_for_data(incident)
+        elif kind == "homicide":
+            reason = "homicide"
+            target_eid = incident.get("victim_eid") or incident.get("target_eid")
+            if target_eid is None or not self._target_is_inhabitant(target_eid):
+                return
+            prop = self._property_for_data(incident)
         elif kind == "action_offense":
             reason = _text(incident.get("context")).lower() or _text(incident.get("merge_subject")).split(":")[-1].lower()
-            if reason not in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge"}:
+            if reason not in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge", "homicide"}:
                 return
             target_eid = incident.get("victim_eid") or incident.get("target_eid")
             if target_eid is None or not self._target_is_inhabitant(target_eid):

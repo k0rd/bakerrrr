@@ -152,6 +152,7 @@ from game.npc_income_system import NPCIncomeSystem
 from game.objective_progress import ObjectiveProgressSystem
 from game.criminal_justice_system import CriminalJusticeSystem
 from game.trade_system import TradeSystem
+from game.cultivation_runtime import CultivationSystem
 from game.combat_systems import NPCItemUseSystem, NPCWeaponSystem, StatusEffectSystem, WeaponSystem
 from game.environment_hazard_system import EnvironmentalHazardSystem
 from game.fire_system import FireSystem
@@ -753,6 +754,7 @@ def _register_runtime_systems(sim, view, player):
     environmental_hazard_system = EnvironmentalHazardSystem(sim)
     fire_system = FireSystem(sim)
     hunting_carcass_system = HuntingCarcassSystem(sim)
+    cultivation_system = CultivationSystem(sim)
 
     property_system = PropertySystem(sim, player)
     player_business_system = PlayerBusinessSystem(sim, player)
@@ -840,6 +842,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(status_effect_system, 5)
     _live_timeskip_stride(altered_state_system, 0)
     _live_timeskip_stride(hunting_carcass_system, 0)
+    _live_timeskip_stride(cultivation_system, 120)
     _live_timeskip_stride(npc_item_use_system, 5)
     _live_timeskip_stride(npc_social_system, 10)
     _live_timeskip_stride(npc_relationship_system, 0)
@@ -895,6 +898,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(environmental_hazard_system)
     sim.register_system(fire_system)
     sim.register_system(hunting_carcass_system)
+    sim.register_system(cultivation_system)
 
     sim.register_system(property_system)
     sim.register_system(player_business_system)

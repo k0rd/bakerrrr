@@ -246,6 +246,8 @@ class CriminalJusticeSystem(System):
     BOOKING_ARCHETYPES = ("jail", "courthouse")
     JUSTICE_DEBT_KEY = "justice_fines"
     EVIDENCE_SURCHARGE_PER_ITEM = 35
+    HOMICIDE_SEVERITY_SCORE = 96
+    PLAYER_HOMICIDE_BOOKING_SURCHARGE = 120
     NPC_CUSTODY_ARCHETYPES_BY_TIER = {
         "questioning": ("jail",),
         "wanted": ("jail",),
@@ -288,6 +290,7 @@ class CriminalJusticeSystem(System):
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
         self.sim.events.subscribe("action_offense", self.on_action_offense)
+        self.sim.events.subscribe("npc_killed", self.on_npc_killed)
         self.sim.events.subscribe("incident_authority_reported", self.on_incident_authority_reported)
         self.sim.events.subscribe("property_interact", self.on_property_interact)
         self.sim.events.subscribe("npc_interact", self.on_npc_interact)
@@ -451,18 +454,22 @@ class CriminalJusticeSystem(System):
             self._emit_change_events(change, source_event=source_event, reason=incident_type)
         return change
 
-    def _event_accountability(self, event, *, offender_eid=None):
+    def _event_accountability(self, event, *, offender_eid=None, allow_position_backfill=False):
         return event_observation_accountability(
             self.sim,
             event,
             offender_eid=offender_eid,
             default_channels=("actor_witness",),
             use_legacy_witness_fallback=False,
-            allow_position_backfill=False,
+            allow_position_backfill=bool(allow_position_backfill),
         )
 
-    def _event_has_justice_report_channel(self, event, *, offender_eid=None):
-        observation = self._event_accountability(event, offender_eid=offender_eid)
+    def _event_has_justice_report_channel(self, event, *, offender_eid=None, allow_position_backfill=False):
+        observation = self._event_accountability(
+            event,
+            offender_eid=offender_eid,
+            allow_position_backfill=allow_position_backfill,
+        )
         report_channels = {
             str(channel or "").strip().lower()
             for channel in tuple(observation.get("accountable_observation_channels", ()) or ())
@@ -494,7 +501,7 @@ class CriminalJusticeSystem(System):
             return True
         return offender_eid == self.player_eid
 
-    def _remember_force_context(self, offender_eid, force_read):
+    def _remember_force_context(self, offender_eid, force_read, *, data=None):
         if offender_eid is None or not isinstance(force_read, dict):
             return
         state = getattr(self.sim, "world_traits", None)
@@ -506,19 +513,30 @@ class CriminalJusticeSystem(System):
             force_state = {}
             state["justice_force_contexts"] = force_state
         payload = force_payload(force_read)
+        payload["recordable"] = bool(force_read.get("recordable", True))
+        payload["suppressed"] = bool(force_read.get("suppressed", False))
+        if isinstance(data, dict):
+            for field in ("target_eid", "victim_eid", "context", "action"):
+                value = data.get(field)
+                if value not in (None, "", ()):
+                    payload[field] = value
         payload["tick"] = int(getattr(self.sim, "tick", 0))
         force_state[str(offender_eid)] = payload
 
-    def _latest_force_context(self, offender_eid=None):
+    def _latest_force_context_row(self, offender_eid=None):
         offender_eid = self.player_eid if offender_eid is None else offender_eid
         state = getattr(self.sim, "world_traits", None)
         if not isinstance(state, dict):
-            return {"force_context": "unclear", "force_reason": "", "severity_mitigation": 0}
+            return {}
         force_state = state.get("justice_force_contexts")
         if not isinstance(force_state, dict):
-            return {"force_context": "unclear", "force_reason": "", "severity_mitigation": 0}
+            return {}
         row = force_state.get(str(offender_eid))
-        if not isinstance(row, dict):
+        return dict(row) if isinstance(row, dict) else {}
+
+    def _latest_force_context(self, offender_eid=None):
+        row = self._latest_force_context_row(offender_eid)
+        if not row:
             return {"force_context": "unclear", "force_reason": "", "severity_mitigation": 0}
         return force_payload(row)
 
@@ -559,7 +577,57 @@ class CriminalJusticeSystem(System):
             "melee_assault": "melee_assault",
             "armed_assault": "armed_assault",
             "explosive_discharge": "explosive_discharge",
+            "homicide": "homicide",
         }.get(context, context)
+
+    def _same_eid_value(self, left, right):
+        if left is None or right is None:
+            return False
+        try:
+            return int(left) == int(right)
+        except (TypeError, ValueError):
+            return str(left) == str(right)
+
+    def _homicide_force_read(self, data, offender_eid):
+        data = data if isinstance(data, dict) else {}
+        reason = str(data.get("reason", "") or "").strip().lower()
+        if "executed" in reason or "downed" in reason:
+            return {
+                "force_context": "criminal_attack",
+                "force_reason": "the victim was already downed",
+                "severity_mitigation": 0,
+                "recordable": True,
+                "suppressed": False,
+            }
+
+        target_eid = data.get("target_eid", data.get("victim_eid"))
+        latest = self._latest_force_context_row(offender_eid)
+        latest_target = latest.get("target_eid", latest.get("victim_eid"))
+        latest_context = str(latest.get("force_context", "") or "").strip().lower()
+        latest_tick = int(latest.get("tick", -10_000) or -10_000)
+        current_tick = int(getattr(self.sim, "tick", 0))
+        if (
+            latest
+            and self._same_eid_value(latest_target, target_eid)
+            and current_tick - latest_tick <= max(120, self._ticks_per_hour())
+            and latest_context in {"lawful_defense", "defense_of_property", "defense_of_other"}
+        ):
+            payload = dict(latest)
+            prior_reason = str(payload.get("force_reason", "") or "").strip()
+            payload["force_reason"] = (
+                f"{prior_reason}; the death followed the same defensive force"
+                if prior_reason
+                else "the death followed the same defensive force"
+            )
+            payload["recordable"] = bool(payload.get("recordable", False))
+            payload["suppressed"] = bool(payload.get("suppressed", True))
+            payload["severity_mitigation"] = payload.get("severity_mitigation", 1.0)
+            return payload
+
+        homicide_data = dict(data)
+        homicide_data.setdefault("context", "homicide")
+        homicide_data.setdefault("offender_eid", offender_eid)
+        return classify_lawful_force(self.sim, homicide_data, offender_eid=offender_eid)
 
     def _position_for(self, eid):
         return self.sim.ecs.get(Position).get(eid)
@@ -1397,7 +1465,11 @@ class CriminalJusticeSystem(System):
             "wanted": 1.4,
             "arrest_on_sight": 2.1,
         }.get(tier, 1.0)
-        return int(max(base, min(240, round(base + (score * per_score)))) + restitution_due)
+        return int(
+            max(base, min(240, round(base + (score * per_score))))
+            + restitution_due
+            + self._player_homicide_surcharge(snapshot)
+        )
 
     def _player_base_fine_amount(self, snapshot):
         snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -1415,17 +1487,28 @@ class CriminalJusticeSystem(System):
         }.get(tier, 1.0)
         return int(max(base, min(240, round(base + (score * per_score)))))
 
+    def _player_homicide_surcharge(self, snapshot):
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        count = max(0, int(snapshot.get("homicide_count", 0) or 0))
+        if count <= 0:
+            return 0
+        return int(min(600, count * self.PLAYER_HOMICIDE_BOOKING_SURCHARGE))
+
     def _player_penalty_breakdown(self, snapshot, *, fine_due=0, fine_result=None, evidence_surcharge=0, multiplier=1.0, disposition=""):
         snapshot = snapshot if isinstance(snapshot, dict) else {}
         fine_result = fine_result if isinstance(fine_result, dict) else {}
         base_fine = int(self._player_base_fine_amount(snapshot))
         restitution_due = max(0, int(snapshot.get("restitution_due", 0) or 0))
+        homicide_count = max(0, int(snapshot.get("homicide_count", 0) or 0))
+        homicide_surcharge = int(self._player_homicide_surcharge(snapshot))
         fine_due = int(max(0, fine_due or 0))
         return {
             "disposition": str(disposition or "").strip().lower(),
             "base_fine": int(base_fine),
             "fine_multiplier": float(round(float(multiplier or 0.0), 3)),
             "restitution_due": int(restitution_due),
+            "homicide_count": int(homicide_count),
+            "homicide_surcharge": int(homicide_surcharge),
             "evidence_surcharge": int(max(0, evidence_surcharge or 0)),
             "fine_due": int(fine_due),
             "fine_paid": int(fine_result.get("fine_paid", 0) or 0),
@@ -3317,6 +3400,11 @@ class CriminalJusticeSystem(System):
             restitution_due = int(max(0, restitution_due or 0))
             if restitution_due > 0:
                 penalty_parts.append(f"{restitution_due}c restitution")
+            homicide_surcharge = int(max(0, penalty_breakdown.get("homicide_surcharge", 0) or 0))
+            homicide_count = int(max(0, penalty_breakdown.get("homicide_count", 0) or 0))
+            if homicide_surcharge > 0:
+                count_text = f" for {homicide_count} homicide record(s)" if homicide_count > 0 else ""
+                penalty_parts.append(f"{homicide_surcharge}c homicide penalty{count_text}")
             evidence_surcharge = int(max(0, evidence_surcharge or 0))
             if evidence_surcharge > 0:
                 penalty_parts.append(f"{evidence_surcharge}c evidence surcharge")
@@ -3440,6 +3528,8 @@ class CriminalJusticeSystem(System):
         stolen_intent_counts = dict(inspection.get("stolen_intent_counts", {}) or {}) if isinstance(inspection, dict) else {}
         force_context = self._force_event_payload(self.player_eid)
         evidence_surcharge = int(self._inspection_evidence_surcharge(inspection))
+        homicide_surcharge = int(self._player_homicide_surcharge(snapshot))
+        homicide_count = int(max(0, snapshot.get("homicide_count", 0) or 0))
         protective = (
             local_protective_pressure_snapshot(
                 self.sim,
@@ -3506,6 +3596,8 @@ class CriminalJusticeSystem(System):
             fine_due=int(fine_due),
             restitution_due=int(restitution_due),
             restitution_property_count=int(restitution_property_count),
+            homicide_count=int(homicide_count),
+            homicide_surcharge=int(homicide_surcharge),
             fine_paid=int(fine_result.get("fine_paid", 0) or 0),
             cash_fine_paid=int(fine_result.get("cash_fine_paid", 0) or 0),
             wallet_fine_paid=int(fine_result.get("wallet_fine_paid", 0) or 0),
@@ -3699,7 +3791,7 @@ class CriminalJusticeSystem(System):
         severity = int(event.data.get("offense_score", 0) or 0)
         if context in VIOLENT_OFFENSE_CONTEXTS:
             force_read = classify_lawful_force(self.sim, event.data, offender_eid=offender_eid)
-            self._remember_force_context(offender_eid, force_read)
+            self._remember_force_context(offender_eid, force_read, data=event.data)
             self.sim.emit(Event(
                 "justice_force_classified",
                 eid=offender_eid,
@@ -3722,6 +3814,57 @@ class CriminalJusticeSystem(System):
             y=event.data.get("y"),
             witnessed=True,
             note=f"{str(event.data.get('action', 'action') or '').strip().lower()}/{context}/{(force_read or {}).get('force_context', '')}".strip("/"),
+        )
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
+
+    def on_npc_killed(self, event):
+        if isinstance(event.data.get("animal_payload"), dict) and event.data.get("animal_payload"):
+            return
+        offender_eid = event.data.get("offender_eid", event.data.get("source_eid"))
+        if offender_eid is None:
+            return
+        event.data.setdefault("offender_eid", offender_eid)
+        event.data.setdefault("victim_eid", event.data.get("target_eid"))
+        event.data.setdefault("context", "homicide")
+        event.data.setdefault("action", "homicide")
+        observation = self._event_accountability(
+            event,
+            offender_eid=offender_eid,
+            allow_position_backfill=True,
+        )
+        if not bool(observation.get("has_accountable_observation")):
+            return
+        if not self._event_has_justice_report_channel(
+            event,
+            offender_eid=offender_eid,
+            allow_position_backfill=True,
+        ):
+            return
+        force_read = self._homicide_force_read(event.data, offender_eid)
+        self._remember_force_context(offender_eid, force_read, data=event.data)
+        self.sim.emit(Event(
+            "justice_force_classified",
+            eid=offender_eid,
+            action="homicide",
+            context="homicide",
+            recordable=bool(force_read.get("recordable", True)),
+            suppressed=bool(force_read.get("suppressed", False)),
+            **force_payload(force_read),
+        ))
+        severity = mitigated_force_severity(self.HOMICIDE_SEVERITY_SCORE, force_read)
+        if severity <= 0:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"), field="justice_force_reviewed")
+            return
+        change = self._record_incident(
+            offender_eid,
+            incident_type="homicide",
+            severity=severity,
+            source_event="npc_killed",
+            x=event.data.get("x"),
+            y=event.data.get("y"),
+            witnessed=True,
+            note=f"homicide/{str(event.data.get('target_name', '') or '').strip()}/{str(event.data.get('reason', '') or '').strip().lower()}/{force_read.get('force_context', '')}".strip("/"),
         )
         if change is not None:
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
@@ -3801,6 +3944,39 @@ class CriminalJusticeSystem(System):
                 witnessed=True,
                 note=str(incident.get("note", incident.get("item_name", "item")) or "item").strip(),
             )
+        elif incident_kind == "homicide":
+            homicide_data = dict(incident)
+            homicide_data.setdefault("context", "homicide")
+            homicide_data.setdefault("action", "homicide")
+            homicide_data.setdefault("target_eid", incident.get("victim_eid"))
+            force_read = self._homicide_force_read(homicide_data, offender_eid)
+            self._remember_force_context(offender_eid, force_read, data=homicide_data)
+            self.sim.emit(Event(
+                "justice_force_classified",
+                eid=offender_eid,
+                action="homicide",
+                context="homicide",
+                recordable=bool(force_read.get("recordable", True)),
+                suppressed=bool(force_read.get("suppressed", False)),
+                **force_payload(force_read),
+            ))
+            effective_severity = mitigated_force_severity(
+                max(self.HOMICIDE_SEVERITY_SCORE, severity_score),
+                force_read,
+            )
+            if effective_severity <= 0:
+                self._mark_incident_accounted(incident.get("id"), field="justice_force_reviewed")
+                return
+            change = self._record_incident(
+                offender_eid,
+                incident_type="homicide",
+                severity=effective_severity,
+                source_event="npc_killed",
+                x=incident.get("x"),
+                y=incident.get("y"),
+                witnessed=True,
+                note=f"homicide/{str(incident.get('victim_name', incident.get('target_name', '')) or '').strip()}/{force_read.get('force_context', '')}".strip("/"),
+            )
         elif incident_kind == "action_offense":
             context = str(incident.get("context", "") or "").strip().lower() or str(incident.get("merge_subject", "") or "").split(":")[-1].strip().lower()
             if context not in {"contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
@@ -3809,7 +3985,7 @@ class CriminalJusticeSystem(System):
             effective_severity = severity_score
             if context in VIOLENT_OFFENSE_CONTEXTS:
                 force_read = classify_lawful_force(self.sim, incident, offender_eid=offender_eid)
-                self._remember_force_context(offender_eid, force_read)
+                self._remember_force_context(offender_eid, force_read, data=incident)
                 self.sim.emit(Event(
                     "justice_force_classified",
                     eid=offender_eid,

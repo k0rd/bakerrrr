@@ -25,6 +25,8 @@ RARITY_BASE_WEIGHTS = {
     "uncommon": 5.0,
     "rare": 1.4,
 }
+DEFAULT_START_HOUR = 9
+DEFAULT_TICKS_PER_HOUR = 600
 
 DEFAULT_GLYPH_BY_FORM = {
     "flower": "'",
@@ -75,6 +77,28 @@ SPREAD_STATES_BY_FORM = {
     "shrub": ("rooted", "rooted"),
     "fern": ("rooted", "rooted"),
 }
+DEFAULT_HARVEST_LIMIT_BY_FORM = {
+    "flower": 1,
+    "grass": 1,
+    "reed": 2,
+    "moss": 2,
+    "lichen": 2,
+    "vine": 2,
+    "shrub": 2,
+    "fern": 2,
+}
+PARTIAL_HARVEST_STAGE_BY_FORM = {
+    "reed": "clipped",
+    "moss": "scraped",
+    "lichen": "scraped",
+    "vine": "clipped",
+    "shrub": "clipped",
+    "fern": "clipped",
+}
+EXHAUSTED_FLORA_STAGES = frozenset(("picked", "picked_over", "spent", "exhausted", "fruitless"))
+IMMATURE_FLORA_STAGES = frozenset(("seeded", "sprouting", "young"))
+FAILED_FLORA_STAGES = frozenset(("withering", "failed"))
+NIGHT_BLOOM_TAGS = frozenset(("night_bloom", "night_blooming", "moon", "lantern"))
 
 
 def _str_key(value, fallback=""):
@@ -119,6 +143,97 @@ def _normalize_string_tuple(value):
 
 def _normalize_dict(value):
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def flora_world_hour(sim):
+    world_traits = getattr(sim, "world_traits", {}) if sim is not None else {}
+    clock = world_traits.get("clock", {}) if isinstance(world_traits, dict) else {}
+    if not isinstance(clock, dict):
+        clock = {}
+    start_hour = _safe_int(clock.get("start_hour"), DEFAULT_START_HOUR)
+    ticks_per_hour = max(60, _safe_int(clock.get("ticks_per_hour"), DEFAULT_TICKS_PER_HOUR))
+    return (start_hour + (_safe_int(getattr(sim, "tick", 0), 0) // ticks_per_hour)) % 24
+
+
+def flora_day_phase(sim):
+    hour = int(flora_world_hour(sim)) % 24
+    if 5 <= hour < 7:
+        return "dawn"
+    if 7 <= hour < 18:
+        return "day"
+    if 18 <= hour < 20:
+        return "dusk"
+    return "night"
+
+
+def _normalize_hour_window(value):
+    if isinstance(value, dict):
+        value = (value.get("start"), value.get("end"))
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        start = max(0, min(23, _safe_int(value[0], 0)))
+        end = max(0, min(23, _safe_int(value[1], 0)))
+        return (start, end)
+    return None
+
+
+def _hour_in_window(hour, window):
+    if not isinstance(window, tuple) or len(window) != 2:
+        return True
+    start, end = int(window[0]) % 24, int(window[1]) % 24
+    hour = int(hour) % 24
+    if start == end:
+        return True
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
+def _catalog_row_for_record(record):
+    if not isinstance(record, dict):
+        return {}
+    plant_id = _str_key(record.get("plant_id"))
+    if not plant_id:
+        return {}
+    return load_flora_catalog().get(plant_id, {}) or {}
+
+
+def _record_traits(record):
+    row = _catalog_row_for_record(record)
+    traits = {}
+    for source in (row.get("growth_traits"), record.get("growth_traits")):
+        if isinstance(source, dict):
+            traits.update(source)
+    return traits
+
+
+def _record_harvest_potential(record):
+    row = _catalog_row_for_record(record)
+    potential = {}
+    for source in (row.get("harvest_potential"), record.get("harvest_potential")):
+        if isinstance(source, dict):
+            potential.update(source)
+    return potential
+
+
+def _record_tags(record):
+    row = _catalog_row_for_record(record)
+    tags = set(_normalize_string_tuple(row.get("tags")))
+    tags.update(_normalize_string_tuple(record.get("tags")))
+    return tags
 
 
 def _normalize_flora_row(plant_id, raw):
@@ -411,6 +526,224 @@ def _spread_state_for(row, index):
     return root_state if int(index or 0) == 0 else child_state
 
 
+def _harvest_limit_for_form(form):
+    return int(DEFAULT_HARVEST_LIMIT_BY_FORM.get(_str_key(form), 1))
+
+
+def flora_harvest_limit(record):
+    if not isinstance(record, dict):
+        return 1
+    configured = record.get("harvest_limit")
+    if configured is None:
+        harvest_potential = record.get("harvest_potential") if isinstance(record.get("harvest_potential"), dict) else {}
+        configured = (
+            harvest_potential.get("harvest_limit")
+            or harvest_potential.get("max_harvests")
+            or harvest_potential.get("uses")
+            or harvest_potential.get("small_batch_uses")
+        )
+    default = _harvest_limit_for_form(record.get("growth_form"))
+    limit = _safe_int(configured, default)
+    if str(record.get("rarity", "")).strip().lower() == "rare":
+        limit = min(limit, default)
+    return max(1, min(limit, 4))
+
+
+def normalize_flora_harvest_state(record):
+    if not isinstance(record, dict):
+        return {}
+    row = dict(record)
+    limit = flora_harvest_limit(row)
+    stage = _str_key(row.get("stage"), "mature")
+    count = max(0, _safe_int(row.get("harvest_count"), 0))
+    if stage in FAILED_FLORA_STAGES:
+        count = max(count, limit)
+        remaining = 0
+    elif stage in EXHAUSTED_FLORA_STAGES:
+        count = max(count, limit)
+        remaining = 0
+    else:
+        remaining = row.get("harvest_remaining")
+        if remaining is None:
+            remaining = max(0, limit - count)
+        remaining = max(0, min(limit, _safe_int(remaining, limit)))
+        if remaining <= 0:
+            stage = "picked"
+            count = max(count, limit)
+    row["harvest_limit"] = int(limit)
+    row["harvest_count"] = int(min(max(count, 0), limit))
+    row["harvest_remaining"] = int(remaining)
+    row["stage"] = stage or "mature"
+    if int(remaining) <= 0 and stage not in FAILED_FLORA_STAGES:
+        row["harvest_exhausted"] = True
+        row.setdefault("exhaustion_kind", "picked_over")
+    else:
+        row["harvest_exhausted"] = False
+    return row
+
+
+def flora_patch_harvestable(record):
+    if not isinstance(record, dict):
+        return False
+    row = normalize_flora_harvest_state(record)
+    stage = _str_key(row.get("stage"))
+    if stage in EXHAUSTED_FLORA_STAGES or stage in IMMATURE_FLORA_STAGES or stage in FAILED_FLORA_STAGES:
+        return False
+    return _safe_int(row.get("harvest_remaining"), 0) > 0
+
+
+def flora_harvest_remaining(record):
+    if not isinstance(record, dict):
+        return 0
+    return max(0, _safe_int(normalize_flora_harvest_state(record).get("harvest_remaining"), 0))
+
+
+def flora_bloom_profile(record):
+    if not isinstance(record, dict):
+        record = {}
+    form = _str_key(record.get("growth_form"), "flower")
+    traits = _record_traits(record)
+    harvest_potential = _record_harvest_potential(record)
+    tags = _record_tags(record)
+    night_bloom = bool(traits.get("night_bloom") or harvest_potential.get("night_bloom") or (tags & NIGHT_BLOOM_TAGS))
+    bloom_hours = (
+        _normalize_hour_window(record.get("bloom_hours"))
+        or _normalize_hour_window(traits.get("bloom_hours"))
+        or _normalize_hour_window(harvest_potential.get("bloom_hours"))
+    )
+    if bloom_hours is None:
+        if night_bloom:
+            bloom_hours = (20, 5)
+        elif form == "vine" and "morning" in tags:
+            bloom_hours = (5, 11)
+        elif form == "flower" or "flowering" in tags:
+            bloom_hours = (6, 19)
+    closed_yield_factor = _safe_float(
+        record.get("closed_yield_factor")
+        if record.get("closed_yield_factor") is not None
+        else traits.get("closed_yield_factor", harvest_potential.get("closed_yield_factor", 0.55)),
+        0.55,
+    )
+    harvest_phase_bonus = _safe_float(
+        record.get("harvest_phase_bonus")
+        if record.get("harvest_phase_bonus") is not None
+        else traits.get("harvest_phase_bonus", harvest_potential.get("harvest_phase_bonus", 0.0)),
+        0.0,
+    )
+    return {
+        "growth_form": form,
+        "bloom_hours": bloom_hours,
+        "night_bloom": bool(night_bloom),
+        "closed_yield_factor": max(0.15, min(1.0, closed_yield_factor)),
+        "harvest_phase_bonus": max(0.0, min(2.0, harvest_phase_bonus)),
+        "tags": tuple(sorted(tags)),
+    }
+
+
+def flora_bloom_state(sim, record):
+    if not isinstance(record, dict):
+        return "dormant"
+    row = normalize_flora_harvest_state(record)
+    stage = _str_key(row.get("stage"))
+    if stage in EXHAUSTED_FLORA_STAGES or stage in IMMATURE_FLORA_STAGES or stage in FAILED_FLORA_STAGES or _safe_int(row.get("harvest_remaining"), 0) <= 0:
+        return "dormant"
+    profile = flora_bloom_profile(row)
+    form = profile.get("growth_form", "flower")
+    tags = set(profile.get("tags") or ())
+    window = profile.get("bloom_hours")
+    flowering = form == "flower" or "flowering" in tags or bool(profile.get("night_bloom"))
+    if not flowering:
+        return "open"
+    if _hour_in_window(flora_world_hour(sim), window):
+        return "night_open" if profile.get("night_bloom") else "open"
+    return "closed"
+
+
+def flora_harvest_context(sim, record):
+    row = normalize_flora_harvest_state(record if isinstance(record, dict) else {})
+    form = _str_key(row.get("growth_form"), "flower")
+    state = flora_bloom_state(sim, row)
+    phase = flora_day_phase(sim)
+    profile = flora_bloom_profile(row)
+    yield_factor = 1.0
+    unit_bonus = 0
+    quality_hint = ""
+    if form == "flower":
+        if state == "closed":
+            plant_part = "closed_bud"
+            yield_factor = float(profile.get("closed_yield_factor", 0.55) or 0.55)
+            quality_hint = "closed"
+        elif state == "night_open":
+            plant_part = "night_blossom"
+            unit_bonus = 1 if str(row.get("rarity", "")).strip().lower() == "rare" else 0
+            quality_hint = "night_bloom"
+        else:
+            plant_part = "open_blossom"
+            if phase in {"dawn", "dusk"}:
+                quality_hint = phase
+    elif form in {"moss", "lichen"} and phase in {"dawn", "night"}:
+        plant_part = f"damp_{form}"
+        unit_bonus = 1 if float(profile.get("harvest_phase_bonus", 0.0) or 0.0) >= 1.0 else 0
+        quality_hint = "damp"
+    elif form == "vine" and state == "night_open":
+        plant_part = "night_cutting"
+        unit_bonus = 1 if float(profile.get("harvest_phase_bonus", 0.0) or 0.0) >= 1.0 else 0
+        quality_hint = "night_bloom"
+    else:
+        plant_part = {
+            "grass": "leaf",
+            "reed": "reed_cutting",
+            "shrub": "leaf_cutting",
+            "fern": "fern_frond",
+            "vine": "vine_cutting",
+            "moss": "moss_scraping",
+            "lichen": "lichen_scraping",
+        }.get(form, "plant_material")
+    return {
+        "day_phase": phase,
+        "harvest_hour": int(flora_world_hour(sim)) % 24,
+        "bloom_state": state,
+        "plant_part": plant_part,
+        "yield_factor": float(yield_factor),
+        "unit_bonus": int(unit_bonus),
+        "quality_hint": quality_hint,
+    }
+
+
+def flora_harvest_updates_after_pick(record, *, eid=None, tick=0, method="", item_id="", instance_id=""):
+    row = normalize_flora_harvest_state(record)
+    limit = _safe_int(row.get("harvest_limit"), 1)
+    before = max(1, _safe_int(row.get("harvest_remaining"), limit))
+    remaining = max(0, before - 1)
+    count = min(limit, _safe_int(row.get("harvest_count"), 0) + 1)
+    form = _str_key(row.get("growth_form"), "flower")
+    if remaining <= 0:
+        stage = "picked"
+        exhausted = True
+        exhaustion_kind = "picked_over"
+    else:
+        stage = PARTIAL_HARVEST_STAGE_BY_FORM.get(form, "thinned")
+        exhausted = False
+        exhaustion_kind = ""
+    updates = {
+        "stage": stage,
+        "harvest_limit": int(limit),
+        "harvest_count": int(count),
+        "harvest_remaining": int(remaining),
+        "harvest_exhausted": bool(exhausted),
+        "harvested_by_eid": eid,
+        "harvested_tick": _safe_int(tick, 0),
+        "last_harvest_tick": _safe_int(tick, 0),
+        "harvest_method": str(method or "").strip().lower(),
+        "output_item_id": str(item_id or "").strip().lower(),
+        "output_instance_id": str(instance_id or "").strip(),
+    }
+    if exhausted:
+        updates["exhaustion_kind"] = exhaustion_kind
+        updates["exhausted_tick"] = _safe_int(tick, 0)
+    return updates
+
+
 def _flora_record_id(cx, cy, cluster_index, tile_index):
     return f"flora:{int(cx)}:{int(cy)}:{int(cluster_index)}:{int(tile_index)}"
 
@@ -418,7 +751,7 @@ def _flora_record_id(cx, cy, cluster_index, tile_index):
 def _make_flora_record(row, *, cx, cy, x, y, z, cluster_index, tile_index, rng, spread_direction=None):
     variant_seed = rng.randrange(1, 2**31 - 1)
     spread_state = _spread_state_for(row, tile_index)
-    return {
+    record = {
         "id": _flora_record_id(cx, cy, cluster_index, tile_index),
         "plant_id": row["id"],
         "name": row["name"],
@@ -437,7 +770,9 @@ def _make_flora_record(row, *, cx, cy, x, y, z, cluster_index, tile_index, rng, 
         "cluster_id": f"flora:{int(cx)}:{int(cy)}:{int(cluster_index)}",
         "tags": list(row.get("tags", ())),
         "rarity": row.get("rarity", "common"),
+        "harvest_potential": dict(row.get("harvest_potential", {}) or {}),
     }
+    return normalize_flora_harvest_state(record)
 
 
 def register_flora_patch(sim, record):
@@ -447,12 +782,13 @@ def register_flora_patch(sim, record):
     record_id = str(record.get("id") or "").strip()
     if not record_id:
         return None
-    patches[record_id] = dict(record)
+    normalized = normalize_flora_harvest_state(record)
+    patches[record_id] = dict(normalized)
     chunk = record.get("chunk")
     if isinstance(chunk, (tuple, list)) and len(chunk) == 2:
         key = (int(chunk[0]), int(chunk[1]))
         bucket = [row for row in tuple(chunk_records.get(key, ()) or ()) if str(row.get("id", "")) != record_id]
-        bucket.append(dict(record))
+        bucket.append(dict(normalized))
         chunk_records[key] = bucket
     return record_id
 
@@ -564,29 +900,70 @@ def flora_at(sim, x, y, z=0):
     return tuple(sorted(rows, key=lambda row: str(row.get("id", ""))))
 
 
-def flora_render_data(record):
+def flora_render_data(record, *, sim=None):
     if not isinstance(record, dict):
         record = {}
+    record = normalize_flora_harvest_state(record)
     growth_form = _str_key(record.get("growth_form"), "flower")
-    semantic = "flora_moss" if growth_form == "lichen" else f"flora_{growth_form}"
+    stage = _str_key(record.get("stage"))
+    exhausted = stage in EXHAUSTED_FLORA_STAGES or _safe_int(record.get("harvest_remaining"), 0) <= 0
+    failed = stage in FAILED_FLORA_STAGES
+    bloom_state = flora_bloom_state(sim, record)
+    if failed:
+        semantic = "flora_withered"
+    elif stage in {"seeded", "sprouting"}:
+        semantic = "flora_seedling"
+    elif stage == "young":
+        semantic = "flora_young"
+    elif growth_form == "lichen":
+        semantic = "flora_moss"
+    elif growth_form == "flower" and bloom_state == "closed" and not exhausted:
+        semantic = "flora_flower_bud"
+    elif growth_form == "flower" and bloom_state == "night_open" and not exhausted:
+        semantic = "flora_flower_night"
+    else:
+        semantic = f"flora_{growth_form}"
+    if failed:
+        color = "flora_withered"
+    elif stage in {"seeded", "sprouting"}:
+        color = "flora_seedling"
+    elif stage == "young":
+        color = _str_key(record.get("color_key"), "flora_leaf")
+    elif exhausted:
+        color = "flora_spent"
+    elif growth_form == "flower" and bloom_state == "closed":
+        color = "flora_flower_closed"
+    elif growth_form == "flower" and bloom_state == "night_open":
+        color = "flora_flower_night"
+    else:
+        color = _str_key(record.get("color_key"), record.get("render_key") or DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_leaf"))
+    effects = [effect for effect in (record.get("spread_state"),) if effect in {"creeping", "trailing", "flowering"}]
+    if bloom_state in {"open", "closed", "night_open"} and (growth_form == "flower" or bloom_state != "open"):
+        effects.append(f"flower_{bloom_state}" if growth_form == "flower" else bloom_state)
+    if exhausted and not failed:
+        effects.append("picked")
+    if failed:
+        effects.append("withered")
+    elif stage in IMMATURE_FLORA_STAGES:
+        effects.append(stage)
     return {
-        "glyph": str(record.get("glyph") or DEFAULT_GLYPH_BY_FORM.get(growth_form, ","))[:1],
-        "color": _str_key(record.get("color_key"), record.get("render_key") or DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_leaf")),
+        "glyph": "," if stage in {"seeded", "sprouting", "young"} else str(record.get("glyph") or DEFAULT_GLYPH_BY_FORM.get(growth_form, ","))[:1],
+        "color": color,
         "semantic_id": semantic,
         "layer": "ground_overlay",
         "priority": -20,
-        "effects": tuple(effect for effect in (record.get("spread_state"),) if effect in {"creeping", "trailing", "flowering"}),
+        "effects": tuple(dict.fromkeys(effects)),
     }
 
 
-def flora_look_text(records):
+def flora_look_text(records, *, sim=None):
     if isinstance(records, dict):
         rows = (records,)
     else:
         rows = tuple(row for row in (records or ()) if isinstance(row, dict))
     if not rows:
         return ""
-    record = rows[0]
+    record = normalize_flora_harvest_state(rows[0])
     form = _str_key(record.get("growth_form"), "flower")
     name = str(record.get("name") or record.get("plant_id") or "plant").replace("_", " ").strip()
     spread_state = _str_key(record.get("spread_state"))
@@ -602,8 +979,29 @@ def flora_look_text(records):
         "fern": "fern",
     }.get(form, "plants")
     text = f"{prefix}: {name}"
-    if _str_key(record.get("stage")) == "picked":
+    stage = _str_key(record.get("stage"))
+    if stage == "seeded":
+        text = f"seeded {prefix}: {name}"
+    elif stage == "sprouting":
+        text = f"sprouting {prefix}: {name}"
+    elif stage == "young":
+        text = f"young {prefix}: {name}"
+    elif stage in FAILED_FLORA_STAGES:
+        text = f"withering {prefix}: {name}"
+    elif stage in EXHAUSTED_FLORA_STAGES or _safe_int(record.get("harvest_remaining"), 0) <= 0:
         text = f"picked-over {prefix}: {name}"
+    elif _safe_int(record.get("harvest_count"), 0) > 0:
+        text = f"partly harvested {prefix}: {name}"
+    elif form == "flower":
+        state = flora_bloom_state(sim, record)
+        if state == "closed":
+            text = f"closed blossoms: {name}"
+        elif state == "night_open":
+            text = f"night-blooming flowers: {name}"
+        else:
+            text = f"open flowers: {name}"
+    elif flora_bloom_state(sim, record) == "night_open":
+        text = f"night-blooming {prefix}: {name}"
     if form == "vine" and spread_state == "trailing" and direction:
         text += f" trailing {direction}"
     elif form in {"moss", "lichen"} and spread_state == "creeping" and direction:

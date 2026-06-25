@@ -9,7 +9,7 @@ from .world import World, normalize_building_levels
 from .eventlog import EventLog
 from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
-from game.components import AI, CreatureIdentity, Position
+from game.components import AI, CreatureIdentity, PlayerAssets, Position
 from game.items import prepare_ground_item_stack_metadata
 from game.property_access import COMMON_AREA_ROOM_KINDS
 from game.system_support.actor_attention_runtime import actor_attention_state, warmth_protected_chunks
@@ -48,6 +48,8 @@ class Simulation:
         self.chunk_flora_records = {}
         self.chunk_population_membership = {}
         self.chunk_saved_states = {}
+        self._pending_stream_unloads = set()
+        self._stream_unload_flush_active = False
         self.chunk_entity_index = {}
         self.entity_chunk_membership = {}
         self.entity_identity_records = {}
@@ -72,6 +74,9 @@ class Simulation:
         self.next_ground_item_id = 1
         self.next_item_instance_id = 1
         self.flora_patches = {}
+        self.cultivation_records = {}
+        self.next_cultivation_id = 1
+        self.cultivation_gardener_cooldowns = {}
         self.projectiles = {}
         self.next_projectile_id = 1
         self.stores = {}
@@ -147,6 +152,10 @@ class Simulation:
             self.cache_inventories = {}
         if not isinstance(getattr(self, "chunk_population_membership", None), dict):
             self.chunk_population_membership = {}
+        if not isinstance(getattr(self, "_pending_stream_unloads", None), set):
+            self._pending_stream_unloads = set()
+        if not isinstance(getattr(self, "_stream_unload_flush_active", None), bool):
+            self._stream_unload_flush_active = False
         if not isinstance(getattr(self, "chunk_entity_index", None), dict):
             self.chunk_entity_index = {}
         if not isinstance(getattr(self, "entity_chunk_membership", None), dict):
@@ -157,6 +166,12 @@ class Simulation:
             self.flora_patches = {}
         if not isinstance(getattr(self, "chunk_flora_records", None), dict):
             self.chunk_flora_records = {}
+        if not isinstance(getattr(self, "cultivation_records", None), dict):
+            self.cultivation_records = {}
+        if not hasattr(self, "next_cultivation_id"):
+            self.next_cultivation_id = 1
+        if not isinstance(getattr(self, "cultivation_gardener_cooldowns", None), dict):
+            self.cultivation_gardener_cooldowns = {}
         if not isinstance(getattr(self, "hunting_carcasses", None), dict):
             self.hunting_carcasses = {}
         if not hasattr(self, "next_hunting_carcass_id"):
@@ -241,6 +256,8 @@ class Simulation:
         if old_chunk != new_chunk:
             self._untrack_chunk_entity(eid, chunk=old_chunk)
         self._track_chunk_entity(eid, new_chunk)
+        if old_chunk != new_chunk:
+            self.flush_stream_unloads()
 
     def _on_tilemap_remove_entity(self, eid, x, y, z=0):
         self._untrack_chunk_entity(eid, chunk=self.chunk_coords(int(x), int(y)))
@@ -605,7 +622,7 @@ class Simulation:
     def chunk_coords(self, x, y):
         return (x // self.chunk_size, y // self.chunk_size)
 
-    def stream_world(self, focus_x, focus_y):
+    def stream_world(self, focus_x, focus_y, *, manage_unloads=True):
         cx, cy = self.chunk_coords(focus_x, focus_y)
         previous_loaded = dict(getattr(self.world, "loaded_chunks", {}) or {})
         report = self.world.stream_chunks(
@@ -681,11 +698,148 @@ class Simulation:
             for key, data in self.world.loaded_chunks.items()
         }
 
+        if manage_unloads:
+            self.flush_stream_unloads(report)
+
         return report
 
     def detail_for_xy(self, x, y):
         coord = self.chunk_coords(x, y)
         return self.chunk_detail.get(coord, "unloaded")
+
+    def _managed_stream_unload_candidates(self):
+        candidates = set()
+        for source_name in (
+            "chunk_population_records",
+            "chunk_ground_item_records",
+            "chunk_property_records",
+            "chunk_entity_index",
+        ):
+            source = getattr(self, source_name, None)
+            if not isinstance(source, dict):
+                continue
+            for raw_key in tuple(source.keys()):
+                key = self._normalize_chunk_key(raw_key)
+                if key is not None:
+                    candidates.add(key)
+        return candidates
+
+    def _stream_unload_blockers(self, key):
+        key = self._normalize_chunk_key(key)
+        if key is None:
+            return ("invalid_chunk",)
+
+        loaded = getattr(getattr(self, "world", None), "loaded_chunks", {}) or {}
+        if key in loaded:
+            return ("loaded",)
+        memberships = getattr(self, "chunk_population_membership", {}) or {}
+        population_records = getattr(self, "chunk_population_records", {}) or {}
+        chunk_roster = set()
+        if isinstance(population_records, dict):
+            for raw_eid in tuple(population_records.get(key, ()) or ()):
+                try:
+                    chunk_roster.add(int(raw_eid))
+                except (TypeError, ValueError):
+                    continue
+        player_eid = getattr(self, "player_eid", None)
+        try:
+            player_eid = int(player_eid) if player_eid is not None else None
+        except (TypeError, ValueError):
+            player_eid = None
+        player_assets = self.ecs.get(PlayerAssets) if getattr(self, "ecs", None) is not None else {}
+        blockers = []
+        for eid in tuple(self.entity_ids_in_chunk(key) or ()):
+            try:
+                int_eid = int(eid)
+            except (TypeError, ValueError):
+                blockers.append(eid)
+                continue
+            if int_eid == player_eid or int_eid in player_assets:
+                blockers.append(int_eid)
+                continue
+            if memberships.get(int_eid) == key or int_eid in chunk_roster:
+                continue
+        return tuple(blockers)
+
+    def flush_stream_unloads(self, report=None):
+        if bool(getattr(self, "_stream_unload_flush_active", False)):
+            return {
+                "persisted": (),
+                "dropped": (),
+                "deferred": tuple(sorted(getattr(self, "_pending_stream_unloads", set()) or set())),
+                "merged_saved": (),
+            }
+
+        pending = getattr(self, "_pending_stream_unloads", None)
+        if not isinstance(pending, set):
+            pending = set()
+            self._pending_stream_unloads = pending
+
+        loaded = getattr(getattr(self, "world", None), "loaded_chunks", {}) or {}
+        candidates = set()
+        explicit_unloaded = set()
+        if isinstance(report, dict):
+            for raw_key in tuple(report.get("unloaded", ()) or ()):
+                key = self._normalize_chunk_key(raw_key)
+                if key is not None:
+                    explicit_unloaded.add(key)
+        candidates.update(explicit_unloaded)
+        candidates.update(pending)
+        candidates.update(
+            key
+            for key in self._managed_stream_unload_candidates()
+            if key not in loaded
+        )
+
+        persisted = []
+        dropped = []
+        deferred = []
+        merged_saved = []
+        attempted_unload = False
+        self._stream_unload_flush_active = True
+        try:
+            pending.clear()
+            if candidates:
+                from .persistence import merge_unload_chunk_state, unload_chunk_state
+
+                saved_states = getattr(self, "chunk_saved_states", {}) or {}
+                for key in sorted(candidates):
+                    if key in loaded:
+                        continue
+                    blockers = self._stream_unload_blockers(key)
+                    if blockers:
+                        pending.add(key)
+                        deferred.append(key)
+                        continue
+                    if isinstance(saved_states, dict) and key in saved_states:
+                        snapshot = merge_unload_chunk_state(self, key, rebuild_indexes=False)
+                        merged_saved.append(key)
+                    else:
+                        snapshot = unload_chunk_state(self, key, rebuild_indexes=False)
+                    attempted_unload = True
+                    if snapshot is None:
+                        dropped.append(key)
+                    else:
+                        persisted.append(key)
+            if attempted_unload and hasattr(self, "rebuild_spatial_indexes"):
+                self.rebuild_spatial_indexes()
+        finally:
+            self._stream_unload_flush_active = False
+
+        result = {
+            "persisted": tuple(sorted(persisted)),
+            "dropped": tuple(sorted(dropped)),
+            "deferred": tuple(sorted(deferred)),
+            "merged_saved": tuple(sorted(merged_saved)),
+        }
+        if isinstance(report, dict):
+            report["unloaded_persisted"] = result["persisted"]
+            report["unloaded_dropped"] = result["dropped"]
+            report["unloaded_deferred"] = result["deferred"]
+            report["unloaded_merged_saved"] = result["merged_saved"]
+            if persisted or dropped or merged_saved:
+                report["managed_unload_changed"] = True
+        return result
 
     def chunk_origin(self, cx, cy):
         return (cx * self.chunk_size, cy * self.chunk_size)

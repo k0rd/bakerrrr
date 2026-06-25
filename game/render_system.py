@@ -2472,7 +2472,7 @@ class RenderSystem(System):
                 screen_y = wy - camera_y
                 if not (0 <= screen_x < map_w and 0 <= screen_y < map_h):
                     continue
-                data = flora_render_data(flora)
+                data = flora_render_data(flora, sim=self.sim)
                 appearance = self.sim.appearance.snapshot(
                     data["glyph"],
                     color=data["color"],

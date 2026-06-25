@@ -1395,7 +1395,7 @@ class OrganizationPracticeEvolutionSystem(System):
 
     def on_action_offense(self, event):
         context = _text(event.data.get("context")).lower()
-        if context not in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge"}:
+        if context not in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge", "homicide"}:
             return
         if not self._accountable(event, offender_eid=event.data.get("offender_eid")):
             return

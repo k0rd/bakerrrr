@@ -53,6 +53,8 @@ VIOLENCE_TAGS = {
     "fire_weapon",
     "melee",
     "murder",
+    "homicide",
+    "death",
 }
 DISASTER_TAGS = {"fire", "explosion", "collapse", "toxic", "hazard", "disaster", "gas", "flood"}
 TRESPASS_TAGS = {"trespass", "forced_entry", "break_in", "break-in", "unauthorized"}

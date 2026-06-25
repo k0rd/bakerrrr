@@ -233,7 +233,7 @@ class PlayerLookRuntime:
 
         flora_rows = () if map_mode_active(self.sim) else flora_at(self.sim, x, y, z=z)
         if flora_rows:
-            flora_text = flora_look_text(flora_rows)
+            flora_text = flora_look_text(flora_rows, sim=self.sim)
             if flora_text:
                 bits.append(flora_text)
 

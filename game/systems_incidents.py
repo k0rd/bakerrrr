@@ -115,6 +115,7 @@ class IncidentKnowledgeSystem(System):
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
+        self.sim.events.subscribe("npc_killed", self.on_npc_killed)
         self.sim.events.subscribe("camera_scrutiny", self.on_camera_scrutiny)
         self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
         self.sim.events.subscribe("fire_started", self.on_fire_event)
@@ -874,6 +875,46 @@ class IncidentKnowledgeSystem(System):
         if context in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge"} and event.data.get("victim_eid") is not None:
             incident = self._capture_violent_scene_items(incident, event) or incident
             self._record_player_witnessed_area_warmth(incident, event, reason="witnessed_event", score_delta=0.85)
+        witnesses = tuple(observation.get("accountable_observer_eids", ()))
+        self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
+
+    def on_npc_killed(self, event):
+        if isinstance(event.data.get("animal_payload"), dict) and event.data.get("animal_payload"):
+            return
+        offender_eid = event.data.get("offender_eid", event.data.get("source_eid"))
+        if offender_eid is None:
+            return
+        target_eid = event.data.get("target_eid", event.data.get("victim_eid"))
+        event.data.setdefault("offender_eid", offender_eid)
+        event.data.setdefault("victim_eid", target_eid)
+        event.data.setdefault("victim_name", event.data.get("target_name"))
+        event.data.setdefault("target_eid", target_eid)
+        event.data.setdefault("context", "homicide")
+        event.data.setdefault("action", "homicide")
+        observation = event_observation_accountability(
+            self.sim,
+            event,
+            offender_eid=offender_eid,
+            default_channels=("actor_witness",),
+            use_legacy_witness_fallback=False,
+            allow_position_backfill=True,
+        )
+        event.data.setdefault("observer_eids", tuple(observation.get("observer_eids", ()) or ()))
+        event.data.setdefault("accountable_observer_eids", tuple(observation.get("accountable_observer_eids", ()) or ()))
+        event.data.setdefault("observation_channels", tuple(observation.get("observation_channels", ()) or ()))
+        victim_part = str(target_eid if target_eid is not None else event.data.get("target_name", "unknown")).strip()
+        reason = _text(event.data.get("reason")).lower()
+        tags = ("homicide", "death", "violence", reason)
+        incident = self._create_incident(
+            event,
+            kind="homicide",
+            severity=max(88, int(event.data.get("severity_score", 96) or 96)),
+            merge_subject=f"homicide:{victim_part}",
+            official_reportable=bool(observation.get("has_accountable_observation")),
+            note=f"homicide/{_text(event.data.get('target_name')) or victim_part}/{reason}".strip("/"),
+            tags=tuple(tag for tag in tags if _text(tag)),
+        )
+        self._record_player_witnessed_area_warmth(incident, event, reason="witnessed_event", score_delta=1.05)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 

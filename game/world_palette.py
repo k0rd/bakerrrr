@@ -87,6 +87,12 @@ WORLD_PALETTE: tuple[WorldPaletteRow, ...] = (
     _row("flora_flower_white", (238, 232, 214), 230, "white", attrs=("bold",), tags=("flora", "flower", "white")),
     _row("flora_flower_blue", (116, 178, 238), 117, "cyan", attrs=("bold",), tags=("flora", "flower", "blue")),
     _row("flora_flower_coral", (242, 128, 108), 210, "red", attrs=("bold",), tags=("flora", "flower", "coral")),
+    _row("flora_flower_closed", (150, 116, 134), 138, "magenta", attrs=("dim",), tags=("flora", "flower", "closed")),
+    _row("flora_flower_night", (210, 204, 250), 189, "cyan", attrs=("bold",), tags=("flora", "flower", "night")),
+    _row("flora_seedling", (116, 206, 122), 120, "green", attrs=("bold",), tags=("flora", "cultivated", "seedling")),
+    _row("flora_young", (98, 188, 112), 78, "green", attrs=("bold",), tags=("flora", "cultivated", "young")),
+    _row("flora_withered", (150, 118, 72), 137, "yellow", attrs=("dim",), tags=("flora", "cultivated", "withered")),
+    _row("flora_spent", (122, 108, 86), 101, "yellow", attrs=("dim",), tags=("flora", "spent")),
 )
 
 _ROWS_BY_KEY = {row.key: row for row in WORLD_PALETTE}
