@@ -97,8 +97,10 @@ _CONTROLLER_DPAD_DELTAS = {
     "dpad_left": (-1, 0),
     "dpad_right": (1, 0),
 }
-_CONTROLLER_BUTTON_DEDUPE_SECONDS = 0.22
-_CONTROLLER_HAT_DEDUPE_SECONDS = 0.14
+_CONTROLLER_BUTTON_DEDUPE_SECONDS = 0.42
+_CONTROLLER_HAT_DEDUPE_SECONDS = 0.28
+_CONTROLLER_DIGITAL_REPEAT_DELAY = 0.42
+_CONTROLLER_DIGITAL_REPEAT_INTERVAL = 0.22
 
 
 def _resource_path(*parts):
@@ -162,6 +164,9 @@ class PygameView:
         self._last_controller_move_delta = (0, 0)
         self._last_controller_move_at = 0.0
         self._next_controller_repeat_at = 0.0
+        self._last_controller_look_delta = (0, 0)
+        self._last_controller_look_at = 0.0
+        self._next_controller_look_repeat_at = 0.0
         self._init_controller_input()
         self._close_requested = False
         self._animation_tick = 0
@@ -5323,8 +5328,19 @@ class PygameView:
         dy = -1 if y_value <= -CONTROLLER_DEADZONE else 1 if y_value >= CONTROLLER_DEADZONE else 0
         return (dx, dy)
 
+    def _controller_input_instance_ids(self):
+        ids = {int(instance_id) for instance_id in tuple(self._controller_devices.keys())}
+        for key in tuple(self._controller_button_state.keys()) + tuple(self._controller_axis_state.keys()):
+            if not isinstance(key, tuple) or not key:
+                continue
+            try:
+                ids.add(int(key[0]))
+            except (TypeError, ValueError):
+                continue
+        return tuple(sorted(ids))
+
     def _controller_diagonal_filter_active(self):
-        for instance_id in tuple(self._controller_devices.keys()):
+        for instance_id in self._controller_input_instance_ids():
             if self._controller_button_state.get((int(instance_id), "left_shoulder")):
                 return True
         return False
@@ -5340,15 +5356,19 @@ class PygameView:
         return (dx, dy)
 
     def _controller_movement_delta(self):
-        for instance_id in tuple(self._controller_devices.keys()):
+        delta, _source = self._controller_movement_delta_with_source()
+        return delta
+
+    def _controller_movement_delta_with_source(self):
+        for instance_id in self._controller_input_instance_ids():
             delta = self._filter_controller_delta(self._controller_dpad_delta(instance_id))
             if delta != (0, 0):
-                return delta
+                return delta, "digital"
         raw_hat = self._filter_controller_delta(self._raw_hat_delta())
         if raw_hat != (0, 0):
-            return raw_hat
+            return raw_hat, "digital"
 
-        for instance_id in tuple(self._controller_devices.keys()):
+        for instance_id in self._controller_input_instance_ids():
             delta = self._filter_controller_delta(
                 self._axis_pair_delta(
                     self._controller_axis_state.get((instance_id, "left_x"), 0.0),
@@ -5356,7 +5376,7 @@ class PygameView:
                 )
             )
             if delta != (0, 0):
-                return delta
+                return delta, "axis"
         for instance_id in tuple(self._raw_joysticks.keys()):
             delta = self._filter_controller_delta(
                 self._axis_pair_delta(
@@ -5365,8 +5385,8 @@ class PygameView:
                 )
             )
             if delta != (0, 0):
-                return delta
-        return (0, 0)
+                return delta, "axis"
+        return (0, 0), ""
 
     def _movement_physical_input(self, delta, *, source="controller"):
         try:
@@ -5386,22 +5406,128 @@ class PygameView:
             "source": source,
         }
 
+    def _right_stick_physical_input(self, delta, *, source="controller"):
+        try:
+            dx = max(-1, min(1, int(delta[0])))
+            dy = max(-1, min(1, int(delta[1])))
+        except (TypeError, ValueError, IndexError):
+            return None
+        if not (dx or dy):
+            return None
+        return {
+            "kind": "axis",
+            "axis": "right_stick",
+            "direction": f"{dx},{dy}",
+            "value": f"{dx},{dy}",
+            "dx": dx,
+            "dy": dy,
+            "source": source,
+        }
+
+    def _controller_has_left_stick(self, instance_id):
+        try:
+            instance_id = int(instance_id)
+        except (TypeError, ValueError):
+            return False
+        if instance_id in self._controller_devices:
+            return True
+        return (
+            (instance_id, "left_x") in self._controller_axis_state
+            or (instance_id, "left_y") in self._controller_axis_state
+        )
+
+    def _raw_joystick_has_left_stick(self, instance_id):
+        try:
+            instance_id = int(instance_id)
+        except (TypeError, ValueError):
+            return False
+        joystick = self._raw_joysticks.get(instance_id)
+        getter = getattr(joystick, "get_numaxes", None)
+        if callable(getter):
+            try:
+                if int(getter()) >= 4:
+                    return True
+            except Exception:
+                pass
+        return (instance_id, 0) in self._raw_axis_state or (instance_id, 1) in self._raw_axis_state
+
+    def _controller_right_stick_delta_with_source(self):
+        for instance_id in self._controller_input_instance_ids():
+            if not self._controller_has_left_stick(instance_id):
+                continue
+            delta = self._axis_pair_delta(
+                self._controller_axis_state.get((instance_id, "right_x"), 0.0),
+                self._controller_axis_state.get((instance_id, "right_y"), 0.0),
+            )
+            if delta != (0, 0):
+                return delta, "controller"
+        for instance_id in tuple(self._raw_joysticks.keys()) + tuple({key[0] for key in self._raw_axis_state.keys()}):
+            if not self._raw_joystick_has_left_stick(instance_id):
+                continue
+            delta = self._axis_pair_delta(
+                self._raw_axis_state.get((instance_id, 2), 0.0),
+                self._raw_axis_state.get((instance_id, 3), 0.0),
+            )
+            if delta != (0, 0):
+                return delta, "joystick"
+        return (0, 0), ""
+
+    def _controller_right_stick_input_for_instance(self, instance_id, *, source="controller"):
+        if source == "joystick":
+            if not self._raw_joystick_has_left_stick(instance_id):
+                return None
+            delta = self._axis_pair_delta(
+                self._raw_axis_state.get((int(instance_id), 2), 0.0),
+                self._raw_axis_state.get((int(instance_id), 3), 0.0),
+            )
+        else:
+            if not self._controller_has_left_stick(instance_id):
+                return None
+            delta = self._axis_pair_delta(
+                self._controller_axis_state.get((int(instance_id), "right_x"), 0.0),
+                self._controller_axis_state.get((int(instance_id), "right_y"), 0.0),
+            )
+        physical = self._right_stick_physical_input(delta, source=source)
+        if physical is not None:
+            self._prime_controller_look_repeat_delay(delta)
+        return physical
+
     def _controller_repeat_input(self):
-        delta = self._controller_movement_delta()
+        delta, source_kind = self._controller_movement_delta_with_source()
         now = time.monotonic()
         if delta == (0, 0):
             self._last_controller_move_delta = (0, 0)
             self._last_controller_move_at = 0.0
             self._next_controller_repeat_at = 0.0
             return None
+        repeat_delay = _CONTROLLER_DIGITAL_REPEAT_DELAY if source_kind == "digital" else CONTROLLER_REPEAT_DELAY
+        repeat_interval = _CONTROLLER_DIGITAL_REPEAT_INTERVAL if source_kind == "digital" else CONTROLLER_REPEAT_INTERVAL
         if delta != self._last_controller_move_delta:
             self._last_controller_move_delta = delta
             self._last_controller_move_at = now
-            self._next_controller_repeat_at = now + CONTROLLER_REPEAT_DELAY
+            self._next_controller_repeat_at = now + repeat_delay
             return self._movement_physical_input(delta)
         if now >= float(self._next_controller_repeat_at or 0.0):
-            self._next_controller_repeat_at = now + CONTROLLER_REPEAT_INTERVAL
+            self._next_controller_repeat_at = now + repeat_interval
             return self._movement_physical_input(delta)
+        return None
+
+    def _controller_look_repeat_input(self):
+        delta, source_kind = self._controller_right_stick_delta_with_source()
+        now = time.monotonic()
+        if delta == (0, 0):
+            self._last_controller_look_delta = (0, 0)
+            self._last_controller_look_at = 0.0
+            self._next_controller_look_repeat_at = 0.0
+            return None
+        if delta != self._last_controller_look_delta:
+            self._last_controller_look_delta = delta
+            self._last_controller_look_at = now
+            self._next_controller_look_repeat_at = now + CONTROLLER_REPEAT_DELAY
+            return self._right_stick_physical_input(delta, source=source_kind or "controller")
+        if now >= float(self._next_controller_look_repeat_at or 0.0):
+            self._next_controller_look_repeat_at = now + CONTROLLER_REPEAT_INTERVAL
+            return self._right_stick_physical_input(delta, source=source_kind or "controller")
         return None
 
     def _prime_controller_repeat_delay(self, delta):
@@ -5415,7 +5541,20 @@ class PygameView:
         now = time.monotonic()
         self._last_controller_move_delta = (dx, dy)
         self._last_controller_move_at = now
-        self._next_controller_repeat_at = now + CONTROLLER_REPEAT_DELAY
+        self._next_controller_repeat_at = now + _CONTROLLER_DIGITAL_REPEAT_DELAY
+
+    def _prime_controller_look_repeat_delay(self, delta):
+        try:
+            dx = max(-1, min(1, int(delta[0])))
+            dy = max(-1, min(1, int(delta[1])))
+        except (TypeError, ValueError, IndexError):
+            return
+        if not (dx or dy):
+            return
+        now = time.monotonic()
+        self._last_controller_look_delta = (dx, dy)
+        self._last_controller_look_at = now
+        self._next_controller_look_repeat_at = now + CONTROLLER_REPEAT_DELAY
 
     def _button_press_is_duplicate(self, state, accepted_at, key, *, pressed, window=_CONTROLLER_BUTTON_DEDUPE_SECONDS):
         now = time.monotonic()
@@ -5541,6 +5680,8 @@ class PygameView:
             self._controller_axis_state[(instance_id, axis)] = value
             if axis in {"left_x", "left_y"}:
                 return None
+            if axis in {"right_x", "right_y"}:
+                return self._controller_right_stick_input_for_instance(instance_id, source="controller")
             return self._axis_press_input((instance_id, axis), axis=axis, value=value, source="controller")
 
         joy_button_down = getattr(pg, "JOYBUTTONDOWN", None)
@@ -5558,6 +5699,8 @@ class PygameView:
             self._raw_axis_state[(instance_id, axis)] = value
             if axis in {0, 1}:
                 return None
+            if axis in {2, 3}:
+                return self._controller_right_stick_input_for_instance(instance_id, source="joystick")
             joystick = self._raw_joysticks.get(instance_id)
             return self._axis_press_input(
                 (instance_id, axis),
@@ -5609,6 +5752,8 @@ class PygameView:
                 self.input_queue.append(mapped)
         if include_repeat and not self.input_queue:
             repeated = self._controller_repeat_input()
+            if repeated is None:
+                repeated = self._controller_look_repeat_input()
             if repeated is not None:
                 self.input_queue.append(repeated)
 

@@ -37,8 +37,10 @@ CONTROLLER_BUTTON_LABELS = {
 CONTROLLER_AXIS_LABELS = {
     "left_x": "Left Stick X",
     "left_y": "Left Stick Y",
+    "left_stick": "Left Stick",
     "right_x": "Right Stick X",
     "right_y": "Right Stick Y",
+    "right_stick": "Right Stick",
     "left_trigger": "Left Trigger",
     "right_trigger": "Right Trigger",
 }
@@ -57,7 +59,7 @@ PROTECTED_CONTROLLER_BUTTONS = frozenset({
     "dpad_left",
     "dpad_right",
 })
-PROTECTED_CONTROLLER_AXES = frozenset({"left_x", "left_y", "left_stick"})
+PROTECTED_CONTROLLER_AXES = frozenset({"left_x", "left_y", "left_stick", "right_x", "right_y", "right_stick"})
 PROTECTED_CONTROLLER_HATS = frozenset({"dpad", "hat0"})
 
 

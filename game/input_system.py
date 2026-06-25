@@ -563,12 +563,14 @@ class InputSystem(System):
                 "inspect_text": "",
                 "throw_item_instance_id": None,
                 "throw_item_name": "",
+                "controller_cursor": False,
             }
             self.sim.look_ui = state
         else:
             state.setdefault("purpose", "inspect")
             state.setdefault("throw_item_instance_id", None)
             state.setdefault("throw_item_name", "")
+            state.setdefault("controller_cursor", False)
         return state
 
     def _aim_lock_state(self):
@@ -756,6 +758,8 @@ class InputSystem(System):
                 return ord("b") if self._action_menu_state().get("open") else None
             if code == "north":
                 return ord("r") if self._action_menu_state().get("open") else None
+        if kind == "axis" and str(physical.get("axis", "") or "").strip().lower() == "right_stick":
+            return None
         try:
             dx = int(physical.get("dx", 0) or 0)
             dy = int(physical.get("dy", 0) or 0)
@@ -777,6 +781,10 @@ class InputSystem(System):
         physical = self._normalize_input_event(physical)
         if not physical:
             return None
+        if str(physical.get("kind", "") or "").strip().lower() == "axis":
+            axis = str(physical.get("axis", "") or "").strip().lower()
+            if axis == "right_stick":
+                return None
         key = self._input_key_code(physical)
         if key in self.movement_keys:
             return self.movement_keys[key]
@@ -788,6 +796,40 @@ class InputSystem(System):
         if dx == 0 and dy == 0:
             return None
         return (max(-1, min(1, dx)), max(-1, min(1, dy)))
+
+    def _input_right_stick_delta(self, physical):
+        physical = self._normalize_input_event(physical)
+        if not physical:
+            return None
+        if str(physical.get("kind", "") or "").strip().lower() != "axis":
+            return None
+        if str(physical.get("axis", "") or "").strip().lower() != "right_stick":
+            return None
+        try:
+            dx = int(physical.get("dx", 0) or 0)
+            dy = int(physical.get("dy", 0) or 0)
+        except (AttributeError, TypeError, ValueError):
+            parts = str(physical.get("value", physical.get("direction", "")) or "").split(",", 1)
+            if len(parts) != 2:
+                return None
+            try:
+                dx = int(parts[0])
+                dy = int(parts[1])
+            except (TypeError, ValueError):
+                return None
+        dx = max(-1, min(1, dx))
+        dy = max(-1, min(1, dy))
+        if dx == 0 and dy == 0:
+            return None
+        return (dx, dy)
+
+    def _input_is_left_stick_movement(self, physical):
+        physical = self._normalize_input_event(physical)
+        if not physical:
+            return False
+        if str(physical.get("kind", "") or "").strip().lower() != "axis":
+            return False
+        return str(physical.get("axis", "") or "").strip().lower() == "left_stick"
 
     def _input_is_controller(self, physical):
         physical = self._normalize_input_event(physical)
@@ -2871,7 +2913,7 @@ class InputSystem(System):
             payload["cursor_z"] = int(state.get("z", 0))
         self._emit_player_action("examine_cursor", consume_turn=False, **payload)
 
-    def _activate_look_mode_at(self, mode, *, x=None, y=None, z=0, chunk_x=None, chunk_y=None, purpose="inspect"):
+    def _activate_look_mode_at(self, mode, *, x=None, y=None, z=0, chunk_x=None, chunk_y=None, purpose="inspect", controller_cursor=False):
         state = self._look_state()
         mode = str(mode or "city").lower()
         self._reset_aim_hold_repeat()
@@ -2891,6 +2933,7 @@ class InputSystem(System):
 
         state["active"] = True
         state["purpose"] = str(purpose or "inspect").lower()
+        state["controller_cursor"] = bool(controller_cursor)
         state["inspect_text"] = ""
         _set_manual_combat_pacing(self.sim, mode == "city" and str(state.get("purpose", "inspect")).lower() == "aim")
         self.sim.emit(Event(
@@ -2921,6 +2964,54 @@ class InputSystem(System):
             y=int(state.get("y", 0)),
             z=int(state.get("z", 0)),
             purpose=purpose,
+        )
+
+    def _right_stick_cursor_purpose(self):
+        if self._aim_lock_state().get("active"):
+            return "aim"
+        overlay = _combat_overlay_state(self.sim)
+        if bool(getattr(self.sim, "turn_based", False) or overlay.get("active")):
+            return "aim"
+        return "inspect" if _entity_uses_melee_aim(self.sim, self.player_eid) else "aim"
+
+    def _handle_right_stick_cursor(self, delta, zoom_mode):
+        if delta is None:
+            return False
+        zoom_mode = str(zoom_mode or "city").strip().lower() or "city"
+        if zoom_mode != "city":
+            return False
+        try:
+            dx = max(-1, min(1, int(delta[0])))
+            dy = max(-1, min(1, int(delta[1])))
+        except (TypeError, ValueError, IndexError):
+            return False
+        if dx == 0 and dy == 0:
+            return False
+
+        key = self._canonical_movement_key_for_delta.get((dx, dy))
+        if key is None:
+            return False
+
+        state = self._look_state()
+        if bool(state.get("active")) and str(state.get("mode", "city")).strip().lower() == "city":
+            state["controller_cursor"] = True
+            return self._handle_look_input(key, zoom_mode)
+
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(self.player_eid)
+        if not pos:
+            return False
+        target_x = int(pos.x) + dx
+        target_y = int(pos.y) + dy
+        if not self.sim.tilemap.in_bounds(target_x, target_y):
+            return False
+        return self._activate_look_mode_at(
+            "city",
+            x=target_x,
+            y=target_y,
+            z=int(pos.z),
+            purpose=self._right_stick_cursor_purpose(),
+            controller_cursor=True,
         )
 
     def _activate_overworld_browse_cursor(self, *, dx=0, dy=0, purpose="inspect"):
@@ -3149,6 +3240,7 @@ class InputSystem(System):
         state["inspect_text"] = ""
         state["throw_item_instance_id"] = None
         state["throw_item_name"] = ""
+        state["controller_cursor"] = False
         if was_aim:
             self._clear_aim_lock(release_pacing=False)
             _set_manual_combat_pacing(self.sim, False)
@@ -4666,6 +4758,7 @@ class InputSystem(System):
             self._stop_auto_walk(reason="interrupted", announce=True)
         if self._auto_drive_state().get("active"):
             self._stop_auto_drive(reason="interrupted", announce=True)
+        right_stick_delta = self._input_right_stick_delta(physical_input)
         movement_delta = self._input_movement_delta(physical_input)
         local_vehicle_key = (
             movement_delta is not None
@@ -4702,6 +4795,20 @@ class InputSystem(System):
             help_state["open"] = True
             return
 
+        if look_state.get("active"):
+            if right_stick_delta is not None:
+                self._handle_right_stick_cursor(right_stick_delta, zoom_mode)
+                return
+            if (
+                movement_delta is not None
+                and bool(look_state.get("controller_cursor"))
+                and self._input_is_left_stick_movement(physical_input)
+            ):
+                self._deactivate_look_mode()
+                look_state = self._look_state()
+            else:
+                self._handle_look_input(key, zoom_mode)
+                return
         if look_state.get("active"):
             self._handle_look_input(key, zoom_mode)
             return
@@ -4744,6 +4851,10 @@ class InputSystem(System):
             if self._handle_trade_input(key):
                 return
             if key not in (ord("q"), ord("Q")):
+                return
+
+        if right_stick_delta is not None:
+            if self._handle_right_stick_cursor(right_stick_delta, zoom_mode):
                 return
 
         if key in ENTER_KEYS and zoom_mode != "overworld" and self._aim_lock_state().get("active"):
