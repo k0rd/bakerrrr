@@ -764,7 +764,13 @@ class InputSystem(System):
         dx = max(-1, min(1, dx))
         dy = max(-1, min(1, dy))
         if dx or dy:
-            return self._canonical_movement_key_for_delta.get((dx, dy))
+            cardinal_arrow_keys = {
+                (0, -1): KEY_UP,
+                (0, 1): KEY_DOWN,
+                (-1, 0): KEY_LEFT,
+                (1, 0): KEY_RIGHT,
+            }
+            return cardinal_arrow_keys.get((dx, dy), self._canonical_movement_key_for_delta.get((dx, dy)))
         return None
 
     def _input_movement_delta(self, physical):

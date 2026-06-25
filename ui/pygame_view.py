@@ -97,6 +97,8 @@ _CONTROLLER_DPAD_DELTAS = {
     "dpad_left": (-1, 0),
     "dpad_right": (1, 0),
 }
+_CONTROLLER_BUTTON_DEDUPE_SECONDS = 0.22
+_CONTROLLER_HAT_DEDUPE_SECONDS = 0.14
 
 
 def _resource_path(*parts):
@@ -149,10 +151,14 @@ class PygameView:
         self._controller_axis_state = {}
         self._controller_axis_pressed = {}
         self._controller_button_state = {}
+        self._controller_button_accept_at = {}
         self._raw_joysticks = {}
         self._raw_axis_state = {}
         self._raw_axis_pressed = {}
+        self._raw_button_state = {}
+        self._raw_button_accept_at = {}
         self._raw_hat_state = {}
+        self._raw_hat_accept_at = {}
         self._last_controller_move_delta = (0, 0)
         self._last_controller_move_at = 0.0
         self._next_controller_repeat_at = 0.0
@@ -268,6 +274,11 @@ class PygameView:
             for key, value in self._controller_button_state.items()
             if key[0] != instance_id
         }
+        self._controller_button_accept_at = {
+            key: value
+            for key, value in self._controller_button_accept_at.items()
+            if key[0] != instance_id
+        }
         self._raw_axis_state = {
             key: value
             for key, value in self._raw_axis_state.items()
@@ -278,9 +289,24 @@ class PygameView:
             for key, value in self._raw_axis_pressed.items()
             if key[0] != instance_id
         }
+        self._raw_button_state = {
+            key: value
+            for key, value in self._raw_button_state.items()
+            if key[0] != instance_id
+        }
+        self._raw_button_accept_at = {
+            key: value
+            for key, value in self._raw_button_accept_at.items()
+            if key[0] != instance_id
+        }
         self._raw_hat_state = {
             key: value
             for key, value in self._raw_hat_state.items()
+            if key[0] != instance_id
+        }
+        self._raw_hat_accept_at = {
+            key: value
+            for key, value in self._raw_hat_accept_at.items()
             if key[0] != instance_id
         }
         quit_fn = getattr(device, "quit", None)
@@ -453,25 +479,28 @@ class PygameView:
                 if self._is_close_event(event):
                     self._mark_close_requested()
                     return None
-                if event.type != self.pygame.KEYDOWN:
-                    continue
+                mapped = self._map_event_input(event)
+                key = self._input_to_legacy_key(mapped)
 
-                if event.key == self.pygame.K_RETURN:
+                if key == 10:
                     normalized = normalize(text)
                     if normalized:
                         return normalized
                     error_text = invalid_message
                     continue
 
-                if event.key == self.pygame.K_ESCAPE:
+                if key == 27:
                     return None
 
-                if event.key == self.pygame.K_BACKSPACE:
+                if key == 127:
                     text = text[:-1]
                     error_text = ""
                     continue
 
-                if event.key == self.pygame.K_TAB:
+                if key == 9:
+                    continue
+
+                if event.type != self.pygame.KEYDOWN:
                     continue
 
                 raw = getattr(event, "unicode", "") or ""
@@ -609,23 +638,23 @@ class PygameView:
                 if self._is_close_event(event):
                     self._mark_close_requested()
                     return None
-                if event.type != self.pygame.KEYDOWN:
+                mapped = self._map_event_input(event)
+                key = self._input_to_legacy_key(mapped)
+                if key is None:
                     continue
 
-                key = event.key
-                keypad_enter = getattr(self.pygame, "K_KP_ENTER", None)
-                if key in (self.pygame.K_RETURN, keypad_enter):
+                if key in (10, 13):
                     return rows[selected]["value"]
-                if key == self.pygame.K_ESCAPE:
+                if key == 27:
                     return None
-                if key in (self.pygame.K_UP, self.pygame.K_LEFT):
+                if key in (KEY_UP, KEY_LEFT):
                     selected = (selected - 1) % len(rows)
                     continue
-                if key in (self.pygame.K_DOWN, self.pygame.K_RIGHT):
+                if key in (KEY_DOWN, KEY_RIGHT):
                     selected = (selected + 1) % len(rows)
                     continue
-                if key in (self.pygame.K_1, self.pygame.K_2, self.pygame.K_3):
-                    idx = key - self.pygame.K_1
+                if key in (ord("1"), ord("2"), ord("3")):
+                    idx = key - ord("1")
                     if 0 <= idx < len(rows):
                         return rows[idx]["value"]
 
@@ -5375,6 +5404,35 @@ class PygameView:
             return self._movement_physical_input(delta)
         return None
 
+    def _prime_controller_repeat_delay(self, delta):
+        try:
+            dx = max(-1, min(1, int(delta[0])))
+            dy = max(-1, min(1, int(delta[1])))
+        except (TypeError, ValueError, IndexError):
+            return
+        if not (dx or dy):
+            return
+        now = time.monotonic()
+        self._last_controller_move_delta = (dx, dy)
+        self._last_controller_move_at = now
+        self._next_controller_repeat_at = now + CONTROLLER_REPEAT_DELAY
+
+    def _button_press_is_duplicate(self, state, accepted_at, key, *, pressed, window=_CONTROLLER_BUTTON_DEDUPE_SECONDS):
+        now = time.monotonic()
+        if not pressed:
+            state[key] = False
+            return True
+        was_pressed = bool(state.get(key))
+        state[key] = True
+        try:
+            last_at = float(accepted_at.get(key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            last_at = 0.0
+        if was_pressed or (last_at and now - last_at < float(window)):
+            return True
+        accepted_at[key] = now
+        return False
+
     def _axis_press_input(self, key, *, axis, value, device_guid="", source="controller"):
         direction = self._axis_direction(value)
         pressed = bool(direction)
@@ -5400,12 +5458,25 @@ class PygameView:
     def _map_controller_button_event(self, event, *, pressed):
         instance_id = int(getattr(event, "which", 0) or 0)
         code = _SDL_CONTROLLER_BUTTONS.get(int(getattr(event, "button", -1)), f"button_{getattr(event, 'button', 0)}")
-        self._controller_button_state[(instance_id, code)] = bool(pressed)
+        key = (instance_id, code)
+        duplicate = self._button_press_is_duplicate(
+            self._controller_button_state,
+            self._controller_button_accept_at,
+            key,
+            pressed=pressed,
+        )
+        if duplicate:
+            if pressed and code in _CONTROLLER_DPAD_DELTAS:
+                delta = self._filter_controller_delta(self._controller_dpad_delta(instance_id))
+                if delta != (0, 0):
+                    self._prime_controller_repeat_delay(delta)
+            return None
         if code in _CONTROLLER_DPAD_DELTAS:
             if pressed:
                 delta = self._filter_controller_delta(self._controller_dpad_delta(instance_id))
                 if delta == (0, 0):
                     return None
+                self._prime_controller_repeat_delay(delta)
                 return {
                     "kind": "button",
                     "code": code,
@@ -5419,13 +5490,20 @@ class PygameView:
         return {"kind": "button", "code": code, "source": "controller"}
 
     def _map_raw_button_event(self, event, *, pressed):
-        if not pressed:
-            return None
         instance_id = int(getattr(event, "instance_id", getattr(event, "which", 0)) or 0)
+        button = int(getattr(event, "button", 0) or 0)
+        key = (instance_id, button)
+        if self._button_press_is_duplicate(
+            self._raw_button_state,
+            self._raw_button_accept_at,
+            key,
+            pressed=pressed,
+        ):
+            return None
         joystick = self._raw_joysticks.get(instance_id)
         return {
             "kind": "button",
-            "code": int(getattr(event, "button", 0) or 0),
+            "code": button,
             "device_guid": self._device_guid(joystick, fallback=f"joy{instance_id}"),
             "source": "joystick",
         }
@@ -5500,6 +5578,17 @@ class PygameView:
                 dx = dy = 0
             if not (dx or dy):
                 return None
+            dedupe_key = (instance_id, hat, dx, dy)
+            now = time.monotonic()
+            try:
+                last_at = float(self._raw_hat_accept_at.get(dedupe_key, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                last_at = 0.0
+            if last_at and now - last_at < _CONTROLLER_HAT_DEDUPE_SECONDS:
+                self._prime_controller_repeat_delay((dx, dy))
+                return None
+            self._raw_hat_accept_at[dedupe_key] = now
+            self._prime_controller_repeat_delay((dx, dy))
             joystick = self._raw_joysticks.get(instance_id)
             return {
                 "kind": "hat",
