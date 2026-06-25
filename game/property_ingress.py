@@ -30,6 +30,11 @@ from game.skills import actor_skill as _actor_skill
 from game.system_support.access_runtime import _attempt_locked_property_entry_with_sim
 from game.system_support.awareness_runtime import observation_payload_for_position
 from game.system_support.building_repair_runtime import record_building_damage as _record_building_damage
+from game.system_support.structure_damage_runtime import (
+    STRUCTURE_MAX_HP,
+    apply_structural_damage as _apply_structural_damage,
+    structural_surface_label as _structural_surface_label,
+)
 from game.system_support.access_checks import (
     _maybe_damage_access_tool,
     _resolve_access_skill_check,
@@ -536,6 +541,70 @@ class PropertyIngressRuntime:
             return f"{base} {hint}".strip()
         return base
 
+    def ingress_structure_damage_amount(self, ingress, ingress_method, *, success=False, fumbled=False):
+        method = str(ingress_method or "").strip().lower()
+        ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
+        aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
+        if ingress_kind in {"boundary_breach", "deep_breach"}:
+            if success:
+                return STRUCTURE_MAX_HP["wall"] + (14 if ingress_kind == "deep_breach" else 8)
+            return 5 if fumbled else 12
+        if ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
+            if success:
+                return STRUCTURE_MAX_HP["window"] + 3
+            if method == "crash_window_entry":
+                return 2 if fumbled else 4
+            return 1 if fumbled else 2
+        if method == "forced_side_entry":
+            if success:
+                return STRUCTURE_MAX_HP["door"] + 4
+            return 3 if fumbled else 6
+        return 0
+
+    def apply_ingress_structure_damage(self, eid, candidate, ingress_method, *, success=False, fumbled=False):
+        ingress = candidate.get("ingress")
+        amount = self.ingress_structure_damage_amount(
+            ingress,
+            ingress_method,
+            success=success,
+            fumbled=fumbled,
+        )
+        if amount <= 0:
+            return None
+        aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
+        ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
+        kind = ""
+        if ingress_kind in {"boundary_breach", "deep_breach"}:
+            kind = "wall"
+        elif _is_window_aperture(aperture_kind):
+            kind = "window"
+        elif str(ingress_method or "").strip().lower() == "forced_side_entry":
+            kind = "door"
+        result = _apply_structural_damage(
+            self.sim,
+            candidate.get("prop"),
+            candidate["x"],
+            candidate["y"],
+            candidate["z"],
+            amount=amount,
+            kind=kind,
+            aperture_kind=aperture_kind,
+            cause=ingress_method,
+            damage_kind="ingress",
+            offender_eid=eid,
+        )
+        return result if isinstance(result, dict) and result.get("damaged") else None
+
+    def structural_damage_feedback(self, result):
+        if not isinstance(result, dict) or not result.get("damaged"):
+            return ""
+        kind = _structural_surface_label(result.get("surface_kind"))
+        hp = _safe_int(result.get("hp"), 0)
+        max_hp = max(1, _safe_int(result.get("max_hp"), 1))
+        if result.get("broken"):
+            return f"The {kind} gives way."
+        return f"The {kind} gives a little ({hp}/{max_hp})."
+
     def emit_failed_ingress_attempt(self, eid, candidate, prop, ingress, ingress_method, *, severity_bonus=0, offense_bonus=0):
         access = _evaluate_property_access(
             self.sim,
@@ -851,6 +920,13 @@ class PropertyIngressRuntime:
         if not ingress_profile["automatic"]:
             attempt = ingress_profile.get("attempt") or {}
             if not bool(attempt.get("success")):
+                damage_result = self.apply_ingress_structure_damage(
+                    eid,
+                    candidate,
+                    ingress_method,
+                    success=False,
+                    fumbled=bool(attempt.get("fumbled")),
+                )
                 self.emit_failed_ingress_attempt(
                     eid,
                     candidate,
@@ -873,21 +949,38 @@ class PropertyIngressRuntime:
                 )
                 _log_player_feedback(
                     self.sim,
-                    self.failed_ingress_attempt_text(
-                        ingress_mode,
-                        ingress_method,
-                        prop,
-                        fumbled=bool(attempt.get("fumbled")),
-                        eid=eid,
+                    " ".join(
+                        part
+                        for part in (
+                            self.failed_ingress_attempt_text(
+                                ingress_mode,
+                                ingress_method,
+                                prop,
+                                fumbled=bool(attempt.get("fumbled")),
+                                eid=eid,
+                            ),
+                            self.structural_damage_feedback(damage_result),
+                        )
+                        if str(part or "").strip()
                     ),
                     kind="movement",
                 )
                 return
 
+        damage_result = self.apply_ingress_structure_damage(
+            eid,
+            candidate,
+            ingress_method,
+            success=not ingress_profile["automatic"],
+            fumbled=False,
+        )
         self.open_ingress_tile(
             candidate,
             hostile=bool(hostile or ingress_method == "forced_side_entry"),
         )
+        damage_text = self.structural_damage_feedback(damage_result)
+        if damage_text and damage_result and damage_result.get("broken"):
+            _log_player_feedback(self.sim, damage_text, kind="movement")
 
         moved, reason = try_move_entity(
             self.sim,

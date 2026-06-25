@@ -396,6 +396,7 @@ def _restore_door_tile(sim, prop, x, y, z, aperture_kind="door"):
         kind=kind,
         ordinary=ordinary,
         property_id=prop.get("id") if isinstance(prop, dict) else None,
+        broken=False,
     )
     if not sim.apply_door_state(int(x), int(y), int(z)):
         sim.tilemap.set_tile(

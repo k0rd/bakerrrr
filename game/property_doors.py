@@ -126,6 +126,8 @@ def _door_open_attempt(sim, eid, x, y, z, *, allow_override=False):
     state = _operable_door_state_at(sim, x, y, z)
     if state is None:
         return False, "not_door"
+    if bool(state.get("broken", False)):
+        return True, "broken_open"
     if bool(state.get("open", False)):
         return True, "already_open"
     if _actor_is_animal_or_wildlife(sim, eid):
@@ -183,6 +185,8 @@ def _door_close_attempt(sim, eid, x, y, z):
     state = _operable_door_state_at(sim, x, y, z)
     if state is None:
         return False, "not_door"
+    if bool(state.get("broken", False)):
+        return False, "broken_door"
     if not bool(state.get("open", False)):
         return False, "already_closed"
     if _door_tile_is_occupied(sim, x, y, z):

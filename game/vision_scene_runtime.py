@@ -10,7 +10,7 @@ from game.components import AI, CreatureIdentity, Position, Vitality
 
 
 VISION_SCENE_SCHEMA_VERSION = 1
-VISION_STEP_TICKS = 7
+VISION_STEP_TICKS = 24
 VISION_MIN_ACTORS = 5
 VISION_MAX_ACTORS = 14
 

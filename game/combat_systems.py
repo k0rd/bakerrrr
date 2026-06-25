@@ -81,6 +81,7 @@ from game.system_support.item_runtime import (
     _smallest_recovery_item_for_downed_actor,
     _weapon_uses_ammo,
 )
+from game.system_support.player_feedback import _log_player_feedback
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
     ACTION_OFFENSE_CONTEXT_BONUS,
@@ -93,6 +94,11 @@ from game.system_support.status_runtime import (
     _status_modifier_total,
     _status_multiplier,
     _status_tick_step,
+)
+from game.system_support.structure_damage_runtime import (
+    apply_structural_damage as _apply_structural_damage,
+    structural_surface_kind as _structural_surface_kind,
+    structural_surface_label as _structural_surface_label,
 )
 from game.weapons import weapon_by_id
 
@@ -340,6 +346,19 @@ class WeaponSystem(System):
 
         target_eid = _first_targetable_entity_at(self.sim, tx, ty, tz, exclude_eid=eid)
         if target_eid is None:
+            prop = self.sim.property_covering(tx, ty, tz) if hasattr(self.sim, "property_covering") else None
+            kind = _structural_surface_kind(self.sim, prop, tx, ty, tz)
+            if kind:
+                return {
+                    "target_eid": None,
+                    "structure": True,
+                    "surface_kind": kind,
+                    "x": tx,
+                    "y": ty,
+                    "z": tz,
+                    "dist": dist,
+                    "property_id": (prop or {}).get("id") if isinstance(prop, dict) else None,
+                }, None
             return None, "no_target"
 
         return {
@@ -387,6 +406,93 @@ class WeaponSystem(System):
             return None
         candidates.sort(key=lambda row: row["dist"])
         return candidates[0]
+
+    def _resolve_structure_melee_attack(
+        self,
+        *,
+        eid,
+        source_pos,
+        target,
+        melee_weapon_id,
+        melee_weapon_name,
+        raw_damage,
+        cooldown_ticks,
+        loadout,
+        manual_aim,
+    ):
+        tx = int(target.get("x", source_pos.x))
+        ty = int(target.get("y", source_pos.y))
+        tz = int(target.get("z", source_pos.z))
+        prop = self.sim.property_covering(tx, ty, tz) if hasattr(self.sim, "property_covering") else None
+        result = _apply_structural_damage(
+            self.sim,
+            prop,
+            tx,
+            ty,
+            tz,
+            amount=max(1, int(raw_damage)),
+            kind=str(target.get("surface_kind", "") or ""),
+            cause="melee_attack",
+            damage_kind="melee",
+            weapon_id=melee_weapon_id,
+            offender_eid=eid,
+        )
+        if not isinstance(result, dict) or not result.get("damaged"):
+            self.sim.emit(Event(
+                "weapon_fire_blocked",
+                eid=eid,
+                reason=result.get("reason", "no_target") if isinstance(result, dict) else "no_target",
+            ))
+            return True
+
+        if loadout:
+            loadout.last_fire_tick = int(self.sim.tick)
+            loadout.cooldown_until_tick = int(self.sim.tick) + int(max(1, cooldown_ticks))
+
+        kind = _structural_surface_label(result.get("surface_kind"))
+        if eid == self.player_eid:
+            if result.get("broken"):
+                _log_player_feedback(self.sim, f"You smash through the {kind}.", kind="combat")
+            else:
+                _log_player_feedback(
+                    self.sim,
+                    f"You strike the {kind} ({int(result.get('hp', 0))}/{int(result.get('max_hp', 1))}).",
+                    kind="combat",
+                )
+        self.sim.emit(Event(
+            "structure_melee_attack",
+            eid=eid,
+            source_eid=eid,
+            weapon_id=melee_weapon_id,
+            weapon_name=melee_weapon_name,
+            target_eid=None,
+            x=tx,
+            y=ty,
+            z=tz,
+            target_x=tx,
+            target_y=ty,
+            target_z=tz,
+            target_dist=target.get("dist", 1),
+            damage=int(raw_damage),
+            target_downed=False,
+            manual_aim=manual_aim,
+            structure=True,
+            surface_kind=result.get("surface_kind"),
+            property_id=result.get("property_id"),
+        ))
+        self.sim.emit(Event(
+            "noise",
+            source_eid=eid,
+            x=source_pos.x,
+            y=source_pos.y,
+            z=source_pos.z,
+            radius=2,
+            cause="structure_melee",
+            target_x=tx,
+            target_y=ty,
+            target_z=tz,
+        ))
+        return True
 
     def _resolve_melee_attack(self, event, *, eid, source_pos, melee_weapon=None):
         if melee_weapon is None:
@@ -450,6 +556,19 @@ class WeaponSystem(System):
             if not target:
                 self.sim.emit(Event("weapon_fire_blocked", eid=eid, reason="no_target"))
                 return True
+
+        if bool(target.get("structure", False)):
+            return self._resolve_structure_melee_attack(
+                eid=eid,
+                source_pos=source_pos,
+                target=target,
+                melee_weapon_id=melee_weapon_id,
+                melee_weapon_name=melee_weapon_name,
+                raw_damage=raw_damage,
+                cooldown_ticks=cooldown_ticks,
+                loadout=loadout,
+                manual_aim=manual_aim,
+            )
 
         target_eid = target.get("target_eid")
         target_pos = self.sim.ecs.get(Position).get(target_eid)
@@ -1483,6 +1602,8 @@ class WeaponSystem(System):
                 blocked_tile = bool(tile and not tile.walkable)
                 if blocked_tile and not projectile.get("ignore_walls"):
                     shattered_window = False
+                    damaged_structure = False
+                    breached_structure = False
                     if tile and tile.transparent:
                         shattered_window = _shatter_window_for_projectile(
                             self.sim,
@@ -1490,14 +1611,43 @@ class WeaponSystem(System):
                             nx,
                             ny,
                             z,
+                            damage_amount=projectile.get("damage", 1),
+                            weapon_id=projectile.get("weapon_id", ""),
                         )
+                    if not shattered_window:
+                        prop = self.sim.property_covering(nx, ny, z) if hasattr(self.sim, "property_covering") else None
+                        kind = _structural_surface_kind(self.sim, prop, nx, ny, z, tile=tile)
+                        if kind:
+                            result = _apply_structural_damage(
+                                self.sim,
+                                prop,
+                                nx,
+                                ny,
+                                z,
+                                amount=max(1, int(projectile.get("damage", 1) or 1)),
+                                kind=kind,
+                                cause="projectile_impact",
+                                damage_kind="ballistic",
+                                weapon_id=projectile.get("weapon_id", ""),
+                                offender_eid=projectile.get("source_eid"),
+                            )
+                            damaged_structure = bool(isinstance(result, dict) and result.get("damaged"))
+                            breached_structure = bool(isinstance(result, dict) and result.get("broken"))
                     self._impact_projectile(
                         projectile_id,
                         projectile,
                         x=nx,
                         y=ny,
                         z=z,
-                        reason="shattered_window" if shattered_window else "blocked_tile",
+                        reason=(
+                            "shattered_window"
+                            if shattered_window
+                            else "breached_structure"
+                            if breached_structure
+                            else "damaged_structure"
+                            if damaged_structure
+                            else "blocked_tile"
+                        ),
                     )
                     break
 

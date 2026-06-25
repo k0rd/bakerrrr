@@ -6,11 +6,9 @@ import random
 
 from engine.events import Event
 from engine.systems import System
-from engine.tilemap import Tile
 from game.components import Collider, NPCNeeds, Render, StatusEffects, Vitality
 from game.property_runtime import property_metadata
 from game.system_support.actor_runtime import _apply_downed_actor_state
-from game.system_support.building_repair_runtime import record_building_damage
 from game.system_support.business_event_state import _business_event_seed_state
 from game.system_support.environment_hazard_runtime import environment_hazard_player_note, environment_hazard_profile
 from game.system_support.fire_runtime import (
@@ -36,6 +34,10 @@ from game.system_support.fire_runtime import (
     remove_fire_cell,
     schedule_fire_cell_advance,
     upsert_fire_cell,
+)
+from game.system_support.structure_damage_runtime import (
+    apply_structural_damage as _apply_structural_damage,
+    structure_is_broken as _structure_is_broken,
 )
 
 
@@ -739,19 +741,23 @@ class FireSystem(System):
         if tick - last_tick < FIRE_SPREAD_INTERVAL:
             return
 
-        record = record_building_damage(
+        fire_intensity = max(1, _safe_int(cell.get("fire_intensity"), 1))
+        damage_amount = max(1, 2 + (fire_intensity * 2))
+        result = _apply_structural_damage(
             self.sim,
             prop,
             coord[0],
             coord[1],
             coord[2],
+            amount=damage_amount,
             kind=kind,
             aperture_kind=_text(behavior.get("aperture_kind")).lower(),
             cause="fire",
+            damage_kind="fire",
             offender_eid=cell.get("source_eid"),
             damage_tick=tick,
         )
-        if record is None:
+        if not isinstance(result, dict) or not result.get("damaged"):
             return
         state["damage_marks"][mark_key] = tick
         structural_radius = 4 if kind == "wall" else 3
@@ -762,33 +768,8 @@ class FireSystem(System):
             coord[2],
             radius=structural_radius,
             source_property_id=property_id,
-            cause_detail=f"structural_{kind}",
+            cause_detail=f"structural_{kind}" if result.get("broken") else f"scorched_{kind}",
         )
-
-        if kind == "window":
-            self.sim.tilemap.set_tile(
-                int(coord[0]),
-                int(coord[1]),
-                Tile(walkable=True, transparent=True, glyph="/", color="feature_breach", semantic_id="feature_breach"),
-                z=int(coord[2]),
-            )
-        elif kind == "door":
-            self.sim.set_door_state(
-                int(coord[0]),
-                int(coord[1]),
-                int(coord[2]),
-                open=True,
-                kind=_text(behavior.get("aperture_kind")).lower() or "door",
-                property_id=property_id or None,
-            )
-            self.sim.apply_door_state(int(coord[0]), int(coord[1]), int(coord[2]))
-        elif kind == "wall":
-            self.sim.tilemap.set_tile(
-                int(coord[0]),
-                int(coord[1]),
-                Tile(walkable=True, transparent=True, glyph="/", color="feature_breach", semantic_id="feature_breach"),
-                z=int(coord[2]),
-            )
 
     def _attempt_spread_to_neighbor(self, source_coord, source_cell, target_coord):
         target_chunk = self.sim.chunk_coords(target_coord[0], target_coord[1])
@@ -833,6 +814,57 @@ class FireSystem(System):
                     advance_interval=FIRE_SPREAD_INTERVAL,
                 )
             return False
+
+        structural_kind = _text(behavior.get("structural_damage_kind")).lower()
+        if structural_kind in {"door", "window", "wall"}:
+            prop = None
+            property_id = _text(behavior.get("property_id"))
+            if property_id:
+                prop = getattr(self.sim, "properties", {}).get(property_id)
+            if isinstance(prop, dict) and not _structure_is_broken(
+                self.sim,
+                prop,
+                target_coord[0],
+                target_coord[1],
+                target_coord[2],
+                kind=structural_kind,
+            ):
+                result = _apply_structural_damage(
+                    self.sim,
+                    prop,
+                    target_coord[0],
+                    target_coord[1],
+                    target_coord[2],
+                    amount=max(1, 1 + _safe_int(source_cell.get("fire_intensity"), 1)),
+                    kind=structural_kind,
+                    aperture_kind=_text(behavior.get("aperture_kind")).lower(),
+                    cause="fire_spread",
+                    damage_kind="fire",
+                    offender_eid=source_cell.get("source_eid"),
+                    damage_tick=tick,
+                )
+                if not bool(isinstance(result, dict) and result.get("broken")):
+                    if existing_smoke <= 0 or (tick - target_last_advanced) >= FIRE_SPREAD_INTERVAL:
+                        upsert_fire_cell(
+                            self.sim,
+                            target_coord[0],
+                            target_coord[1],
+                            target_coord[2],
+                            fire_intensity=0,
+                            smoke_intensity=1,
+                            source_kind="smoke_drift",
+                            source_property_id=source_cell.get("property_id"),
+                            property_id=behavior.get("property_id"),
+                            building_id=behavior.get("building_id"),
+                            burn_tier=behavior.get("burn_tier"),
+                            burn_budget=0,
+                            started_tick=getattr(self.sim, "tick", 0),
+                            last_advanced_tick=getattr(self.sim, "tick", 0),
+                            sync_protected=False,
+                            behavior=behavior,
+                            advance_interval=FIRE_SPREAD_INTERVAL,
+                        )
+                    return False
 
         source_behavior = self._behavior_for_cell(source_coord[0], source_coord[1], source_coord[2])
         chance = (

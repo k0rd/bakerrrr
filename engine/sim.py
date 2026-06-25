@@ -474,6 +474,7 @@ class Simulation:
         ordinary=None,
         property_id=None,
         auto_managed=None,
+        broken=None,
     ):
         key = self._coord_key(x, y, z)
         if key is None:
@@ -495,6 +496,8 @@ class Simulation:
             state["property_id"] = str(property_id).strip() or None
         if auto_managed is not None:
             state["auto_managed"] = bool(auto_managed)
+        if broken is not None:
+            state["broken"] = bool(broken)
 
         self.door_states[key] = state
         tile = self.tilemap.tile_at(x, y, z)
@@ -520,6 +523,16 @@ class Simulation:
         kind = str(state.get("kind", "door") or "door").strip().lower() or "door"
         if kind not in {"door", "side_door", "service_door", "employee_door"}:
             return False
+
+        if bool(state.get("broken", False)):
+            tile.walkable = True
+            tile.transparent = True
+            tile.set_appearance(
+                glyph="/",
+                color="feature_breach",
+                semantic_id="feature_breach",
+            )
+            return True
 
         is_open = bool(state.get("open", False))
         tile.walkable = bool(is_open)

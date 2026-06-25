@@ -3,7 +3,6 @@
 from dataclasses import replace
 
 from engine.events import Event
-from engine.tilemap import Tile
 from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.components import AI, Collider, NPCTraits, Position, SuppressionState, Vitality, WeaponLoadout
 from game.property_access import property_access_level as _property_access_level
@@ -12,11 +11,14 @@ from game.property_runtime import property_covering as _property_covering
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import _entity_is_downed
 from game.system_support.awareness_runtime import observation_payload_for_position
-from game.system_support.building_repair_runtime import record_building_damage as _record_building_damage
 from game.system_support.combat_pacing_runtime import _combat_turn_pacing_active
 from game.system_support.entity_naming import _entity_display_name
 from game.system_support.intrusion_runtime import _is_window_aperture, _trespass_label_from_score
 from game.system_support.item_runtime import _weapon_uses_ammo
+from game.system_support.structure_damage_runtime import (
+    STRUCTURE_MAX_HP,
+    apply_structural_damage as _apply_structural_damage,
+)
 from game.weapons import weapon_by_id
 
 THREAT_STATES = {"protecting", "investigating"}
@@ -787,28 +789,32 @@ def _weapon_reserve_ammo(loadout, weapon_id, *, instance_id=None):
     return loadout.reserve_ammo_value(weapon_id, default=None, instance_id=instance_id)
 
 
-def _shatter_window_for_projectile(sim, offender_eid, x, y, z):
+def _shatter_window_for_projectile(sim, offender_eid, x, y, z, *, damage_amount=None, weapon_id=""):
     prop = _property_covering(sim, x, y, z)
     aperture = _property_aperture_at(prop, x, y, z) if isinstance(prop, dict) else None
     if not isinstance(aperture, dict) or not _is_window_aperture(aperture.get("kind", "")):
         return False
 
-    sim.tilemap.set_tile(
-        int(x),
-        int(y),
-        Tile(walkable=True, transparent=True, glyph="/"),
-        z=int(z),
-    )
-    _record_building_damage(
+    try:
+        damage = int(damage_amount)
+    except (TypeError, ValueError):
+        damage = STRUCTURE_MAX_HP["window"] + 1
+    result = _apply_structural_damage(
         sim,
         prop,
         int(x),
         int(y),
         int(z),
+        amount=max(STRUCTURE_MAX_HP["window"] + 1, damage),
         kind="window",
         aperture_kind=aperture.get("kind", "window"),
         cause="window_shot",
+        damage_kind="ballistic",
+        weapon_id=weapon_id,
+        offender_eid=offender_eid,
     )
+    if not bool(result.get("broken")):
+        return False
 
     if offender_eid is None:
         return True

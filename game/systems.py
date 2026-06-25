@@ -411,6 +411,10 @@ from game.system_support.intrusion_runtime import (
     _trespass_is_obvious_breach,
     _trespass_label_from_score,
 )
+from game.system_support.structure_damage_runtime import (
+    STRUCTURE_MAX_HP,
+    apply_structural_damage as _apply_structural_damage,
+)
 from game.system_support.access_checks import (
     _access_attempt_roll,
     _maybe_damage_access_tool,
@@ -3655,18 +3659,32 @@ def _actor_is_animal_or_wildlife(sim, eid):
     return role == "wildlife" or creature_type == "animal"
 
 
-def _shatter_window_for_projectile(sim, offender_eid, x, y, z):
+def _shatter_window_for_projectile(sim, offender_eid, x, y, z, *, damage_amount=None, weapon_id=""):
     prop = _property_covering(sim, x, y, z)
     aperture = _property_aperture_at(prop, x, y, z) if isinstance(prop, dict) else None
     if not isinstance(aperture, dict) or not _is_window_aperture(aperture.get("kind", "")):
         return False
 
-    sim.tilemap.set_tile(
+    try:
+        damage = int(damage_amount)
+    except (TypeError, ValueError):
+        damage = STRUCTURE_MAX_HP["window"] + 1
+    result = _apply_structural_damage(
+        sim,
+        prop,
         int(x),
         int(y),
-        Tile(walkable=True, transparent=True, glyph="/"),
-        z=int(z),
+        int(z),
+        amount=max(STRUCTURE_MAX_HP["window"] + 1, damage),
+        kind="window",
+        aperture_kind=aperture.get("kind", "window"),
+        cause="window_shot",
+        damage_kind="ballistic",
+        weapon_id=weapon_id,
+        offender_eid=offender_eid,
     )
+    if not bool(result.get("broken")):
+        return False
 
     if offender_eid is None:
         return True

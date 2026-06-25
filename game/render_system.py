@@ -1464,12 +1464,27 @@ class RenderSystem(System):
     def _draw_vision_scene(self, scene, screen_w, screen_h):
         scene = scene if isinstance(scene, dict) else {}
         is_pygame = hasattr(self.view, "pygame")
+        started_tick = int(scene.get("started_tick", 0) or 0)
+        target_end_tick = int(scene.get("target_end_tick", started_tick) or started_tick)
+        total_ticks = max(0, target_end_tick - started_tick)
+        elapsed_ticks = max(0, min(total_ticks, int(getattr(self.sim, "tick", 0) or 0) - started_tick))
+        remaining_ticks = max(0, total_ticks - elapsed_ticks)
+        progress = ""
+        if total_ticks > 0:
+            progress = (
+                f"Dreaming... {_tick_duration_label(self.sim, elapsed_ticks)} / "
+                f"{_tick_duration_label(self.sim, total_ticks)}"
+            )
+            if remaining_ticks > 0:
+                progress += f" ({_tick_duration_label(self.sim, remaining_ticks)} left)"
         if not is_pygame:
             title = "Dreaming..."
             hint = "The room goes blank until you wake."
             center_y = max(0, int(screen_h) // 2 - 1)
             self.view.draw_text(max(0, (int(screen_w) - len(title)) // 2), center_y, title, color="objective")
             self.view.draw_text(max(0, (int(screen_w) - len(hint)) // 2), center_y + 2, hint, color="default")
+            if progress:
+                self.view.draw_text(max(0, (int(screen_w) - len(progress)) // 2), center_y + 4, progress, color="default")
             return True
 
         width = max(1, int(scene.get("width", 1) or 1))
@@ -1477,9 +1492,9 @@ class RenderSystem(System):
         offset_x = max(0, (int(screen_w) - width) // 2)
         offset_y = max(0, (int(screen_h) - height) // 2)
         tile_styles = {
-            "floor": (".", "floor_downtown", "floor_downtown"),
-            "grass": ("'", "floor_wilderness", "floor_wilderness"),
-            "shadow": (".", "building_fill_dark", "building_fill_dark"),
+            "floor": (" ", "floor_downtown", "floor_downtown"),
+            "grass": (" ", "floor_wilderness", "floor_wilderness"),
+            "shadow": (" ", "building_fill_dark", "building_fill_dark"),
             "wall": ("#", "building_edge_gray_b", "building_edge_gray_b"),
             "door": ("+", "feature_door", "feature_door"),
             "window": ("=", "feature_window", "feature_window"),
@@ -1525,6 +1540,11 @@ class RenderSystem(System):
                 layer="actor",
                 priority=30,
             )
+        if progress:
+            progress = str(progress)
+            progress_y = min(max(0, int(screen_h) - 2), max(0, offset_y + height + 1))
+            progress_x = max(0, (int(screen_w) - len(progress)) // 2)
+            self.view.draw_text(progress_x, progress_y, progress[: max(0, int(screen_w))], color="default")
         return True
 
     def _entity_color(self, eid, render, identity):

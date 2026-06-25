@@ -37,7 +37,7 @@ def _entity_blocks(sim, moving_eid, x, y, z):
 
 def _auto_open_closed_door_for_move(sim, eid, from_x, from_y, to_x, to_y, z, *, move_reason="move"):
     state = _operable_door_state_at(sim, to_x, to_y, z)
-    if state is None or bool(state.get("open", False)):
+    if state is None or bool(state.get("open", False)) or bool(state.get("broken", False)):
         return True, None
     return _door_open_attempt(
         sim,
@@ -51,7 +51,7 @@ def _auto_open_closed_door_for_move(sim, eid, from_x, from_y, to_x, to_y, z, *, 
 
 def _closed_door_move_block_reason(sim, eid, x, y, z):
     state = _operable_door_state_at(sim, x, y, z)
-    if state is None or bool(state.get("open", False)):
+    if state is None or bool(state.get("open", False)) or bool(state.get("broken", False)):
         return None
     if _actor_is_animal_or_wildlife(sim, eid):
         return "blocked_animal_doorway"
@@ -98,7 +98,7 @@ def _closed_door_move_block_reason(sim, eid, x, y, z):
 
 def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z):
     state = _operable_door_state_at(sim, to_x, to_y, z)
-    if state is None or bool(state.get("open", False)):
+    if state is None or bool(state.get("open", False)) or bool(state.get("broken", False)):
         return False
     if _actor_is_animal_or_wildlife(sim, eid):
         return False
