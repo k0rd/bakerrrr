@@ -101,6 +101,9 @@ _CONTROLLER_BUTTON_DEDUPE_SECONDS = 0.42
 _CONTROLLER_HAT_DEDUPE_SECONDS = 0.28
 _CONTROLLER_DIGITAL_REPEAT_DELAY = 0.42
 _CONTROLLER_DIGITAL_REPEAT_INTERVAL = 0.22
+_CONTROLLER_LOOK_DEADZONE = 0.55
+_CONTROLLER_LOOK_REPEAT_DELAY = 0.28
+_CONTROLLER_LOOK_REPEAT_INTERVAL = 0.16
 
 
 def _resource_path(*parts):
@@ -5328,6 +5331,13 @@ class PygameView:
         dy = -1 if y_value <= -CONTROLLER_DEADZONE else 1 if y_value >= CONTROLLER_DEADZONE else 0
         return (dx, dy)
 
+    def _right_stick_delta(self, x_value, y_value):
+        x_value = self._normalized_axis_value(x_value)
+        y_value = self._normalized_axis_value(y_value)
+        dx = -1 if x_value <= -_CONTROLLER_LOOK_DEADZONE else 1 if x_value >= _CONTROLLER_LOOK_DEADZONE else 0
+        dy = -1 if y_value <= -_CONTROLLER_LOOK_DEADZONE else 1 if y_value >= _CONTROLLER_LOOK_DEADZONE else 0
+        return (dx, dy)
+
     def _controller_input_instance_ids(self):
         ids = {int(instance_id) for instance_id in tuple(self._controller_devices.keys())}
         for key in tuple(self._controller_button_state.keys()) + tuple(self._controller_axis_state.keys()):
@@ -5455,7 +5465,7 @@ class PygameView:
         for instance_id in self._controller_input_instance_ids():
             if not self._controller_has_left_stick(instance_id):
                 continue
-            delta = self._axis_pair_delta(
+            delta = self._right_stick_delta(
                 self._controller_axis_state.get((instance_id, "right_x"), 0.0),
                 self._controller_axis_state.get((instance_id, "right_y"), 0.0),
             )
@@ -5464,7 +5474,7 @@ class PygameView:
         for instance_id in tuple(self._raw_joysticks.keys()) + tuple({key[0] for key in self._raw_axis_state.keys()}):
             if not self._raw_joystick_has_left_stick(instance_id):
                 continue
-            delta = self._axis_pair_delta(
+            delta = self._right_stick_delta(
                 self._raw_axis_state.get((instance_id, 2), 0.0),
                 self._raw_axis_state.get((instance_id, 3), 0.0),
             )
@@ -5476,14 +5486,14 @@ class PygameView:
         if source == "joystick":
             if not self._raw_joystick_has_left_stick(instance_id):
                 return None
-            delta = self._axis_pair_delta(
+            delta = self._right_stick_delta(
                 self._raw_axis_state.get((int(instance_id), 2), 0.0),
                 self._raw_axis_state.get((int(instance_id), 3), 0.0),
             )
         else:
             if not self._controller_has_left_stick(instance_id):
                 return None
-            delta = self._axis_pair_delta(
+            delta = self._right_stick_delta(
                 self._controller_axis_state.get((int(instance_id), "right_x"), 0.0),
                 self._controller_axis_state.get((int(instance_id), "right_y"), 0.0),
             )
@@ -5495,9 +5505,7 @@ class PygameView:
             return None
         if delta == self._last_controller_look_delta:
             return None
-        self._last_controller_look_delta = delta
-        self._last_controller_look_at = time.monotonic()
-        self._next_controller_look_repeat_at = 0.0
+        self._prime_controller_look_repeat_delay(delta)
         return physical
 
     def _controller_repeat_input(self):
@@ -5531,10 +5539,10 @@ class PygameView:
         if delta != self._last_controller_look_delta:
             self._last_controller_look_delta = delta
             self._last_controller_look_at = now
-            self._next_controller_look_repeat_at = now + CONTROLLER_REPEAT_DELAY
+            self._next_controller_look_repeat_at = now + _CONTROLLER_LOOK_REPEAT_DELAY
             return self._right_stick_physical_input(delta, source=source_kind or "controller")
         if now >= float(self._next_controller_look_repeat_at or 0.0):
-            self._next_controller_look_repeat_at = now + CONTROLLER_REPEAT_INTERVAL
+            self._next_controller_look_repeat_at = now + _CONTROLLER_LOOK_REPEAT_INTERVAL
             return self._right_stick_physical_input(delta, source=source_kind or "controller")
         return None
 
@@ -5562,7 +5570,7 @@ class PygameView:
         now = time.monotonic()
         self._last_controller_look_delta = (dx, dy)
         self._last_controller_look_at = now
-        self._next_controller_look_repeat_at = now + CONTROLLER_REPEAT_DELAY
+        self._next_controller_look_repeat_at = now + _CONTROLLER_LOOK_REPEAT_DELAY
 
     def _button_press_is_duplicate(self, state, accepted_at, key, *, pressed, window=_CONTROLLER_BUTTON_DEDUPE_SECONDS):
         now = time.monotonic()
@@ -5760,6 +5768,8 @@ class PygameView:
                 self.input_queue.append(mapped)
         if include_repeat and not self.input_queue:
             repeated = self._controller_repeat_input()
+            if repeated is None:
+                repeated = self._controller_look_repeat_input()
             if repeated is not None:
                 self.input_queue.append(repeated)
 

@@ -2992,6 +2992,11 @@ class InputSystem(System):
         if key is None:
             return False
 
+        state = self._look_state()
+        if bool(state.get("active")) and str(state.get("mode", "city")).strip().lower() == "city":
+            state["controller_cursor"] = True
+            return self._handle_look_input(key, zoom_mode)
+
         positions = self.sim.ecs.get(Position)
         pos = positions.get(self.player_eid)
         if not pos:
@@ -3000,7 +3005,6 @@ class InputSystem(System):
         target_y = int(pos.y) + dy
         if not self.sim.tilemap.in_bounds(target_x, target_y):
             return False
-        state = self._look_state()
         purpose = str(state.get("purpose", "") or "").strip().lower() if bool(state.get("active")) else ""
         if not purpose or purpose == "inspect":
             purpose = self._right_stick_cursor_purpose()
