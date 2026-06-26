@@ -104,6 +104,8 @@ _CONTROLLER_DIGITAL_REPEAT_INTERVAL = 0.22
 _CONTROLLER_LOOK_DEADZONE = 0.55
 _CONTROLLER_LOOK_REPEAT_DELAY = 0.28
 _CONTROLLER_LOOK_REPEAT_INTERVAL = 0.16
+_CONTROL_SEMANTIC_DEDUPE_SECONDS = 0.28
+_CONTROL_SEMANTIC_DEDUPE_KEYS = frozenset({9, 10, 13, 27, ord("b"), ord("r")})
 
 
 def _resource_path(*parts):
@@ -164,6 +166,8 @@ class PygameView:
         self._raw_button_accept_at = {}
         self._raw_hat_state = {}
         self._raw_hat_accept_at = {}
+        self._control_semantic_accept_at = {}
+        self._control_semantic_accept_source = {}
         self._last_controller_move_delta = (0, 0)
         self._last_controller_move_at = 0.0
         self._next_controller_repeat_at = 0.0
@@ -5588,6 +5592,48 @@ class PygameView:
         accepted_at[key] = now
         return False
 
+    def _input_source_kind(self, physical):
+        if not isinstance(physical, dict):
+            return ""
+        if str(physical.get("kind", "") or "").strip().lower() == "key":
+            return "key"
+        source = str(physical.get("source", "") or "").strip().lower()
+        return source or "controller"
+
+    def _control_semantic_key(self, physical):
+        key = self._input_to_legacy_key(physical)
+        try:
+            key = int(key)
+        except (TypeError, ValueError):
+            return None
+        if key in _CONTROL_SEMANTIC_DEDUPE_KEYS:
+            return key
+        return None
+
+    def _control_semantic_duplicate(self, physical):
+        semantic_key = self._control_semantic_key(physical)
+        if semantic_key is None:
+            return False
+        source = self._input_source_kind(physical)
+        now = time.monotonic()
+        for queued in self.input_queue:
+            if self._control_semantic_key(queued) != semantic_key:
+                continue
+            queued_source = self._input_source_kind(queued)
+            if source != "key" or queued_source != "key":
+                return True
+        try:
+            last_at = float(self._control_semantic_accept_at.get(semantic_key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            last_at = 0.0
+        last_source = str(self._control_semantic_accept_source.get(semantic_key, "") or "")
+        if last_at and now - last_at < _CONTROL_SEMANTIC_DEDUPE_SECONDS:
+            if source != "key" or last_source != "key":
+                return True
+        self._control_semantic_accept_at[semantic_key] = now
+        self._control_semantic_accept_source[semantic_key] = source
+        return False
+
     def _axis_press_input(self, key, *, axis, value, device_guid="", source="controller"):
         direction = self._axis_direction(value)
         pressed = bool(direction)
@@ -5764,7 +5810,7 @@ class PygameView:
     def _pump_inputs(self, *, include_repeat=True):
         for event in self.pygame.event.get():
             mapped = self._map_event_input(event)
-            if mapped is not None:
+            if mapped is not None and not self._control_semantic_duplicate(mapped):
                 self.input_queue.append(mapped)
         if include_repeat and not self.input_queue:
             repeated = self._controller_repeat_input()
