@@ -1,5 +1,7 @@
 import curses
+import json
 import math
+import os
 import sys
 import time
 from collections import deque
@@ -106,6 +108,11 @@ _CONTROLLER_LOOK_REPEAT_DELAY = 0.28
 _CONTROLLER_LOOK_REPEAT_INTERVAL = 0.16
 _CONTROL_SEMANTIC_DEDUPE_SECONDS = 0.28
 _CONTROL_SEMANTIC_DEDUPE_KEYS = frozenset({9, 10, 13, 27, ord("b"), ord("r")})
+_INPUT_DEBUG_ENV = "BAKERRRR_INPUT_DEBUG"
+_INPUT_DEBUG_PATH_ENV = "BAKERRRR_INPUT_DEBUG_PATH"
+_INPUT_DEBUG_MAX_BYTES_ENV = "BAKERRRR_INPUT_DEBUG_MAX_BYTES"
+_INPUT_DEBUG_DEFAULT_PATH = Path("saves") / "debug" / "input_debug.log"
+_INPUT_DEBUG_DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 
 
 def _resource_path(*parts):
@@ -113,6 +120,10 @@ def _resource_path(*parts):
     if bundle_root:
         return Path(bundle_root).joinpath(*parts)
     return Path(__file__).resolve().parents[1].joinpath(*parts)
+
+
+def _env_truthy(name):
+    return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on", "debug", "trace"}
 
 
 class PygameView:
@@ -168,12 +179,23 @@ class PygameView:
         self._raw_hat_accept_at = {}
         self._control_semantic_accept_at = {}
         self._control_semantic_accept_source = {}
+        self._input_debug_enabled = _env_truthy(_INPUT_DEBUG_ENV)
+        self._input_debug_file = None
+        self._input_debug_seq = 0
+        self._input_debug_path = self._resolve_input_debug_path()
         self._last_controller_move_delta = (0, 0)
         self._last_controller_move_at = 0.0
         self._next_controller_repeat_at = 0.0
         self._last_controller_look_delta = (0, 0)
         self._last_controller_look_at = 0.0
         self._next_controller_look_repeat_at = 0.0
+        self._input_debug(
+            "view_init",
+            width_cells=self.width_cells,
+            height_cells=self.height_cells,
+            cell_px=self.cell_px,
+            pygame_version=getattr(pygame, "version", None) and getattr(getattr(pygame, "version", None), "ver", ""),
+        )
         self._init_controller_input()
         self._close_requested = False
         self._animation_tick = 0
@@ -190,10 +212,102 @@ class PygameView:
         self.palette.update(pygame_world_palette_entries())
         self.palette.update(pygame_palette_entries())
 
+    def _resolve_input_debug_path(self):
+        raw = str(os.getenv(_INPUT_DEBUG_PATH_ENV, "") or "").strip()
+        if raw:
+            return Path(raw).expanduser()
+        return _INPUT_DEBUG_DEFAULT_PATH
+
+    def _input_debug_max_bytes(self):
+        raw = str(os.getenv(_INPUT_DEBUG_MAX_BYTES_ENV, "") or "").strip()
+        if not raw:
+            return _INPUT_DEBUG_DEFAULT_MAX_BYTES
+        try:
+            return max(64 * 1024, int(raw))
+        except (TypeError, ValueError):
+            return _INPUT_DEBUG_DEFAULT_MAX_BYTES
+
+    def _ensure_input_debug_file(self):
+        if not self._input_debug_enabled:
+            return None
+        if self._input_debug_file is not None:
+            return self._input_debug_file
+        try:
+            path = Path(self._input_debug_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            max_bytes = self._input_debug_max_bytes()
+            try:
+                if path.exists() and path.stat().st_size > max_bytes:
+                    rotated = path.with_suffix(path.suffix + ".1")
+                    try:
+                        rotated.unlink()
+                    except FileNotFoundError:
+                        pass
+                    path.replace(rotated)
+            except OSError:
+                pass
+            self._input_debug_file = path.open("a", encoding="utf-8", buffering=1)
+            return self._input_debug_file
+        except OSError:
+            self._input_debug_enabled = False
+            return None
+
+    def _input_debug_safe(self, value):
+        if isinstance(value, dict):
+            return {str(key): self._input_debug_safe(val) for key, val in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._input_debug_safe(val) for val in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    def _input_debug(self, event_name, **fields):
+        handle = self._ensure_input_debug_file()
+        if handle is None:
+            return
+        self._input_debug_seq += 1
+        row = {
+            "seq": int(self._input_debug_seq),
+            "time": round(time.monotonic(), 6),
+            "event": str(event_name),
+        }
+        for key, value in fields.items():
+            row[str(key)] = self._input_debug_safe(value)
+        try:
+            handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+        except OSError:
+            self._input_debug_enabled = False
+
+    def _input_debug_event_fields(self, event):
+        if event is None:
+            return {}
+        fields = {}
+        event_type = getattr(event, "type", None)
+        fields["type"] = event_type
+        try:
+            fields["type_name"] = self.pygame.event.event_name(event_type)
+        except Exception:
+            fields["type_name"] = str(event_type)
+        for attr in (
+            "key",
+            "unicode",
+            "button",
+            "axis",
+            "value",
+            "which",
+            "instance_id",
+            "device_index",
+            "hat",
+        ):
+            if hasattr(event, attr):
+                fields[attr] = getattr(event, attr)
+        return fields
+
     def _init_controller_input(self):
         try:
             self.pygame.joystick.init()
         except Exception:
+            self._input_debug("controller_init_failed", stage="joystick_init")
             return False
         controller_mod = None
         try:
@@ -210,6 +324,7 @@ class PygameView:
             count = self.pygame.joystick.get_count()
         except Exception:
             count = 0
+        self._input_debug("controller_init", controller_module=bool(controller_mod is not None), joystick_count=int(count or 0))
         for index in range(max(0, int(count))):
             self._open_controller_device(index)
         return True
@@ -248,9 +363,16 @@ class PygameView:
                         init()
                     instance_id = self._device_instance_id(controller, index)
                     self._controller_devices[instance_id] = controller
+                    self._input_debug(
+                        "controller_opened",
+                        index=int(index),
+                        instance_id=int(instance_id),
+                        source="controller",
+                        guid=self._device_guid(controller, fallback=f"controller{instance_id}"),
+                    )
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                self._input_debug("controller_open_failed", index=int(index), source="controller", error=repr(exc))
 
         try:
             joystick = self.pygame.joystick.Joystick(index)
@@ -259,8 +381,16 @@ class PygameView:
                 init()
             instance_id = self._device_instance_id(joystick, index)
             self._raw_joysticks[instance_id] = joystick
+            self._input_debug(
+                "controller_opened",
+                index=int(index),
+                instance_id=int(instance_id),
+                source="joystick",
+                guid=self._device_guid(joystick, fallback=f"joy{instance_id}"),
+            )
             return True
-        except Exception:
+        except Exception as exc:
+            self._input_debug("controller_open_failed", index=int(index), source="joystick", error=repr(exc))
             return False
 
     def _close_controller_device(self, instance_id):
@@ -269,6 +399,7 @@ class PygameView:
         except (TypeError, ValueError):
             return False
         device = self._controller_devices.pop(instance_id, None)
+        source = "controller" if device is not None else "joystick"
         if device is None:
             device = self._raw_joysticks.pop(instance_id, None)
         self._controller_axis_state = {
@@ -321,6 +452,7 @@ class PygameView:
             for key, value in self._raw_hat_accept_at.items()
             if key[0] != instance_id
         }
+        self._input_debug("controller_closed", instance_id=int(instance_id), source=source, had_device=bool(device is not None))
         quit_fn = getattr(device, "quit", None)
         if callable(quit_fn):
             try:
@@ -5489,6 +5621,7 @@ class PygameView:
     def _controller_right_stick_input_for_instance(self, instance_id, *, source="controller"):
         if source == "joystick":
             if not self._raw_joystick_has_left_stick(instance_id):
+                self._input_debug("right_stick_drop", instance_id=int(instance_id), source=source, reason="no_left_stick")
                 return None
             delta = self._right_stick_delta(
                 self._raw_axis_state.get((int(instance_id), 2), 0.0),
@@ -5496,6 +5629,7 @@ class PygameView:
             )
         else:
             if not self._controller_has_left_stick(instance_id):
+                self._input_debug("right_stick_drop", instance_id=int(instance_id), source=source, reason="no_left_stick")
                 return None
             delta = self._right_stick_delta(
                 self._controller_axis_state.get((int(instance_id), "right_x"), 0.0),
@@ -5503,13 +5637,16 @@ class PygameView:
             )
         physical = self._right_stick_physical_input(delta, source=source)
         if physical is None:
+            self._input_debug("right_stick_center", instance_id=int(instance_id), source=source)
             self._last_controller_look_delta = (0, 0)
             self._last_controller_look_at = 0.0
             self._next_controller_look_repeat_at = 0.0
             return None
         if delta == self._last_controller_look_delta:
+            self._input_debug("right_stick_edge_drop", instance_id=int(instance_id), source=source, delta=delta, reason="same_delta")
             return None
         self._prime_controller_look_repeat_delay(delta)
+        self._input_debug("right_stick_edge", instance_id=int(instance_id), source=source, delta=delta, physical=physical)
         return physical
 
     def _controller_repeat_input(self):
@@ -5526,10 +5663,14 @@ class PygameView:
             self._last_controller_move_delta = delta
             self._last_controller_move_at = now
             self._next_controller_repeat_at = now + repeat_delay
-            return self._movement_physical_input(delta)
+            physical = self._movement_physical_input(delta, source=source_kind or "controller")
+            self._input_debug("movement_repeat_prime", delta=delta, source=source_kind, delay=round(float(repeat_delay), 4), physical=physical)
+            return physical
         if now >= float(self._next_controller_repeat_at or 0.0):
             self._next_controller_repeat_at = now + repeat_interval
-            return self._movement_physical_input(delta)
+            physical = self._movement_physical_input(delta, source=source_kind or "controller")
+            self._input_debug("movement_repeat", delta=delta, source=source_kind, interval=round(float(repeat_interval), 4), physical=physical)
+            return physical
         return None
 
     def _controller_look_repeat_input(self):
@@ -5544,10 +5685,14 @@ class PygameView:
             self._last_controller_look_delta = delta
             self._last_controller_look_at = now
             self._next_controller_look_repeat_at = now + _CONTROLLER_LOOK_REPEAT_DELAY
-            return self._right_stick_physical_input(delta, source=source_kind or "controller")
+            physical = self._right_stick_physical_input(delta, source=source_kind or "controller")
+            self._input_debug("look_repeat_prime", delta=delta, source=source_kind, delay=round(float(_CONTROLLER_LOOK_REPEAT_DELAY), 4), physical=physical)
+            return physical
         if now >= float(self._next_controller_look_repeat_at or 0.0):
             self._next_controller_look_repeat_at = now + _CONTROLLER_LOOK_REPEAT_INTERVAL
-            return self._right_stick_physical_input(delta, source=source_kind or "controller")
+            physical = self._right_stick_physical_input(delta, source=source_kind or "controller")
+            self._input_debug("look_repeat", delta=delta, source=source_kind, interval=round(float(_CONTROLLER_LOOK_REPEAT_INTERVAL), 4), physical=physical)
+            return physical
         return None
 
     def _prime_controller_repeat_delay(self, delta):
@@ -5580,6 +5725,7 @@ class PygameView:
         now = time.monotonic()
         if not pressed:
             state[key] = False
+            self._input_debug("button_release", key=key)
             return True
         was_pressed = bool(state.get(key))
         state[key] = True
@@ -5588,6 +5734,13 @@ class PygameView:
         except (TypeError, ValueError):
             last_at = 0.0
         if was_pressed or (last_at and now - last_at < float(window)):
+            self._input_debug(
+                "button_dedupe_drop",
+                key=key,
+                was_pressed=bool(was_pressed),
+                age=round(now - last_at, 6) if last_at else None,
+                window=float(window),
+            )
             return True
         accepted_at[key] = now
         return False
@@ -5621,6 +5774,15 @@ class PygameView:
                 continue
             queued_source = self._input_source_kind(queued)
             if source != "key" or queued_source != "key":
+                self._input_debug(
+                    "semantic_dedupe_drop",
+                    semantic_key=int(semantic_key),
+                    source=source,
+                    queued_source=queued_source,
+                    queued_input=queued,
+                    physical=physical,
+                    reason="queued_equivalent",
+                )
                 return True
         try:
             last_at = float(self._control_semantic_accept_at.get(semantic_key, 0.0) or 0.0)
@@ -5629,6 +5791,16 @@ class PygameView:
         last_source = str(self._control_semantic_accept_source.get(semantic_key, "") or "")
         if last_at and now - last_at < _CONTROL_SEMANTIC_DEDUPE_SECONDS:
             if source != "key" or last_source != "key":
+                self._input_debug(
+                    "semantic_dedupe_drop",
+                    semantic_key=int(semantic_key),
+                    source=source,
+                    last_source=last_source,
+                    age=round(now - last_at, 6),
+                    window=float(_CONTROL_SEMANTIC_DEDUPE_SECONDS),
+                    physical=physical,
+                    reason="recent_equivalent",
+                )
                 return True
         self._control_semantic_accept_at[semantic_key] = now
         self._control_semantic_accept_source[semantic_key] = source
@@ -5641,8 +5813,10 @@ class PygameView:
         pressed_store = self._raw_axis_pressed if source == "joystick" else self._controller_axis_pressed
         if not pressed:
             pressed_store.pop(key, None)
+            self._input_debug("axis_release", key=key, axis=axis, source=source, value=round(float(value or 0.0), 4))
             return None
         if was_pressed:
+            self._input_debug("axis_edge_drop", key=key, axis=axis, source=source, direction=direction, reason="already_pressed")
             return None
         pressed_store[key] = direction
         physical = {
@@ -5722,10 +5896,13 @@ class PygameView:
         controller_removed = getattr(pg, "CONTROLLERDEVICEREMOVED", None)
         if event_type in {joy_added, controller_added}:
             index = int(getattr(event, "device_index", getattr(event, "which", 0)) or 0)
+            self._input_debug("controller_device_added", raw_event=self._input_debug_event_fields(event), index=int(index))
             self._open_controller_device(index)
             return None
         if event_type in {joy_removed, controller_removed}:
-            self._close_controller_device(getattr(event, "instance_id", getattr(event, "which", 0)))
+            instance_id = getattr(event, "instance_id", getattr(event, "which", 0))
+            self._input_debug("controller_device_removed", raw_event=self._input_debug_event_fields(event), instance_id=instance_id)
+            self._close_controller_device(instance_id)
             return None
 
         controller_button_down = getattr(pg, "CONTROLLERBUTTONDOWN", None)
@@ -5809,21 +5986,30 @@ class PygameView:
 
     def _pump_inputs(self, *, include_repeat=True):
         for event in self.pygame.event.get():
+            self._input_debug("raw_event", raw_event=self._input_debug_event_fields(event))
             mapped = self._map_event_input(event)
-            if mapped is not None and not self._control_semantic_duplicate(mapped):
-                self.input_queue.append(mapped)
+            self._input_debug("mapped_event", raw_event=self._input_debug_event_fields(event), mapped=mapped)
+            if mapped is not None:
+                if self._control_semantic_duplicate(mapped):
+                    self._input_debug("mapped_event_dropped", mapped=mapped, reason="semantic_dedupe")
+                else:
+                    self.input_queue.append(mapped)
+                    self._input_debug("queued_input", mapped=mapped, queue_len=len(self.input_queue))
         if include_repeat and not self.input_queue:
             repeated = self._controller_repeat_input()
             if repeated is None:
                 repeated = self._controller_look_repeat_input()
             if repeated is not None:
                 self.input_queue.append(repeated)
+                self._input_debug("queued_repeat", mapped=repeated, queue_len=len(self.input_queue))
 
     def get_input(self):
         self._pump_inputs(include_repeat=True)
         if not self.input_queue:
             return None
-        return self.input_queue.popleft()
+        result = self.input_queue.popleft()
+        self._input_debug("get_input", result=result, queue_len=len(self.input_queue))
+        return result
 
     def drain_inputs(self):
         self._pump_inputs(include_repeat=True)
@@ -5831,6 +6017,7 @@ class PygameView:
             return []
         drained = list(self.input_queue)
         self.input_queue.clear()
+        self._input_debug("drain_inputs", result=drained, queue_len=0)
         return drained
 
     def _input_to_legacy_key(self, physical):
@@ -5940,4 +6127,11 @@ class PygameView:
         self.pygame.display.flip()
 
     def close(self):
+        if self._input_debug_file is not None:
+            self._input_debug("view_close")
+            try:
+                self._input_debug_file.close()
+            except OSError:
+                pass
+            self._input_debug_file = None
         self.pygame.quit()
