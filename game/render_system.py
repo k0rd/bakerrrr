@@ -1616,7 +1616,7 @@ class RenderSystem(System):
         for line in (
             "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with space or 5.",
             "Action palette: Tab opens a nearby action menu. Enter runs the selected action, B rebinds it, R resets it, and protected movement/back/help keys stay fixed.",
-            "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, T takes a tactical read, and X opens the map.",
+            "Observe: / talks, ' physically interacts, . uses the service at your tile or adjacent terminal, ; locks or unlocks a nearby door, x opens the look cursor, T takes a tactical read, and X opens the map.",
             "Vehicles: ' enters a vehicle. Local driving uses forward to accelerate, left/right to turn, back to brake or reverse from rest. H toggles headlights. X opens a view-only map; drive onto an entrance ramp for quick travel. Boats stay local. Press t to get out.",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
             "Conversation read: + marks newly surfaced topics when your character notices them; at higher Conversation, its color hints safe, neutral, or dangerous.",
@@ -1631,7 +1631,7 @@ class RenderSystem(System):
             "Badges: ! marks threats or restricted places, + marks allies or public services, * marks contacts or owned places, and L marks locked places.",
             "Progress: O operations report, Y opens the Places notebook; Tab switches to the People notebook. L opens event log history.",
             "Log modal: T cycles filters; H sets the current modal filter as the live HUD filter.",
-            "Services: . uses the service on your tile, including banking, insurance, terminals, transit, and storefront counters. P buy property.",
+            "Services: . uses the service at your tile or adjacent terminal, including banking, insurance, terminals, transit, and storefront counters. P buy property.",
             "Character: + opens the character sheet. Tab or Left/Right switch pages.",
         ):
             _append_help_section(lines, line)

@@ -2156,7 +2156,7 @@ class EventLogSystem(System):
             self.sim.log.add("No one close enough to talk to.")
             return
         if interaction_mode == "service":
-            self.sim.log.add("No service is available here.")
+            self.sim.log.add("No service terminal or same-tile counter is available here.")
             return
         self.sim.log.add("Nothing nearby responds to that interaction.")
 

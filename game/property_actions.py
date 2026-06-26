@@ -322,6 +322,41 @@ class PropertyActionRuntime:
         )
         return candidates[0]
 
+    def nearby_service_terminal_property(self, pos, *, radius=1, actor_eid=None):
+        try:
+            radius = max(0, int(radius))
+        except (TypeError, ValueError):
+            radius = 1
+        candidates = []
+        seen = set()
+        for candidate in self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=radius):
+            if not isinstance(candidate, dict):
+                continue
+            prop_id = str(candidate.get("id", "")).strip()
+            if not prop_id or prop_id in seen:
+                continue
+            seen.add(prop_id)
+            if _property_infrastructure_role(candidate) != "service_terminal":
+                continue
+            if not self._property_supports_services(candidate):
+                continue
+            candidates.append(candidate)
+        if not candidates:
+            return None
+
+        preferred_dir = self.action_system._player_interact_direction(actor_eid, pos) if actor_eid is not None else None
+        candidates.sort(
+            key=lambda current: _interaction_target_order_key(
+                pos.x,
+                pos.y,
+                int(current.get("x", pos.x)),
+                int(current.get("y", pos.y)),
+                preferred_dir=preferred_dir,
+                stable_tiebreaker=(str(current.get("id", "")),),
+            )
+        )
+        return candidates[0]
+
     def hard_traversal_property_at(self, pos):
         if pos is None:
             return None
@@ -730,6 +765,8 @@ class PropertyActionRuntime:
 
     def handle_service_interact_action(self, eid, pos):
         prop = self.same_space_service_property(pos)
+        if not isinstance(prop, dict):
+            prop = self.nearby_service_terminal_property(pos, radius=1, actor_eid=eid)
         if not isinstance(prop, dict):
             self._emit_interact_empty(eid, pos, interaction_mode="service")
             return False
