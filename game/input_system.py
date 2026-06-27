@@ -4343,17 +4343,17 @@ class InputSystem(System):
             state["selected_index"] += 1
             self._normalize_inventory_selection()
             return True
-
-        if ord("1") <= key <= ord("9"):
-            state.pop("appearance_slot_choice", None)
-            state["selected_index"] = key - ord("1")
-            self._normalize_inventory_selection()
-            return True
-        if key == ord("0"):
-            state.pop("appearance_slot_choice", None)
-            state["selected_index"] = 9
-            self._normalize_inventory_selection()
-            return True
+        if key is not None: #guard bad assumption
+            if ord("1") <= key <= ord("9"):
+                state.pop("appearance_slot_choice", None)
+                state["selected_index"] = key - ord("1")
+                self._normalize_inventory_selection()
+                return True
+            if key == ord("0"):
+                state.pop("appearance_slot_choice", None)
+                state["selected_index"] = 9
+                self._normalize_inventory_selection()
+                return True
 
         selected = self._selected_inventory_entry()
         if panel_kind == "container" and key in (ord("u"), ord("U")):
