@@ -964,13 +964,16 @@ class InputSystem(System):
         rows = self._normalize_action_menu_selection(zoom_mode)
         if key in (KEY_UP, ord("k"), ord("K")):
             state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 1)
+            self._next_input_event(collapse_burst=False)
             return True
         if key in (KEY_DOWN, ord("j"), ord("J")):
             state["selected_index"] = min(max(0, len(rows) - 1), int(state.get("selected_index", 0) or 0) + 1)
+            self._next_input_event(collapse_burst=False)
             return True
-        if ord("1") <= key <= ord("9"):
-            state["selected_index"] = min(max(0, len(rows) - 1), key - ord("1"))
-            return True
+        if key is not None:
+            if ord("1") <= key <= ord("9"):
+                state["selected_index"] = min(max(0, len(rows) - 1), key - ord("1"))
+                return True
         row = self._selected_action_menu_row(zoom_mode)
         if key in (ord("b"), ord("B")):
             if not row:
