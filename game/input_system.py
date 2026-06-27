@@ -981,6 +981,8 @@ class InputSystem(System):
             state["mode"] = "bind"
             state["pending_bind_action_id"] = row.get("id", "")
             state["feedback"] = f"Press a key or button for {row.get('label', 'action')}."
+            # Discard the key that just triggered the bind, duh!
+            self._next_input_event(collapse_burst=False)
             return True
         if key in (ord("r"), ord("R")):
             if row:
