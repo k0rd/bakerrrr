@@ -537,6 +537,36 @@ def _owner_cue_fields(scene, relevant):
     }
 
 
+def _place_mood_fields(scene):
+    if not isinstance(scene, dict):
+        return {}
+    fields = {}
+    for key in (
+        "place_mood_kind",
+        "place_mood_label",
+        "place_mood_reason",
+        "place_mood_visible_cue",
+        "place_mood_mechanical_tags",
+        "ambient_ritual_kind",
+        "ambient_ritual_label",
+        "ambient_ritual_summary",
+        "ambient_ritual_action",
+        "ambient_ritual_fixture_name",
+        "ambient_ritual_mechanical_tags",
+    ):
+        value = scene.get(key)
+        if value in (None, "", (), []):
+            continue
+        fields[key] = value
+    try:
+        confidence = float(scene.get("place_mood_confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence > 0.0:
+        fields["place_mood_confidence"] = max(0.0, min(1.0, confidence))
+    return fields
+
+
 def _anchor_tuple(value):
     if not isinstance(value, (tuple, list)) or len(value) < 3:
         return None
@@ -617,6 +647,7 @@ def _row_from_scene(sim, scene_id, scene, *, player_pos=None, player_eid=None):
         **_distance_fields(anchor, player_pos),
         **ownership,
         **_owner_cue_fields(scene, ownership.get("player_business_relevance")),
+        **_place_mood_fields(scene),
     }
 
 
@@ -1136,6 +1167,8 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
         effect_text = f" Effect: {effect_summary}." if effect_summary else ""
         world_event_context = _text(row.get("world_event_context_note"))
         context_text = f" World event pressure: {world_event_context}." if world_event_context else ""
+        mood_text = _report_place_mood_text(row)
+        ritual_text = _report_ambient_ritual_text(row)
         if row.get("player_business_relevance") and owner_cue:
             owner_text = f" Your business is directly involved: {owner_cue}."
         elif row.get("player_business_relevance") and owner_style:
@@ -1146,9 +1179,25 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
             owner_text = ""
         lines.append(
             f"{row['title']} at {row['property_name']} ({row['distance_text']}): "
-            f"{row['summary']}; {row['action']}.{org_text}{fixture_text}{effect_text}{context_text}{owner_text}"
+            f"{row['summary']}; {row['action']}.{org_text}{fixture_text}{effect_text}{context_text}{mood_text}{ritual_text}{owner_text}"
         )
     return tuple(lines)
+
+
+def _report_place_mood_text(row):
+    label = _text(row.get("place_mood_label"))
+    if not label:
+        return ""
+    cue = _text(row.get("place_mood_visible_cue")) or _text(row.get("place_mood_reason"))
+    return f" Mood: {label} - {cue}." if cue else f" Mood: {label}."
+
+
+def _report_ambient_ritual_text(row):
+    label = _text(row.get("ambient_ritual_label"))
+    if not label:
+        return ""
+    summary = _text(row.get("ambient_ritual_summary"))
+    return f" Ritual: {label} - {summary}." if summary else f" Ritual: {label}."
 
 
 def _look_owner_text(row):
@@ -1177,6 +1226,26 @@ def _look_effect_text(row):
     return ""
 
 
+def _look_place_mood_text(row):
+    label = _text(row.get("place_mood_label"))
+    if not label:
+        return ""
+    cue = _text(row.get("place_mood_visible_cue")) or _text(row.get("place_mood_reason"))
+    if cue:
+        return f"; mood {label} - {cue}"
+    return f"; mood {label}"
+
+
+def _look_ambient_ritual_text(row):
+    label = _text(row.get("ambient_ritual_label"))
+    if not label:
+        return ""
+    action = _text(row.get("ambient_ritual_action")) or _text(row.get("ambient_ritual_summary"))
+    if action:
+        return f"; ritual {label} - {action}"
+    return f"; ritual {label}"
+
+
 def _format_property_look_row(row):
     if not row:
         return ""
@@ -1184,6 +1253,8 @@ def _format_property_look_row(row):
         f"situation:{row['title']} active here - {row['summary']}; {row['action']}"
         + _look_org_text(row)
         + _look_effect_text(row)
+        + _look_place_mood_text(row)
+        + _look_ambient_ritual_text(row)
         + _look_owner_text(row)
     )
 
@@ -1306,6 +1377,8 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
             f"{fixture_name} is the visible handle; {row['action']}"
             + _look_org_text(row)
             + _look_effect_text(row)
+            + _look_place_mood_text(row)
+            + _look_ambient_ritual_text(row)
             + _look_owner_text(row)
         )
     if row.get("source_kind") == "world_event":
@@ -1314,6 +1387,8 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
             f"situation:{row['title']} active here - "
             f"{fixture_name} is the visible handle; {row['action']}"
             + _look_effect_text(row)
+            + _look_place_mood_text(row)
+            + _look_ambient_ritual_text(row)
             + _look_owner_text(row)
         )
     return _format_property_look_row(row)

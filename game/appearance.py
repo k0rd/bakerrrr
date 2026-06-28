@@ -23,6 +23,10 @@ from game.property_runtime import (
     site_services_for_property,
 )
 from game.semantic_catalog import get_runtime_semantic_catalog
+from game.object_profile_runtime import (
+    object_profile_effects,
+    property_is_item_backed_fixture,
+)
 
 DISTRICT_GLYPHS = {
     "industrial": ":",
@@ -1063,6 +1067,20 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None):
         elif not color:
             color = "vehicle_parked"
     elif kind in {"fixture", "asset"}:
+        if property_is_item_backed_fixture(prop):
+            signature = metadata.get("visual_signature") if isinstance(metadata.get("visual_signature"), dict) else {}
+            profile = metadata.get("object_profile") if isinstance(metadata.get("object_profile"), dict) else {}
+            semantic_id = str(signature.get("semantic_id", "") or "").strip() or f"world_object_{profile.get('family', 'personal_home')}"
+            effects = object_profile_effects(profile, signature)
+            return _semantic_snapshot(
+                glyph,
+                color=color,
+                semantic_id=semantic_id,
+                catalog=catalog,
+                preferred_categories=("world_objects", "properties"),
+                effects=effects,
+                overlays=overlays,
+            )
         semantic_id = PROPERTY_FIXTURE_SEMANTICS.get(property_fixture_type(prop))
     if property_is_public(prop) and glyph.isalpha():
         glyph = glyph.lower()

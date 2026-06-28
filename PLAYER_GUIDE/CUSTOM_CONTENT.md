@@ -93,9 +93,37 @@ Item ids must be lowercase letters, numbers, and underscores only. Custom ids ca
 
 Allowed item fields in this version:
 
-`name`, `glyph`, `stack_max`, `tags`, `category`, `legal_status`, `effects`, `appearance_family`, `appearance_slots`, `identification_profile`, `substance_profile`, `lead_profile`
+`name`, `glyph`, `stack_max`, `tags`, `category`, `legal_status`, `effects`, `appearance_family`, `appearance_slots`, `identification_profile`, `substance_profile`, `lead_profile`, `object_profile`
 
 This version does not add custom weapons, armor, containers, throwables, tools, scripts, or new building types.
+
+`object_profile` is optional metadata for small, placeable world objects. It does not make an item appear in the world by itself. A game system has to place or consume the object before it matters.
+
+Allowed `object_profile` fields:
+
+`schema_version`, `family`, `silhouette`, `material`, `primary_color`, `accent_color`, `motif`, `condition`, `rarity`, `placeable`, `pickup_allowed`, `display_name`, `description`, `display_glyph`, `display_color`, `future_tags`
+
+Allowed `object_profile.family` values:
+
+`plants_pots`, `tokens_charms`, `tools_parts`, `textiles`, `paper_books`, `containers`, `light_ritual`, `personal_home`, `trade_work`, `nature_finds`, `medical_herbal`
+
+Allowed `object_profile.material` values:
+
+`ceramic`, `wood`, `brass`, `glass`, `cloth`, `paper`, `steel`, `tin`, `stone`, `shell`, `wax`, `herb`
+
+Allowed `object_profile.motif` values:
+
+`none`, `star`, `stripe`, `dot_ring`, `crescent`, `flower`, `key_mark`, `route_mark`, `slash`
+
+Allowed `object_profile.condition` values:
+
+`plain`, `chipped`, `polished`, `wrapped`, `dusty`, `repaired`, `cracked`
+
+Allowed `object_profile.rarity` values:
+
+`common`, `uncommon`, `rare`, `unique`
+
+Placeable object-profile items must have `stack_max` set to `1`. Owner names, NPC ids, relationship labels, and "belongs to" fields are intentionally not accepted here; those meanings have to be learned through game systems, not leaked by the item file.
 
 Allowed effect types:
 

@@ -10,8 +10,15 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game.location_presentation_runtime import _location_building_category
+from game.meaningful_objects_runtime import materialize_place_object_near
 from game.opportunities import tracked_target_scene_rows
 from game.organizations import local_workplace_org_posture
+from game.place_mood_runtime import (
+    AMBIENT_RITUAL_FIELD_KEYS,
+    PLACE_MOOD_FIELD_KEYS,
+    annotate_place_mood_and_ritual,
+    public_place_mood_fields,
+)
 from game.player_businesses import (
     player_business_customer_policy as _player_business_customer_policy,
     player_business_open_roles as _player_business_open_roles,
@@ -911,6 +918,18 @@ def _business_event_scene_attention_bias(candidate):
     if event_phase in _BUSINESS_EVENT_ATTENTION_BIAS_PHASES:
         bonus += 0.25
     return round(bonus, 3)
+
+
+def _scene_place_mood_score_bias(pulse):
+    if not isinstance(pulse, dict):
+        return 0.0
+    bias = 0.0
+    for key in ("place_mood_scene_bias", "ambient_ritual_scene_bias"):
+        try:
+            bias += float(pulse.get(key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return max(0.0, min(0.3, bias))
 
 
 def _apply_business_event_scene_attention_bias(candidate):
@@ -1955,6 +1974,8 @@ def _building_pulse_snapshot(sim, prop=None, structure=None, *, respect_chunk_ca
             pulse["world_event_context_bias"] = 0.0
     consequence_profile = _business_reputation_scene_consequence_profile(sim, prop=prop, base_pulse=pulse)
     pulse["community_tone"] = str(consequence_profile.get("tone", "") or "").strip().lower()
+    if isinstance(prop, dict):
+        pulse.update(annotate_place_mood_and_ritual(sim, prop, pulse=pulse))
     return pulse
 def _next_business_event_seed_id(sim):
     state = _business_event_seed_state(sim)
@@ -5869,6 +5890,7 @@ class BusinessPulseSceneSystem(System):
                 score += 0.35
             if event_phase in _BUSINESS_EVENT_SETTLEMENT_PHASES and self._chunk_release_headroom(active_chunk) > 0:
                 score += 0.9
+            score += _scene_place_mood_score_bias(pulse)
             score -= float(_manhattan(player_pos.x, player_pos.y, anchor[0], anchor[1])) * 0.045
             if scene_id in active:
                 score += 0.55
@@ -5916,6 +5938,7 @@ class BusinessPulseSceneSystem(System):
                 continue
             score = float(tracked.get("score", 0.0) or 0.0)
             score += 0.95 if str(tracked.get("security_state", "") or "").strip().lower() in {"watched", "tight"} else 0.0
+            score += _scene_place_mood_score_bias(pulse)
             score -= float(_manhattan(player_pos.x, player_pos.y, anchor[0], anchor[1])) * 0.035
             candidates.append({
                 "scene_id": scene_id,
@@ -6060,8 +6083,12 @@ class BusinessPulseSceneSystem(System):
             "world_event_context_label",
             "world_event_context_note",
             "world_event_context_effect",
-        ):
-            value = str(scene.get(key, "") or "").strip()
+        ) + PLACE_MOOD_FIELD_KEYS:
+            raw_value = scene.get(key, "")
+            if isinstance(raw_value, (tuple, list)):
+                value = ",".join(str(item).strip() for item in raw_value if str(item).strip())
+            else:
+                value = str(raw_value or "").strip()
             if value:
                 metadata[key] = value
         if isinstance(extra_metadata, dict):
@@ -6125,8 +6152,12 @@ class BusinessPulseSceneSystem(System):
             "world_event_context_label",
             "world_event_context_note",
             "world_event_context_effect",
-        ):
-            value = str(scene.get(key, "") or "").strip()
+        ) + PLACE_MOOD_FIELD_KEYS:
+            raw_value = scene.get(key, "")
+            if isinstance(raw_value, (tuple, list)):
+                value = ",".join(str(item).strip() for item in raw_value if str(item).strip())
+            else:
+                value = str(raw_value or "").strip()
             if value:
                 metadata[key] = value
         property_id = self.sim.register_property(
@@ -6140,6 +6171,76 @@ class BusinessPulseSceneSystem(System):
             metadata=metadata,
         )
         scene["spawned_property_ids"].append(property_id)
+        return property_id
+
+    def _register_ambient_ritual_fixture(self, scene, reserved):
+        if not isinstance(scene, dict):
+            return None
+        ritual_kind = str(scene.get("ambient_ritual_kind", "") or "").strip().lower()
+        fixture_name = str(scene.get("ambient_ritual_fixture_name", "") or "").strip()
+        if not ritual_kind or not fixture_name:
+            return None
+        anchor = scene.get("anchor")
+        if not isinstance(anchor, (tuple, list)) or len(anchor) < 3:
+            return None
+        reserved = set(reserved or ())
+        support_tiles = self._anchor_support_tiles(anchor, reserved=reserved, limit=8)
+        if not support_tiles:
+            return None
+        fixture_tile = support_tiles[0]
+        extra_metadata = {
+            "ambient_ritual": True,
+            "ambient_ritual_kind": ritual_kind,
+            "ambient_ritual_label": str(scene.get("ambient_ritual_label", "") or "").strip(),
+            "ambient_ritual_summary": str(scene.get("ambient_ritual_summary", "") or "").strip(),
+            "ambient_ritual_action": str(scene.get("ambient_ritual_action", "") or "").strip(),
+            "place_mood_kind": str(scene.get("place_mood_kind", "") or "").strip().lower(),
+            "place_mood_label": str(scene.get("place_mood_label", "") or "").strip(),
+            "place_mood_visible_cue": str(scene.get("place_mood_visible_cue", "") or "").strip(),
+        }
+        object_result = materialize_place_object_near(
+            self.sim,
+            str(scene.get("property_id", "") or "").strip(),
+            int(fixture_tile[0]),
+            int(fixture_tile[1]),
+            int(fixture_tile[2] if len(fixture_tile) >= 3 else 0),
+            context={
+                "ritual_kind": ritual_kind,
+                "ritual_label": extra_metadata["ambient_ritual_label"],
+                "archetype": str(scene.get("archetype", "") or scene.get("building_archetype", "") or "").strip(),
+            },
+            placement_source="ambient_ritual",
+        )
+        if object_result.get("ok"):
+            property_id = object_result.get("property_id")
+            prop = self.sim.properties.get(str(property_id))
+            metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else None
+            if prop is not None:
+                prop["name"] = fixture_name
+            if metadata is not None:
+                linked_prop = self.sim.properties.get(str(scene.get("property_id", "") or "").strip())
+                linked_building_id = _building_id_from_property(linked_prop) if isinstance(linked_prop, dict) else ""
+                metadata.update(extra_metadata)
+                metadata["display_name"] = str(metadata.get("display_name", "") or fixture_name).strip()
+                metadata["fixture_type"] = str(scene.get("ambient_ritual_fixture_type", "") or "ambient_ritual").strip().lower()
+                metadata["business_scene_id"] = str(scene.get("scene_id", "") or "").strip()
+                metadata["business_scene_phase"] = str(scene.get("event_phase", "") or "").strip().lower()
+                metadata["linked_property_id"] = str(scene.get("property_id", "") or "").strip() or None
+                metadata["linked_building_id"] = linked_building_id or None
+            scene["spawned_property_ids"].append(str(property_id))
+            reserved.add(tuple(fixture_tile))
+            return property_id
+        property_id = self._register_scene_fixture(
+            scene,
+            fixture_tile,
+            name=fixture_name,
+            fixture_type=str(scene.get("ambient_ritual_fixture_type", "") or "ambient_ritual").strip().lower(),
+            glyph=str(scene.get("ambient_ritual_fixture_glyph", "") or "r").strip()[:1] or "r",
+            color=str(scene.get("ambient_ritual_fixture_color", "") or "property_service").strip() or "property_service",
+            extra_metadata=extra_metadata,
+        )
+        if property_id:
+            reserved.add(tuple(fixture_tile))
         return property_id
 
     def _scene_property(self, scene):
@@ -6272,6 +6373,7 @@ class BusinessPulseSceneSystem(System):
             "site_affiliated": bool(site_affiliated),
             "carried_item_ids": tuple(carried_item_ids),
         }
+        note.update(public_place_mood_fields(scene))
         intel_note = {}
         if source_kind == "seed":
             intel_note = _business_event_seed_scene_actor_note(self.sim, scene, prop, actor_spec, rng=rng)
@@ -6297,6 +6399,18 @@ class BusinessPulseSceneSystem(System):
                 "followup_lead_kind": str(intel_note.get("lead_kind", "") or "").strip().lower(),
                 "followup_shared": bool(intel_note.get("shared")),
             })
+        allow_ritual_actor_fallback = str(scene.get("event_phase", "") or "").strip().lower() not in {"maintenance_loop"}
+        if allow_ritual_actor_fallback and not str(note.get("local_line", "") or "").strip():
+            ritual_line = str(scene.get("ambient_ritual_actor_line", "") or "").strip()
+            if ritual_line:
+                note["local_line"] = ritual_line
+        if allow_ritual_actor_fallback and not str(note.get("detail_line", "") or "").strip():
+            ritual_detail = str(scene.get("ambient_ritual_detail_line", "") or "").strip()
+            mood_reason = str(scene.get("place_mood_reason", "") or "").strip()
+            if ritual_detail:
+                note["detail_line"] = ritual_detail
+            elif mood_reason:
+                note["detail_line"] = mood_reason
 
         if isinstance(prop, dict):
             _remember_property_lead_for_actor(
@@ -6516,6 +6630,7 @@ class BusinessPulseSceneSystem(System):
                         receiver_route.append(interior_target)
                     self._set_scene_actor_route(scene, eid, receiver_route)
                 reserved.add((int(spawn_pos[0]), int(spawn_pos[1]), int(spawn_pos[2])))
+        self._register_ambient_ritual_fixture(scene, reserved)
 
     def _materialize_queue_scene(self, scene, blueprint, rng):
         anchor = scene["anchor"]
@@ -6542,6 +6657,7 @@ class BusinessPulseSceneSystem(System):
             eid = self._spawn_scene_actor(scene, actor_spec, spawn_pos=spawn_pos, route_points=route_points, rng=rng)
             if eid is not None:
                 reserved.add((int(spawn_pos[0]), int(spawn_pos[1]), int(spawn_pos[2])))
+        self._register_ambient_ritual_fixture(scene, reserved)
 
     def _materialize_shift_scene(self, scene, blueprint, rng):
         anchor = scene["anchor"]
@@ -6591,6 +6707,7 @@ class BusinessPulseSceneSystem(System):
             eid = self._spawn_scene_actor(scene, actor_spec, spawn_pos=spawn_pos, route_points=route_points, rng=rng)
             if eid is not None:
                 reserved.add((int(spawn_pos[0]), int(spawn_pos[1]), int(spawn_pos[2])))
+        self._register_ambient_ritual_fixture(scene, reserved)
 
     def _materialize_gathering_scene(self, scene, blueprint, rng):
         anchor = scene["anchor"]
@@ -6640,6 +6757,7 @@ class BusinessPulseSceneSystem(System):
             eid = self._spawn_scene_actor(scene, actor_spec, spawn_pos=spawn_pos, route_points=route_points, rng=rng)
             if eid is not None:
                 reserved.add((int(spawn_pos[0]), int(spawn_pos[1]), int(spawn_pos[2])))
+        self._register_ambient_ritual_fixture(scene, reserved)
 
     def _materialize_scene(self, spec):
         blueprint = spec["blueprint"]
@@ -6679,6 +6797,7 @@ class BusinessPulseSceneSystem(System):
             "keep_hours": max(1, int(blueprint.get("keep_hours", 2) or 2)),
             "pulse_hour": max(0, int((spec.get("pulse") or {}).get("hour", 0) or 0)),
         }
+        scene.update(public_place_mood_fields(spec.get("pulse") or {}))
         rng = random.Random(f"{self.sim.seed}:business-scene:{scene['scene_id']}")
         prop = self._scene_property(scene)
         if scene["source_kind"] != "seed":
@@ -6712,6 +6831,22 @@ class BusinessPulseSceneSystem(System):
                     property_id=str(prop.get("id", "") or "").strip(),
                     property_name=str(prop.get("name", "") or "").strip(),
                     event_phase=str(scene.get("event_phase", "") or "").strip().lower(),
+                    x=int(scene["anchor"][0]),
+                    y=int(scene["anchor"][1]),
+                    z=int(scene["anchor"][2]),
+                ))
+            ritual_log = str(scene.get("ambient_ritual_log_text", "") or "").strip()
+            if ritual_log and prop is not None:
+                self.sim.emit(Event(
+                    "ambient_ritual_started",
+                    scene_id=str(scene.get("scene_id", "") or "").strip(),
+                    property_id=str(prop.get("id", "") or "").strip(),
+                    property_name=str(prop.get("name", "") or "").strip(),
+                    ritual_kind=str(scene.get("ambient_ritual_kind", "") or "").strip().lower(),
+                    ritual_label=str(scene.get("ambient_ritual_label", "") or "").strip(),
+                    place_mood_kind=str(scene.get("place_mood_kind", "") or "").strip().lower(),
+                    place_mood_label=str(scene.get("place_mood_label", "") or "").strip(),
+                    log_text=ritual_log,
                     x=int(scene["anchor"][0]),
                     y=int(scene["anchor"][1]),
                     z=int(scene["anchor"][2]),

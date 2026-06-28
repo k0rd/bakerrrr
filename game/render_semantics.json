@@ -43,6 +43,10 @@
       "layer": "ground_overlay",
       "priority": 10
     },
+    "world_objects": {
+      "layer": "ground_overlay",
+      "priority": 15
+    },
     "vehicles": {
       "layer": "ground_overlay",
       "priority": 20
@@ -347,6 +351,52 @@
     "A": {
       "property_asset": "prop_asset",
       "default": "prop_asset"
+    }
+  },
+  "world_objects": {
+    "o": {
+      "world_object_plant": "world_object_plants_pots",
+      "default": "world_object_plants_pots"
+    },
+    "*": {
+      "world_object_charm": "world_object_tokens_charms",
+      "default": "world_object_tokens_charms"
+    },
+    "t": {
+      "world_object_tool": "world_object_tools_parts",
+      "default": "world_object_tools_parts"
+    },
+    "{": {
+      "world_object_textile": "world_object_textiles",
+      "default": "world_object_textiles"
+    },
+    "?": {
+      "world_object_paper": "world_object_paper_books",
+      "default": "world_object_paper_books"
+    },
+    "c": {
+      "world_object_container": "world_object_containers",
+      "default": "world_object_containers"
+    },
+    "v": {
+      "world_object_light": "world_object_light_ritual",
+      "default": "world_object_light_ritual"
+    },
+    "m": {
+      "world_object_home": "world_object_personal_home",
+      "default": "world_object_personal_home"
+    },
+    "j": {
+      "world_object_trade": "world_object_trade_work",
+      "default": "world_object_trade_work"
+    },
+    ",": {
+      "world_object_nature": "world_object_nature_finds",
+      "default": "world_object_nature_finds"
+    },
+    "!": {
+      "world_object_medical": "world_object_medical_herbal",
+      "default": "world_object_medical_herbal"
     }
   },
   "vehicles": {

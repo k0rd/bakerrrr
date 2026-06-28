@@ -17,6 +17,7 @@ from typing import Any
 
 from engine.persistence import SAVE_DIR
 from game.json_metadata import SCHEMA_VERSION, wrap_object_document
+from game.meaningful_objects_runtime import reward_object_profile
 from game.public_content import public_area_types, public_building_archetype_ids, public_district_types
 
 
@@ -79,6 +80,15 @@ _ITEM_FAMILIES = (
         "effects": ({"type": "modify_need", "need": "social", "delta": 12},),
     },
 )
+
+_ITEM_OBJECT_PROFILE_FAMILY = {
+    "steady_charm": "tokens_charms",
+    "runner_patch": "textiles",
+    "pocket_ration": "containers",
+    "rain_token": "tokens_charms",
+    "soft_wrap": "medical_herbal",
+    "calling_card": "paper_books",
+}
 
 
 _PROFILE_FAMILIES = (
@@ -326,6 +336,11 @@ def _build_item_definition(reward_id: str, source_payload: dict[str, Any]) -> tu
         "tags": list(family["tags"]),
         "category": "consumable",
         "legal_status": "legal",
+        "object_profile": reward_object_profile(
+            source_payload,
+            reward_id,
+            family_hint=_ITEM_OBJECT_PROFILE_FAMILY.get(str(family["kind"]), ""),
+        ),
         "effects": [dict(effect) for effect in family["effects"]],
         "lead_profile": {
             "summary": f"Earned after {source_payload.get('objective_title') or 'a successful run'}.",

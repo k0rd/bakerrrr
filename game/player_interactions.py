@@ -8,6 +8,7 @@ from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
 from game.herbal_chemistry_runtime import harvest_flora_patch, nearest_harvestable_flora
 from game.hunting_runtime import field_dress_carcass, nearest_hunting_carcass
+from game.meaningful_objects_runtime import nearest_item_backed_object_fixture, pickup_meaningful_object_fixture
 from game.opportunities import _item_label, mark_bounty_target_restrained, resolve_opportunities
 from game.property_access import (
     property_access_controller as _property_access_controller,
@@ -1354,6 +1355,42 @@ class PlayerInteractionRuntime:
         )
         if cache_prop is not None:
             self.player_interact_cache(eid, pos, cache_prop)
+            return
+        object_prop = nearest_item_backed_object_fixture(
+            self.sim,
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
+        if object_prop is not None:
+            result = pickup_meaningful_object_fixture(self.sim, eid, str(object_prop.get("id")))
+            item_name = str(result.get("item_name", "object") or "object").strip()
+            if result.get("ok"):
+                if bool(result.get("theft")) and bool(result.get("witnessed_by_owner")):
+                    _log_player_feedback(
+                        self.sim,
+                        f"You take {item_name}. Someone recognizes it.",
+                        kind="interaction",
+                        dedupe_window=2,
+                        dedupe_key=f"meaningful_object_taken:{result.get('object_id')}",
+                    )
+                else:
+                    _log_player_feedback(
+                        self.sim,
+                        f"You take {item_name}.",
+                        kind="interaction",
+                        dedupe_window=2,
+                        dedupe_key=f"object_fixture_taken:{result.get('instance_id')}",
+                    )
+            elif str(result.get("reason")) == "inventory_full":
+                _log_player_feedback(
+                    self.sim,
+                    f"You do not have room for {item_name}.",
+                    kind="interaction",
+                    dedupe_window=2,
+                    dedupe_key=f"object_fixture_full:{object_prop.get('id')}",
+                )
             return
         hard_traversal_prop = self.action_system.property_actions.hard_traversal_property_at(pos)
         if hard_traversal_prop is not None:

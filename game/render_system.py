@@ -1519,6 +1519,27 @@ class RenderSystem(System):
                     priority=-900,
                 )
 
+        for prop in tuple(scene.get("props", ()) or ()):
+            if not isinstance(prop, dict):
+                continue
+            try:
+                prop_x = int(prop.get("x", 0) or 0)
+                prop_y = int(prop.get("y", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= prop_x < width and 0 <= prop_y < height):
+                continue
+            self._draw(
+                offset_x + prop_x,
+                offset_y + prop_y,
+                str(prop.get("glyph", "o") or "o")[:1],
+                color=prop.get("color") or "world_object_home",
+                semantic_id=prop.get("semantic_id") or "world_object_personal_home",
+                effects=tuple(prop.get("effects", ()) or ()),
+                layer="fixture",
+                priority=5,
+            )
+
         for actor in tuple(scene.get("actors", ()) or ()):
             if not isinstance(actor, dict):
                 continue

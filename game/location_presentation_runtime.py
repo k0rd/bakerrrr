@@ -25,6 +25,8 @@ from game.dialogue_runtime import (
 )
 from game.economy import item_market_bias, store_supply_profile
 from game.items import ITEM_CATALOG, item_display_name
+from game.meaningful_objects_runtime import meaningful_object_display_text
+from game.object_profile_runtime import object_profile_display_text, property_is_item_backed_fixture
 from game.opportunities import opportunity_intel_for_observer, tracked_target_surface_snapshot
 from game.organization_presence import format_property_org_presence, format_visible_property_org_presence
 from game.organizations import organization_name, property_organization_eid
@@ -255,6 +257,10 @@ def _property_interaction_modes(sim, prop, viewer_eid=None):
     access = _evaluate_property_access(sim, viewer_eid, prop)
     modes = []
     infrastructure_role = _property_infrastructure_role(prop)
+    if property_is_item_backed_fixture(prop):
+        metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+        if bool(metadata.get("pickup_allowed", True)):
+            modes.append("pickup")
     if infrastructure_role == "access_panel":
         modes.append("panel")
     elif infrastructure_role == "security_post":
@@ -719,6 +725,25 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
     metadata = _property_metadata(prop)
     kind = str(prop.get("kind", "property")).strip().lower() or "property"
     archetype = str(metadata.get("archetype", "")).strip().lower()
+    if property_is_item_backed_fixture(prop):
+        profile = metadata.get("object_profile") if isinstance(metadata.get("object_profile"), dict) else {}
+        text = meaningful_object_display_text(sim, prop, viewer_eid=viewer_eid)
+        if not text:
+            text = object_profile_display_text(profile, fallback_name=prop.get("name", "object"))
+        if bool(metadata.get("ambient_ritual")):
+            handle = str(prop.get("name", "") or "").strip()
+            if handle and handle.lower() not in text.lower():
+                text = f"{handle} ({text})"
+        bits = [text, "[fixture/item-backed object]"]
+        description = str(metadata.get("display_description", "") or "").strip()
+        if description and description.lower() != text.lower():
+            bits.append(description)
+        pickup_allowed = bool(metadata.get("pickup_allowed", True))
+        bits.append("pickup:yes" if pickup_allowed else "pickup:no")
+        rarity = str(profile.get("rarity", "") or "").strip().lower()
+        if rarity and rarity != "common":
+            bits.append(f"rarity:{rarity}")
+        return " ".join(bit for bit in bits if bit)
     infrastructure_role = _property_infrastructure_role(prop)
     infrastructure_target = _infrastructure_target_property(sim, prop) if infrastructure_role else None
     owner_eid = prop.get("owner_eid")

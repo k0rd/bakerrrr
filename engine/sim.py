@@ -77,6 +77,8 @@ class Simulation:
         self.cultivation_records = {}
         self.next_cultivation_id = 1
         self.cultivation_gardener_cooldowns = {}
+        self.meaningful_objects = {"objects": {}, "actor_index": {}, "place_index": {}, "player_knowledge": {}}
+        self.next_meaningful_object_id = 1
         self.projectiles = {}
         self.next_projectile_id = 1
         self.stores = {}
@@ -180,6 +182,15 @@ class Simulation:
             self.npc_relationships = {}
         if not isinstance(getattr(self, "npc_relationship_tastes", None), dict):
             self.npc_relationship_tastes = {}
+        if not isinstance(getattr(self, "meaningful_objects", None), dict):
+            self.meaningful_objects = {"objects": {}, "actor_index": {}, "place_index": {}, "player_knowledge": {}}
+        else:
+            self.meaningful_objects.setdefault("objects", {})
+            self.meaningful_objects.setdefault("actor_index", {})
+            self.meaningful_objects.setdefault("place_index", {})
+            self.meaningful_objects.setdefault("player_knowledge", {})
+        if not hasattr(self, "next_meaningful_object_id"):
+            self.next_meaningful_object_id = 1
         if not isinstance(getattr(self, "local_trade_pressures", None), dict):
             self.local_trade_pressures = {"properties": {}, "chunks": {}}
         else:

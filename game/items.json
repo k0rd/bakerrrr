@@ -3897,6 +3897,50 @@
       "legal"
     ],
     "legal_status": "legal",
+    "object_profile": {
+      "family": "plants_pots",
+      "silhouette": "round_pot",
+      "material": "ceramic",
+      "primary_color": "blue",
+      "accent_color": "white",
+      "motif": "star",
+      "condition": "plain",
+      "rarity": "common",
+      "placeable": true,
+      "pickup_allowed": true,
+      "display_glyph": "o",
+      "display_color": "world_object_plant",
+      "description": "a small ceramic plant pot with a simple painted mark"
+    },
+    "effects": []
+  },
+  "meaningful_object": {
+    "name": "Small Object",
+    "glyph": "o",
+    "stack_max": 1,
+    "inventory_slot_cost": 1,
+    "category": "misc",
+    "tags": [
+      "object",
+      "keepsake",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "object_profile": {
+      "family": "personal_home",
+      "silhouette": "mug",
+      "material": "ceramic",
+      "primary_color": "blue",
+      "accent_color": "white",
+      "motif": "none",
+      "condition": "plain",
+      "rarity": "common",
+      "placeable": true,
+      "pickup_allowed": true,
+      "display_glyph": "o",
+      "display_color": "world_object_home",
+      "description": "a small personal object"
+    },
     "effects": []
   },
   "emergency_blanket": {

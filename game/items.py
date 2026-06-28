@@ -4,6 +4,7 @@ from pathlib import Path
 
 from game.content_warnings import warn_content_fallback
 from game.json_metadata import split_object_document
+from game.object_profile_runtime import normalize_object_profile
 
 
 ITEMS_PATH = Path(__file__).resolve().parent / "items.json"
@@ -1196,6 +1197,11 @@ def _normalize_item_catalog_source(source):
             "throw_profile": _normalize_throw_profile(item.get("throw_profile")),
             "substance_profile": _normalize_substance_profile(item.get("substance_profile")),
             "lead_profile": _normalize_lead_profile(item.get("lead_profile")),
+            "object_profile": normalize_object_profile(
+                item.get("object_profile"),
+                item_id=item_id,
+                tags=tags,
+            ),
             "scratch_payout_table": _normalize_scratch_payout_table(item.get("scratch_payout_table"))
             if item_id == SCRATCH_TICKET_ITEM_ID else (),
             "condition_profile": _normalize_condition_profile(

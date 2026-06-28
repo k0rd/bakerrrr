@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_document
+from game.object_profile_runtime import object_profile_validation_errors
 from game.public_content import PUBLIC_STATUS_MODIFIERS
 from game.world_palette import world_palette_keys
 
@@ -443,6 +444,7 @@ def _validate_items(path, report):
 
         if "stack_max" in item:
             _validate_int(report, source, item_path + ["stack_max"], item["stack_max"], minimum=1, field_name="stack_max")
+        stack_max_for_profile = item.get("stack_max", 1)
 
         if "tags" in item:
             _validate_string_list(report, source, item_path + ["tags"], item["tags"], field_name="tags")
@@ -452,6 +454,14 @@ def _validate_items(path, report):
                 status = str(item["legal_status"]).strip().lower()
                 if status not in ALLOWED_LEGAL_STATUS:
                     report.error(source, item_path + ["legal_status"], f"legal_status must be one of {sorted(ALLOWED_LEGAL_STATUS)}")
+
+        if "object_profile" in item:
+            for path_suffix, message in object_profile_validation_errors(item.get("object_profile"), stack_max=stack_max_for_profile):
+                path_parts = list(item_path)
+                suffix = path_suffix.removeprefix("$.")
+                if suffix:
+                    path_parts.extend(part for part in suffix.split(".") if part)
+                report.error(source, path_parts, message)
 
         if "substance_profile" in item:
             profile = item["substance_profile"]

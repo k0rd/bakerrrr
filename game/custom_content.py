@@ -16,6 +16,7 @@ from game.items import (
     refresh_item_runtime,
 )
 from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_document
+from game.object_profile_runtime import object_profile_validation_errors
 from game.public_content import (
     PUBLIC_DENSITY_LEVELS,
     PUBLIC_ITEM_EFFECT_TYPES,
@@ -58,6 +59,7 @@ CUSTOM_ITEM_ALLOWED_FIELDS = {
     "identification_profile",
     "substance_profile",
     "lead_profile",
+    "object_profile",
 }
 
 CUSTOM_ITEM_DISALLOWED_FIELDS = {
@@ -354,6 +356,9 @@ def _validate_custom_item(issues, source, item_id, item, *, root=CUSTOM_CONTENT_
     legal_status = str(item.get("legal_status", "legal") or "").strip().lower()
     if legal_status not in LEGAL_STATUSES:
         _issue(issues, "error", domain, source, f"$.{item_id}.legal_status", f"legal_status must be one of {sorted(LEGAL_STATUSES)}", root=root)
+    for path_suffix, message in object_profile_validation_errors(item.get("object_profile"), stack_max=stack_max):
+        path = f"$.{item_id}{path_suffix.removeprefix('$')}"
+        _issue(issues, "error", domain, source, path, message, root=root)
     clean["effects"] = _validate_item_effects(issues, domain, source, item_id, item.get("effects", []), root=root)
     substance = item.get("substance_profile")
     if isinstance(substance, dict) and "withdrawal_modifiers" in substance:

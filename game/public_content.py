@@ -98,6 +98,78 @@ PUBLIC_UI_THEME_ROLES = (
     "footer",
 )
 
+PUBLIC_OBJECT_PROFILE_FIELDS = (
+    "schema_version",
+    "family",
+    "silhouette",
+    "material",
+    "primary_color",
+    "accent_color",
+    "motif",
+    "condition",
+    "rarity",
+    "placeable",
+    "pickup_allowed",
+    "display_name",
+    "description",
+    "display_glyph",
+    "display_color",
+    "future_tags",
+)
+
+PUBLIC_OBJECT_PROFILE_FAMILIES = (
+    "plants_pots",
+    "tokens_charms",
+    "tools_parts",
+    "textiles",
+    "paper_books",
+    "containers",
+    "light_ritual",
+    "personal_home",
+    "trade_work",
+    "nature_finds",
+    "medical_herbal",
+)
+
+PUBLIC_OBJECT_PROFILE_MATERIALS = (
+    "ceramic",
+    "wood",
+    "brass",
+    "glass",
+    "cloth",
+    "paper",
+    "steel",
+    "tin",
+    "stone",
+    "shell",
+    "wax",
+    "herb",
+)
+
+PUBLIC_OBJECT_PROFILE_MOTIFS = (
+    "none",
+    "star",
+    "stripe",
+    "dot_ring",
+    "crescent",
+    "flower",
+    "key_mark",
+    "route_mark",
+    "slash",
+)
+
+PUBLIC_OBJECT_PROFILE_CONDITIONS = (
+    "plain",
+    "chipped",
+    "polished",
+    "wrapped",
+    "dusty",
+    "repaired",
+    "cracked",
+)
+
+PUBLIC_OBJECT_PROFILE_RARITIES = ("common", "uncommon", "rare", "unique")
+
 PUBLIC_ROOM_CURIOSITY_BASE_PROFILES = (
     "afterhours_pusher",
     "backroom_doctor",

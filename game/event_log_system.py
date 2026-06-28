@@ -496,6 +496,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("justice_vehicle_misuse_barked", self.on_justice_vehicle_misuse_barked)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
         self.sim.events.subscribe("business_scene_posture_started", self.on_business_scene_posture_started)
+        self.sim.events.subscribe("ambient_ritual_started", self.on_ambient_ritual_started)
         self.sim.events.subscribe("business_scene_nuisance", self.on_business_scene_nuisance)
         self.sim.events.subscribe("camera_scrutiny", self.on_camera_scrutiny)
         self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
@@ -4143,6 +4144,27 @@ class EventLogSystem(System):
             priority="normal",
             dedupe_window=20,
             dedupe_key=f"business-posture:{scene_id or property_id}:{phase}",
+        )
+
+    def on_ambient_ritual_started(self, event):
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
+        if isinstance(prop, dict):
+            if not (self._player_is_near_property(prop, radius=10) or self._player_can_perceive_event_position(event)):
+                return
+        elif not self._player_can_perceive_event_position(event):
+            return
+        text = str(event.data.get("log_text", "") or "").strip()
+        if not text:
+            return
+        scene_id = str(event.data.get("scene_id", "") or "").strip()
+        ritual_kind = str(event.data.get("ritual_kind", "") or "").strip().lower()
+        self._log(
+            text.rstrip(".") + ".",
+            channel="general",
+            priority="low",
+            dedupe_window=30,
+            dedupe_key=f"ambient-ritual:{scene_id or property_id}:{ritual_kind}",
         )
 
     def on_business_scene_nuisance(self, event):

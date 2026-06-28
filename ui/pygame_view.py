@@ -2003,6 +2003,214 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_world_object_overlay(self, x, y, color=None, attrs=0, *, kind="personal_home", effects=None):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+        effect_set = {
+            str(effect).strip().lower()
+            for effect in (effects or ())
+            if str(effect).strip()
+        }
+
+        def _suffix(prefix, default=""):
+            for effect in effect_set:
+                if effect.startswith(prefix):
+                    return effect.removeprefix(prefix)
+            return default
+
+        motif = _suffix("object_motif_", "none")
+        condition = _suffix("object_condition_", "plain")
+        rarity = _suffix("object_rarity_", "common")
+        material = _suffix("object_material_", "")
+        seed = 0
+        try:
+            seed = int(_suffix("object_seed_", "0"))
+        except (TypeError, ValueError):
+            seed = 0
+
+        mid_x = self.cell_px // 2
+        mid_y = self.cell_px // 2
+        stroke_w = max(1, self.cell_px // 18)
+        outline = self._alpha_color("item_outline", 180)
+        highlight = self._alpha_color("item_highlight", 150)
+        accent_key = "world_object_gold" if rarity in {"rare", "unique"} else "world_object_silver"
+        accent = self._alpha_color(accent_key, 156)
+        fill = (frame[0], frame[1], frame[2], 162)
+        stroke = (
+            min(255, int(frame[0] * 1.14) + 8),
+            min(255, int(frame[1] * 1.14) + 8),
+            min(255, int(frame[2] * 1.14) + 8),
+            218,
+        )
+        dark = self._darkened_rgba(frame, 164, amount=0.58)
+        glass = self._alpha_color("item_glass", 126)
+        metal = self._alpha_color("item_metal", 150)
+        paper = self._alpha_color("item_paper", 138)
+        cloth = self._alpha_color("item_cloth", 128)
+        plant = self._alpha_color("flora_leaf", 152)
+        backing = self._local_tile_rect(inset=max(2, self.cell_px // 7), min_size=6)
+        self._draw_legibility_backing(overlay, backing, color="item_outline", alpha=54)
+
+        kind = str(kind or "personal_home").strip().lower()
+        if kind == "plants_pots":
+            pot = [
+                (mid_x - max(4, self.cell_px // 4), mid_y),
+                (mid_x + max(4, self.cell_px // 4), mid_y),
+                (mid_x + max(3, self.cell_px // 5), self.cell_px - max(3, self.cell_px // 5)),
+                (mid_x - max(3, self.cell_px // 5), self.cell_px - max(3, self.cell_px // 5)),
+            ]
+            self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in pot])
+            self.pygame.draw.polygon(overlay, fill, pot)
+            self.pygame.draw.polygon(overlay, stroke, pot, stroke_w)
+            for idx, dx in enumerate((-1, 0, 1)):
+                leaf_x = mid_x + dx * max(2, self.cell_px // 8)
+                top = max(2, mid_y - max(4, self.cell_px // 3) + (idx % 2) * max(1, self.cell_px // 12))
+                self.pygame.draw.ellipse(
+                    overlay,
+                    plant,
+                    (leaf_x - max(2, self.cell_px // 12), top, max(4, self.cell_px // 6), max(6, self.cell_px // 4)),
+                )
+        elif kind == "tokens_charms":
+            radius = max(4, self.cell_px // 4)
+            self.pygame.draw.circle(overlay, outline, (mid_x + 1, mid_y + 1), radius)
+            self.pygame.draw.circle(overlay, fill, (mid_x, mid_y), radius)
+            self.pygame.draw.circle(overlay, stroke, (mid_x, mid_y), radius, stroke_w)
+            self.pygame.draw.circle(overlay, metal, (mid_x, mid_y), max(2, radius // 2), max(1, stroke_w - 1))
+            self.pygame.draw.line(overlay, accent, (mid_x, mid_y - radius - 1), (mid_x, max(1, mid_y - radius // 2)), stroke_w)
+        elif kind == "tools_parts":
+            self.pygame.draw.line(
+                overlay,
+                outline,
+                (max(3, self.cell_px // 5) + 1, self.cell_px - max(4, self.cell_px // 4) + 1),
+                (self.cell_px - max(4, self.cell_px // 4) + 1, max(3, self.cell_px // 4) + 1),
+                max(3, stroke_w + 2),
+            )
+            self.pygame.draw.line(
+                overlay,
+                metal,
+                (max(3, self.cell_px // 5), self.cell_px - max(4, self.cell_px // 4)),
+                (self.cell_px - max(4, self.cell_px // 4), max(3, self.cell_px // 4)),
+                max(2, stroke_w + 1),
+            )
+            self.pygame.draw.circle(overlay, stroke, (self.cell_px - max(4, self.cell_px // 4), max(3, self.cell_px // 4)), max(2, self.cell_px // 8), stroke_w)
+        elif kind == "textiles":
+            fold = [
+                (max(3, self.cell_px // 5), max(3, self.cell_px // 4)),
+                (self.cell_px - max(4, self.cell_px // 5), max(4, self.cell_px // 5)),
+                (self.cell_px - max(3, self.cell_px // 4), self.cell_px - max(4, self.cell_px // 4)),
+                (mid_x, self.cell_px - max(3, self.cell_px // 5)),
+                (max(3, self.cell_px // 4), self.cell_px - max(4, self.cell_px // 4)),
+            ]
+            self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in fold])
+            self.pygame.draw.polygon(overlay, fill if material != "cloth" else cloth, fold)
+            self.pygame.draw.polygon(overlay, stroke, fold, stroke_w)
+            self.pygame.draw.line(overlay, highlight, (fold[0][0], mid_y), (fold[2][0], mid_y + max(1, self.cell_px // 10)), stroke_w)
+        elif kind == "paper_books":
+            book = self.pygame.Rect(max(3, self.cell_px // 4), max(3, self.cell_px // 5), max(7, self.cell_px // 2), max(8, self.cell_px // 2))
+            self.pygame.draw.rect(overlay, outline, book.move(1, 1), border_radius=max(1, self.cell_px // 26))
+            self.pygame.draw.rect(overlay, paper, book, border_radius=max(1, self.cell_px // 26))
+            self.pygame.draw.rect(overlay, stroke, book, stroke_w, border_radius=max(1, self.cell_px // 26))
+            self.pygame.draw.line(overlay, dark, (book.centerx, book.top + 2), (book.centerx, book.bottom - 2), max(1, stroke_w))
+        elif kind == "containers":
+            box = self.pygame.Rect(max(3, self.cell_px // 5), mid_y - max(2, self.cell_px // 8), self.cell_px - max(6, (self.cell_px // 5) * 2), max(7, self.cell_px // 3))
+            self.pygame.draw.rect(overlay, outline, box.move(1, 1), border_radius=max(1, self.cell_px // 22))
+            self.pygame.draw.rect(overlay, fill, box, border_radius=max(1, self.cell_px // 22))
+            self.pygame.draw.rect(overlay, stroke, box, stroke_w, border_radius=max(1, self.cell_px // 22))
+            self.pygame.draw.line(overlay, dark, (box.left + 2, box.centery), (box.right - 2, box.centery), stroke_w)
+        elif kind == "light_ritual":
+            base = self.pygame.Rect(mid_x - max(3, self.cell_px // 8), mid_y, max(6, self.cell_px // 4), max(7, self.cell_px // 3))
+            self.pygame.draw.rect(overlay, outline, base.move(1, 1), border_radius=max(1, self.cell_px // 20))
+            self.pygame.draw.rect(overlay, fill, base, border_radius=max(1, self.cell_px // 20))
+            flame = [(mid_x, max(2, self.cell_px // 5)), (mid_x + max(3, self.cell_px // 8), mid_y), (mid_x, mid_y + max(1, self.cell_px // 14)), (mid_x - max(3, self.cell_px // 8), mid_y)]
+            self.pygame.draw.polygon(overlay, self._alpha_color("hazard_fire", 174), flame)
+            self.pygame.draw.rect(overlay, stroke, base, stroke_w, border_radius=max(1, self.cell_px // 20))
+        elif kind == "personal_home":
+            cup = self.pygame.Rect(mid_x - max(4, self.cell_px // 5), mid_y - max(2, self.cell_px // 8), max(8, self.cell_px // 3), max(8, self.cell_px // 3))
+            self.pygame.draw.rect(overlay, outline, cup.move(1, 1), border_radius=max(2, self.cell_px // 8))
+            self.pygame.draw.rect(overlay, fill, cup, border_radius=max(2, self.cell_px // 8))
+            self.pygame.draw.arc(overlay, stroke, (cup.right - 2, cup.top + 2, max(5, self.cell_px // 4), max(6, self.cell_px // 4)), -1.2, 1.2, stroke_w)
+            self.pygame.draw.rect(overlay, stroke, cup, stroke_w, border_radius=max(2, self.cell_px // 8))
+        elif kind == "trade_work":
+            bell = self.pygame.Rect(mid_x - max(5, self.cell_px // 4), mid_y - max(1, self.cell_px // 12), max(10, self.cell_px // 2), max(7, self.cell_px // 3))
+            self.pygame.draw.ellipse(overlay, outline, bell.move(1, 1))
+            self.pygame.draw.ellipse(overlay, fill, bell)
+            self.pygame.draw.arc(overlay, stroke, bell, 3.14, 6.28, stroke_w + 1)
+            self.pygame.draw.circle(overlay, accent, (mid_x, bell.top), max(2, self.cell_px // 12))
+            self.pygame.draw.line(overlay, dark, (bell.left, bell.bottom - 2), (bell.right, bell.bottom - 2), stroke_w)
+        elif kind == "nature_finds":
+            shell = self.pygame.Rect(max(3, self.cell_px // 4), max(3, self.cell_px // 4), max(8, self.cell_px // 2), max(8, self.cell_px // 2))
+            self.pygame.draw.arc(overlay, outline, shell.move(1, 1), 3.2, 6.2, stroke_w + 2)
+            self.pygame.draw.arc(overlay, fill, shell, 3.2, 6.2, max(3, stroke_w + 2))
+            for offset in (-1, 0, 1):
+                self.pygame.draw.line(overlay, stroke, (mid_x, shell.bottom - 2), (mid_x + offset * max(4, self.cell_px // 7), shell.top + max(2, self.cell_px // 8)), max(1, stroke_w))
+        elif kind == "medical_herbal":
+            vial = self.pygame.Rect(mid_x - max(3, self.cell_px // 8), mid_y - max(3, self.cell_px // 7), max(6, self.cell_px // 4), max(10, self.cell_px // 2))
+            self.pygame.draw.rect(overlay, outline, vial.move(1, 1), border_radius=max(2, self.cell_px // 10))
+            self.pygame.draw.rect(overlay, glass if material == "glass" else fill, vial, border_radius=max(2, self.cell_px // 10))
+            liquid = self.pygame.Rect(vial.left + 1, vial.centery, max(2, vial.w - 2), max(2, vial.h // 3))
+            self.pygame.draw.rect(overlay, self._alpha_color("item_chemical", 134), liquid, border_radius=max(1, self.cell_px // 18))
+            self.pygame.draw.rect(overlay, stroke, vial, stroke_w, border_radius=max(2, self.cell_px // 10))
+
+        motif_radius = max(2, self.cell_px // 12)
+        motif_x = mid_x + ((seed % 3) - 1) * max(1, self.cell_px // 16)
+        motif_y = mid_y + max(1, self.cell_px // 10)
+        if motif == "star":
+            points = []
+            outer = max(3, self.cell_px // 8)
+            inner = max(1, outer // 2)
+            for idx in range(10):
+                angle = (math.pi * 2 * idx / 10.0) - (math.pi / 2.0)
+                radius = outer if idx % 2 == 0 else inner
+                points.append((motif_x + int(math.cos(angle) * radius), motif_y + int(math.sin(angle) * radius)))
+            self.pygame.draw.polygon(overlay, accent, points)
+        elif motif == "stripe":
+            self.pygame.draw.line(overlay, accent, (mid_x - max(4, self.cell_px // 5), motif_y), (mid_x + max(4, self.cell_px // 5), motif_y), stroke_w)
+        elif motif == "dot_ring":
+            for idx in range(6):
+                angle = math.pi * 2 * idx / 6.0
+                self.pygame.draw.circle(overlay, accent, (motif_x + int(math.cos(angle) * motif_radius * 2), motif_y + int(math.sin(angle) * motif_radius * 2)), max(1, stroke_w))
+        elif motif == "crescent":
+            self.pygame.draw.circle(overlay, accent, (motif_x, motif_y), motif_radius + 2)
+            self.pygame.draw.circle(overlay, dark, (motif_x + max(1, motif_radius // 2), motif_y - 1), motif_radius + 1)
+        elif motif == "flower":
+            for idx in range(5):
+                angle = math.pi * 2 * idx / 5.0
+                self.pygame.draw.circle(overlay, accent, (motif_x + int(math.cos(angle) * motif_radius), motif_y + int(math.sin(angle) * motif_radius)), max(1, motif_radius // 2))
+            self.pygame.draw.circle(overlay, highlight, (motif_x, motif_y), max(1, stroke_w))
+        elif motif == "key_mark":
+            self.pygame.draw.circle(overlay, accent, (motif_x - motif_radius, motif_y), motif_radius, max(1, stroke_w))
+            self.pygame.draw.line(overlay, accent, (motif_x, motif_y), (motif_x + motif_radius * 2, motif_y), stroke_w)
+        elif motif == "route_mark":
+            self.pygame.draw.line(overlay, accent, (motif_x - motif_radius * 2, motif_y + motif_radius), (motif_x, motif_y - motif_radius), stroke_w)
+            self.pygame.draw.line(overlay, accent, (motif_x, motif_y - motif_radius), (motif_x + motif_radius * 2, motif_y + motif_radius), stroke_w)
+        elif motif == "slash":
+            self.pygame.draw.line(overlay, accent, (motif_x - motif_radius * 2, motif_y + motif_radius * 2), (motif_x + motif_radius * 2, motif_y - motif_radius * 2), stroke_w)
+
+        if condition in {"cracked", "chipped"}:
+            self.pygame.draw.line(overlay, outline, (mid_x - max(2, self.cell_px // 10), mid_y - max(3, self.cell_px // 8)), (mid_x + max(1, self.cell_px // 14), mid_y), max(1, stroke_w))
+            self.pygame.draw.line(overlay, outline, (mid_x + max(1, self.cell_px // 14), mid_y), (mid_x - max(1, self.cell_px // 12), mid_y + max(3, self.cell_px // 8)), max(1, stroke_w))
+        elif condition == "repaired":
+            self.pygame.draw.line(overlay, accent, (mid_x - max(4, self.cell_px // 6), mid_y), (mid_x + max(4, self.cell_px // 6), mid_y), max(1, stroke_w))
+            for dx in (-1, 0, 1):
+                self.pygame.draw.line(overlay, accent, (mid_x + dx * max(3, self.cell_px // 12), mid_y - max(2, self.cell_px // 10)), (mid_x + dx * max(3, self.cell_px // 12), mid_y + max(2, self.cell_px // 10)), max(1, stroke_w))
+        elif condition == "dusty":
+            for idx in range(4):
+                px = max(2, (seed + idx * 7) % max(3, self.cell_px - 3))
+                py = max(2, (seed // 3 + idx * 5) % max(3, self.cell_px - 3))
+                self.pygame.draw.circle(overlay, self._alpha_color("hazard_smoke", 88), (px, py), max(1, stroke_w))
+        elif condition == "polished":
+            self.pygame.draw.arc(overlay, highlight, (max(3, self.cell_px // 5), max(3, self.cell_px // 5), self.cell_px - max(6, (self.cell_px // 5) * 2), self.cell_px - max(6, (self.cell_px // 5) * 2)), 3.7, 5.4, max(1, stroke_w))
+        elif condition == "wrapped":
+            self.pygame.draw.arc(overlay, cloth, (max(3, self.cell_px // 5), max(3, self.cell_px // 5), self.cell_px - max(6, (self.cell_px // 5) * 2), self.cell_px - max(6, (self.cell_px // 5) * 2)), 0.2, 2.9, max(1, stroke_w))
+
+        if rarity == "unique":
+            self.pygame.draw.circle(overlay, accent, (self.cell_px - max(3, self.cell_px // 6), max(3, self.cell_px // 6)), max(1, self.cell_px // 16))
+        elif rarity == "rare":
+            self.pygame.draw.circle(overlay, accent, (self.cell_px - max(3, self.cell_px // 6), max(3, self.cell_px // 6)), max(1, self.cell_px // 20))
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _vehicle_heading_from_render(self, glyph, semantic_key):
         semantic_key = str(semantic_key or "").strip().lower()
         prefix = "property_vehicle_heading_"
@@ -4650,6 +4858,50 @@ class PygameView:
         if semantic_key == "cover_rating_full":
             self._draw_cover_rating_overlay(x, y, color=color, attrs=attrs, kind="full")
             return "cover_rating_full"
+        if semantic_key.startswith("world_object_") or color_key.startswith("world_object_"):
+            family_aliases = {
+                "plant": "plants_pots",
+                "charm": "tokens_charms",
+                "tool": "tools_parts",
+                "textile": "textiles",
+                "paper": "paper_books",
+                "container": "containers",
+                "light": "light_ritual",
+                "home": "personal_home",
+                "trade": "trade_work",
+                "nature": "nature_finds",
+                "medical": "medical_herbal",
+            }
+            object_families = {
+                "plants_pots",
+                "tokens_charms",
+                "tools_parts",
+                "textiles",
+                "paper_books",
+                "containers",
+                "light_ritual",
+                "personal_home",
+                "trade_work",
+                "nature_finds",
+                "medical_herbal",
+            }
+            if semantic_key.startswith("world_object_"):
+                object_kind = semantic_key.removeprefix("world_object_")
+            else:
+                object_kind = color_key.removeprefix("world_object_")
+            object_kind = family_aliases.get(
+                object_kind,
+                object_kind if object_kind in object_families else "personal_home",
+            )
+            self._draw_world_object_overlay(
+                x,
+                y,
+                color=color,
+                attrs=attrs,
+                kind=object_kind,
+                effects=effect_set,
+            )
+            return f"world_object_{object_kind}"
         item_kind_map = {
             "item_ground": "ground",
             "item_medical": "medical",
@@ -5557,6 +5809,9 @@ class PygameView:
             top = rect.top + 9
             dealer = payload.get("dealer_cards") or payload.get("banker_cards") or ()
             player = payload.get("cards") or payload.get("player_cards") or ()
+            outcome_key = str(payload.get("outcome_key", "") or "").strip().lower()
+            if service in {"casino_holdem", "three_card_poker"} and dealer and outcome_key in {"", "fold", "forfeit"}:
+                dealer = tuple("??" for _card in list(dealer or ()))
             hands = payload.get("hands") or payload.get("player_hands") or ()
             if hands and not player:
                 first = list(hands)[0]

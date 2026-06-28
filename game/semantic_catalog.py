@@ -13,6 +13,7 @@ RUNTIME_CATEGORIES = (
     "features",
     "infrastructure",
     "properties",
+    "world_objects",
     "vehicles",
     "items",
     "projectiles",
@@ -35,6 +36,7 @@ DEFAULT_CATEGORY_RENDER_DEFAULTS = {
     "features": {"layer": "ground_overlay", "priority": 0},
     "infrastructure": {"layer": "ground_overlay", "priority": 5},
     "properties": {"layer": "ground_overlay", "priority": 10},
+    "world_objects": {"layer": "ground_overlay", "priority": 15},
     "vehicles": {"layer": "ground_overlay", "priority": 20},
     "items": {"layer": "item", "priority": 0},
     "projectiles": {"layer": "fx", "priority": 0},
@@ -342,6 +344,8 @@ class RuntimeSemanticCatalog:
             return ["flora"] + [name for name in default_order if name != "flora"]
         if key.startswith("vehicle_"):
             return ["vehicles"] + [name for name in default_order if name != "vehicles"]
+        if key.startswith("world_object_"):
+            return ["world_objects"] + [name for name in default_order if name != "world_objects"]
         if key.startswith("feature_"):
             return ["features"] + [name for name in default_order if name != "features"]
         if (
@@ -368,6 +372,8 @@ class RuntimeSemanticCatalog:
             return ("items",)
         if key.startswith("vehicle_"):
             return ("vehicles",)
+        if key.startswith("world_object_"):
+            return ("world_objects",)
         return ()
 
     def semantic_id_for_key(self, category_name, source_key, color_key=None, allow_defaults=True):

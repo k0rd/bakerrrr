@@ -7,6 +7,7 @@ import random
 from typing import Any
 
 from game.components import AI, CreatureIdentity, Position, Vitality
+from game.meaningful_objects_runtime import dream_object_props_for_scene
 
 
 VISION_SCENE_SCHEMA_VERSION = 1
@@ -404,6 +405,16 @@ def start_vision_scene(
     if str(recipe.get("stressor", "none")) in {"fake_justice", "animal_pressure"}:
         actors.append(_add_dream_only_figure(rng, scene, len(actors) + 1, stressor=str(recipe.get("stressor", "none"))))
     scene["actors"] = actors[:VISION_MAX_ACTORS]
+    scene["props"] = list(
+        dream_object_props_for_scene(
+            sim,
+            scene["actors"],
+            rng=rng,
+            width=_BOARD_W,
+            height=_BOARD_H,
+            limit=6,
+        )
+    )
     scene["focus"] = {
         "x": _BOARD_W // 2,
         "y": _BOARD_H // 2,
