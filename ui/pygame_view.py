@@ -1,4 +1,3 @@
-import curses
 import json
 import math
 import os
@@ -22,6 +21,7 @@ from ui.input_keys import (
     KEY_RIGHT,
     KEY_UP,
 )
+from ui.text_attrs import A_DIM, attr_for_name
 
 _DEFAULT_RENDER_SEMANTICS_PATH = DEFAULT_RENDER_SEMANTICS_PATH
 
@@ -4996,10 +4996,7 @@ class PygameView:
         return self.palette["default"]
 
     def _has_attr(self, attrs, flag_name):
-        try:
-            flag = int(getattr(curses, flag_name, 0) or 0)
-        except (TypeError, ValueError):
-            return False
+        flag = attr_for_name(flag_name)
         attrs = int(attrs or 0)
         if flag <= 0:
             return False
@@ -5089,6 +5086,13 @@ class PygameView:
                     max_width=call.get("max_width"),
                     attrs=call.get("attrs", 0),
                 )
+                continue
+            if kind == "light_tint":
+                self._draw_light_tint_now(
+                    call.get("x", 0),
+                    call.get("y", 0),
+                    call.get("tint", {}),
+                )
 
     def _effects_visible(self, effects):
         effect_set = {
@@ -5106,7 +5110,7 @@ class PygameView:
         }
         resolved = int(attrs or 0)
         if "blink" in effect_set and ((int(self._animation_tick) // 4) % 2) != 0:
-            resolved |= int(getattr(curses, "A_DIM", 0) or 0)
+            resolved |= A_DIM
         return resolved
 
     def _clip_text(self, x, y, text):
@@ -5195,6 +5199,62 @@ class PygameView:
             self.surface.fill(bg, (cell_x, cell_y, self.cell_px, self.cell_px))
         glyph = self.font.render(str(ch)[:1] or " ", True, fg)
         self.surface.blit(glyph, (cell_x, cell_y))
+
+    def _normalize_light_tint(self, tint):
+        if not isinstance(tint, dict):
+            return None
+        rgb = tint.get("rgb")
+        if not isinstance(rgb, (list, tuple)) or len(rgb) < 3:
+            return None
+        try:
+            red = max(0, min(255, int(round(float(rgb[0])))))
+            green = max(0, min(255, int(round(float(rgb[1])))))
+            blue = max(0, min(255, int(round(float(rgb[2])))))
+            strength = max(0.0, min(1.0, float(tint.get("strength", 0.0) or 0.0)))
+        except (TypeError, ValueError):
+            return None
+        if strength <= 0.0:
+            return None
+        pulse = str(tint.get("pulse", "") or "").strip().lower()
+        return (red, green, blue), strength, pulse
+
+    def _draw_light_tint_now(self, x, y, tint):
+        region = self._clip_draw_position(x, y)
+        if region is None:
+            return
+        normalized = self._normalize_light_tint(tint)
+        if normalized is None:
+            return
+        (red, green, blue), strength, pulse = normalized
+        alpha = 10 + int(round(58 * strength))
+        tick = int(self._animation_tick)
+        if pulse == "emergency":
+            alpha = int(alpha * (1.0 if ((tick // 3) % 2 == 0) else 0.36))
+        elif pulse == "neon":
+            alpha = int(alpha * (0.76 + (0.24 * ((math.sin(tick * 0.75) + 1.0) * 0.5))))
+        elif pulse in {"slow", "warm", "soft"}:
+            alpha = int(alpha * (0.84 + (0.16 * ((math.sin(tick * 0.35) + 1.0) * 0.5))))
+        alpha = max(4, min(76, int(alpha)))
+        if alpha <= 3:
+            return
+        x, y = region
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+        overlay.fill((int(red), int(green), int(blue), int(alpha)))
+        self.surface.blit(overlay, (int(x) * self.cell_px, int(y) * self.cell_px))
+
+    def draw_light_tint(self, x, y, tint, layer="fx", priority=-900):
+        if self._wants_layered_draw(layer=layer, priority=priority):
+            self._queue_draw_call(
+                "light_tint",
+                x=int(x),
+                y=int(y),
+                tint=dict(tint or {}),
+                layer=layer,
+                priority=0 if priority is None else int(priority),
+            )
+            return
+        self._flush_queued_draws()
+        self._draw_light_tint_now(x, y, tint)
 
     def _should_use_grid_text(self, text):
         content = str(text or "")

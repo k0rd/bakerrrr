@@ -1,4 +1,3 @@
-import curses
 import heapq
 import hashlib
 import itertools
@@ -23,6 +22,7 @@ from engine.visibility import (
     observer_can_see_position as _shared_observer_can_see_position,
     update_player_visibility as _update_player_visibility,
 )
+from ui.text_attrs import A_BOLD
 from game.checks import (
     crime_read_summary as _crime_read_summary,
     crime_sensitivity as _crime_sensitivity,
@@ -2720,7 +2720,7 @@ def _cover_source_render(sim, cover_state, active_quest_target=None):
             "z": sz,
             "glyph": glyph,
             "color": color,
-            "attrs": getattr(curses, "A_BOLD", 0),
+            "attrs": A_BOLD,
         }
 
     if cover_state.source_kind == "property":
@@ -2738,7 +2738,7 @@ def _cover_source_render(sim, cover_state, active_quest_target=None):
                 "color": appearance.color,
                 "semantic_id": appearance.semantic_id,
                 "overlays": appearance.overlays,
-                "attrs": getattr(curses, "A_BOLD", 0),
+                "attrs": A_BOLD,
             }
 
     return None

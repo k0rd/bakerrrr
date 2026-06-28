@@ -19,6 +19,7 @@ TOPIC_ORDER = (
     "off_shift",
     "care_about",
     "read_player",
+    "object_meaning",
     "workplace",
     "organization",
     "supervisor",
@@ -174,6 +175,11 @@ TOPIC_DEFS = {
     },
     "read_player": {
         "label": "How do you read me?",
+        "root": False,
+        "unlocks": (),
+    },
+    "object_meaning": {
+        "label": "Can I ask about that object?",
         "root": False,
         "unlocks": (),
     },
@@ -1144,6 +1150,46 @@ PLAYER_TOPIC_BANKS = {
             "npc_rebuff": (
                 "You are asking for my private read before I am ready to spend it.",
                 "I am not putting a label on you just because you asked.",
+            ),
+        },
+    ),
+    "object_meaning": (
+        {
+            "text": "Can I ask about {object_label}?",
+            "npc_reserved": (
+                "You already know enough to know it matters. That is where I leave it.",
+                "It is mine to keep close. That is the whole answer for now.",
+            ),
+            "npc_open": (
+                "{object_meaning_phrase}",
+                "It looks small from the outside. {object_meaning_phrase}",
+            ),
+            "npc_warm": (
+                "{object_meaning_phrase} I do not talk about that part with many people.",
+                "{object_meaning_phrase} It is easier to carry when somebody asks gently.",
+            ),
+            "npc_rebuff": (
+                "No. You do not get the story just because you noticed the object.",
+                "That is not a door I am opening for you right now.",
+            ),
+        },
+        {
+            "text": "That {object_label} seemed important. What is it?",
+            "npc_reserved": (
+                "Important is the right word. Private is the next one.",
+                "It keeps its own counsel, and so do I.",
+            ),
+            "npc_open": (
+                "{object_meaning_phrase}",
+                "If you are asking cleanly, {object_meaning_phrase_lc}",
+            ),
+            "npc_warm": (
+                "{object_meaning_phrase} I guess you have earned the gentle version.",
+                "{object_meaning_phrase} Some things stay ordinary until they are the only ordinary thing left.",
+            ),
+            "npc_rebuff": (
+                "Do not pry at it.",
+                "You saw it matter. That does not mean you get to spend it.",
             ),
         },
     ),

@@ -14,6 +14,7 @@ VISION_SCENE_SCHEMA_VERSION = 1
 VISION_STEP_TICKS = 24
 VISION_MIN_ACTORS = 5
 VISION_MAX_ACTORS = 14
+VISION_RESIDUE_TICKS = 180
 
 _BOARD_W = 48
 _BOARD_H = 18
@@ -108,6 +109,80 @@ def event_is_vision_only(event_or_data: Any) -> bool:
     if _text(data.get("dream_actor_id")):
         return True
     return False
+
+
+def _vision_residue_for_scene(sim, scene: dict, *, reason: str = "") -> dict:
+    if not isinstance(scene, dict):
+        return {}
+    if str(scene.get("profile_kind", "") or "").strip().lower() != "dream_rest":
+        return {}
+    reason_key = _text(reason).lower()
+    if reason_key in {"", "test", "live_timeskip_reset"}:
+        return {}
+    recipe_id = _text(scene.get("recipe_id")).lower()
+    stressor = _text(scene.get("stressor")).lower()
+    layout = _text(scene.get("layout")).lower()
+    rng = random.Random(_seed_text(sim, scene.get("scene_id"), "residue", reason_key))
+    rows = []
+    if stressor in {"trespass", "fake_justice"}:
+        rows.extend((
+            ("watched", "The room keeps a watched edge for a few breaths.", "security_cool", "watched"),
+            ("tight", "The waking air feels like it is checking the door twice.", "security_cool", "shut_tight"),
+        ))
+    if stressor == "animal_pressure":
+        rows.extend((
+            ("startled", "The corners feel a little too awake when you open your eyes.", "street_warm", "spooked"),
+            ("listening", "For a moment the room seems to be listening back.", "underground_green", "watchful"),
+        ))
+    if stressor == "market":
+        rows.extend((
+            ("aftermarket", "You wake with the sense of a market just packed away.", "casino_neon", "talking"),
+            ("colored", "The room carries a leftover wash of color from nowhere useful.", "ritual_violet", "talking"),
+        ))
+    if not rows:
+        rows.extend((
+            ("soft", "The waking room feels softer than it has any reason to.", "clinic_soft", "generous"),
+            ("strange", "A small wrongness lingers, then behaves itself.", "ritual_violet", "tired"),
+            ("quiet", "The room comes back slowly, as if it had to remember you first.", "street_warm", "tired"),
+        ))
+    label, line, light_profile, rumor_kind = rows[int(rng.random() * len(rows)) % len(rows)]
+    tick = _current_tick(sim)
+    try:
+        duration = int((scene.get("step_ticks") or VISION_STEP_TICKS) * 8)
+    except (TypeError, ValueError):
+        duration = VISION_RESIDUE_TICKS
+    duration = max(60, min(VISION_RESIDUE_TICKS, duration))
+    return {
+        "active": True,
+        "vision_only": True,
+        "consequence_ineligible": True,
+        "source_scene_id": _text(scene.get("scene_id")),
+        "profile_kind": _text(scene.get("profile_kind")),
+        "recipe_id": recipe_id,
+        "layout": layout,
+        "stressor": stressor,
+        "created_tick": int(tick),
+        "expires_tick": int(tick + duration),
+        "residue_kind": label,
+        "mood_line": line,
+        "light_profile_hint": light_profile,
+        "rumor_weather_kind": rumor_kind,
+        "reason": reason_key,
+    }
+
+
+def dream_residue_state(sim) -> dict | None:
+    residue = getattr(sim, "dream_residue", None)
+    if not isinstance(residue, dict) or not bool(residue.get("active")):
+        return None
+    try:
+        expires = int(residue.get("expires_tick", 0) or 0)
+    except (TypeError, ValueError):
+        expires = 0
+    if expires and _current_tick(sim) > expires:
+        sim.dream_residue = {}
+        return None
+    return residue
 
 
 def vision_scene_active(sim) -> bool:
@@ -412,7 +487,7 @@ def start_vision_scene(
             rng=rng,
             width=_BOARD_W,
             height=_BOARD_H,
-            limit=6,
+            limit=8,
         )
     )
     scene["focus"] = {
@@ -534,6 +609,9 @@ def end_vision_scene(sim, *, reason: str = "") -> dict | None:
     scene["active"] = False
     scene["ended_tick"] = _current_tick(sim)
     scene["end_reason"] = _text(reason) or "ended"
+    residue = _vision_residue_for_scene(sim, scene, reason=scene["end_reason"])
+    if residue:
+        sim.dream_residue = residue
     sim.vision_scene = {}
     return scene
 

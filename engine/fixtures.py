@@ -25,6 +25,7 @@ DEFAULT_CITY_FIXTURE_SPECS = (
         "light_radius": 5,
         "light_intensity": 0.68,
         "light_phases": ("dawn", "dusk", "night"),
+        "light_profile": "street_warm",
     },
     {
         "id": "utility_pole",
@@ -62,6 +63,7 @@ DEFAULT_CITY_FIXTURE_SPECS = (
         "light_radius": 2,
         "light_intensity": 0.18,
         "light_phases": ("dawn", "dusk", "night"),
+        "light_profile": "security_cool",
     },
     {
         "id": "bench",
@@ -126,6 +128,7 @@ DEFAULT_CITY_FIXTURE_SPECS = (
         "light_radius": 3,
         "light_intensity": 0.32,
         "light_phases": ("dawn", "dusk", "night"),
+        "light_profile": "security_cool",
         "metadata": {"fixture_kind": "electronic"},
     },
     {
@@ -145,6 +148,7 @@ DEFAULT_CITY_FIXTURE_SPECS = (
         "light_radius": 3,
         "light_intensity": 0.28,
         "light_phases": ("dawn", "dusk", "night"),
+        "light_profile": "security_cool",
         "metadata": {"fixture_kind": "electronic"},
     },
 )
@@ -175,6 +179,7 @@ DEFAULT_NON_CITY_FIXTURE_SPECS = (
         "light_radius": 4,
         "light_intensity": 0.6,
         "light_phases": ("dawn", "dusk", "night"),
+        "light_profile": "street_warm",
     },
     {
         "id": "relay_pole",
@@ -295,6 +300,10 @@ def _normalize_fixture_spec(raw):
     light_radius = int(max(0, round(_num(raw.get("light_radius", light.get("radius", 0)), 0.0))))
     light_intensity = max(0.0, min(1.0, _num(raw.get("light_intensity", light.get("intensity", 0.0)), 0.0)))
     raw_light_phases = raw.get("light_phases", light.get("phases", ()))
+    light_profile = str(raw.get("light_profile", light.get("profile", "")) or "").strip().lower()
+    light_color = raw.get("light_color", light.get("color"))
+    light_pulse = str(raw.get("light_pulse", light.get("pulse", "")) or "").strip().lower()
+    light_priority = int(max(0, round(_num(raw.get("light_priority", light.get("priority", 0)), 0.0))))
     raw_metadata = raw.get("metadata")
     metadata = {}
     if isinstance(raw_metadata, dict):
@@ -330,6 +339,10 @@ def _normalize_fixture_spec(raw):
         "light_radius": max(0, int(light_radius)),
         "light_intensity": float(light_intensity),
         "light_phases": tuple(light_phases),
+        "light_profile": light_profile,
+        "light_color": light_color,
+        "light_pulse": light_pulse,
+        "light_priority": int(light_priority),
         "metadata": metadata,
     }
 
@@ -559,6 +572,10 @@ def _build_fixture_metadata(spec, rng, area_type):
         "light_radius": int(max(0, spec.get("light_radius", 0))),
         "light_intensity": float(max(0.0, min(1.0, spec.get("light_intensity", 0.0)))),
         "light_phases": list(spec.get("light_phases", ())),
+        "light_profile": str(spec.get("light_profile", "") or "").strip().lower(),
+        "light_color": spec.get("light_color"),
+        "light_pulse": str(spec.get("light_pulse", "") or "").strip().lower(),
+        "light_priority": int(max(0, spec.get("light_priority", 0) or 0)),
     })
     return metadata
 

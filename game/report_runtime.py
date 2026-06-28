@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import curses
 
 from game.components import ContactLedger, CreatureIdentity, Inventory, NPCMemory, NPCSocial, PlayerAssets, Position, PropertyKnowledge, VehicleState
 from game.debug_overlay import current_or_nearby_property, organization_summary_rows
@@ -61,6 +60,7 @@ from game.systems_business_reputation import (
     property_business_reputation_designations,
     property_business_reputation_scope_profile,
 )
+from ui.text_attrs import A_BOLD
 
 
 def _segment(text, color=None, attrs=0, **extras):
@@ -112,7 +112,7 @@ def _line_text(line):
 
 def _section_header_line(label, *, color="human"):
     label = str(label or "").strip().upper()
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment(" "),
         _segment(label, color=color, attrs=bold),
@@ -126,7 +126,7 @@ def _labeled_line(label, value, *, label_color="building_edge", value_color=None
     value = str(value or "").strip()
     if not value:
         return ""
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment(f"{label}: ", color=label_color, attrs=bold),
         _segment(value, color=value_color),
@@ -138,7 +138,7 @@ def _bullet_line(text, *, bullet="-", bullet_color="building_edge", text_color=N
     text = str(text or "").strip()
     if not text:
         return ""
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment(f"{str(bullet)[:1]} ", color=bullet_color, attrs=bold),
         _segment(text, color=text_color),
@@ -151,7 +151,7 @@ def _badge_line(badge, text, *, badge_color="human", text_color=None):
     if not text:
         return ""
     badge = str(badge or "").strip().upper()
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment("[", color="building_edge"),
         _segment(badge, color=badge_color, attrs=bold),
@@ -191,7 +191,7 @@ def _opportunity_report_line(row):
     intel_percent = int(round(float(row.get("confidence", 0.0)) * 100.0))
     tracked_summary = str(row.get("tracked_target_summary", "") or "").strip()
     next_step = str(row.get("next_step", "") or "").strip()
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment("[", color="building_edge"),
         _segment(risk.upper(), color=_opportunity_risk_color(risk), attrs=bold),

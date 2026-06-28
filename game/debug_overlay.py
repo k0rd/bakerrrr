@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import curses
 
 from game.components import (
     AI,
@@ -39,6 +38,7 @@ from game.service_runtime import _overworld_discovery_profile, _overworld_travel
 from game.skill_ui import skill_debug_lines
 from game.status_ui_runtime import _survival_indicator_chunks
 from game.system_support.actor_attention_runtime import warmth_debug_summary
+from ui.text_attrs import A_BOLD
 
 
 def _segment(text, color=None, attrs=0, **extras):
@@ -90,7 +90,7 @@ def _line_text(line):
 
 def _section_header_line(label, *, color="human"):
     label = str(label or "").strip().upper()
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment(" "),
         _segment(label, color=color, attrs=bold),
@@ -103,7 +103,7 @@ def _bullet_line(text, *, bullet="-", bullet_color="building_edge", text_color=N
     text = str(text or "").strip()
     if not text:
         return ""
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment(f"{str(bullet)[:1]} ", color=bullet_color, attrs=bold),
         _segment(text, color=text_color),
@@ -116,7 +116,7 @@ def _badge_line(badge, text, *, badge_color="human", text_color=None):
     if not text:
         return ""
     badge = str(badge or "").strip().upper()
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment("[", color="building_edge"),
         _segment(badge, color=badge_color, attrs=bold),

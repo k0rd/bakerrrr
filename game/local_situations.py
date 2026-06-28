@@ -10,6 +10,7 @@ from game.components import AI, Position
 from game.components import PlayerAssets
 from game.economy import strongest_local_trade_pressure_for_property
 from game.incident_runtime import incident_record
+from game.meaningful_objects_runtime import meaningful_object_fixture_cue
 from game.organization_presence import format_visible_property_org_presence
 from game.organizations import local_protective_pressure_snapshot
 from game.property_runtime import (
@@ -547,6 +548,16 @@ def _place_mood_fields(scene):
         "place_mood_reason",
         "place_mood_visible_cue",
         "place_mood_mechanical_tags",
+        "place_texture_kind",
+        "place_texture_label",
+        "place_texture_reason",
+        "place_texture_visible_cue",
+        "place_texture_mechanical_tags",
+        "place_texture_light_profile_hint",
+        "rumor_weather_kind",
+        "rumor_weather_label",
+        "rumor_weather_summary",
+        "rumor_weather_dialogue_bias",
         "ambient_ritual_kind",
         "ambient_ritual_label",
         "ambient_ritual_summary",
@@ -564,6 +575,12 @@ def _place_mood_fields(scene):
         confidence = 0.0
     if confidence > 0.0:
         fields["place_mood_confidence"] = max(0.0, min(1.0, confidence))
+    try:
+        texture_confidence = float(scene.get("place_texture_confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        texture_confidence = 0.0
+    if texture_confidence > 0.0:
+        fields["place_texture_confidence"] = max(0.0, min(1.0, texture_confidence))
     return fields
 
 
@@ -602,6 +619,20 @@ def _scene_fixture_names(sim, scene, *, limit=2):
     return tuple(names)
 
 
+def _scene_meaningful_object_cues(sim, scene, *, player_eid=None, limit=2):
+    cues = []
+    for property_id in tuple((scene or {}).get("spawned_property_ids", ()) or ()):
+        prop = getattr(sim, "properties", {}).get(str(property_id).strip())
+        if not isinstance(prop, dict):
+            continue
+        cue = meaningful_object_fixture_cue(sim, prop, viewer_eid=player_eid)
+        if cue and cue not in cues:
+            cues.append(cue)
+        if len(cues) >= int(limit):
+            break
+    return tuple(cues)
+
+
 def _row_from_scene(sim, scene_id, scene, *, player_pos=None, player_eid=None):
     if not isinstance(scene, dict):
         return None
@@ -617,6 +648,7 @@ def _row_from_scene(sim, scene_id, scene, *, player_pos=None, player_eid=None):
     summary = _text(profile.get("summary")) or "something local is visible"
     action = _text(profile.get("action")) or "inspect it or ask around"
     fixture_names = _scene_fixture_names(sim, scene)
+    object_cues = _scene_meaningful_object_cues(sim, scene, player_eid=player_eid)
     organization_presence = format_visible_property_org_presence(sim, prop)
     source_kind = _text(scene.get("source_kind")).lower() or "business_scene"
     ownership = _ownership_fields(sim, prop, player_eid=player_eid)
@@ -638,6 +670,10 @@ def _row_from_scene(sim, scene_id, scene, *, player_pos=None, player_eid=None):
         "source_kind": source_kind,
         "anchor": anchor,
         "fixture_names": fixture_names,
+        "meaningful_object_cues": object_cues,
+        "meaningful_object_label": _text((object_cues[0] if object_cues else {}).get("meaningful_object_label")),
+        "meaningful_object_summary": _text((object_cues[0] if object_cues else {}).get("meaningful_object_summary")),
+        "meaningful_object_action": _text((object_cues[0] if object_cues else {}).get("meaningful_object_action")),
         "organization_presence": organization_presence,
         "world_event_context_key": world_event_context_key,
         "world_event_context_label": world_event_context_label,
@@ -1168,7 +1204,9 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
         world_event_context = _text(row.get("world_event_context_note"))
         context_text = f" World event pressure: {world_event_context}." if world_event_context else ""
         mood_text = _report_place_mood_text(row)
+        texture_text = _report_place_texture_text(row)
         ritual_text = _report_ambient_ritual_text(row)
+        object_text = _report_meaningful_object_text(row)
         if row.get("player_business_relevance") and owner_cue:
             owner_text = f" Your business is directly involved: {owner_cue}."
         elif row.get("player_business_relevance") and owner_style:
@@ -1179,7 +1217,7 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
             owner_text = ""
         lines.append(
             f"{row['title']} at {row['property_name']} ({row['distance_text']}): "
-            f"{row['summary']}; {row['action']}.{org_text}{fixture_text}{effect_text}{context_text}{mood_text}{ritual_text}{owner_text}"
+            f"{row['summary']}; {row['action']}.{org_text}{fixture_text}{effect_text}{context_text}{mood_text}{texture_text}{ritual_text}{object_text}{owner_text}"
         )
     return tuple(lines)
 
@@ -1192,12 +1230,30 @@ def _report_place_mood_text(row):
     return f" Mood: {label} - {cue}." if cue else f" Mood: {label}."
 
 
+def _report_place_texture_text(row):
+    label = _text(row.get("place_texture_label"))
+    if not label:
+        return ""
+    cue = _text(row.get("place_texture_visible_cue")) or _text(row.get("place_texture_reason"))
+    rumor = _text(row.get("rumor_weather_label"))
+    suffix = f"; rumor weather {rumor}" if rumor and rumor.lower() != label.lower() else ""
+    return f" Texture: {label}{suffix} - {cue}." if cue else f" Texture: {label}{suffix}."
+
+
 def _report_ambient_ritual_text(row):
     label = _text(row.get("ambient_ritual_label"))
     if not label:
         return ""
     summary = _text(row.get("ambient_ritual_summary"))
     return f" Ritual: {label} - {summary}." if summary else f" Ritual: {label}."
+
+
+def _report_meaningful_object_text(row):
+    summary = _text(row.get("meaningful_object_summary"))
+    if summary:
+        return f" Object: {summary}."
+    label = _text(row.get("meaningful_object_label"))
+    return f" Object: {label}." if label else ""
 
 
 def _look_owner_text(row):
@@ -1236,6 +1292,16 @@ def _look_place_mood_text(row):
     return f"; mood {label}"
 
 
+def _look_place_texture_text(row):
+    label = _text(row.get("place_texture_label"))
+    if not label:
+        return ""
+    cue = _text(row.get("place_texture_visible_cue")) or _text(row.get("rumor_weather_summary"))
+    if cue:
+        return f"; texture {label} - {cue}"
+    return f"; texture {label}"
+
+
 def _look_ambient_ritual_text(row):
     label = _text(row.get("ambient_ritual_label"))
     if not label:
@@ -1246,6 +1312,14 @@ def _look_ambient_ritual_text(row):
     return f"; ritual {label}"
 
 
+def _look_meaningful_object_text(row):
+    label = _text(row.get("meaningful_object_label"))
+    if not label:
+        return ""
+    action = _text(row.get("meaningful_object_action")) or "inspect it"
+    return f"; object {label} - {action}"
+
+
 def _format_property_look_row(row):
     if not row:
         return ""
@@ -1254,7 +1328,9 @@ def _format_property_look_row(row):
         + _look_org_text(row)
         + _look_effect_text(row)
         + _look_place_mood_text(row)
+        + _look_place_texture_text(row)
         + _look_ambient_ritual_text(row)
+        + _look_meaningful_object_text(row)
         + _look_owner_text(row)
     )
 

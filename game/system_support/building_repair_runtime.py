@@ -10,6 +10,7 @@ out of the monolith and the UI systems. It intentionally focuses on:
 
 from __future__ import annotations
 
+from engine.events import Event
 from engine.tilemap import Tile
 from game.components import PlayerAssets
 from game.property_access import property_apertures
@@ -459,6 +460,131 @@ def repair_building_damage(sim, prop):
     }
 
 
+def _quiet_maintenance_record_allowed(record):
+    if not isinstance(record, dict):
+        return False
+    repair_kind = _normalize_repair_kind(
+        record.get("repair_kind"),
+        aperture_kind=record.get("aperture_kind"),
+    )
+    if repair_kind == "wall":
+        return False
+    if _int_or(record.get("offender_eid"), default=0):
+        return False
+    cause = _text(record.get("cause")).lower()
+    if cause in {
+        "attack",
+        "breach",
+        "explosion",
+        "fire",
+        "forced_entry",
+        "ramming",
+        "sabotage",
+        "shooting",
+        "vehicle_collision",
+    }:
+        return False
+    return repair_kind in {"window", "door"}
+
+
+def quiet_maintenance_cleanup(sim, prop, *, max_records=1, source_kind="maintenance_loop", emit_event=True):
+    """Let an anchored maintenance scene clean tiny concrete damage only.
+
+    This intentionally avoids full contractor repair semantics. It is for the
+    little world-texture cases where a live worker/service cart plausibly fixes
+    a loose door or broken pane. Wall damage, offender-linked damage, and
+    sabotage-like causes stay on the stronger repair/restitution paths.
+    """
+
+    if sim is None or not isinstance(prop, dict) or _text(prop.get("kind")).lower() != "building":
+        return {
+            "ok": False,
+            "reason": "invalid_property",
+            "restored_count": 0,
+        }
+    try:
+        limit = max(0, int(max_records))
+    except (TypeError, ValueError):
+        limit = 1
+    if limit <= 0:
+        return {
+            "ok": False,
+            "reason": "no_budget",
+            "restored_count": 0,
+        }
+    records = [
+        dict(record)
+        for record in tuple(property_damage_records(sim, prop) or ())
+        if _quiet_maintenance_record_allowed(record)
+    ]
+    if not records:
+        return {
+            "ok": False,
+            "reason": "no_minor_damage",
+            "restored_count": 0,
+        }
+    records = records[:limit]
+    restored_keys = set()
+    restored_kinds = []
+    for record in records:
+        x = _int_or(record.get("x"), default=0)
+        y = _int_or(record.get("y"), default=0)
+        z = _int_or(record.get("z"), default=0)
+        repair_kind = _normalize_repair_kind(
+            record.get("repair_kind"),
+            aperture_kind=record.get("aperture_kind"),
+        )
+        if repair_kind == "window":
+            _restore_window_tile(sim, x, y, z)
+        elif repair_kind == "door":
+            _restore_door_tile(sim, prop, x, y, z, aperture_kind=record.get("aperture_kind", "door"))
+        else:
+            continue
+        restored_keys.add(_record_key(record))
+        restored_kinds.append(repair_kind)
+
+    if not restored_keys:
+        return {
+            "ok": False,
+            "reason": "nothing_restored",
+            "restored_count": 0,
+        }
+    state = _stored_damage_state(prop, create=True)
+    state["records"] = [
+        existing
+        for existing in list(state.get("records", ()) or ())
+        if _record_key(_clean_damage_record(existing) or {}) not in restored_keys
+    ]
+    result = {
+        "ok": True,
+        "reason": "restored",
+        "property_id": _text(prop.get("id")),
+        "property_name": _text(prop.get("name", prop.get("id"))),
+        "restored_count": len(restored_keys),
+        "restored_kinds": tuple(restored_kinds),
+        "source_kind": _text(source_kind).lower() or "maintenance_loop",
+    }
+    if emit_event:
+        try:
+            x = int(prop.get("x", 0) or 0)
+            y = int(prop.get("y", 0) or 0)
+            z = int(prop.get("z", 0) or 0)
+        except (TypeError, ValueError):
+            x = y = z = 0
+        sim.emit(Event(
+            "quiet_maintenance_resolved",
+            property_id=result["property_id"],
+            property_name=result["property_name"],
+            restored_count=int(result["restored_count"]),
+            restored_kinds=tuple(restored_kinds),
+            source_kind=result["source_kind"],
+            x=x,
+            y=y,
+            z=z,
+        ))
+    return result
+
+
 __all__ = [
     "owned_building_properties",
     "owned_repairable_buildings",
@@ -466,6 +592,7 @@ __all__ = [
     "property_damage_records",
     "property_damage_summary",
     "property_needs_building_repair",
+    "quiet_maintenance_cleanup",
     "record_building_damage",
     "repair_building_damage",
 ]

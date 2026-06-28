@@ -49,6 +49,70 @@ _FIRE_INTENSITY_PROFILE = {
     3: {"radius": 4, "intensity": 0.78},
 }
 
+LIGHT_COLOR_PROFILES = {
+    "street_warm": {"rgb": (255, 190, 92), "priority": 1, "pulse": ""},
+    "security_cool": {"rgb": (96, 172, 255), "priority": 2, "pulse": ""},
+    "storefront_warm": {"rgb": (255, 214, 142), "priority": 1, "pulse": ""},
+    "clinic_soft": {"rgb": (182, 255, 218), "priority": 1, "pulse": ""},
+    "casino_neon": {"rgb": (211, 91, 255), "priority": 2, "pulse": "neon"},
+    "fire_orange": {"rgb": (255, 116, 45), "priority": 3, "pulse": "warm"},
+    "headlight_white": {"rgb": (255, 246, 216), "priority": 2, "pulse": ""},
+    "emergency_red": {"rgb": (255, 62, 70), "priority": 4, "pulse": "emergency"},
+    "underground_green": {"rgb": (94, 226, 168), "priority": 1, "pulse": ""},
+    "ritual_violet": {"rgb": (168, 116, 255), "priority": 2, "pulse": "slow"},
+}
+
+_FIXTURE_LIGHT_PROFILE_HINTS = {
+    "streetlamp": "street_warm",
+    "trail_lamp": "street_warm",
+    "bus_stop": "security_cool",
+    "atm_kiosk": "security_cool",
+    "claim_terminal": "security_cool",
+    "vending_machine": "security_cool",
+    "charging_pillar": "security_cool",
+    "security_camera": "security_cool",
+    "storm_siren": "emergency_red",
+    "campfire_ring": "fire_orange",
+}
+
+_BUILDING_LIGHT_PROFILE_HINTS = {
+    "clinic": "clinic_soft",
+    "backroom_clinic": "clinic_soft",
+    "hospital": "clinic_soft",
+    "pharmacy": "clinic_soft",
+    "herbalist_shop": "clinic_soft",
+    "herbalist_camp": "clinic_soft",
+    "casino": "casino_neon",
+    "arcade": "casino_neon",
+    "game_room": "casino_neon",
+    "tavern": "storefront_warm",
+    "bar": "storefront_warm",
+    "roadhouse": "storefront_warm",
+    "police_station": "security_cool",
+    "security_office": "security_cool",
+    "justice_station": "security_cool",
+    "jail": "security_cool",
+    "courthouse": "security_cool",
+    "watch_post": "security_cool",
+    "firewatch_tower": "security_cool",
+    "pump_house": "underground_green",
+    "service_basement": "underground_green",
+    "utility_corridor": "underground_green",
+    "maintenance_tunnel": "underground_green",
+}
+
+_SERVICE_LIGHT_PROFILE_HINTS = {
+    "medical_care": "clinic_soft",
+    "herbal_care": "clinic_soft",
+    "herbal_prepare": "clinic_soft",
+    "banking": "security_cool",
+    "insurance": "security_cool",
+    "casino_games": "casino_neon",
+    "slots": "casino_neon",
+    "blackjack": "casino_neon",
+    "roulette": "casino_neon",
+}
+
 
 def _property_metadata(prop):
     if not isinstance(prop, dict):
@@ -63,6 +127,109 @@ def _clamp_unit(value, default=0.0):
     except (TypeError, ValueError):
         number = float(default)
     return max(0.0, min(1.0, number))
+
+
+def _clamp_rgb_channel(value, default=255):
+    try:
+        return max(0, min(255, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _profile_row(profile_name, default_profile="storefront_warm"):
+    name = str(profile_name or "").strip().lower()
+    row = LIGHT_COLOR_PROFILES.get(name)
+    if isinstance(row, dict):
+        return name, row
+    fallback_name = str(default_profile or "storefront_warm").strip().lower() or "storefront_warm"
+    fallback = LIGHT_COLOR_PROFILES.get(fallback_name) or LIGHT_COLOR_PROFILES["storefront_warm"]
+    return fallback_name if fallback_name in LIGHT_COLOR_PROFILES else "storefront_warm", fallback
+
+
+def _normalize_light_rgb(value, *, profile_name=None, default_profile="storefront_warm"):
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        return (
+            _clamp_rgb_channel(value[0]),
+            _clamp_rgb_channel(value[1]),
+            _clamp_rgb_channel(value[2]),
+        )
+
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in LIGHT_COLOR_PROFILES:
+            return tuple(int(channel) for channel in LIGHT_COLOR_PROFILES[text]["rgb"])
+        if text.startswith("#") and len(text) == 7:
+            try:
+                return (
+                    int(text[1:3], 16),
+                    int(text[3:5], 16),
+                    int(text[5:7], 16),
+                )
+            except ValueError:
+                pass
+
+    _name, row = _profile_row(profile_name, default_profile=default_profile)
+    return tuple(int(channel) for channel in row["rgb"])
+
+
+def _int_or_default(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _default_light_profile_for_property(prop, default_profile="storefront_warm"):
+    if not isinstance(prop, dict):
+        return str(default_profile or "storefront_warm")
+    metadata = _property_metadata(prop)
+    kind = str(prop.get("kind", "") or "").strip().lower()
+    archetype = str(metadata.get("archetype") or metadata.get("fixture_type") or prop.get("archetype") or "").strip().lower()
+    fixture_kind = str(metadata.get("fixture_kind", "") or "").strip().lower()
+
+    if kind == "vehicle":
+        restricted = str(metadata.get("restricted_use", "") or "").strip().lower()
+        if restricted == "justice" or "police" in archetype or "justice" in archetype:
+            return "security_cool"
+        return "headlight_white"
+
+    if kind in {"fixture", "asset"}:
+        if archetype in _FIXTURE_LIGHT_PROFILE_HINTS:
+            return _FIXTURE_LIGHT_PROFILE_HINTS[archetype]
+        if fixture_kind in {"electronic", "camera", "alarm"}:
+            return "security_cool"
+        return "street_warm"
+
+    if kind == "building":
+        if archetype in _BUILDING_LIGHT_PROFILE_HINTS:
+            return _BUILDING_LIGHT_PROFILE_HINTS[archetype]
+        for service in tuple(finance_services_for_property(prop)) + tuple(site_services_for_property(prop)):
+            service_key = str(service or "").strip().lower()
+            if service_key in _SERVICE_LIGHT_PROFILE_HINTS:
+                return _SERVICE_LIGHT_PROFILE_HINTS[service_key]
+        if property_is_storefront(prop):
+            return "storefront_warm"
+        if property_is_public(prop):
+            return "street_warm"
+
+    return str(default_profile or "storefront_warm")
+
+
+def _light_visual_fields(metadata=None, *, prop=None, default_profile="storefront_warm"):
+    metadata = metadata if isinstance(metadata, dict) else {}
+    default_profile = _default_light_profile_for_property(prop, default_profile=default_profile)
+    profile_name = str(metadata.get("light_profile") or metadata.get("profile") or default_profile).strip().lower()
+    profile_name, row = _profile_row(profile_name, default_profile=default_profile)
+    rgb = _normalize_light_rgb(metadata.get("light_color"), profile_name=profile_name, default_profile=profile_name)
+    pulse = str(metadata.get("light_pulse", row.get("pulse", "")) or "").strip().lower()
+    priority = _int_or_default(metadata.get("light_priority", row.get("priority", 0)), row.get("priority", 0))
+    priority = max(0, min(8, priority))
+    return {
+        "light_profile": profile_name,
+        "light_color": [int(rgb[0]), int(rgb[1]), int(rgb[2])],
+        "light_pulse": pulse,
+        "light_priority": int(priority),
+    }
 
 
 def _clock_config(sim):
@@ -438,10 +605,12 @@ def _building_light_profile(sim, prop, clock):
         radius = max(radius, 3)
 
     metadata = _property_metadata(prop)
+    visual = _light_visual_fields(metadata, prop=prop, default_profile="storefront_warm")
     return {
         "building_id": metadata.get("building_id"),
         "intensity": _clamp_unit(intensity),
         "radius": max(1, int(radius)),
+        **visual,
     }
 
 
@@ -474,6 +643,7 @@ def _authored_fixture_light_sources(sim, clock):
         if radius <= 0 or intensity <= 0.0:
             continue
 
+        visual = _light_visual_fields(metadata, prop=prop, default_profile="street_warm")
         sources.append({
             "x": x,
             "y": y,
@@ -483,6 +653,7 @@ def _authored_fixture_light_sources(sim, clock):
             "kind": "fixture",
             "building_id": None,
             "property_id": prop.get("id"),
+            **visual,
         })
 
     return sources
@@ -528,6 +699,10 @@ def _aperture_light_sources(sim, clock):
                 "kind": "aperture",
                 "building_id": profile.get("building_id"),
                 "property_id": prop.get("id"),
+                "light_profile": profile.get("light_profile"),
+                "light_color": list(profile.get("light_color", ())),
+                "light_pulse": profile.get("light_pulse", ""),
+                "light_priority": int(profile.get("light_priority", 0) or 0),
             })
 
     return sources
@@ -571,6 +746,7 @@ def _fire_light_sources(sim):
             "kind": "fire",
             "building_id": str(cell.get("building_id", "") or "").strip() or None,
             "property_id": str(cell.get("property_id", "") or "").strip() or None,
+            **_light_visual_fields({}, default_profile="fire_orange"),
         })
 
     return sources
@@ -646,6 +822,7 @@ def _vehicle_headlight_sources(sim):
                 continue
 
         # A compact two-source beam gives nearby fill and a brighter reach ahead.
+        visual = _light_visual_fields(_property_metadata(vehicle_prop), prop=vehicle_prop, default_profile="headlight_white")
         for step, radius, intensity in ((1, 4, 0.62), (4, 5, 0.42)):
             sources.append({
                 "x": x + (dx * step),
@@ -657,6 +834,7 @@ def _vehicle_headlight_sources(sim):
                 "building_id": None,
                 "property_id": vehicle_id,
                 "eid": int(eid),
+                **visual,
             })
     return sources
 
@@ -773,7 +951,7 @@ def _world_event_fixture_light_mult(sim, x, y):
     return max(0.0, min(1.0, mult))
 
 
-def _local_light_level(sim, x, y, z=0, inside=False, aperture_bleed=0.0, clock=None):
+def _local_light_contributions(sim, x, y, z=0, inside=False, aperture_bleed=0.0, clock=None):
     if clock is None:
         clock = clock_snapshot(sim)
 
@@ -782,7 +960,7 @@ def _local_light_level(sim, x, y, z=0, inside=False, aperture_bleed=0.0, clock=N
         y = int(y)
         z = int(z)
     except (TypeError, ValueError):
-        return 0.0
+        return []
 
     contributions = []
     sample_building_id = _structure_building_id(sim, x, y, z) if inside else None
@@ -818,15 +996,98 @@ def _local_light_level(sim, x, y, z=0, inside=False, aperture_bleed=0.0, clock=N
         elif str(source.get("kind", "") or "").strip().lower() == "aperture":
             contribution *= 0.9 + (0.1 * outside_bleed)
 
-        contributions.append(_clamp_unit(contribution))
+        contributions.append((source, _clamp_unit(contribution)))
 
-    if not contributions:
+    return contributions
+
+
+def _combine_local_light(contributions):
+    values = []
+    for row in contributions or ():
+        if isinstance(row, (list, tuple)) and len(row) >= 2:
+            values.append(_clamp_unit(row[1]))
+        else:
+            values.append(_clamp_unit(row))
+
+    if not values:
         return 0.0
 
     combined_shadow = 1.0
-    for contribution in contributions:
+    for contribution in values:
         combined_shadow *= (1.0 - contribution)
     return _clamp_unit(1.0 - combined_shadow)
+
+
+def _light_tint_from_contributions(contributions):
+    weighted = []
+    for source, contribution in contributions or ():
+        if not isinstance(source, dict):
+            continue
+        contribution = _clamp_unit(contribution)
+        if contribution <= 0.0:
+            continue
+        profile = str(source.get("light_profile", "") or "").strip().lower()
+        rgb = _normalize_light_rgb(source.get("light_color"), profile_name=profile or "storefront_warm")
+        priority = max(0, min(8, _int_or_default(source.get("light_priority", 0), 0)))
+        weight = contribution * (1.0 + (0.22 * priority))
+        if weight <= 0.0:
+            continue
+        weighted.append({
+            "source": source,
+            "contribution": contribution,
+            "weight": weight,
+            "rgb": rgb,
+            "priority": priority,
+            "profile": profile or _profile_row(None)[0],
+        })
+
+    if not weighted:
+        return None, []
+
+    total_weight = sum(row["weight"] for row in weighted)
+    if total_weight <= 0.0:
+        return None, []
+
+    rgb = []
+    for channel in range(3):
+        rgb.append(_clamp_rgb_channel(sum(row["rgb"][channel] * row["weight"] for row in weighted) / total_weight))
+
+    combined_strength = _combine_local_light((row["source"], row["contribution"]) for row in weighted)
+    dominant = max(weighted, key=lambda row: (row["weight"], row["priority"], row["profile"]))
+    pulse = str(dominant["source"].get("light_pulse", "") or "").strip().lower()
+    sources = []
+    for row in sorted(weighted, key=lambda entry: (entry["weight"], entry["priority"]), reverse=True)[:3]:
+        source = row["source"]
+        sources.append({
+            "kind": str(source.get("kind", "") or "").strip().lower(),
+            "profile": row["profile"],
+            "strength": round(float(row["contribution"]), 4),
+            "weight": round(float(row["weight"]), 4),
+            "priority": int(row["priority"]),
+        })
+
+    tint = {
+        "rgb": [int(rgb[0]), int(rgb[1]), int(rgb[2])],
+        "strength": round(float(combined_strength), 4),
+        "profile": dominant["profile"],
+        "pulse": pulse,
+        "source_count": int(len(weighted)),
+    }
+    return tint, sources
+
+
+def _local_light_level(sim, x, y, z=0, inside=False, aperture_bleed=0.0, clock=None):
+    return _combine_local_light(
+        _local_light_contributions(
+            sim,
+            x,
+            y,
+            z,
+            inside=inside,
+            aperture_bleed=aperture_bleed,
+            clock=clock,
+        )
+    )
 
 
 def ambient_snapshot(sim, x, y, z=0, clock=None):
@@ -838,7 +1099,9 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
     )
     inside = bool(is_interior_tile(sim, x, y, z))
     if not inside:
-        local_light = _local_light_level(sim, x, y, z, inside=False, aperture_bleed=0.0, clock=clock)
+        contributions = _local_light_contributions(sim, x, y, z, inside=False, aperture_bleed=0.0, clock=clock)
+        local_light = _combine_local_light(contributions)
+        light_tint, light_sources = _light_tint_from_contributions(contributions)
         ambient = _clamp_unit(outdoor_ambient + ((1.0 - outdoor_ambient) * local_light), default=outdoor_ambient)
         return {
             "phase": str(clock.get("phase", "day")),
@@ -847,12 +1110,16 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
             "inside": False,
             "aperture_bleed": 0.0,
             "local_light": local_light,
+            "light_tint": light_tint,
+            "light_sources": light_sources,
         }
 
     interior_base = max(0.12, min(0.48, outdoor_ambient * 0.58))
     bleed = _neighbor_aperture_bonus(sim, x, y, z)
     interior = interior_base + ((outdoor_ambient - interior_base) * (0.7 * bleed))
-    local_light = _local_light_level(sim, x, y, z, inside=True, aperture_bleed=bleed, clock=clock)
+    contributions = _local_light_contributions(sim, x, y, z, inside=True, aperture_bleed=bleed, clock=clock)
+    local_light = _combine_local_light(contributions)
+    light_tint, light_sources = _light_tint_from_contributions(contributions)
     interior = _clamp_unit(interior + ((1.0 - interior) * local_light), default=interior_base)
     return {
         "phase": str(clock.get("phase", "day")),
@@ -861,6 +1128,8 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
         "inside": True,
         "aperture_bleed": bleed,
         "local_light": local_light,
+        "light_tint": light_tint,
+        "light_sources": light_sources,
     }
 
 
@@ -886,6 +1155,8 @@ def lighting_state(sim):
         "player_ambient": 1.0,
         "player_aperture_bleed": 0.0,
         "player_local_light": 0.0,
+        "player_light_tint": None,
+        "player_light_sources": [],
         "source_cache_key": (),
         "local_light_sources": [],
         "source_count": 0,
@@ -909,6 +1180,8 @@ def update_lighting_state(sim, player_pos=None):
         state["player_ambient"] = state["outside_ambient"]
         state["player_aperture_bleed"] = 0.0
         state["player_local_light"] = 0.0
+        state["player_light_tint"] = None
+        state["player_light_sources"] = []
         _local_light_sources(sim, clock=snapshot)
         return state
 
@@ -924,4 +1197,6 @@ def update_lighting_state(sim, player_pos=None):
     state["player_ambient"] = _clamp_unit(ambient.get("ambient", state["outside_ambient"]), default=state["outside_ambient"])
     state["player_aperture_bleed"] = _clamp_unit(ambient.get("aperture_bleed", 0.0))
     state["player_local_light"] = _clamp_unit(ambient.get("local_light", 0.0))
+    state["player_light_tint"] = ambient.get("light_tint")
+    state["player_light_sources"] = list(ambient.get("light_sources", ()) or ())
     return state

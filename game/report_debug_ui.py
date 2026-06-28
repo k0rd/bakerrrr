@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-import curses
 
 from game.release_runtime import release_control_text
 from game.ui_text_runtime import _modal_body_widths, _modal_panel_width
-from ui.input_keys import ENTER_KEYS, KEY_DOWN, KEY_UP
+from ui.input_keys import (
+    ENTER_KEYS,
+    KEY_BACK_TAB,
+    KEY_DOWN,
+    KEY_END,
+    KEY_HOME,
+    KEY_PAGE_DOWN,
+    KEY_PAGE_UP,
+    KEY_UP,
+)
 
 
 def default_report_ui_state():
@@ -346,7 +354,7 @@ def handle_report_input(host, key, *, line_text_fn, wrap_display_lines_fn):
     if not state.get("open"):
         return False
     report_kind = str(state.get("kind", "progress")).strip().lower() or "progress"
-    key_btab = getattr(curses, "KEY_BTAB", None)
+    key_btab = KEY_BACK_TAB
 
     if key in (ord("?"), ord("/")):
         host._help_state()["open"] = True
@@ -389,10 +397,10 @@ def handle_report_input(host, key, *, line_text_fn, wrap_display_lines_fn):
         host._close_report_ui()
         return True
 
-    key_home = getattr(curses, "KEY_HOME", None)
-    key_end = getattr(curses, "KEY_END", None)
-    key_page_up = getattr(curses, "KEY_PPAGE", None)
-    key_page_down = getattr(curses, "KEY_NPAGE", None)
+    key_home = KEY_HOME
+    key_end = KEY_END
+    key_page_up = KEY_PAGE_UP
+    key_page_down = KEY_PAGE_DOWN
     body_w, body_h = scroll_panel_body_dimensions(host.view, host.sim)
 
     if report_kind == "known_locations":
@@ -598,12 +606,12 @@ def handle_debug_input(host, key, *, line_text_fn, wrap_display_lines_fn):
         )
         return True
 
-    key_home = getattr(curses, "KEY_HOME", None)
+    key_home = KEY_HOME
     if key_home is not None and key == key_home:
         state["scroll"] = 0
         return True
 
-    key_end = getattr(curses, "KEY_END", None)
+    key_end = KEY_END
     if key_end is not None and key == key_end:
         display_lines = debug_display_lines(
             state,
@@ -614,7 +622,7 @@ def handle_debug_input(host, key, *, line_text_fn, wrap_display_lines_fn):
         state["scroll"] = max(0, len(display_lines) - body_h)
         return True
 
-    key_page_up = getattr(curses, "KEY_PPAGE", None)
+    key_page_up = KEY_PAGE_UP
     if key_page_up is not None and key == key_page_up:
         state["scroll"] = int(state.get("scroll", 0)) - 6
         clamp_debug_scroll(
@@ -626,7 +634,7 @@ def handle_debug_input(host, key, *, line_text_fn, wrap_display_lines_fn):
         )
         return True
 
-    key_page_down = getattr(curses, "KEY_NPAGE", None)
+    key_page_down = KEY_PAGE_DOWN
     if key_page_down is not None and key == key_page_down:
         state["scroll"] = int(state.get("scroll", 0)) + 6
         clamp_debug_scroll(

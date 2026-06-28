@@ -1,4 +1,3 @@
-import curses
 import faulthandler
 import importlib.util
 import os
@@ -196,7 +195,6 @@ from game.systems import (
     RenderSystem,
 )
 from game.weapons import roll_weapon_instance
-from ui.curses_view import CursesView
 from ui.pygame_view import PygameView
 
 
@@ -275,8 +273,8 @@ def _resolve_run_seed(default=None):
     return random.SystemRandom().randrange(1, 2_147_483_648)
 
 
-def _resolve_ui_backend(argv=None):
-    backend = str(os.getenv("BAKERRRR_UI", "curses") or "curses").strip().lower()
+def _requested_ui_backend(argv=None):
+    backend = str(os.getenv("BAKERRRR_UI", "pygame") or "pygame").strip().lower()
     args = list(argv or sys.argv[1:])
     for idx, raw in enumerate(args):
         value = str(raw).strip()
@@ -286,9 +284,20 @@ def _resolve_ui_backend(argv=None):
         if value == "--ui" and idx + 1 < len(args):
             backend = str(args[idx + 1]).strip().lower() or backend
 
+    return backend
+
+
+def _terminal_backend_requested(argv=None):
+    return _requested_ui_backend(argv) in {"curses", "terminal", "tty", "text"}
+
+
+def _resolve_ui_backend(argv=None):
+    backend = _requested_ui_backend(argv)
     if backend in {"pygame", "tile", "tiles"}:
         return "pygame"
-    return "curses"
+    if backend in {"curses", "terminal", "tty", "text"}:
+        return "pygame"
+    return "pygame"
 
 
 def _resolve_tutorial_flag(argv=None, config=None):
@@ -346,12 +355,10 @@ def _doctor_report(argv=None, *, save_dir=None):
         ok = False
 
     pygame_available = importlib.util.find_spec("pygame") is not None
-    curses_available = importlib.util.find_spec("curses") is not None
     lines.append(f"pygame: {'available' if pygame_available else 'missing'}")
-    lines.append(f"curses: {'available' if curses_available else 'missing'}")
+    if _terminal_backend_requested(args):
+        lines.append("terminal_ui: lives on terminal-stable; main is pygame-only")
     if backend == "pygame" and not pygame_available:
-        ok = False
-    if backend == "curses" and not curses_available:
         ok = False
 
     json_paths = [
@@ -426,48 +433,6 @@ def _prompt_character_name_text():
         print("Please enter a valid character name.")
 
 
-def _prompt_character_name(stdscr):
-    default_name = last_character_name()
-    while True:
-        stdscr.erase()
-        height, width = stdscr.getmaxyx()
-        prompt_x = max(0, min(width - 1, 2))
-        prompt_y = max(0, min(height - 1, 2))
-        detail_y = min(height - 1, prompt_y + 2)
-        input_y = min(height - 1, prompt_y + 4)
-        max_text_width = max(0, width - prompt_x)
-        prompt_label = f"Character name [{default_name}]:" if default_name else "Character name:"
-        prompt_text = prompt_label[:max_text_width]
-        detail_text = "Existing save with this name resumes once, then is deleted on load."[:max_text_width]
-
-        stdscr.addstr(prompt_y, prompt_x, prompt_text)
-        stdscr.addstr(detail_y, prompt_x, detail_text)
-        stdscr.move(input_y, prompt_x)
-        stdscr.clrtoeol()
-        stdscr.refresh()
-
-        try:
-            curses.echo()
-            try:
-                curses.curs_set(1)
-            except curses.error:
-                pass
-            raw = stdscr.getstr(input_y, prompt_x, 48)
-        finally:
-            curses.noecho()
-            try:
-                curses.curs_set(0)
-            except curses.error:
-                pass
-
-        name = normalize_character_name(raw) or default_name
-        if name:
-            remember_character_name(name)
-            stdscr.erase()
-            stdscr.refresh()
-            return name
-
-
 def _player_identity_default_index(value):
     normalized = normalize_gender_identity(value, default="nonbinary")
     for idx, row in enumerate(_PLAYER_IDENTITY_OPTIONS):
@@ -509,80 +474,6 @@ def _prompt_choice_text(prompt, options, *, detail="", initial_index=0):
         print("Please choose Man, Woman, or Nonbinary.")
 
 
-def _prompt_choice_curses(
-    stdscr,
-    prompt,
-    options,
-    *,
-    detail="",
-    title="bakerrrr - identity",
-    subtitle="Player identity setup",
-    initial_index=0,
-):
-    rows = [dict(row) for row in tuple(options or ()) if isinstance(row, dict) and str(row.get("value", "")).strip()]
-    if not rows:
-        return None
-    selected = max(0, min(int(initial_index), len(rows) - 1))
-    try:
-        curses.curs_set(0)
-    except curses.error:
-        pass
-    stdscr.keypad(True)
-    while True:
-        stdscr.erase()
-        height, width = stdscr.getmaxyx()
-        left = max(0, min(width - 1, 2))
-        y = 1
-
-        def _draw_line(line, *, attr=0):
-            nonlocal y
-            if y >= height:
-                return
-            text = str(line or "")[: max(0, width - left - 1)]
-            try:
-                stdscr.addstr(y, left, text, attr)
-            except curses.error:
-                pass
-            y += 1
-
-        if title:
-            _draw_line(title, attr=getattr(curses, "A_BOLD", 0))
-        if subtitle:
-            _draw_line(subtitle)
-        y += 1
-        _draw_line(prompt, attr=getattr(curses, "A_BOLD", 0))
-        if detail:
-            _draw_line(detail)
-        y += 1
-        for idx, row in enumerate(rows, start=1):
-            label = str(row.get("label", row.get("value", ""))).strip()
-            description = str(row.get("description", "")).strip()
-            line = f"{idx}. {label}"
-            if description:
-                line = f"{line} - {description}"
-            attr = getattr(curses, "A_REVERSE", 0) if idx - 1 == selected else 0
-            _draw_line(line, attr=attr)
-        y += 1
-        _draw_line("Arrows move | 1-3 choose | Enter confirm | Esc cancel")
-        stdscr.refresh()
-
-        key = stdscr.getch()
-        if key in (10, 13, getattr(curses, "KEY_ENTER", -1)):
-            return str(rows[selected].get("value", "")).strip().lower()
-        if key == 27:
-            return None
-        if key in (curses.KEY_UP, curses.KEY_LEFT):
-            selected = (selected - 1) % len(rows)
-            continue
-        if key in (curses.KEY_DOWN, curses.KEY_RIGHT):
-            selected = (selected + 1) % len(rows)
-            continue
-        if key in (ord("1"), ord("2"), ord("3")):
-            idx = key - ord("1")
-            if 0 <= idx < len(rows):
-                return str(rows[idx].get("value", "")).strip().lower()
-
-
 def _prompt_player_gender_identity_text(*, initial_value=None, character_name="", resume=False):
     prompt = f"Identity for {character_name or 'this run'}:"
     if resume:
@@ -593,31 +484,6 @@ def _prompt_player_gender_identity_text(*, initial_value=None, character_name=""
         prompt,
         _PLAYER_IDENTITY_OPTIONS,
         detail=detail,
-        initial_index=_player_identity_default_index(initial_value),
-    )
-
-
-def _prompt_player_gender_identity(
-    stdscr,
-    *,
-    initial_value=None,
-    character_name="",
-    resume=False,
-):
-    prompt = f"Identity for {character_name or 'this run'}:"
-    if resume:
-        detail = "This save predates player identity metadata. Choose how NPCs should address you."
-        subtitle = "Resume identity upgrade"
-    else:
-        detail = "Choose the identity NPCs use for pronouns and social address. Assigned sex is rolled separately."
-        subtitle = "Street-level run identity"
-    return _prompt_choice_curses(
-        stdscr,
-        prompt,
-        _PLAYER_IDENTITY_OPTIONS,
-        detail=detail,
-        title="bakerrrr - identity",
-        subtitle=subtitle,
         initial_index=_player_identity_default_index(initial_value),
     )
 
@@ -3169,24 +3035,6 @@ def _run_character_session(view, character_name, gender_identity=None, *, tutori
     )
 
 
-def _run_curses(stdscr, tutorial=False, *, debug_mode=False):
-    # Prompt before CursesView sets non-blocking input mode.
-    character_name = _prompt_character_name(stdscr)
-    selected_identity = None
-    if tutorial or not character_save_exists(character_name):
-        selected_identity = _prompt_player_gender_identity(
-            stdscr,
-            character_name=character_name,
-            resume=False,
-        )
-        if not selected_identity:
-            return None
-    view = CursesView(stdscr)
-    run_end = _run_character_session(view, character_name, selected_identity, tutorial=tutorial, debug_mode=debug_mode)
-    show_run_end_notice(view, run_end, wait=True, print_notice=True)
-    return run_end
-
-
 def _run_pygame(tutorial=False, *, debug_mode=False):
     # Pygame uses a fixed procedural default cell size unless overridden by env.
     # Override with BAKERRRR_TILE_SIZE_PX / _GRID_W / _GRID_H if you want a different view.
@@ -3311,18 +3159,6 @@ def _show_crash_notice_modal(backend, title, lines):
             finally:
                 view.close()
             return True
-        if backend == "curses":
-            return curses.wrapper(
-                lambda stdscr: show_final_notice(
-                    CursesView(stdscr),
-                    title=title,
-                    lines=lines,
-                    severity="error",
-                    stream="stderr",
-                    print_notice=False,
-                    wait=True,
-                )
-            )
     except Exception:
         return False
     return False
@@ -3345,10 +3181,9 @@ def _run_entrypoint(argv=None):
     backend = _resolve_ui_backend(args)
     tutorial = _resolve_tutorial_flag(args)
     debug_mode = _resolve_debug_flag(args)
-    if backend == "pygame":
-        run_end = _run_pygame(tutorial=tutorial, debug_mode=debug_mode)
-    else:
-        run_end = curses.wrapper(lambda stdscr: _run_curses(stdscr, tutorial=tutorial, debug_mode=debug_mode))
+    if _terminal_backend_requested(args):
+        print("Terminal/curses play lives on the terminal-stable branch. Launching Pygame on main.", file=sys.stderr)
+    run_end = _run_pygame(tutorial=tutorial, debug_mode=debug_mode)
     _record_tutorial_run_if_needed(run_end)
     _print_post_run_summary(run_end)
     return 0

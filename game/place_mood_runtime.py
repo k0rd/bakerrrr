@@ -25,6 +25,20 @@ PLACE_MOOD_FIELD_KEYS = (
     "place_mood_scene_bias",
 )
 
+PLACE_TEXTURE_FIELD_KEYS = (
+    "place_texture_kind",
+    "place_texture_label",
+    "place_texture_reason",
+    "place_texture_visible_cue",
+    "place_texture_confidence",
+    "place_texture_mechanical_tags",
+    "place_texture_light_profile_hint",
+    "rumor_weather_kind",
+    "rumor_weather_label",
+    "rumor_weather_summary",
+    "rumor_weather_dialogue_bias",
+)
+
 AMBIENT_RITUAL_FIELD_KEYS = (
     "ambient_ritual_kind",
     "ambient_ritual_label",
@@ -402,6 +416,192 @@ def place_mood_snapshot(sim, prop, *, scene=None, pulse=None):
         "mechanical_tags": tuple(best.get("mechanical_tags", ()) or ()),
         "visible_cue": best["visible_cue"],
         "scene_bias": round(max(0.0, min(0.24, _float(best.get("scene_bias")))), 3),
+    }
+
+
+def _texture_candidate(kind, label, reason, cue, score, *, rumor_kind="", rumor_label="", rumor_summary="", dialogue_bias="", light_profile="", tags=()):
+    return {
+        "kind": _slug(kind),
+        "label": _text(label),
+        "reason": _text(reason),
+        "visible_cue": _text(cue),
+        "score": _float(score),
+        "rumor_kind": _slug(rumor_kind or kind),
+        "rumor_label": _text(rumor_label or label),
+        "rumor_summary": _text(rumor_summary or reason),
+        "dialogue_bias": _slug(dialogue_bias or rumor_kind or kind),
+        "light_profile": _slug(light_profile),
+        "mechanical_tags": tuple(_slug(tag) for tag in tuple(tags or ()) if _text(tag)),
+    }
+
+
+def local_texture_snapshot(sim, prop, *, mood=None, scene=None, pulse=None):
+    """Return a compact read for social weather / local texture.
+
+    This is a presentation helper. It does not create a row by itself; callers
+    attach the fields only to concrete scene/property anchors.
+    """
+
+    if not isinstance(prop, dict):
+        return {}
+    scene = scene if isinstance(scene, dict) else {}
+    pulse = pulse if isinstance(pulse, dict) else {}
+    mood = mood if isinstance(mood, dict) else place_mood_snapshot(sim, prop, scene=scene, pulse=pulse)
+    mood_kind = _slug(mood.get("mood_kind") or mood.get("kind"))
+    mood_label = _text(mood.get("mood_label") or mood.get("label")) or mood_kind
+    phase = _slug(_scene_or_pulse_value("event_phase", scene=scene, pulse=pulse))
+    category = _category_for(prop, pulse=pulse, scene=scene)
+    prop_name = _prop_name(prop)
+    tags = set(_slug(tag) for tag in tuple(mood.get("mechanical_tags", ()) or ()) if _text(tag))
+    candidates = [
+        _texture_candidate(
+            "ordinary",
+            "ordinary",
+            f"{prop_name} is giving off a readable {mood_label} rhythm",
+            _text(mood.get("visible_cue")) or "the place is doing ordinary local work",
+            0.18,
+            rumor_kind="talking",
+            rumor_label="talking",
+            rumor_summary="people here will probably talk if you give them a clean reason",
+            dialogue_bias="open",
+            light_profile="",
+            tags=("social",),
+        )
+    ]
+
+    if mood_kind in {"warm", "loyal", "softened", "tender"} or tags.intersection({"calm", "care"}):
+        candidates.append(_texture_candidate(
+            "welcoming",
+            "warm",
+            f"{prop_name} has enough trust in the air for softer conversation",
+            _text(mood.get("visible_cue")) or "people are leaving room for each other",
+            0.62 + (0.08 if mood_kind in {"loyal", "tender"} else 0.0),
+            rumor_kind="generous",
+            rumor_label="generous",
+            rumor_summary="the local talk is a little more giving than guarded",
+            dialogue_bias="soft",
+            light_profile="storefront_warm" if category in {"retail", "hospitality", "residential"} else "clinic_soft",
+            tags=("social", "calm"),
+        ))
+    if mood_kind in {"strained", "brittle", "edged"} or "strained" in tags:
+        candidates.append(_texture_candidate(
+            "strained",
+            "strained",
+            f"{prop_name} is making people measure words before they spend them",
+            _text(mood.get("visible_cue")) or "people are watching tone as much as motion",
+            0.7,
+            rumor_kind="spooked",
+            rumor_label="spooked",
+            rumor_summary="the block is talking, but it is not relaxed about it",
+            dialogue_bias="guarded",
+            light_profile="emergency_red" if mood_kind == "edged" else "security_cool",
+            tags=("strained", "watched"),
+        ))
+    if mood_kind in {"watched", "dimmed"} or "watched" in tags:
+        candidates.append(_texture_candidate(
+            "watched",
+            "watched",
+            f"{prop_name} feels watched because the boundary is actually being watched",
+            _text(mood.get("visible_cue")) or "eyes keep returning to the same edge",
+            0.76,
+            rumor_kind="watchful",
+            rumor_label="watchful",
+            rumor_summary="people here notice movement before they explain it",
+            dialogue_bias="guarded",
+            light_profile="security_cool",
+            tags=("watched", "boundary"),
+        ))
+    if mood_kind in {"hurried", "short", "wanted"} or phase in {"delivery_run", "loading_push", "dispatch_surge", "boarding_crush", "arrival_handoff"}:
+        candidates.append(_texture_candidate(
+            "busy",
+            "busy",
+            f"{prop_name} is being pulled into route pressure",
+            _text(mood.get("visible_cue")) or "the visible work has more motion than patience",
+            0.64,
+            rumor_kind="busy",
+            rumor_label="busy",
+            rumor_summary="the useful talk is mixed into work and handoffs",
+            dialogue_bias="work",
+            light_profile="headlight_white" if category == "transit" else "storefront_warm",
+            tags=("work", "motion"),
+        ))
+    if mood_kind == "repairing" or "maintenance" in tags or phase in {"maintenance_loop", "repair_lookover"}:
+        candidates.append(_texture_candidate(
+            "mending",
+            "mending",
+            f"{prop_name} is being nudged back into shape by small practical work",
+            _text(mood.get("visible_cue")) or "tools and careful hands are visible around the site",
+            0.69,
+            rumor_kind="busy",
+            rumor_label="busy",
+            rumor_summary="the useful talk is happening between repairs",
+            dialogue_bias="work",
+            light_profile="storefront_warm" if category not in {"secure", "industrial", "transit"} else "security_cool",
+            tags=("maintenance", "work"),
+        ))
+    if mood_kind in {"neglected", "overstocked"} or phase in {"afterhours_aftermath", "aftermath_cleanup"}:
+        candidates.append(_texture_candidate(
+            "tired",
+            "tired",
+            f"{prop_name} is showing the cost of staying useful",
+            _text(mood.get("visible_cue")) or "the place has not fully shaken off its last hard hour",
+            0.61,
+            rumor_kind="tired",
+            rumor_label="tired",
+            rumor_summary="people here still have enough energy to notice, not enough to perform",
+            dialogue_bias="weary",
+            light_profile="street_warm",
+            tags=("maintenance", "social"),
+        ))
+    if phase in {"block_watch", "owner_screening", "visitor_screening", "booking_queue", "security_sweep"}:
+        candidates.append(_texture_candidate(
+            "shut_tight",
+            "shut tight",
+            f"{prop_name} is narrowing who gets an easy answer",
+            "answers are moving through checks, glances, and small silences",
+            0.79,
+            rumor_kind="shut_tight",
+            rumor_label="shut tight",
+            rumor_summary="people here may know things, but the first answer will be small",
+            dialogue_bias="closed",
+            light_profile="security_cool",
+            tags=("watched", "boundary"),
+        ))
+    if phase in {"regulars_spill", "neighbors_lingering", "tenant_meetup", "mutual_aid_table"}:
+        candidates.append(_texture_candidate(
+            "talking",
+            "talking",
+            f"{prop_name} has ordinary talk doing useful work",
+            "people are lingering long enough for a second answer",
+            0.72,
+            rumor_kind="talking",
+            rumor_label="talking",
+            rumor_summary="the local version is easier to catch here than most places",
+            dialogue_bias="open",
+            light_profile="storefront_warm",
+            tags=("social", "calm"),
+        ))
+
+    best = max(
+        candidates,
+        key=lambda row: (
+            _float(row.get("score")),
+            _slug(row.get("kind")),
+            _text(row.get("reason")),
+        ),
+    )
+    return {
+        "texture_kind": best["kind"],
+        "texture_label": best["label"],
+        "texture_reason": best["reason"],
+        "visible_cue": best["visible_cue"],
+        "confidence": round(max(0.0, min(1.0, _float(best.get("score")))), 3),
+        "mechanical_tags": tuple(best.get("mechanical_tags", ()) or ()),
+        "light_profile_hint": best["light_profile"],
+        "rumor_weather_kind": best["rumor_kind"],
+        "rumor_weather_label": best["rumor_label"],
+        "rumor_weather_summary": best["rumor_summary"],
+        "rumor_weather_dialogue_bias": best["dialogue_bias"],
     }
 
 
@@ -950,13 +1150,35 @@ def ambient_ritual_scene_fields(ritual):
     }
 
 
+def place_texture_scene_fields(texture):
+    texture = texture if isinstance(texture, dict) else {}
+    if not texture:
+        return {}
+    tags = tuple(_slug(tag) for tag in tuple(texture.get("mechanical_tags", ()) or ()) if _text(tag))
+    return {
+        "place_texture_kind": _slug(texture.get("texture_kind") or texture.get("kind")),
+        "place_texture_label": _text(texture.get("texture_label") or texture.get("label")),
+        "place_texture_reason": _text(texture.get("texture_reason") or texture.get("reason")),
+        "place_texture_visible_cue": _text(texture.get("visible_cue")),
+        "place_texture_confidence": round(max(0.0, min(1.0, _float(texture.get("confidence")))), 3),
+        "place_texture_mechanical_tags": tuple(tags),
+        "place_texture_light_profile_hint": _slug(texture.get("light_profile_hint")),
+        "rumor_weather_kind": _slug(texture.get("rumor_weather_kind")),
+        "rumor_weather_label": _text(texture.get("rumor_weather_label")),
+        "rumor_weather_summary": _text(texture.get("rumor_weather_summary")),
+        "rumor_weather_dialogue_bias": _slug(texture.get("rumor_weather_dialogue_bias")),
+    }
+
+
 def annotate_place_mood_and_ritual(sim, prop, *, scene=None, pulse=None):
     """Return scene/pulse fields for the current derived mood and ritual."""
 
     mood = place_mood_snapshot(sim, prop, scene=scene, pulse=pulse)
+    texture = local_texture_snapshot(sim, prop, mood=mood, scene=scene, pulse=pulse)
     ritual = ambient_ritual_snapshot(sim, prop, mood=mood, scene=scene, pulse=pulse)
     fields = {}
     fields.update(place_mood_scene_fields(mood))
+    fields.update(place_texture_scene_fields(texture))
     fields.update(ambient_ritual_scene_fields(ritual))
     return fields
 
@@ -967,7 +1189,7 @@ def public_place_mood_fields(source):
     if not isinstance(source, dict):
         return {}
     fields = {}
-    for key in PLACE_MOOD_FIELD_KEYS + AMBIENT_RITUAL_FIELD_KEYS:
+    for key in PLACE_MOOD_FIELD_KEYS + PLACE_TEXTURE_FIELD_KEYS + AMBIENT_RITUAL_FIELD_KEYS:
         value = source.get(key)
         if value in (None, "", (), []):
             continue

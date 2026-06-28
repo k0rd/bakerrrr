@@ -10,7 +10,7 @@ from typing import Any
 
 from engine.events import Event
 
-from game.components import AI, CreatureIdentity, Inventory, NPCMemory, Position, Vitality
+from game.components import AI, CreatureIdentity, Inventory, NPCMemory, NPCSocial, NPCRoutine, NPCSettlement, Occupation, Position, Vitality
 from game.items import ITEM_CATALOG
 from game.object_profile_runtime import (
     OBJECT_PROFILE_FAMILIES,
@@ -82,12 +82,52 @@ def meaningful_objects_state(sim: Any) -> dict[str, Any]:
     if not isinstance(state, dict):
         state = {}
         setattr(sim, "meaningful_objects", state)
-    for key in ("objects", "actor_index", "place_index", "player_knowledge"):
+    for key in ("objects", "actor_index", "place_index", "player_knowledge", "cooldowns"):
         if not isinstance(state.get(key), dict):
             state[key] = {}
     if not hasattr(sim, "next_meaningful_object_id"):
         sim.next_meaningful_object_id = 1
     return state
+
+
+def _cooldown_bucket(sim: Any, bucket: str) -> dict[str, int]:
+    state = meaningful_objects_state(sim)
+    cooldowns = state.setdefault("cooldowns", {})
+    if not isinstance(cooldowns, dict):
+        cooldowns = {}
+        state["cooldowns"] = cooldowns
+    bucket_key = _text(bucket, "general")
+    rows = cooldowns.setdefault(bucket_key, {})
+    if not isinstance(rows, dict):
+        rows = {}
+        cooldowns[bucket_key] = rows
+    return rows
+
+
+def meaningful_object_cooldown_ready(
+    sim: Any,
+    bucket: str,
+    key: Any,
+    *,
+    cooldown_ticks: int,
+    mark: bool = False,
+) -> bool:
+    """Return whether a meaningful-object presentation cooldown is ready."""
+
+    rows = _cooldown_bucket(sim, bucket)
+    key_text = _text(key)
+    if not key_text:
+        return False
+    now = int(getattr(sim, "tick", 0) or 0)
+    last = rows.get(key_text)
+    try:
+        last_tick = int(last)
+    except (TypeError, ValueError):
+        last_tick = -10**9
+    ready = now - last_tick >= max(0, int(cooldown_ticks or 0))
+    if mark and ready:
+        rows[key_text] = now
+    return ready
 
 
 def _next_object_id(sim: Any) -> str:
@@ -603,19 +643,119 @@ def meaningful_object_display_text(
     return neutral
 
 
-def _owner_can_notice_pickup(sim: Any, owner_eid: Any, x: int, y: int, z: int, *, actor_eid: Any = None) -> bool:
+def meaningful_object_fixture_cue(sim: Any, prop: Mapping[str, Any], *, viewer_eid: Any = None) -> dict[str, Any]:
+    """Return a non-ESP visible cue for a place object-backed fixture."""
+
+    if not property_is_item_backed_fixture(prop):
+        return {}
+    context = _fixture_object_context(prop)
+    if _text(context.get("source_kind")) != "place":
+        return {}
+    label = meaningful_object_display_text(sim, prop, viewer_eid=viewer_eid, include_learned=False)
+    if not label:
+        return {}
+    meaning = _text(context.get("meaning_kind"), "place_habit").replace("_", " ")
+    return {
+        "meaningful_object_id": _text(context.get("meaningful_object_id")),
+        "meaningful_object_label": label,
+        "meaningful_object_summary": f"a kept {meaning} object is visible: {label}",
+        "meaningful_object_action": "inspect the object or ask why it is kept here",
+    }
+
+
+def meaningful_object_entry_summary(sim: Any, object_id: Any, *, viewer_eid: Any = None) -> dict[str, Any]:
+    """Return learned/unlearned display-safe summary fields for an object entry."""
+
+    entry = meaningful_object_entry(sim, object_id)
+    if not entry:
+        return {}
+    profile = entry.get("object_profile") if isinstance(entry.get("object_profile"), Mapping) else {}
+    neutral = object_profile_display_text(profile, fallback_name="object")
+    learned = object_meaning_learned(sim, entry.get("object_id"), viewer_eid=viewer_eid)
+    source_kind = _text(entry.get("source_kind"))
+    owner_eid = entry.get("owner_eid")
+    source_property_id = _text(entry.get("source_property_id"))
+    owner_name = ""
+    source_property_name = ""
+    if learned and owner_eid is not None:
+        owner_name = _entity_display_name(sim, owner_eid, title_case=True)
+    if learned and source_property_id:
+        source_prop = getattr(sim, "properties", {}).get(source_property_id)
+        if isinstance(source_prop, Mapping):
+            source_property_name = _text(source_prop.get("name"), source_property_id)
+    display = neutral
+    if learned and owner_name:
+        display = f"{neutral}, one of {owner_name}'s things"
+    elif learned and source_property_name:
+        display = f"{neutral}, a kept object from {source_property_name}"
+    return {
+        "object_id": _text(entry.get("object_id")),
+        "object_label": neutral,
+        "display_text": display,
+        "learned": bool(learned),
+        "source_kind": source_kind,
+        "owner_eid": owner_eid,
+        "owner_name": owner_name,
+        "source_property_id": source_property_id,
+        "source_property_name": source_property_name,
+        "meaning_kind": _text(entry.get("meaning_kind")),
+        "family": _text(profile.get("family")),
+    }
+
+
+def _observer_ids_from_payload(payload: Mapping[str, Any] | None) -> set[int]:
+    ids: set[int] = set()
+    payload = payload if isinstance(payload, Mapping) else {}
+    for key in ("accountable_observer_eids", "observer_eids", "witnesses"):
+        values = payload.get(key)
+        if not isinstance(values, (list, tuple, set)):
+            continue
+        for value in values:
+            try:
+                ids.add(int(value))
+            except (TypeError, ValueError):
+                continue
+    return ids
+
+
+def _bond_score(sim: Any, left_eid: Any, right_eid: Any) -> float:
+    try:
+        left = int(left_eid)
+        right = int(right_eid)
+    except (TypeError, ValueError):
+        return 0.0
+    social = sim.ecs.get(NPCSocial).get(left) if sim is not None else None
+    bonds = getattr(social, "bonds", None)
+    if not isinstance(bonds, dict):
+        return 0.0
+    bond = bonds.get(right)
+    if not isinstance(bond, dict):
+        bond = bonds.get(str(right))
+    if not isinstance(bond, dict):
+        return 0.0
+    closeness = float(bond.get("closeness", 0.0) or 0.0)
+    trust = float(bond.get("trust", 0.0) or 0.0)
+    protectiveness = float(bond.get("protectiveness", 0.0) or 0.0)
+    return max(0.0, min(1.0, (closeness * 0.38) + (trust * 0.3) + (protectiveness * 0.32)))
+
+
+def _credible_pickup_witness(
+    sim: Any,
+    owner_eid: Any,
+    x: int,
+    y: int,
+    z: int,
+    *,
+    actor_eid: Any = None,
+    observation: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if owner_eid is None:
-        return False
+        return {}
     try:
         owner_eid = int(owner_eid)
     except (TypeError, ValueError):
-        return False
-    owner_pos = sim.ecs.get(Position).get(owner_eid)
-    if owner_pos is None or int(owner_pos.z) != int(z):
-        return False
-    if max(abs(int(owner_pos.x) - int(x)), abs(int(owner_pos.y) - int(y))) > 8:
-        return False
-    observation = observation_payload_for_position(
+        return {}
+    observation = observation if isinstance(observation, Mapping) else observation_payload_for_position(
         sim,
         int(x),
         int(y),
@@ -624,11 +764,214 @@ def _owner_can_notice_pickup(sim: Any, owner_eid: Any, x: int, y: int, z: int, *
         offender_eid=actor_eid,
         observation_channels=("actor_witness",),
     )
-    for key in ("accountable_observer_eids", "observer_eids", "witnesses"):
-        values = observation.get(key)
-        if isinstance(values, (list, tuple, set)) and owner_eid in {int(value) for value in values if str(value).lstrip("-").isdigit()}:
-            return True
+    observer_ids = _observer_ids_from_payload(observation)
+    owner_pos = sim.ecs.get(Position).get(owner_eid)
+    if (
+        owner_eid in observer_ids
+        and owner_pos is not None
+        and int(owner_pos.z) == int(z)
+        and max(abs(int(owner_pos.x) - int(x)), abs(int(owner_pos.y) - int(y))) <= 8
+    ):
+        return {"witness_eid": owner_eid, "witness_relation": "owner", "owner_eid": owner_eid, "bond_score": 1.0}
+    candidates = []
+    for witness_eid in observer_ids:
+        if witness_eid == owner_eid:
+            continue
+        witness_pos = sim.ecs.get(Position).get(witness_eid)
+        if witness_pos is None or int(witness_pos.z) != int(z):
+            continue
+        score = max(_bond_score(sim, witness_eid, owner_eid), _bond_score(sim, owner_eid, witness_eid))
+        if score >= 0.55:
+            candidates.append((score, witness_eid))
+    if not candidates:
+        return {}
+    candidates.sort(reverse=True)
+    return {
+        "witness_eid": int(candidates[0][1]),
+        "witness_relation": "bonded_witness",
+        "owner_eid": owner_eid,
+        "bond_score": round(float(candidates[0][0]), 4),
+    }
+
+
+def meaningful_object_owner_reaction_text(sim: Any, event_data: Mapping[str, Any]) -> dict[str, str]:
+    """Build deterministic owner/witness reaction copy for the event log."""
+
+    event_data = event_data if isinstance(event_data, Mapping) else {}
+    speaker_eid = event_data.get("witness_eid", event_data.get("eid"))
+    owner_eid = event_data.get("owner_eid")
+    item_name = _text(event_data.get("item_name"), "that")
+    owner_name = _text(event_data.get("owner_name"))
+    if not owner_name and owner_eid is not None:
+        owner_name = _entity_display_name(sim, owner_eid, title_case=True)
+    relation = _text(event_data.get("witness_relation"), "owner")
+    object_id = _text(event_data.get("object_id"))
+    rng = random.Random(_stable_seed("meaningful-object-bark", getattr(sim, "seed", 0), object_id, speaker_eid, owner_eid, item_name, relation))
+    if relation == "bonded_witness" and str(speaker_eid) != str(owner_eid):
+        owner_bit = owner_name or "someone here"
+        banks = {
+            "protective": (
+                f"Hey. That belongs to {owner_bit}. Put it back.",
+                f"Leave {owner_bit}'s {item_name} where it was.",
+                f"That is not yours. {owner_bit} keeps track of that.",
+                f"Careful. {owner_bit} will know if that walks off.",
+            ),
+            "guarded": (
+                f"I know that piece. It is {owner_bit}'s.",
+                f"That has a home here. Do not pocket it.",
+                f"You are picking up the wrong kind of keepsake.",
+                f"That one matters to {owner_bit}. Set it down.",
+            ),
+        }
+        tone = rng.choice(tuple(banks))
+        quote = rng.choice(banks[tone])
+        nearby = f"Someone nearby objects as you take {item_name}."
+        other_floor = f"Someone on another floor objects as you take {item_name}."
+        return {"quote": quote, "nearby_audio": nearby, "other_floor_audio": other_floor, "tone": tone}
+    banks = {
+        "angry": (
+            f"Put that back. {item_name.capitalize()} is mine.",
+            f"No. You do not walk off with my {item_name}.",
+            f"Hands off. That is one of mine.",
+            f"You picked the wrong little thing to steal.",
+        ),
+        "hurt": (
+            f"Careful with that. It is one of mine.",
+            f"That is not stock. It matters to me.",
+            f"I notice when that moves. Put it down.",
+            f"Some things are small and still not spare.",
+        ),
+        "startled": (
+            f"Hey, wait. That is mine.",
+            f"Hold up. Why are you taking that?",
+            f"That does not leave with you.",
+            f"Stop. I keep that for a reason.",
+        ),
+        "guarded": (
+            f"You do not know what that is. Leave it.",
+            f"That piece stays where I can see it.",
+            f"Do not make me explain why I keep that.",
+            f"Set it back and we can both keep this small.",
+        ),
+        "weary": (
+            f"Not that too. Put it back.",
+            f"I am tired of losing small things. Leave it.",
+            f"That one has survived enough. Do not add yourself to it.",
+            f"Just set it down. Please.",
+        ),
+        "protective": (
+            f"Back off from that.",
+            f"That is mine to keep, not yours to test.",
+            f"You are not taking that from me.",
+            f"Move your hand away from my {item_name}.",
+        ),
+    }
+    tone = rng.choice(tuple(banks))
+    quote = rng.choice(banks[tone])
+    nearby = f"Someone nearby reacts sharply as you take {item_name}."
+    other_floor = f"Someone on another floor reacts sharply as you take {item_name}."
+    return {"quote": quote, "nearby_audio": nearby, "other_floor_audio": other_floor, "tone": tone}
+
+
+def _npc_relevant_to_property(sim: Any, npc_eid: Any, property_id: str) -> bool:
+    property_id = _text(property_id)
+    if not property_id:
+        return False
+    try:
+        npc_eid = int(npc_eid)
+    except (TypeError, ValueError):
+        return False
+    occupation = sim.ecs.get(Occupation).get(npc_eid)
+    workplace = getattr(occupation, "workplace", None)
+    if isinstance(workplace, Mapping) and _text(workplace.get("property_id")) == property_id:
+        return True
+    routine = sim.ecs.get(NPCRoutine).get(npc_eid)
+    for point in (getattr(routine, "home", None), getattr(routine, "work", None)):
+        if isinstance(point, (tuple, list)) and len(point) >= 3:
+            try:
+                prop = sim.property_covering(int(point[0]), int(point[1]), int(point[2]))
+            except Exception:
+                prop = None
+            if isinstance(prop, Mapping) and _text(prop.get("id")) == property_id:
+                return True
+    settlement = sim.ecs.get(NPCSettlement).get(npc_eid)
+    if settlement is not None and property_id in {
+        _text(getattr(settlement, "home_property_id", "")),
+        _text(getattr(settlement, "work_property_id", "")),
+    }:
+        return True
     return False
+
+
+def meaningful_object_dialogue_context(sim: Any, npc_eid: Any, *, viewer_eid: Any = None) -> dict[str, Any]:
+    """Return learned object context this NPC may talk about."""
+
+    state = meaningful_objects_state(sim)
+    viewer_key = str(viewer_eid if viewer_eid is not None else getattr(sim, "player_eid", "player"))
+    knowledge = state["player_knowledge"].get(viewer_key)
+    if not isinstance(knowledge, dict):
+        return {"available": False}
+    try:
+        npc_eid_int = int(npc_eid)
+    except (TypeError, ValueError):
+        npc_eid_int = npc_eid
+    candidates = []
+    for object_id, learned in tuple(knowledge.items()):
+        entry = meaningful_object_entry(sim, object_id)
+        if not entry:
+            continue
+        source_kind = _text(entry.get("source_kind"))
+        relation = ""
+        priority = 99
+        if source_kind == "actor":
+            try:
+                if int(entry.get("owner_eid")) == int(npc_eid_int):
+                    relation = "owner"
+                    priority = 0
+            except (TypeError, ValueError):
+                relation = ""
+        elif source_kind == "place" and _npc_relevant_to_property(sim, npc_eid_int, _text(entry.get("source_property_id"))):
+            relation = "place_stakeholder"
+            priority = 1
+        if not relation:
+            continue
+        learned_tick = _safe_int((learned or {}).get("learned_tick"), 0) if isinstance(learned, Mapping) else 0
+        summary = meaningful_object_entry_summary(sim, entry.get("object_id"), viewer_eid=viewer_eid)
+        candidates.append((priority, -learned_tick, summary, relation, learned))
+    if not candidates:
+        return {"available": False}
+    candidates.sort(key=lambda row: (row[0], row[1], row[2].get("object_id", "")))
+    _priority, _neg_tick, summary, relation, learned = candidates[0]
+    source = _text((learned or {}).get("source"), "learned") if isinstance(learned, Mapping) else "learned"
+    dialogue_key = f"{npc_eid_int}:{summary.get('object_id')}"
+    return {
+        "available": True,
+        "relation": relation,
+        "source": source,
+        "dialogue_key": dialogue_key,
+        **summary,
+    }
+
+
+def meaningful_object_owner_dialogue_reveal(
+    sim: Any,
+    owner_eid: Any,
+    *,
+    viewer_eid: Any = None,
+    source: str = "owner_dialogue",
+) -> dict[str, Any] | None:
+    """Reveal an existing owner object through a legitimate owner dialogue path."""
+
+    entry = ensure_actor_personal_object(sim, owner_eid, create=False)
+    if not entry:
+        return None
+    object_id = _text(entry.get("object_id"))
+    if object_meaning_learned(sim, object_id, viewer_eid=viewer_eid):
+        return None
+    learned = learn_meaningful_object(sim, object_id, viewer_eid=viewer_eid, source=source, witness_eid=owner_eid)
+    if not learned:
+        return None
+    return meaningful_object_entry_summary(sim, object_id, viewer_eid=viewer_eid)
 
 
 def pickup_meaningful_object_fixture(sim: Any, actor_eid: Any, property_id: str) -> dict[str, Any]:
@@ -725,21 +1068,36 @@ def pickup_meaningful_object_fixture(sim: Any, actor_eid: Any, property_id: str)
         object_id=object_id or None,
         **observation,
     )
-    witnessed_by_owner = _owner_can_notice_pickup(sim, owner_eid, x, y, z, actor_eid=actor_eid)
-    if witnessed_by_owner and object_id:
-        learn_meaningful_object(sim, object_id, viewer_eid=getattr(sim, "player_eid", actor_eid), source="owner_reaction", witness_eid=owner_eid)
-        owner_name = _entity_display_name(sim, owner_eid, title_case=False)
-        sim.emit(Event(
-            "meaningful_object_owner_reaction",
-            eid=owner_eid,
-            offender_eid=actor_eid,
-            object_id=object_id,
-            item_name=item_name,
-            owner_name=owner_name,
-            x=x,
-            y=y,
-            z=z,
-        ))
+    witness = _credible_pickup_witness(sim, owner_eid, x, y, z, actor_eid=actor_eid, observation=observation)
+    witnessed_by_owner = bool(witness and witness.get("witness_relation") == "owner")
+    witnessed_by_relevant_actor = bool(witness)
+    if witnessed_by_relevant_actor and object_id:
+        witness_eid = witness.get("witness_eid")
+        witness_relation = _text(witness.get("witness_relation"), "owner")
+        learn_meaningful_object(
+            sim,
+            object_id,
+            viewer_eid=getattr(sim, "player_eid", actor_eid),
+            source="owner_reaction" if witness_relation == "owner" else "protective_witness",
+            witness_eid=witness_eid,
+        )
+        owner_name = _entity_display_name(sim, owner_eid, title_case=True)
+        cooldown_key = f"{object_id}:{actor_eid}:{witness_eid}"
+        if meaningful_object_cooldown_ready(sim, "owner_reactions", cooldown_key, cooldown_ticks=45, mark=True):
+            sim.emit(Event(
+                "meaningful_object_owner_reaction",
+                eid=witness_eid,
+                witness_eid=witness_eid,
+                witness_relation=witness_relation,
+                owner_eid=owner_eid,
+                offender_eid=actor_eid,
+                object_id=object_id,
+                item_name=item_name,
+                owner_name=owner_name,
+                x=x,
+                y=y,
+                z=z,
+            ))
         memory = sim.ecs.get(NPCMemory).get(owner_eid)
         if memory is not None:
             memory.remember(
@@ -750,11 +1108,26 @@ def pickup_meaningful_object_fixture(sim: Any, actor_eid: Any, property_id: str)
                 object_id=object_id,
                 item_name=item_name,
             )
+        if witness_eid is not None and str(witness_eid) != str(owner_eid):
+            witness_memory = sim.ecs.get(NPCMemory).get(witness_eid)
+            if witness_memory is not None:
+                witness_memory.remember(
+                    int(getattr(sim, "tick", 0) or 0),
+                    "personal_object_theft_witnessed",
+                    strength=0.72,
+                    offender_eid=actor_eid,
+                    owner_eid=owner_eid,
+                    object_id=object_id,
+                    item_name=item_name,
+                )
     return {
         **result,
         "object_id": object_id,
         "theft": True,
         "witnessed_by_owner": bool(witnessed_by_owner),
+        "witnessed_by_relevant_actor": bool(witnessed_by_relevant_actor),
+        "witness_eid": witness.get("witness_eid") if witness else None,
+        "witness_relation": _text(witness.get("witness_relation")) if witness else "",
         "item_name": item_name,
     }
 
@@ -817,6 +1190,8 @@ def dream_object_props_for_scene(
             "color": _text(profile_copy.get("display_color"), "world_object_home"),
             "semantic_id": f"world_object_{_text(profile_copy.get('family'), 'personal_home')}",
             "effects": tuple(object_profile_effects(profile_copy)),
+            "mood_anchor": _text(entry.get("meaning_kind")),
+            "label_hidden": True,
             "visual_seed": int(signature_seed & 0xFFFF_FFFF),
             "vision_only": True,
             "consequence_ineligible": True,
@@ -830,6 +1205,22 @@ def reward_object_profile(source_payload: Mapping[str, Any] | None, reward_id: s
     """Build an owner-free object profile for generated reward keepsake items."""
 
     source_payload = source_payload if isinstance(source_payload, Mapping) else {}
+    facilitator = source_payload.get("facilitator_context")
+    facilitator = facilitator if isinstance(facilitator, Mapping) else {}
+    facilitator_text = " ".join(
+        _text(value).lower()
+        for value in (
+            facilitator.get("role"),
+            facilitator.get("role_id"),
+            facilitator.get("career"),
+            facilitator.get("domain"),
+            facilitator.get("archetype"),
+            facilitator.get("service"),
+            " ".join(str(tag) for tag in facilitator.get("style_tags", ()) if str(tag).strip())
+            if isinstance(facilitator.get("style_tags"), (list, tuple, set)) else "",
+        )
+        if _text(value)
+    )
     seed = _stable_seed(
         "reward-object-profile",
         reward_id,
@@ -837,11 +1228,28 @@ def reward_object_profile(source_payload: Mapping[str, Any] | None, reward_id: s
         source_payload.get("objective"),
         source_payload.get("outcome"),
         family_hint,
+        facilitator,
     )
     rng = random.Random(seed)
-    family = family_hint if family_hint in OBJECT_PROFILE_FAMILIES else rng.choice(
-        ("tokens_charms", "paper_books", "tools_parts", "personal_home", "nature_finds", "medical_herbal", "light_ritual")
-    )
+    facilitator_family = ""
+    if any(word in facilitator_text for word in ("medic", "doctor", "herbal", "clinic", "remedy")):
+        facilitator_family = "medical_herbal"
+    elif any(word in facilitator_text for word in ("courier", "driver", "mechanic", "repair", "worker")):
+        facilitator_family = "tools_parts"
+    elif any(word in facilitator_text for word in ("clerk", "merchant", "dealer", "counter", "market")):
+        facilitator_family = "trade_work"
+    elif any(word in facilitator_text for word in ("guard", "security", "justice", "watch")):
+        facilitator_family = "tokens_charms"
+    elif any(word in facilitator_text for word in ("garden", "forager", "ranger", "hunter", "flora")):
+        facilitator_family = "nature_finds"
+    if facilitator_family in OBJECT_PROFILE_FAMILIES:
+        family = facilitator_family
+    elif family_hint in OBJECT_PROFILE_FAMILIES:
+        family = family_hint
+    else:
+        family = rng.choice(
+            ("tokens_charms", "paper_books", "tools_parts", "personal_home", "nature_finds", "medical_herbal", "light_ritual")
+        )
     profile = _profile_with_display(seed, family)
     profile["rarity"] = "unique"
     profile["future_tags"] = tuple(sorted(set(profile.get("future_tags", ())) | {"run_reward", "keepsake"}))

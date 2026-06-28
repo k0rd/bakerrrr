@@ -16,6 +16,7 @@ from game.organizations import local_workplace_org_posture
 from game.place_mood_runtime import (
     AMBIENT_RITUAL_FIELD_KEYS,
     PLACE_MOOD_FIELD_KEYS,
+    PLACE_TEXTURE_FIELD_KEYS,
     annotate_place_mood_and_ritual,
     public_place_mood_fields,
 )
@@ -46,6 +47,7 @@ from game.system_support.business_event_state import (
     _business_event_actor_state,
     _business_event_seed_state,
 )
+from game.system_support.building_repair_runtime import quiet_maintenance_cleanup
 from game.system_support.entity_naming import _entity_display_name
 from game.world_event_presentation import world_event_business_scene_context
 from game import systems as _systems
@@ -6083,7 +6085,7 @@ class BusinessPulseSceneSystem(System):
             "world_event_context_label",
             "world_event_context_note",
             "world_event_context_effect",
-        ) + PLACE_MOOD_FIELD_KEYS:
+        ) + PLACE_MOOD_FIELD_KEYS + PLACE_TEXTURE_FIELD_KEYS:
             raw_value = scene.get(key, "")
             if isinstance(raw_value, (tuple, list)):
                 value = ",".join(str(item).strip() for item in raw_value if str(item).strip())
@@ -6197,7 +6199,21 @@ class BusinessPulseSceneSystem(System):
             "place_mood_kind": str(scene.get("place_mood_kind", "") or "").strip().lower(),
             "place_mood_label": str(scene.get("place_mood_label", "") or "").strip(),
             "place_mood_visible_cue": str(scene.get("place_mood_visible_cue", "") or "").strip(),
+            "place_texture_kind": str(scene.get("place_texture_kind", "") or "").strip().lower(),
+            "place_texture_label": str(scene.get("place_texture_label", "") or "").strip(),
+            "place_texture_visible_cue": str(scene.get("place_texture_visible_cue", "") or "").strip(),
+            "rumor_weather_kind": str(scene.get("rumor_weather_kind", "") or "").strip().lower(),
+            "rumor_weather_label": str(scene.get("rumor_weather_label", "") or "").strip(),
         }
+        texture_light_profile = str(scene.get("place_texture_light_profile_hint", "") or "").strip().lower()
+        if texture_light_profile:
+            extra_metadata.update({
+                "light_enabled": True,
+                "light_radius": 3,
+                "light_intensity": 0.28,
+                "light_profile": texture_light_profile,
+                "light_priority": 2,
+            })
         object_result = materialize_place_object_near(
             self.sim,
             str(scene.get("property_id", "") or "").strip(),
@@ -6407,10 +6423,18 @@ class BusinessPulseSceneSystem(System):
         if allow_ritual_actor_fallback and not str(note.get("detail_line", "") or "").strip():
             ritual_detail = str(scene.get("ambient_ritual_detail_line", "") or "").strip()
             mood_reason = str(scene.get("place_mood_reason", "") or "").strip()
+            texture_reason = str(scene.get("place_texture_reason", "") or "").strip()
             if ritual_detail:
                 note["detail_line"] = ritual_detail
             elif mood_reason:
                 note["detail_line"] = mood_reason
+            elif texture_reason:
+                note["detail_line"] = texture_reason
+        if allow_ritual_actor_fallback and not str(note.get("local_line", "") or "").strip():
+            rumor_label = str(scene.get("rumor_weather_label", "") or "").strip().lower()
+            rumor_summary = str(scene.get("rumor_weather_summary", "") or "").strip()
+            if rumor_label and rumor_summary:
+                note["local_line"] = f"The block feels {rumor_label} right now; {rumor_summary}."
 
         if isinstance(prop, dict):
             _remember_property_lead_for_actor(
@@ -6851,6 +6875,21 @@ class BusinessPulseSceneSystem(System):
                     y=int(scene["anchor"][1]),
                     z=int(scene["anchor"][2]),
                 ))
+            maintenance_phase = str(scene.get("event_phase", "") or "").strip().lower()
+            ritual_kind = str(scene.get("ambient_ritual_kind", "") or "").strip().lower()
+            if prop is not None and (
+                maintenance_phase == "maintenance_loop"
+                or ritual_kind in {"repair_lookover", "plant_tending", "counter_wipe", "shelf_straightening"}
+            ):
+                result = quiet_maintenance_cleanup(
+                    self.sim,
+                    prop,
+                    max_records=1,
+                    source_kind=maintenance_phase or ritual_kind or "ambient_ritual",
+                    emit_event=True,
+                )
+                if bool(result.get("ok")):
+                    scene["quiet_maintenance_result"] = dict(result)
 
     def _release_scene_actor(self, scene, eid):
         source = (

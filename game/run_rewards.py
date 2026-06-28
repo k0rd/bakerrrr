@@ -265,6 +265,33 @@ def _text(value: Any, fallback: str = "") -> str:
     return text or fallback
 
 
+def _safe_facilitator_context(*sources: Any) -> dict[str, Any]:
+    allowed_text = ("role", "role_id", "career", "domain", "archetype", "service", "area_type", "district_type")
+    allowed_lists = ("style_tags", "tags")
+    safe: dict[str, Any] = {}
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in allowed_text:
+            value = _text(source.get(key))
+            if value:
+                safe[key] = value[:64]
+        for key in allowed_lists:
+            values = source.get(key)
+            if not isinstance(values, (list, tuple, set)):
+                continue
+            clean = []
+            for value in values:
+                text = _clean_identifier(value)
+                if text and text not in clean:
+                    clean.append(text)
+                if len(clean) >= 6:
+                    break
+            if clean:
+                safe[key] = clean
+    return safe
+
+
 def _source_payload(sim, player_eid, event_data: dict[str, Any]) -> dict[str, Any]:
     traits = getattr(sim, "world_traits", None)
     run_end = traits.get("run_end", {}) if isinstance(traits, dict) else {}
@@ -294,6 +321,12 @@ def _source_payload(sim, player_eid, event_data: dict[str, Any]) -> dict[str, An
             "casino_net": int((stats or {}).get("casino_net", 0) or 0) if isinstance(stats, dict) else 0,
         },
     }
+    facilitator = _safe_facilitator_context(
+        event_data.get("facilitator_context"),
+        run_end.get("facilitator_context") if isinstance(run_end, dict) else None,
+    )
+    if facilitator:
+        payload["facilitator_context"] = facilitator
     return payload
 
 

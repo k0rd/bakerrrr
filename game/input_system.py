@@ -1,6 +1,5 @@
 """Extracted systems from ``game.systems``: InputSystem."""
 
-import curses
 import time
 from engine.events import Event
 from engine.systems import System
@@ -229,7 +228,28 @@ from game.ui_text_runtime import (
     _wrap_text_lines,
 )
 from game.weapons import WEAPON_CATALOG, roll_weapon_instance, weapon_by_id
-from ui.input_keys import ENTER_KEYS, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP
+from ui.input_keys import (
+    ENTER_KEYS,
+    KEY_A1,
+    KEY_A2,
+    KEY_A3,
+    KEY_B1,
+    KEY_B2,
+    KEY_B3,
+    KEY_BACKSPACE,
+    KEY_BACK_TAB,
+    KEY_C1,
+    KEY_C2,
+    KEY_C3,
+    KEY_DOWN,
+    KEY_END,
+    KEY_HOME,
+    KEY_LEFT,
+    KEY_PAGE_DOWN,
+    KEY_PAGE_UP,
+    KEY_RIGHT,
+    KEY_UP,
+)
 
 def _facade():
     from game import systems as facade
@@ -281,28 +301,25 @@ class InputSystem(System):
             ord("h"): (-1, 0),
             ord("l"): (1, 0),
         }
-        for key_name, delta in (
-            ("KEY_A1", (-1, -1)),
-            ("KEY_A2", (0, -1)),
-            ("KEY_A3", (1, -1)),
-            ("KEY_B1", (-1, 0)),
-            ("KEY_B3", (1, 0)),
-            ("KEY_C1", (-1, 1)),
-            ("KEY_C2", (0, 1)),
-            ("KEY_C3", (1, 1)),
-            ("KEY_HOME", (-1, -1)),
-            ("KEY_PPAGE", (1, -1)),
-            ("KEY_END", (-1, 1)),
-            ("KEY_NPAGE", (1, 1)),
+        for key_code, delta in (
+            (KEY_A1, (-1, -1)),
+            (KEY_A2, (0, -1)),
+            (KEY_A3, (1, -1)),
+            (KEY_B1, (-1, 0)),
+            (KEY_B3, (1, 0)),
+            (KEY_C1, (-1, 1)),
+            (KEY_C2, (0, 1)),
+            (KEY_C3, (1, 1)),
+            (KEY_HOME, (-1, -1)),
+            (KEY_PAGE_UP, (1, -1)),
+            (KEY_END, (-1, 1)),
+            (KEY_PAGE_DOWN, (1, 1)),
         ):
-            key_code = getattr(curses, key_name, None)
-            if key_code is not None:
+            if key_code is not None and int(key_code) >= 0:
                 self.movement_keys[key_code] = delta
         self.wait_keys = {ord(" "), ord("5")}
-        for wait_key_name in ("KEY_B2", "KEY_CENTER"):
-            key_code = getattr(curses, wait_key_name, None)
-            if key_code is not None:
-                self.wait_keys.add(key_code)
+        if KEY_B2 is not None and int(KEY_B2) >= 0:
+            self.wait_keys.add(KEY_B2)
         self._canonical_movement_key_for_delta = {
             (-1, -1): ord("q"),
             (0, -1): ord("w"),
@@ -2279,7 +2296,7 @@ class InputSystem(System):
                 self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="primary"))
             return True
 
-        key_backspace = getattr(curses, "KEY_BACKSPACE", None)
+        key_backspace = KEY_BACKSPACE
         if key in (127, 8, key_backspace):
             self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="secondary"))
             return True
@@ -2377,25 +2394,25 @@ class InputSystem(System):
             self._normalize_dialog_selection()
             return True
 
-        key_home = getattr(curses, "KEY_HOME", None)
+        key_home = KEY_HOME
         if key_home is not None and key == key_home:
             state["scroll"] = 0
             return True
 
-        key_end = getattr(curses, "KEY_END", None)
+        key_end = KEY_END
         if key_end is not None and key == key_end:
             display_lines = self._dialog_display_lines()
             _body_w, transcript_h, _option_h = self._dialog_body_dimensions()
             state["scroll"] = max(0, len(display_lines) - transcript_h)
             return True
 
-        key_page_up = getattr(curses, "KEY_PPAGE", None)
+        key_page_up = KEY_PAGE_UP
         if key_page_up is not None and key == key_page_up:
             state["scroll"] = int(state.get("scroll", 0)) - 6
             self._clamp_dialog_scroll()
             return True
 
-        key_page_down = getattr(curses, "KEY_NPAGE", None)
+        key_page_down = KEY_PAGE_DOWN
         if key_page_down is not None and key == key_page_down:
             state["scroll"] = int(state.get("scroll", 0)) + 6
             self._clamp_dialog_scroll()
@@ -2500,25 +2517,25 @@ class InputSystem(System):
             self._clamp_log_scroll()
             return True
 
-        key_home = getattr(curses, "KEY_HOME", None)
+        key_home = KEY_HOME
         if key_home is not None and key == key_home:
             state["scroll"] = 0
             return True
 
-        key_end = getattr(curses, "KEY_END", None)
+        key_end = KEY_END
         if key_end is not None and key == key_end:
             display_lines = self._log_display_lines()
             _body_w, body_h = self._scroll_panel_body_dimensions()
             state["scroll"] = max(0, len(display_lines) - body_h)
             return True
 
-        key_page_up = getattr(curses, "KEY_PPAGE", None)
+        key_page_up = KEY_PAGE_UP
         if key_page_up is not None and key == key_page_up:
             state["scroll"] = int(state.get("scroll", 0)) - 6
             self._clamp_log_scroll()
             return True
 
-        key_page_down = getattr(curses, "KEY_NPAGE", None)
+        key_page_down = KEY_PAGE_DOWN
         if key_page_down is not None and key == key_page_down:
             state["scroll"] = int(state.get("scroll", 0)) + 6
             self._clamp_log_scroll()
@@ -2561,17 +2578,17 @@ class InputSystem(System):
             if 0 <= page_index < len(pages) and self._set_character_page(page_index, reset_scroll=False):
                 return True
 
-        key_left = getattr(curses, "KEY_LEFT", None)
+        key_left = KEY_LEFT
         if key_left is not None and key == key_left:
             self._cycle_character_page(step=-1)
             return True
 
-        key_right = getattr(curses, "KEY_RIGHT", None)
+        key_right = KEY_RIGHT
         if key_right is not None and key == key_right:
             self._cycle_character_page(step=1)
             return True
 
-        key_back_tab = getattr(curses, "KEY_BTAB", None)
+        key_back_tab = KEY_BACK_TAB
         if key_back_tab is not None and key == key_back_tab:
             self._cycle_character_page(step=-1)
             return True
@@ -2594,25 +2611,25 @@ class InputSystem(System):
             self._clamp_character_scroll()
             return True
 
-        key_home = getattr(curses, "KEY_HOME", None)
+        key_home = KEY_HOME
         if key_home is not None and key == key_home:
             state["scroll"] = 0
             return True
 
-        key_end = getattr(curses, "KEY_END", None)
+        key_end = KEY_END
         if key_end is not None and key == key_end:
             display_lines = self._character_display_lines()
             _body_w, body_h = self._character_panel_body_dimensions()
             state["scroll"] = max(0, len(display_lines) - body_h)
             return True
 
-        key_page_up = getattr(curses, "KEY_PPAGE", None)
+        key_page_up = KEY_PAGE_UP
         if key_page_up is not None and key == key_page_up:
             state["scroll"] = int(state.get("scroll", 0)) - 6
             self._clamp_character_scroll()
             return True
 
-        key_page_down = getattr(curses, "KEY_NPAGE", None)
+        key_page_down = KEY_PAGE_DOWN
         if key_page_down is not None and key == key_page_down:
             state["scroll"] = int(state.get("scroll", 0)) + 6
             self._clamp_character_scroll()
@@ -4802,13 +4819,13 @@ class InputSystem(System):
                 help_state["scroll"] = max(0, int(help_state.get("scroll", 0)) - 1)
             elif key in (KEY_DOWN, ord("j"), ord("J")):
                 help_state["scroll"] = int(help_state.get("scroll", 0)) + 1
-            elif (getattr(curses, "KEY_HOME", None) is not None) and key == getattr(curses, "KEY_HOME"):
+            elif key == KEY_HOME:
                 help_state["scroll"] = 0
-            elif (getattr(curses, "KEY_END", None) is not None) and key == getattr(curses, "KEY_END"):
+            elif key == KEY_END:
                 help_state["scroll"] = 10**9
-            elif (getattr(curses, "KEY_PPAGE", None) is not None) and key == getattr(curses, "KEY_PPAGE"):
+            elif key == KEY_PAGE_UP:
                 help_state["scroll"] = max(0, int(help_state.get("scroll", 0)) - 6)
-            elif (getattr(curses, "KEY_NPAGE", None) is not None) and key == getattr(curses, "KEY_NPAGE"):
+            elif key == KEY_PAGE_DOWN:
                 help_state["scroll"] = int(help_state.get("scroll", 0)) + 6
             return
 

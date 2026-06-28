@@ -81,6 +81,7 @@ from game.system_support.crime_plan_runtime import (
     record_crime_plan_observation,
 )
 from game.world_event_presentation import world_event_effect_summary
+from game.meaningful_objects_runtime import meaningful_object_owner_reaction_text
 from game.objective_progress import (
     award_objective_progress,
     objective_progress_explain_delta,
@@ -494,9 +495,11 @@ class EventLogSystem(System):
         self.sim.events.subscribe("item_use_blocked", self.on_item_use_blocked)
         self.sim.events.subscribe("report_device_used", self.on_report_device_used)
         self.sim.events.subscribe("justice_vehicle_misuse_barked", self.on_justice_vehicle_misuse_barked)
+        self.sim.events.subscribe("meaningful_object_owner_reaction", self.on_meaningful_object_owner_reaction)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
         self.sim.events.subscribe("business_scene_posture_started", self.on_business_scene_posture_started)
         self.sim.events.subscribe("ambient_ritual_started", self.on_ambient_ritual_started)
+        self.sim.events.subscribe("quiet_maintenance_resolved", self.on_quiet_maintenance_resolved)
         self.sim.events.subscribe("business_scene_nuisance", self.on_business_scene_nuisance)
         self.sim.events.subscribe("camera_scrutiny", self.on_camera_scrutiny)
         self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
@@ -521,6 +524,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("rumor_shared", self.on_rumor_shared)
         self.sim.events.subscribe("npc_socialized", self.on_npc_socialized)
         self.sim.events.subscribe("npc_partner_acknowledged", self.on_npc_partner_acknowledged)
+        self.sim.events.subscribe("npc_self_protection_quirk", self.on_npc_self_protection_quirk)
         self.sim.events.subscribe("animal_socialized", self.on_animal_socialized)
         self.sim.events.subscribe("armor_equipped", self.on_armor_equipped)
         self.sim.events.subscribe("armor_removed", self.on_armor_removed)
@@ -4108,6 +4112,23 @@ class EventLogSystem(System):
             dedupe_key=f"justice-vehicle-misuse:{npc_eid}:{event.data.get('incident_id')}",
         )
 
+    def on_meaningful_object_owner_reaction(self, event):
+        offender_eid = event.data.get("offender_eid")
+        speaker_eid = event.data.get("witness_eid") or event.data.get("eid")
+        if offender_eid != self.player_eid and not self._player_can_perceive_entity(speaker_eid):
+            return
+        text = meaningful_object_owner_reaction_text(self.sim, event.data)
+        quote = text.get("quote") or "Put that back."
+        self._log_npc_bark(
+            speaker_eid,
+            quote,
+            text.get("nearby_audio") or "Someone nearby objects.",
+            text.get("other_floor_audio") or "Someone on another floor objects.",
+            channel="alerts",
+            priority="high",
+            dedupe_key=f"meaningful-object:{event.data.get('object_id')}:{speaker_eid}",
+        )
+
     def on_item_stolen(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
@@ -4165,6 +4186,55 @@ class EventLogSystem(System):
             priority="low",
             dedupe_window=30,
             dedupe_key=f"ambient-ritual:{scene_id or property_id}:{ritual_kind}",
+        )
+
+    def on_quiet_maintenance_resolved(self, event):
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
+        if isinstance(prop, dict):
+            if not (self._player_is_near_property(prop, radius=10) or self._player_can_perceive_event_position(event)):
+                return
+            prop_label = _property_summary(self.sim, prop, viewer_eid=self.player_eid)
+        elif not self._player_can_perceive_event_position(event):
+            return
+        else:
+            prop_label = str(event.data.get("property_name", "") or "").strip() or "the place"
+        restored_count = max(1, int(event.data.get("restored_count", 1) or 1))
+        kinds = {
+            str(kind or "").strip().lower()
+            for kind in tuple(event.data.get("restored_kinds", ()) or ())
+            if str(kind or "").strip()
+        }
+        if kinds == {"window"}:
+            thing = "a broken pane"
+        elif kinds == {"door"}:
+            thing = "a bad door"
+        else:
+            thing = "a small repair"
+        if restored_count > 1:
+            thing = f"{restored_count} small repairs"
+        self._log(
+            f"A maintenance worker settles {thing} at {prop_label}.",
+            channel="general",
+            priority="low",
+            dedupe_window=50,
+            dedupe_key=f"quiet-maintenance:{property_id}:{','.join(sorted(kinds))}",
+        )
+
+    def on_npc_self_protection_quirk(self, event):
+        if not self._player_can_perceive_event_position(event):
+            return
+        line = str(event.data.get("line", "") or "").strip()
+        if not line:
+            return
+        npc_eid = event.data.get("npc_eid")
+        quirk = str(event.data.get("quirk", "") or "").strip().lower()
+        self._log(
+            line.rstrip(".") + ".",
+            channel="general",
+            priority="low",
+            dedupe_window=40,
+            dedupe_key=f"self-protection:{npc_eid}:{quirk}",
         )
 
     def on_business_scene_nuisance(self, event):

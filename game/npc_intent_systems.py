@@ -89,6 +89,8 @@ from game.npc_relationships import (
     record_partner_combat_witnesses as _record_partner_combat_witnesses,
     should_block_solo_vehicle_for_partner as _should_block_solo_vehicle_for_partner,
 )
+from game.named_scars_runtime import maybe_record_named_scar_from_damage
+from game.npc_self_protection_runtime import apply_self_protection_quirk
 from game.property_access import (
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
@@ -1676,6 +1678,7 @@ class NPCWillSystem(System):
         vitality = self.sim.ecs.get(Vitality).get(target_eid)
         if vitality is not None and bool(getattr(vitality, "downed", False)):
             return
+        maybe_record_named_scar_from_damage(self.sim, target_eid, event)
 
         needs = self.sim.ecs.get(NPCNeeds).get(target_eid)
         if needs is not None:
@@ -1743,6 +1746,15 @@ class NPCWillSystem(System):
                 target=retreat_target,
                 target_eid=source_eid,
             )
+            apply_self_protection_quirk(
+                self.sim,
+                target_eid,
+                ai=ai,
+                pos=target_pos,
+                reason="seeking_safety",
+                target=retreat_target,
+                threat_eid=source_eid,
+            )
         else:
             self._set_intent(
                 target_eid,
@@ -1752,6 +1764,15 @@ class NPCWillSystem(System):
                 min(96.0, 66.0 + (assault_bias * 24.0) + min(14.0, float(damage))),
                 target=(int(source_pos.x), int(source_pos.y), int(source_pos.z)),
                 target_eid=source_eid,
+            )
+            apply_self_protection_quirk(
+                self.sim,
+                target_eid,
+                ai=ai,
+                pos=target_pos,
+                reason="standing_ground",
+                target=(int(source_pos.x), int(source_pos.y), int(source_pos.z)),
+                threat_eid=source_eid,
             )
         _schedule_will_rethink(self.sim, target_eid, current_tick=getattr(self.sim, "tick", 0), delay_ticks=0)
         _mark_actor_urgent(self.sim, target_eid, family="will", reason="direct_damage", ttl_ticks=18)

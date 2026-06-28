@@ -1,14 +1,24 @@
-import curses
-
-
-# Shared keycodes consumed by input handling across UI backends.
-KEY_UP = int(getattr(curses, "KEY_UP", -1001))
-KEY_DOWN = int(getattr(curses, "KEY_DOWN", -1002))
-KEY_LEFT = int(getattr(curses, "KEY_LEFT", -1003))
-KEY_RIGHT = int(getattr(curses, "KEY_RIGHT", -1004))
-KEY_ENTER = int(getattr(curses, "KEY_ENTER", -1005))
-KEY_PAGE_UP = int(getattr(curses, "KEY_PPAGE", -1006))
-KEY_PAGE_DOWN = int(getattr(curses, "KEY_NPAGE", -1007))
-KEY_HOME = int(getattr(curses, "KEY_HOME", -1008))
-KEY_END = int(getattr(curses, "KEY_END", -1009))
+# Shared keycodes consumed by input handling. These match the common ncurses
+# values used by the terminal-stable branch, but main no longer imports curses
+# just to route Pygame/controller input.
+KEY_UP = 259
+KEY_DOWN = 258
+KEY_LEFT = 260
+KEY_RIGHT = 261
+KEY_ENTER = 343
+KEY_PAGE_UP = 339
+KEY_PAGE_DOWN = 338
+KEY_HOME = 262
+KEY_END = 360
+KEY_BACKSPACE = 263
+KEY_BACK_TAB = 353
+KEY_A1 = 348
+KEY_A2 = -1010
+KEY_A3 = 349
+KEY_B1 = -1011
+KEY_B2 = 350
+KEY_B3 = -1012
+KEY_C1 = 351
+KEY_C2 = -1013
+KEY_C3 = 352
 ENTER_KEYS = tuple(dict.fromkeys((10, 13, KEY_ENTER)))

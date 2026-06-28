@@ -1,6 +1,5 @@
 """Trade system extracted from ``game.systems``."""
 
-import curses
 import random
 
 from engine.events import Event
@@ -76,6 +75,7 @@ from game.system_support.street_vendor_trade_runtime import (
     street_vendor_sell_rows,
 )
 from game.system_support.throwable_runtime import throwable_summary_text
+from ui.text_attrs import A_BOLD
 
 
 def _default_trade_contact_terms(_sim, _viewer_eid, _prop):
@@ -97,7 +97,7 @@ def _item_legend_line(item_id, text):
         text,
         glyph=_item_display_glyph(item_def),
         color=_ground_item_color(item_def),
-        attrs=getattr(curses, "A_BOLD", 0),
+        attrs=A_BOLD,
     )
 
 

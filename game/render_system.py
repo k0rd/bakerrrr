@@ -1,6 +1,5 @@
 """Extracted systems from ``game.systems``: RenderSystem."""
 
-import curses
 import re
 from dataclasses import replace
 from engine.systems import System
@@ -87,8 +86,9 @@ from game.items import (
 )
 from game.hunting_runtime import hunting_carcasses_at
 from game.flora_runtime import flora_records_in_rect, flora_render_data
-from game.vision_scene_runtime import vision_scene_render_state
+from game.vision_scene_runtime import dream_residue_state, vision_scene_render_state
 from game.ui_theme_runtime import draw_modal_frame, resolve_modal_theme, theme_token
+from ui.text_attrs import A_BOLD, A_DIM, A_REVERSE, A_UNDERLINE
 from game.item_semantics import (
     appraise_item_for_actor,
     item_display_name_for_actor,
@@ -96,6 +96,7 @@ from game.item_semantics import (
     item_unknown_inspect_text_for_actor,
 )
 from game.lighting import (
+    LIGHT_COLOR_PROFILES,
     ambient_snapshot as _lighting_ambient_snapshot,
     lighting_state as _lighting_state,
     update_lighting_state as _update_lighting_state,
@@ -295,7 +296,7 @@ def _fire_visual_style(sim, x, y, z=0):
         color = "hazard_fire"
         semantic_id = "hazard_open_flame"
         effects = ("blink",)
-        attrs = getattr(curses, "A_BOLD", 0)
+        attrs = A_BOLD
         layer = "ground_overlay"
         priority = 80
     else:
@@ -303,7 +304,7 @@ def _fire_visual_style(sim, x, y, z=0):
         color = "hazard_smoke"
         semantic_id = "hazard_smoke"
         effects = ()
-        attrs = getattr(curses, "A_DIM", 0)
+        attrs = A_DIM
         layer = "ground_overlay"
         priority = 70
     try:
@@ -671,7 +672,7 @@ def _character_metric_segments(chunk, *, section_color):
     if not core:
         return [_segment(text)]
 
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = []
     if leading:
         segments.append(_segment(leading, color="human"))
@@ -706,7 +707,7 @@ def _character_sheet_rich_line(text, section_index=0):
     if not text:
         return ""
 
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     section_color = _character_section_color(section_index)
     if _looks_like_character_section_header(text):
         return _rich_line((_segment(text, color=section_color, attrs=bold),), text=text)
@@ -728,7 +729,7 @@ def _character_sheet_control_line(text):
     if not text:
         return ""
 
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     style = [["building_edge", 0] for _char in text]
 
     def apply_range(start, end, color, attrs=0):
@@ -765,7 +766,7 @@ def _character_sheet_control_line(text):
 
 
 def _character_sheet_nav_line(pages, page_index):
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = []
     plain_parts = []
     for idx, page in enumerate(list(pages or ())[:9]):
@@ -840,7 +841,7 @@ def _help_overlay_rich_line(text, section_index=0):
     if not text:
         return ""
 
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     stripped = text.strip()
     if stripped == "Help":
         return _rich_line((_segment(text, color=_HELP_EMPHASIS_COLOR, attrs=bold),), text=text)
@@ -1315,7 +1316,7 @@ class RenderSystem(System):
         tick, frame = self._hud_flash_clock()
         if tick >= int(expire_tick) or frame >= int(expire_frame):
             return line
-        return _hud_line_with_flash_ranges(line, ranges, getattr(curses, "A_REVERSE", 0))
+        return _hud_line_with_flash_ranges(line, ranges, A_REVERSE)
 
     def _advance_hud_queue(self, budget):
         """Ingest new log entries and drain up to 2 per game tick into the HUD display buffer."""
@@ -1715,7 +1716,7 @@ class RenderSystem(System):
         rest = text[len(label):]
         return _rich_line(
             (
-                _segment(prefix, color=color, attrs=getattr(curses, "A_BOLD", 0)),
+                _segment(prefix, color=color, attrs=A_BOLD),
                 _segment(rest),
             ),
             text=text,
@@ -1790,7 +1791,7 @@ class RenderSystem(System):
         text = f"{label} {coord}"
         return _rich_line(
             (
-                _segment(label, color=color, attrs=getattr(curses, "A_BOLD", 0)),
+                _segment(label, color=color, attrs=A_BOLD),
                 _segment(f" {coord}", color="building_edge"),
             ),
             text=text,
@@ -1870,7 +1871,7 @@ class RenderSystem(System):
                 _segment(
                     "@",
                     color=color,
-                    attrs=getattr(curses, "A_BOLD", 0),
+                    attrs=A_BOLD,
                     inline_glyph=True,
                     semantic_id=semantic_id,
                 ),
@@ -2158,7 +2159,7 @@ class RenderSystem(System):
             debug_ui["title"] = str(debug_panel.get("title", "Debug Overlay")).strip() or "Debug Overlay"
             debug_ui["lines"] = list(debug_panel.get("lines", ()) or ())
         ambient_cache = {}
-        ambient_dim_attr = getattr(curses, "A_DIM", 0)
+        ambient_dim_attr = A_DIM
 
         def _ambient_sample(x, y, z):
             key = (int(x), int(y), int(z))
@@ -2195,6 +2196,58 @@ class RenderSystem(System):
                 return 0
             return ambient_dim_attr
 
+        light_tint_drawer = getattr(self.view, "draw_light_tint", None)
+
+        def _draw_light_tint_overlay(sx, sy, wx, wy, z):
+            if not callable(light_tint_drawer):
+                return
+            sample = _ambient_sample(wx, wy, z)
+            tint = sample.get("light_tint") if isinstance(sample, dict) else None
+            if not isinstance(tint, dict):
+                return
+            try:
+                if float(tint.get("strength", 0.0) or 0.0) <= 0.0:
+                    return
+            except (TypeError, ValueError):
+                return
+            light_tint_drawer(sx, sy, tint, layer="fx", priority=-900)
+
+        def _draw_dream_residue_overlay():
+            residue = dream_residue_state(self.sim)
+            if not isinstance(residue, dict) or not callable(light_tint_drawer):
+                return
+            if zoom_mode == "overworld" or player_pos is None:
+                return
+            profile_key = str(residue.get("light_profile_hint", "") or "").strip().lower()
+            profile = LIGHT_COLOR_PROFILES.get(profile_key) or LIGHT_COLOR_PROFILES.get("ritual_violet", {})
+            rgb = tuple(profile.get("rgb", (168, 116, 255)) or (168, 116, 255))
+            try:
+                expires = int(residue.get("expires_tick", 0) or 0)
+                created = int(residue.get("created_tick", expires) or expires)
+                now = int(getattr(self.sim, "tick", 0) or 0)
+            except (TypeError, ValueError):
+                expires = created = now = 0
+            span = max(1, expires - created)
+            remaining = max(0, expires - now)
+            strength = 0.06 + (0.16 * (float(remaining) / float(span)))
+            tint = {
+                "rgb": rgb,
+                "strength": max(0.04, min(0.22, strength)),
+                "pulse": str(profile.get("pulse", "") or "slow"),
+                "profile": profile_key or "ritual_violet",
+            }
+            px = int(player_pos.x)
+            py = int(player_pos.y)
+            for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)):
+                wx = px + dx
+                wy = py + dy
+                if not _is_visible(wx, wy, active_z):
+                    continue
+                sx = wx - camera_x
+                sy = wy - camera_y
+                if 0 <= sx < map_w and 0 <= sy < map_h:
+                    light_tint_drawer(sx, sy, tint, layer="fx", priority=-650)
+
         if zoom_mode == "overworld":
             if player_pos:
                 player_cx, player_cy = self.sim.chunk_coords(player_pos.x, player_pos.y)
@@ -2230,9 +2283,9 @@ class RenderSystem(System):
                 self.player_eid,
                 current_chunk=(player_cx, player_cy),
             )
-            region_dim_attr = getattr(curses, "A_DIM", 0)
-            fill_attrs = getattr(curses, "A_DIM", 0)
-            unknown_fill_attrs = getattr(curses, "A_DIM", 0)
+            region_dim_attr = A_DIM
+            fill_attrs = A_DIM
+            unknown_fill_attrs = A_DIM
             path_attrs = 0
             markers = self._player_overworld_markers()
             nearest_marker_id = None
@@ -2518,11 +2571,11 @@ class RenderSystem(System):
                                     )
 
                     if (cx, cy) == (player_cx, player_cy):
-                        focus_attr = getattr(curses, "A_BOLD", 0)
+                        focus_attr = A_BOLD
                         _draw_overworld_frame(cell_origin_x, cell_origin_y, "player", focus_attr, "overworld_focus", priority_base=-60)
 
                     if cursor_chunk is not None and (cx, cy) == cursor_chunk and (cx, cy) != (player_cx, player_cy):
-                        selector_attr = getattr(curses, "A_BOLD", 0)
+                        selector_attr = A_BOLD
                         _draw_overworld_frame(cell_origin_x, cell_origin_y, "player", selector_attr, "overworld_selector", priority_base=-40)
 
                     if glyph:
@@ -2534,9 +2587,9 @@ class RenderSystem(System):
                         )
                         if 0 <= screen_x < map_w and 0 <= screen_y < map_h:
                             if awareness in {"current", "adjacent_live"}:
-                                glyph_attrs = getattr(curses, "A_BOLD", 0)
+                                glyph_attrs = A_BOLD
                             else:
-                                glyph_attrs = getattr(curses, "A_DIM", 0)
+                                glyph_attrs = A_DIM
                             glyph_semantic = None
                             if awareness in {"current", "memory", "adjacent_live"}:
                                 glyph_semantic = _overworld_center_semantic_id(
@@ -2664,7 +2717,7 @@ class RenderSystem(System):
                         remembered = _remembered_tile_appearance(wx, wy, active_z)
                         if remembered is not None:
                             appearance = remembered
-                        attrs = getattr(curses, "A_DIM", 0)
+                        attrs = A_DIM
                     if _appearance_prefers_floor_underlay(appearance):
                         floor_glyph = _district_floor_glyph(self.sim, wx, wy)
                         floor_color = _district_floor_color(self.sim, wx, wy)
@@ -2691,12 +2744,13 @@ class RenderSystem(System):
                                 sy,
                                 hallucination.get("glyph", "?"),
                                 color=hallucination.get("color", "objective"),
-                                attrs=attrs | getattr(curses, "A_BOLD", 0),
+                                attrs=attrs | A_BOLD,
                                 semantic_id=hallucination.get("semantic_id", "hallucinated_tile"),
                                 effects=("shimmer",),
                                 layer="terrain",
                                 priority=-850,
                             )
+                        _draw_light_tint_overlay(sx, sy, wx, wy, active_z)
 
             for flora in flora_records_in_rect(
                 self.sim,
@@ -2775,7 +2829,7 @@ class RenderSystem(System):
                 if visible_now:
                     attrs = _ambient_attr(display_pos[0], display_pos[1], active_z)
                 else:
-                    attrs = getattr(curses, "A_DIM", 0)
+                    attrs = A_DIM
                 self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
 
             for ground in self.sim.ground_items.values():
@@ -2792,7 +2846,7 @@ class RenderSystem(System):
 
                 item_def = ITEM_CATALOG.get(ground["item_id"], {})
                 appearance = self.sim.appearance.item(item_def)
-                attrs = getattr(curses, "A_BOLD", 0) | _ambient_attr(ground["x"], ground["y"], active_z)
+                attrs = A_BOLD | _ambient_attr(ground["x"], ground["y"], active_z)
                 self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
 
             for record in tuple(getattr(self.sim, "hunting_carcasses", {}).values()):
@@ -2821,7 +2875,7 @@ class RenderSystem(System):
                     layer="item",
                     priority=40,
                 )
-                attrs = getattr(curses, "A_BOLD", 0) | _ambient_attr(wx, wy, active_z)
+                attrs = A_BOLD | _ambient_attr(wx, wy, active_z)
                 self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
 
             for projectile in self.sim.projectiles.values():
@@ -2936,7 +2990,7 @@ class RenderSystem(System):
                     appearance = _appearance_with_effect(appearance, "blink")
                 elif _entity_should_mark_ambient_combat(self.sim, eid, player_eid=self.player_eid):
                     appearance = _appearance_with_effect(appearance, "combat_ambient")
-                    attrs |= getattr(curses, "A_BOLD", 0)
+                    attrs |= A_BOLD
                 fire_cell = fire_cell_state(self.sim, _pos.x, _pos.y, _pos.z)
                 if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
                     appearance = _appearance_with_effect(appearance, "blink")
@@ -2949,7 +3003,7 @@ class RenderSystem(System):
 
             radio_scan = getattr(self.sim, "world_traits", {}).get("justice_radio_scan", {})
             if isinstance(radio_scan, dict) and int(radio_scan.get("expires_tick", -1) or -1) >= int(getattr(self.sim, "tick", 0)):
-                ping_attr = getattr(curses, "A_BOLD", 0) | getattr(curses, "A_REVERSE", 0)
+                ping_attr = A_BOLD | A_REVERSE
                 for row in tuple(radio_scan.get("positions", ()) or ()):
                     if not isinstance(row, dict):
                         continue
@@ -2995,7 +3049,7 @@ class RenderSystem(System):
                     z=preview_z,
                 )
                 projectile_glyph = str(preview.get("projectile_glyph", "."))[:1] or "."
-                dim_attr = getattr(curses, "A_DIM", 0)
+                dim_attr = A_DIM
                 occupied = {(item[4], item[5]) for item in drawables}
                 for px, py in preview.get("path", []):
                     sx = int(px) - camera_x
@@ -3029,7 +3083,7 @@ class RenderSystem(System):
                         sx,
                         sy,
                         appearance,
-                        attrs=getattr(curses, "A_REVERSE", 0) | getattr(curses, "A_BOLD", 0),
+                        attrs=A_REVERSE | A_BOLD,
                     )
 
             if look_ui.get("active") and str(look_ui.get("mode", "")).lower() == "city":
@@ -3046,9 +3100,9 @@ class RenderSystem(System):
                             glyph = "@"
                             if not player_pos or (cursor_x, cursor_y, cursor_z) != (player_pos.x, player_pos.y, player_pos.z):
                                 glyph = "X"
-                            attrs = getattr(curses, "A_REVERSE", 0)
+                            attrs = A_REVERSE
                             if not visible_now:
-                                attrs |= getattr(curses, "A_DIM", 0)
+                                attrs |= A_DIM
                             else:
                                 attrs |= _ambient_attr(cursor_x, cursor_y, cursor_z)
                             appearance = self.sim.appearance.marker(
@@ -3062,6 +3116,18 @@ class RenderSystem(System):
                                 appearance,
                                 attrs=attrs,
                             )
+            _draw_dream_residue_overlay()
+            residue = dream_residue_state(self.sim)
+            residue_line = str((residue or {}).get("mood_line", "") or "").strip()
+            if residue_line:
+                residue_line = residue_line[: max(0, map_w - 4)]
+                self.view.draw_text(
+                    max(0, (map_w - len(residue_line)) // 2),
+                    max(0, map_h - 1),
+                    residue_line,
+                    color="flora_flower_violet",
+                    attrs=A_DIM,
+                )
 
         chunk = getattr(self.sim, "active_chunk", {})
         if not isinstance(chunk, dict):
@@ -4243,7 +4309,7 @@ class RenderSystem(System):
                     "objective" if topic_id in new_topic_ids else "player"
                 )
                 label = str(row.get("label", row.get("id", "topic"))).strip() or "topic"
-                row_attrs = getattr(curses, "A_BOLD", 0) if absolute == selected_index else 0
+                row_attrs = A_BOLD if absolute == selected_index else 0
                 line = _rich_line(
                     (
                         _segment(marker, color="player", attrs=row_attrs),
@@ -4296,9 +4362,9 @@ class RenderSystem(System):
             body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
             title_line = _rich_line(
                 (
-                    _segment(f" {title}", color="objective", attrs=getattr(curses, "A_BOLD", 0)),
+                    _segment(f" {title}", color="objective", attrs=A_BOLD),
                     _segment("   |   ", color="building_edge"),
-                    _segment(page_label, color="player", attrs=getattr(curses, "A_BOLD", 0)),
+                    _segment(page_label, color="player", attrs=A_BOLD),
                     _segment(f" {page_index + 1}/{max(1, len(pages) or 1)} ", color="human"),
                 ),
                 text=title_text,

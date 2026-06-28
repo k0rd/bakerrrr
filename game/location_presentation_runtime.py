@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import curses
 
 from engine.buildings import building_exterior_profile
 from game.appearance import (
@@ -79,6 +78,7 @@ from game.system_support.interaction_ordering import _manhattan
 from game.trade_system import TradeSystem
 from game.ui_text_runtime import _legend_line
 from game.status_ui_runtime import _floor_label
+from ui.text_attrs import A_BOLD
 
 
 FINANCE_ARCHETYPES = {
@@ -542,7 +542,7 @@ def _property_legend_line(prop, text, active_quest_target=None):
         text,
         glyph=appearance.glyph,
         color=appearance.color,
-        attrs=getattr(curses, "A_BOLD", 0),
+        attrs=A_BOLD,
         semantic_id=appearance.semantic_id,
     )
 
@@ -557,7 +557,7 @@ def _item_reference_line(item_id, text, prefix=""):
         glyph=glyph,
         color=color,
         prefix=prefix,
-        attrs=getattr(curses, "A_BOLD", 0),
+        attrs=A_BOLD,
         semantic_id=semantic_id,
     )
 
@@ -580,7 +580,7 @@ def _entity_legend_line(sim, eid, text, player_eid=None):
         text,
         glyph=appearance.glyph,
         color=appearance.color,
-        attrs=getattr(curses, "A_BOLD", 0),
+        attrs=A_BOLD,
     )
 
 
@@ -624,7 +624,7 @@ def _tile_label(sim, tile, x, y, z=0):
 def _tile_legend_line(sim, x, y, z, text):
     tile = sim.tilemap.tile_at(x, y, z)
     glyph, color = _tile_render_style(sim, tile, x, y, z)
-    return _legend_line(text, glyph=glyph, color=color, attrs=getattr(curses, "A_BOLD", 0))
+    return _legend_line(text, glyph=glyph, color=color, attrs=A_BOLD)
 
 
 def _building_street_label(prop):

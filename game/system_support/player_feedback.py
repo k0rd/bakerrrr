@@ -1,6 +1,6 @@
 """Shared player-facing log helpers for tactile action feedback."""
 
-import curses
+from ui.text_attrs import A_BOLD
 
 
 PLAYER_FEEDBACK_LOG_STYLES = {
@@ -95,7 +95,7 @@ def _log_player_feedback(
     if badge:
         rich = [
             _segment("[", color="building_edge"),
-            _segment(badge, color=badge_color, attrs=getattr(curses, "A_BOLD", 0)),
+            _segment(badge, color=badge_color, attrs=A_BOLD),
             _segment("] ", color="building_edge"),
             _segment(plain_text),
         ]

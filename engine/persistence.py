@@ -57,6 +57,8 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "property_cover_index",
     "actor_attention_state",
     "vision_scene",
+    "dream_residue",
+    "npc_self_protection_state",
     "action_menu_ui",
     "custom_room_curiosity_flavors",
     "custom_ui_themes",

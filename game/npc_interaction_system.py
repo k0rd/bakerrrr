@@ -150,6 +150,11 @@ from game.opportunities import (
     stage_active_opportunities,
 )
 from game.run_echoes import strongest_active_run_echo_for_chunk
+from game.meaningful_objects_runtime import (
+    meaningful_object_cooldown_ready,
+    meaningful_object_dialogue_context,
+    meaningful_object_owner_dialogue_reveal,
+)
 from game.incident_runtime import incident_action_label
 from game.economy import chunk_economy_profile
 from engine.systems import System
@@ -7113,6 +7118,11 @@ class NPCInteractionSystem(System):
             empathy=getattr(npc_traits, "empathy", 0.5) if npc_traits else 0.5,
             discipline=getattr(npc_traits, "discipline", 0.5) if npc_traits else 0.5,
         )
+        object_dialogue = meaningful_object_dialogue_context(self.sim, npc_eid, viewer_eid=self.player_eid)
+        object_meaning_phrase = self._object_meaning_phrase(
+            {"npc_eid": npc_eid},
+            object_dialogue,
+        ) if object_dialogue.get("available") else ""
         context = {
             "npc_eid": npc_eid,
             "npc_name": display_name,
@@ -7143,6 +7153,16 @@ class NPCInteractionSystem(System):
             "district_type": district_type,
             "local_economy_profile": dict(local_economy_profile) if isinstance(local_economy_profile, dict) else {},
             "speech_style": speech_style,
+            "object_meaning_context": dict(object_dialogue) if isinstance(object_dialogue, dict) else {},
+            "object_meaning_available": bool((object_dialogue or {}).get("available")),
+            "object_id": str((object_dialogue or {}).get("object_id", "") or "").strip(),
+            "object_label": str((object_dialogue or {}).get("object_label", "") or "").strip(),
+            "object_meaning_kind": str((object_dialogue or {}).get("meaning_kind", "") or "").strip(),
+            "object_meaning_relation": str((object_dialogue or {}).get("relation", "") or "").strip(),
+            "object_meaning_source": str((object_dialogue or {}).get("source", "") or "").strip(),
+            "object_meaning_dialogue_key": str((object_dialogue or {}).get("dialogue_key", "") or "").strip(),
+            "object_meaning_phrase": object_meaning_phrase,
+            "object_meaning_phrase_lc": _dialogue_lower_start(object_meaning_phrase),
             "pressure_attention": int(pressure.get("attention", 0)),
             "pressure_tier": pressure_tier,
             "pressure_goodwill_mult": float(pressure_effects.get("goodwill_mult", 1.0)),
@@ -8494,6 +8514,63 @@ class NPCInteractionSystem(System):
         rendered["rapport_relationship_profile"] = relationship["profile"]
         return rendered
 
+    def _object_meaning_phrase(self, context, object_context):
+        object_context = object_context if isinstance(object_context, dict) else {}
+        label = str(object_context.get("object_label", "that object") or "that object").strip()
+        meaning = str(object_context.get("meaning_kind", "") or "").strip().lower()
+        relation = str(object_context.get("relation", "owner") or "owner").strip().lower()
+        npc_eid = context.get("npc_eid") if isinstance(context, dict) else object_context.get("owner_eid")
+        if relation == "place_stakeholder":
+            banks = {
+                "place_habit": (
+                    f"{label} is one of the little habits that tells you this place is still tended.",
+                    f"{label} stays out because the room feels wrong without it.",
+                    f"People notice {label} before they notice the work behind it.",
+                ),
+                "plant_tending": (
+                    f"{label} is part of keeping the room alive, even on days nobody says so.",
+                    f"{label} makes the place look cared for. That matters more than people admit.",
+                    f"When {label} is tended, the room feels less abandoned.",
+                ),
+            }
+            options = banks.get(meaning, banks["place_habit"])
+        else:
+            banks = {
+                "keepsake": (
+                    f"{label} is a marker from a life that did not quite let go of me.",
+                    f"I keep {label} because some days memory needs a physical thing to hold onto.",
+                    f"{label} is small, but it has outlasted louder parts of my life.",
+                    f"{label} reminds me I came through something and kept a piece of myself.",
+                ),
+                "work_token": (
+                    f"{label} came out of work that mattered more than the pay did.",
+                    f"I keep {label} because it reminds me what clean work feels like.",
+                    f"{label} is a quiet little proof that I have been useful somewhere.",
+                    f"Some jobs leave scars. That one left {label}.",
+                ),
+                "comfort": (
+                    f"{label} is just something that steadies me when the room gets too loud.",
+                    f"I keep {label} around because it makes the day feel less borrowed.",
+                    f"{label} gives my hands somewhere decent to land.",
+                    f"It is comfort, mostly. Not grand, but real.",
+                ),
+                "habit": (
+                    f"{label} is habit now. I would miss it before I could explain why.",
+                    f"I keep {label} because routine needs anchors too.",
+                    f"That one is less a story than a rhythm I trust.",
+                    f"{label} makes a day feel like it has edges.",
+                ),
+                "private_charm": (
+                    f"{label} is private luck, if you believe in that kind of thing.",
+                    f"I know it is only {label}. I still like having it near.",
+                    f"{label} is not magic. It just helps me act like I have some.",
+                    f"Call it a charm, or call it stubbornness with a shape.",
+                ),
+            }
+            options = banks.get(meaning, banks["keepsake"])
+        chooser = random.Random(f"{self.sim.seed}:object-meaning-phrase:{npc_eid}:{object_context.get('object_id')}:{meaning}:{relation}")
+        return str(options[chooser.randrange(len(options))]).strip()
+
     def _rapport_topic_available(self, context, topic_id):
         topic_id = str(topic_id or "").strip().lower()
         social_context = context.get("dialogue_social_context") if isinstance(context, dict) else {}
@@ -8688,6 +8765,102 @@ class NPCInteractionSystem(System):
                 return line
         return ""
 
+    def _owner_object_dialogue_reveal_line(self, context, topic_id, outcome):
+        topic_id = str(topic_id or "").strip().lower()
+        outcome = str(outcome or "").strip().lower()
+        if topic_id not in {"care_about", "roots"} or outcome != "warm":
+            return ""
+        key = f"{context.get('npc_eid')}:{self.player_eid}:{topic_id}"
+        if not meaningful_object_cooldown_ready(self.sim, "dialogue_reveals", key, cooldown_ticks=480, mark=False):
+            return ""
+        summary = meaningful_object_owner_dialogue_reveal(
+            self.sim,
+            context.get("npc_eid"),
+            viewer_eid=self.player_eid,
+            source=f"{topic_id}_dialogue",
+        )
+        if not summary:
+            return ""
+        meaningful_object_cooldown_ready(self.sim, "dialogue_reveals", key, cooldown_ticks=480, mark=True)
+        phrase = self._object_meaning_phrase(context, {**summary, "relation": "owner"})
+        label = str(summary.get("object_label", "that object") or "that object").strip()
+        options = (
+            f"There is {label}, too. {phrase}",
+            f"If you ever wondered about {label}: {phrase}",
+            f"I keep thinking of {label}. {phrase}",
+            f"You asked what matters, so there is the small answer: {phrase}",
+        )
+        chooser = random.Random(f"{self.sim.seed}:object-dialogue-reveal:{context.get('npc_eid')}:{summary.get('object_id')}:{topic_id}")
+        return options[chooser.randrange(len(options))]
+
+    def _resolve_object_meaning_topic(self, context, *, ask_count=1):
+        object_context = context.get("object_meaning_context") if isinstance(context.get("object_meaning_context"), dict) else {}
+        if not object_context.get("available"):
+            return {"npc_lines": ["I am not sure what you mean."], "social_outcome": "reserved"}
+        key = context.get("object_meaning_dialogue_key")
+        if not meaningful_object_cooldown_ready(self.sim, "object_dialogue", key, cooldown_ticks=180, mark=True):
+            return {"npc_lines": ["Let's not keep turning that over right now."], "social_outcome": "reserved"}
+        bond = context.get("bond") if isinstance(context.get("bond"), dict) else {}
+        trust = float(bond.get("trust", 0.0) or 0.0)
+        closeness = float(bond.get("closeness", 0.0) or 0.0)
+        standing = float(context.get("social_standing", 0.0) or 0.0)
+        rapport = float(context.get("rapport", 0.0) or 0.0)
+        score = (standing * 0.3) + (trust * 0.24) + (closeness * 0.22) + (rapport * 0.18)
+        if str(context.get("tone", "")).strip().lower() == "friendly":
+            score += 0.08
+        elif str(context.get("tone", "")).strip().lower() == "wary":
+            score -= 0.08
+        if bool(context.get("guarded")):
+            score -= 0.2
+        relation = str(context.get("object_meaning_relation", "") or "").strip().lower()
+        if relation == "place_stakeholder":
+            score += 0.08
+        if score >= 0.66:
+            outcome = "warm"
+        elif score >= 0.38:
+            outcome = "open"
+        elif score >= 0.18:
+            outcome = "reserved"
+        else:
+            outcome = "rebuff"
+        line = _dialogue_topic_player_reaction_line(
+            "object_meaning",
+            seed=self.sim.seed,
+            npc_eid=context.get("npc_eid"),
+            count=ask_count,
+            outcome=outcome,
+            context=context,
+            prompt_text=context.get("selected_player_prompt_text", ""),
+        )
+        if not line:
+            if outcome == "warm":
+                line = context.get("object_meaning_phrase") or "It matters. More than it looks like it should."
+            elif outcome == "open":
+                line = context.get("object_meaning_phrase") or "It has a little history with me."
+            elif outcome == "rebuff":
+                line = "No. You do not get that story right now."
+            else:
+                line = "You already know it matters. That is enough for today."
+        if outcome in {"open", "warm"}:
+            self._shift_dialogue_bond(
+                context["npc_eid"],
+                trust_delta=0.012 if outcome == "open" else 0.02,
+                closeness_delta=0.014 if outcome == "open" else 0.026,
+                guarded=False,
+            )
+            self._remember_bonding_dialogue_memory(
+                context["npc_eid"],
+                approval=0.12 if outcome == "open" else 0.2,
+                strength=0.14 if outcome == "open" else 0.22,
+            )
+        elif outcome == "rebuff":
+            self._remember_bonding_dialogue_memory(
+                context["npc_eid"],
+                approval=-0.12,
+                strength=0.12,
+            )
+        return {"npc_lines": [line], "social_outcome": outcome}
+
     def _resolve_rapport_topic(self, context, topic_id, *, ask_count=1):
         topic_id = str(topic_id or "").strip().lower()
         outcome = self._rapport_topic_outcome(context, topic_id, ask_count=ask_count)
@@ -8746,6 +8919,9 @@ class NPCInteractionSystem(System):
                 line = "Maybe another time."
         preface = self._relationship_anchor_social_preface(context, topic_id, outcome=outcome)
         npc_lines = [text for text in (preface, line) if str(text or "").strip()]
+        reveal_line = self._owner_object_dialogue_reveal_line(context, topic_id, outcome)
+        if reveal_line:
+            npc_lines.append(reveal_line)
 
         if outcome in {"open", "warm"}:
             property_id = ""
@@ -11948,7 +12124,13 @@ class NPCInteractionSystem(System):
             if topic_id in self.MISSTEP_TOPICS:
                 if not self._dialogue_misstep_available(context, topic_id):
                     continue
-            elif not (peaceful_orders_only and topic_id in peaceful_topics) and topic_id not in self.ROOT_TOPICS and topic_id not in unlocked and topic_id not in door_topics:
+            elif (
+                topic_id != "object_meaning"
+                and not (peaceful_orders_only and topic_id in peaceful_topics)
+                and topic_id not in self.ROOT_TOPICS
+                and topic_id not in unlocked
+                and topic_id not in door_topics
+            ):
                 continue
             if door_topics and topic_id not in door_topics:
                 continue
@@ -11977,6 +12159,17 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id in {"rapport", "check_in", "day_feel", "job_feel", "roots", "off_shift", "care_about", "read_player"} and not self._rapport_topic_available(context, topic_id):
                 continue
+            if topic_id == "object_meaning":
+                if not context.get("object_meaning_available"):
+                    continue
+                if not meaningful_object_cooldown_ready(
+                    self.sim,
+                    "object_dialogue",
+                    context.get("object_meaning_dialogue_key"),
+                    cooldown_ticks=180,
+                    mark=False,
+                ):
+                    continue
             if topic_id == "routine" and not self._routine_summary(context):
                 continue
             if topic_id == "workplace" and not context.get("workplace_prop"):
@@ -12473,6 +12666,8 @@ class NPCInteractionSystem(System):
             return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
         if topic_id == "read_player":
             return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
+        if topic_id == "object_meaning":
+            return self._resolve_object_meaning_topic(context, ask_count=ask_count)
         if topic_id in self.SOCIAL_KNOWLEDGE_TOPIC_IDS:
             return self._resolve_social_knowledge_dialogue_topic(context, topic_id, ask_count=ask_count)
         if topic_id == "local_economy":

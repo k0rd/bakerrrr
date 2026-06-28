@@ -5,7 +5,6 @@ This module holds the shared service-stack behavior that used to live inside
 runtime seam instead of reaching back into the monolith.
 """
 
-import curses
 import itertools
 import random
 from collections import Counter
@@ -23,6 +22,7 @@ from game.property_runtime import (
 )
 from game.system_support.entity_naming import _entity_display_name
 from game.vehicles import roll_vehicle_paint_key, roll_vehicle_profile
+from ui.text_attrs import A_BOLD
 
 
 def _int_or_default(value, default):
@@ -1131,7 +1131,7 @@ def _overworld_render_style(sim, cx, cy):
 
 def _overworld_legend_line(sim, cx, cy, text):
     glyph, color = _overworld_render_style(sim, cx, cy)
-    return _legend_line(text, glyph=glyph, color=color, attrs=getattr(curses, "A_BOLD", 0))
+    return _legend_line(text, glyph=glyph, color=color, attrs=A_BOLD)
 
 
 def _overworld_travel_profile(sim, cx, cy, desc=None, interest=None):

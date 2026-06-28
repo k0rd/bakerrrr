@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_document
+from game.lighting import LIGHT_COLOR_PROFILES
 from game.object_profile_runtime import object_profile_validation_errors
 from game.public_content import PUBLIC_STATUS_MODIFIERS
 from game.world_palette import world_palette_keys
@@ -34,6 +35,7 @@ ALLOWED_FIXTURE_KINDS = {"fixture", "asset"}
 ALLOWED_FIXTURE_COVER = {"none", "low", "full"}
 ALLOWED_FIXTURE_BUCKETS = {"path_side", "path_tile", "entry_side", "street_side", "edge", "open"}
 ALLOWED_LIGHT_PHASES = {"dawn", "day", "dusk", "night"}
+ALLOWED_LIGHT_PROFILES = set(LIGHT_COLOR_PROFILES)
 ALLOWED_FLORA_GROWTH_FORMS = {"flower", "grass", "reed", "moss", "lichen", "vine", "shrub", "fern"}
 ALLOWED_FLORA_RARITIES = {"common", "uncommon", "rare"}
 ALLOWED_FLORA_GLYPHS = {",", "'", ";", "*"}
@@ -1049,6 +1051,26 @@ def _validate_fixtures(path, report):
                     for phase in phases:
                         if str(phase).strip().lower() not in ALLOWED_LIGHT_PHASES:
                             report.error(source, spec_path + ["light", "phases"], f"unknown light phase {phase!r}")
+                if "profile" in light:
+                    profile = str(light.get("profile", "") or "").strip().lower()
+                    if not profile:
+                        report.error(source, spec_path + ["light", "profile"], "light.profile must be a non-empty string")
+                    elif profile not in ALLOWED_LIGHT_PROFILES:
+                        report.error(source, spec_path + ["light", "profile"], f"unknown light profile {profile!r}")
+                if "color" in light:
+                    color = light.get("color")
+                    valid_color = False
+                    if isinstance(color, str):
+                        text = color.strip().lower()
+                        valid_color = bool(text in ALLOWED_LIGHT_PROFILES or (text.startswith("#") and len(text) == 7))
+                    elif isinstance(color, list) and len(color) >= 3:
+                        valid_color = all(isinstance(channel, (int, float)) for channel in color[:3])
+                    if not valid_color:
+                        report.error(source, spec_path + ["light", "color"], "light.color must be a profile name, #rrggbb, or three RGB numbers")
+                if "pulse" in light and not isinstance(light["pulse"], str):
+                    report.error(source, spec_path + ["light", "pulse"], "light.pulse must be a string")
+                if "priority" in light:
+                    _validate_int(report, source, spec_path + ["light", "priority"], light["priority"], minimum=0, maximum=8, field_name="light.priority")
 
 
 def _validate_positive_weight_map(report, source, path, value, *, field_name="weights"):

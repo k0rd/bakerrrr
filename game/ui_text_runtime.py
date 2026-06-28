@@ -1,7 +1,8 @@
 """Shared UI text, log, and wrapping helpers."""
 
-import curses
 import textwrap
+
+from ui.text_attrs import A_BOLD
 
 
 def _int_or_default(value, default):
@@ -248,7 +249,7 @@ def _log_display_line(line):
         prefix_color = "property_asset"
     else:
         prefix_color = "building_edge"
-    prefix_attrs = getattr(curses, "A_BOLD", 0) if priority >= LOG_PRIORITY_HIGH else 0
+    prefix_attrs = A_BOLD if priority >= LOG_PRIORITY_HIGH else 0
     prefixed_segments = [
         _segment(prefix, color=prefix_color, attrs=prefix_attrs),
         _segment(_line_text(line)),
@@ -357,7 +358,7 @@ def _bullet_display_line(text, *, bullet="-", bullet_color="building_edge", text
     text = str(text or "").strip()
     if not text:
         return ""
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment(f"{str(bullet)[:1]} ", color=bullet_color, attrs=bold),
         _segment(text, color=text_color),
@@ -410,7 +411,7 @@ def _known_location_business_sentiment_line(row):
     ]
     if not designations:
         return ""
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment("Street read: ", color="building_edge", attrs=bold),
     ]
@@ -431,7 +432,7 @@ def _known_location_business_reputation_scope_line(row):
     label = str(scope.get("label", "")).strip()
     if not label:
         return ""
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment("Street reach: ", color="building_edge", attrs=bold),
         _segment(label, color="objective"),
@@ -440,7 +441,7 @@ def _known_location_business_reputation_scope_line(row):
 
 
 def _known_location_business_sentiment_legend_line():
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     entries = (
         ("*", "staple", "staple"),
         ("~", "chill", "chill"),
@@ -468,7 +469,7 @@ def _known_location_summary_line(row):
         for bit in row.get("summary_bits", ())
         if str(bit).strip()
     ]
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [
         _segment(f"{confidence}% confident", color="player", attrs=bold),
     ]
@@ -514,7 +515,7 @@ def _known_location_list_line(row, *, ordinal=1, selected=False):
 
     confidence = max(0, min(100, int(round(float(row.get("confidence", 0.0)) * 100.0))))
     marker_color = "player" if selected else "building_edge"
-    marker_attrs = getattr(curses, "A_BOLD", 0) if selected else 0
+    marker_attrs = A_BOLD if selected else 0
     confidence_color = "property_service" if confidence >= 80 else ("property_asset" if confidence >= 50 else "projectile")
 
     segments = [
@@ -542,7 +543,7 @@ def _known_location_list_line(row, *, ordinal=1, selected=False):
             segments.append(_segment(
                 str(designation.get("symbol", "")).strip()[:2],
                 color=_business_sentiment_color(designation.get("key")),
-                attrs=marker_attrs or getattr(curses, "A_BOLD", 0),
+                attrs=marker_attrs or A_BOLD,
             ))
     return _rich_line(segments, text=f"{'>' if selected else ' '}{max(1, int(ordinal)):02d} {_line_text(base_line)} | {confidence}%{' | rep ' + ''.join(str(designation.get('symbol', '')).strip()[:2] for designation in designations[:3]) if designations else ''}")
 
@@ -577,7 +578,7 @@ def _known_person_list_line(row, *, ordinal=1, selected=False):
     appearance = str(row.get("appearance_summary", "<unknown>")).strip() or "<unknown>"
     relationship = str(row.get("relationship_summary", "<unknown>")).strip() or "<unknown>"
     marker_color = "player" if selected else "building_edge"
-    marker_attrs = getattr(curses, "A_BOLD", 0) if selected else 0
+    marker_attrs = A_BOLD if selected else 0
     name_color = "human" if name != "<unknown>" else "building_edge"
     appearance_color = "property_asset" if appearance != "<unknown>" else "building_edge"
     relationship_color = "property_service" if relationship not in {"<unknown>", "do not trust you", "on edge around you"} else (
@@ -941,7 +942,7 @@ def _mode_line(
     stealth_state=None,
     intrusion_state=None,
 ):
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     segments = [_segment("Modes: ")]
 
     badges = []

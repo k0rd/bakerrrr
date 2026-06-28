@@ -31,6 +31,7 @@
         "enabled": true,
         "radius": 5,
         "intensity": 0.68,
+        "profile": "street_warm",
         "phases": [
           "dawn",
           "dusk",
@@ -114,6 +115,7 @@
         "enabled": true,
         "radius": 2,
         "intensity": 0.18,
+        "profile": "security_cool",
         "phases": [
           "dawn",
           "dusk",
@@ -280,6 +282,7 @@
         "enabled": true,
         "radius": 3,
         "intensity": 0.32,
+        "profile": "security_cool",
         "phases": [
           "dawn",
           "dusk",
@@ -318,6 +321,7 @@
         "enabled": true,
         "radius": 3,
         "intensity": 0.28,
+        "profile": "security_cool",
         "phases": [
           "dawn",
           "dusk",
@@ -356,6 +360,7 @@
         "enabled": true,
         "radius": 2,
         "intensity": 0.18,
+        "profile": "security_cool",
         "phases": [
           "dawn",
           "dusk",
@@ -418,6 +423,7 @@
         "enabled": true,
         "radius": 2,
         "intensity": 0.22,
+        "profile": "security_cool",
         "phases": [
           "dawn",
           "dusk",
@@ -480,6 +486,7 @@
         "enabled": true,
         "radius": 3,
         "intensity": 0.26,
+        "profile": "security_cool",
         "phases": [
           "dawn",
           "dusk",
@@ -566,6 +573,7 @@
         "enabled": true,
         "radius": 4,
         "intensity": 0.6,
+        "profile": "street_warm",
         "phases": [
           "dawn",
           "dusk",
@@ -676,6 +684,7 @@
         "enabled": true,
         "radius": 3,
         "intensity": 0.42,
+        "profile": "fire_orange",
         "phases": [
           "dusk",
           "night"
@@ -708,6 +717,9 @@
         "enabled": true,
         "radius": 2,
         "intensity": 0.16,
+        "profile": "emergency_red",
+        "pulse": "emergency",
+        "priority": 4,
         "phases": [
           "dawn",
           "dusk",

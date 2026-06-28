@@ -1,6 +1,5 @@
 """Shared overworld memory, marker, and readout runtime."""
 
-import curses
 
 from engine.events import Event
 
@@ -31,6 +30,7 @@ from game.service_runtime import (
 )
 from game.property_runtime import vehicle_fuel_values as _vehicle_fuel_values
 from game.system_support.interaction_ordering import _manhattan
+from ui.text_attrs import A_BOLD
 
 
 def _chunk_tuple(chunk):
@@ -176,7 +176,7 @@ def _overworld_render_style_from_snapshot(desc, interest=None, *, loaded=False):
 
 def _overworld_legend_line_from_snapshot(text, *, desc=None, interest=None, loaded=False):
     glyph, color = _overworld_render_style_from_snapshot(desc, interest, loaded=loaded)
-    return _legend_line(text, glyph=glyph, color=color, attrs=getattr(curses, "A_BOLD", 0))
+    return _legend_line(text, glyph=glyph, color=color, attrs=A_BOLD)
 
 
 def _remember_overworld_chunk_memory(
@@ -536,7 +536,7 @@ def _overworld_hud_lines(
     identity = identity if isinstance(identity, dict) else {}
     markers = list(markers or ())
 
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
     area = str(desc.get("area_type", "city")).strip().lower() or "city"
     district = str(desc.get("district_type", "residential")).strip().lower() or "residential"
     terrain = str(desc.get("terrain", "")).strip().lower()
@@ -676,7 +676,7 @@ def _overworld_edge_legend_lines(
     interest = interest if isinstance(interest, dict) else {}
     look_ui = look_ui if isinstance(look_ui, dict) else {}
     markers = list(markers or ())
-    bold = getattr(curses, "A_BOLD", 0)
+    bold = A_BOLD
 
     cx = int(current_chunk[0])
     cy = int(current_chunk[1])
@@ -923,7 +923,7 @@ class PlayerOverworldRuntime:
                 bits.append(summary)
             if marker_id:
                 bits.append(f"marker:M{marker_id}")
-            return _legend_line(" ".join(bits), glyph="?", color="player", attrs=getattr(curses, "A_BOLD", 0))
+            return _legend_line(" ".join(bits), glyph="?", color="player", attrs=A_BOLD)
 
         if awareness == "adjacent":
             bits = [f"{prefix}({cx},{cy}) {dist}c {direction}", "adjacent unknown"]
