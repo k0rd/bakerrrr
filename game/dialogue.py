@@ -644,17 +644,17 @@ TOPIC_DEFS = {
         "unlocks": (),
     },
     "weird": {
-        "label": "Your sister... [creepy] ",
+        "label": "Ask something strange. [odd]",
         "root": False,
         "unlocks": (),
     },
     "pry": {
-        "label": "Whats your interest here, anyway? [hostile]",
+        "label": "What's your interest here, anyway? [hostile]",
         "root": False,
         "unlocks": (),
     },
     "insult": {
-        "label": "Your momma... [hostile]",
+        "label": "Throw a cheap shot. [hostile]",
         "root": False,
         "unlocks": (),
     },
@@ -5368,13 +5368,44 @@ def topic_player_prompt(topic_id, *, seed, npc_eid, count=0, context=None):
     return rendered_entries[(offset + count - 1) % len(rendered_entries)]
 
 
-def topic_player_reaction_line(topic_id, *, seed, npc_eid, count=0, outcome="soft", context=None):
-    prompt = topic_player_prompt(
+def topic_player_prompt_matching_text(topic_id, *, seed, npc_eid, count=0, context=None, prompt_text=""):
+    prompt_text = str(prompt_text or "").strip()
+    if not prompt_text:
+        return topic_player_prompt(
+            topic_id,
+            seed=seed,
+            npc_eid=npc_eid,
+            count=count,
+            context=context,
+        )
+    prompt_key = prompt_text.casefold()
+    if prompt_text.endswith("]"):
+        hint_start = prompt_text.rfind(" [")
+        if hint_start >= 0:
+            prompt_key = prompt_text[:hint_start].strip().casefold()
+    options = tuple(PLAYER_TOPIC_BANKS.get(str(topic_id or "").strip().lower(), ()))
+    for raw in options:
+        rendered = _render_player_topic_entry(raw, context)
+        rendered_key = str(rendered.get("text", "")).strip().casefold() if isinstance(rendered, dict) else ""
+        if rendered_key and (rendered_key == prompt_key or rendered_key in prompt_key):
+            return rendered
+    return topic_player_prompt(
         topic_id,
         seed=seed,
         npc_eid=npc_eid,
         count=count,
         context=context,
+    )
+
+
+def topic_player_reaction_line(topic_id, *, seed, npc_eid, count=0, outcome="soft", context=None, prompt_text=""):
+    prompt = topic_player_prompt_matching_text(
+        topic_id,
+        seed=seed,
+        npc_eid=npc_eid,
+        count=count,
+        context=context,
+        prompt_text=prompt_text,
     )
     normalized_outcome = str(outcome or "soft").strip().lower() or "soft"
     outcome_key = {

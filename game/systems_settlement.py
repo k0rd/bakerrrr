@@ -1823,15 +1823,24 @@ class NPCSettlementSystem(System):
         if pos is None:
             return False
         nx, ny, nz = int(destination[0]), int(destination[1]), int(destination[2])
-        self.sim.tilemap.move_entity(
-            eid,
-            oldx=int(pos.x),
-            oldy=int(pos.y),
-            oldz=int(pos.z),
-            newx=nx,
-            newy=ny,
-            newz=nz,
-        )
+        # Relocation finishes home/work/population bookkeeping before the
+        # destination chunk is allowed to serialize. The tilemap movement
+        # callback can otherwise unload the target mid-move and then the
+        # explicit relocation unload wipes the incomplete snapshot.
+        previous_flush_guard = bool(getattr(self.sim, "_stream_unload_flush_active", False))
+        self.sim._stream_unload_flush_active = True
+        try:
+            self.sim.tilemap.move_entity(
+                eid,
+                oldx=int(pos.x),
+                oldy=int(pos.y),
+                oldz=int(pos.z),
+                newx=nx,
+                newy=ny,
+                newz=nz,
+            )
+        finally:
+            self.sim._stream_unload_flush_active = previous_flush_guard
         pos.x = nx
         pos.y = ny
         pos.z = nz

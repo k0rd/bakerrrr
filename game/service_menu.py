@@ -73,10 +73,16 @@ from game.service_runtime import (
     _casino_craps_resolve,
     _casino_craps_stage_bet,
     _casino_craps_start,
+    _casino_crash_multiplier_for_step,
+    _casino_crash_normalize_session,
+    _casino_crash_resolve,
+    _casino_crash_start,
     _casino_game_profile,
     _casino_game_title,
     _casino_keno_draw,
+    _casino_keno_multiplier_text,
     _casino_keno_normalize_session,
+    _casino_keno_payout_multiplier,
     _casino_keno_start,
     _casino_keno_toggle_pick,
     _casino_holdem_resolve,
@@ -422,6 +428,7 @@ class ServiceMenuSystem(System):
         floor_page="games",
         service="",
         session=None,
+        art=None,
         return_to="",
         return_option_id="",
         selected_id="",
@@ -448,6 +455,7 @@ class ServiceMenuSystem(System):
             "floor_page": str(floor_page or state.get("floor_page", "games")).strip().lower() or "games",
             "service": str(service or "").strip().lower(),
             "session": dict(session) if isinstance(session, dict) else None,
+            "art": dict(art) if isinstance(art, dict) else None,
             "return_to": str(return_to or "").strip().lower(),
             "return_option_id": str(return_option_id or "").strip().lower(),
         })
@@ -777,7 +785,7 @@ class ServiceMenuSystem(System):
         current["cursor_key"] = order[index]
         return current
 
-    def _open_casino_modal(self, prop, service, *, subtitle="", transcript=None, topics=None, hint="", mode="root", session=None):
+    def _open_casino_modal(self, prop, service, *, subtitle="", transcript=None, topics=None, hint="", mode="root", session=None, art=None):
         prop_name = self._casino_prop_name(prop)
         host_style = str(self._casino_ui_state().get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
         return_to = str(self._casino_ui_state().get("return_to", "floor" if host_style == "floor" else "service_menu")).strip().lower()
@@ -809,6 +817,7 @@ class ServiceMenuSystem(System):
             floor_page=self._casino_ui_state().get("floor_page", "games"),
             service=service,
             session=session,
+            art=art,
             return_to=return_to,
             return_option_id=str(service or "").strip().lower(),
         )
@@ -859,7 +868,7 @@ class ServiceMenuSystem(System):
         self.sim.emit(Event("site_service_used", **payload))
         return True
 
-    def _open_casino_result(self, prop, service, title, lines, *, subtitle=""):
+    def _open_casino_result(self, prop, service, title, lines, *, subtitle="", art=None):
         state = self._casino_ui_state()
         host_style = str(state.get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
         rail_lines = self._casino_common_rail_lines(prop, service=service)
@@ -882,6 +891,7 @@ class ServiceMenuSystem(System):
             floor_page=state.get("floor_page", "games"),
             service=service,
             session=None,
+            art=art,
             return_to=str(state.get("return_to", "floor" if host_style == "floor" else "service_menu")).strip().lower(),
             return_option_id=str(state.get("return_option_id", service)).strip().lower(),
         )
@@ -892,7 +902,7 @@ class ServiceMenuSystem(System):
             self._clear_casino_session()
             self.sim.emit(Event("site_service_blocked", **blocked))
             title, lines = self._site_service_blocked_lines(Event("site_service_blocked", **blocked))
-            self._open_casino_result(prop, service, title, lines)
+            self._open_casino_result(prop, service, title, lines, art=round_result if isinstance(round_result, dict) else None)
             return False
         self.sim.emit(Event("site_service_used", **payload))
         if service == "craps" and isinstance(next_session, dict):
@@ -904,7 +914,7 @@ class ServiceMenuSystem(System):
                 return True
         self._clear_casino_session()
         title, lines = self._site_service_result_lines(Event("site_service_used", **payload))
-        self._open_casino_result(prop, service, title, lines)
+        self._open_casino_result(prop, service, title, lines, art=round_result if isinstance(round_result, dict) else None)
         return True
 
     def _open_plinko_lane_menu(self, prop, service, wager):
@@ -936,6 +946,7 @@ class ServiceMenuSystem(System):
             hint="Pick a lane to drop the disc. Esc walks away and forfeits the posted chip.",
             mode="casino:plinko:lane",
             session=session,
+            art=session,
         )
 
     def _open_twenty_one_table(self, prop, session):
@@ -1103,7 +1114,7 @@ class ServiceMenuSystem(System):
                 f"Pay row {pay_key}",
             ])
             for hit_count, mult in sorted(pay_row.items()):
-                rail_lines.append(f"{hit_count} hit -> x{int(mult)}")
+                rail_lines.append(f"{hit_count} hit -> {_casino_keno_multiplier_text(mult)}")
         self._open_casino_ui(
             mode="live",
             prop=prop,
@@ -1353,6 +1364,42 @@ class ServiceMenuSystem(System):
             hint="Play or fold. Esc walks away and forfeits the ante.",
             mode="casino:three_card_poker:hand",
             session=session,
+            art=session,
+        )
+
+    def _open_crash_table(self, prop, session, *, notice=""):
+        session = _casino_crash_normalize_session(session)
+        if not session:
+            self._present_service_result("Crash", ["That machine lost the live graph.", "Start a fresh round."], property_id=prop.get("id") if isinstance(prop, dict) else None)
+            return
+        wager = int(session.get("wager", 0) or 0)
+        current = float(session.get("current_multiplier", 1.0) or 1.0)
+        next_multiplier = float(_casino_crash_multiplier_for_step(int(session.get("step", 0) or 0) + 1))
+        transcript = []
+        notice = str(notice or "").strip()
+        if notice:
+            transcript.append(notice)
+        transcript.extend([
+            f"Stake {_credit_amount_label(wager)} is posted.",
+            f"Current multiplier: x{current:.2f}.",
+            f"Next ride would push toward x{next_multiplier:.2f}.",
+            "Cash out now to take the visible multiplier, or ride one more tick and risk the graph breaking.",
+            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+        ])
+        topics = [
+            {"id": "crash:ride", "label": f"Ride toward x{next_multiplier:.2f}"},
+            {"id": "crash:cashout", "label": f"Cash out x{current:.2f}"},
+        ]
+        self._open_casino_modal(
+            prop,
+            "crash",
+            subtitle="Live graph",
+            transcript=transcript,
+            topics=topics,
+            hint="Ride or cash out. Esc walks away and forfeits the posted stake.",
+            mode="casino:crash:live",
+            session=session,
+            art=session,
         )
 
     def _start_casino_round(self, prop, service, wager):
@@ -1375,6 +1422,19 @@ class ServiceMenuSystem(System):
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
             self._open_plinko_lane_menu(prop, service, wager)
+            return
+
+        if service == "crash":
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            session = _casino_crash_start(self._casino_round_seed(prop, service, wager), wager)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_crash_table(prop, session)
             return
 
         if service == "video_poker":
@@ -1509,6 +1569,18 @@ class ServiceMenuSystem(System):
             round_result = _casino_plinko_resolve(seed_token, int(session.get("wager", 0)), lane)
             round_result["stake_already_paid"] = True
             self._settle_casino_round(prop, service, round_result)
+            return True
+
+        if service == "crash" and option_id in {"crash:ride", "crash:cashout"}:
+            action = "cashout" if option_id.endswith(":cashout") else "ride"
+            next_session, round_result = _casino_crash_resolve(session, action)
+            if round_result:
+                self._settle_casino_round(prop, service, round_result)
+                return True
+            if next_session:
+                self._open_crash_table(prop, next_session)
+                return True
+            self._present_service_result("Crash", ["That live graph lost sync.", "Start a fresh round."], property_id=prop.get("id"))
             return True
 
         if service == "video_poker" and option_id.startswith("video_poker:toggle:"):
@@ -1667,7 +1739,7 @@ class ServiceMenuSystem(System):
         if not isinstance(session, dict):
             return
         service = str(session.get("service", "")).strip().lower()
-        if service not in {"plinko", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", "twenty_one", "casino_holdem"}:
+        if service not in {"plinko", "crash", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", "twenty_one", "casino_holdem"}:
             self._clear_casino_session()
             return
         prop = self.sim.properties.get(session.get("property_id"))
@@ -1693,6 +1765,35 @@ class ServiceMenuSystem(System):
                     "The attendant sweeps the chip off the rail.",
                 ],
                 "drop_lane": None,
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "crash":
+            current = _casino_crash_normalize_session(session)
+            multiplier = float(current.get("current_multiplier", 1.0) or 1.0) if isinstance(current, dict) else 1.0
+            history = tuple(current.get("history", ()) or ()) if isinstance(current, dict) else (1.0,)
+            crash_point = float(current.get("crash_point", 0.0) or 0.0) if isinstance(current, dict) else 0.0
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You step away from the graph.",
+                "detail": "The posted crash stake is gone when you walk away without cashing out.",
+                "summary": f"You abandon crash at x{multiplier:.2f} and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    f"Last visible multiplier: x{multiplier:.2f}.",
+                    (
+                        f"Crash point: x{crash_point:.2f}."
+                        if crash_point > 0.0
+                        else "Crash point: unknown."
+                    ),
+                    "You leave without cashing out, so the machine keeps the stake.",
+                ],
+                "cashout_multiplier": 0.0,
+                "crash_point": float(crash_point),
+                "history": history,
                 "social_gain": 0,
                 "stake_already_paid": True,
             }
@@ -2326,8 +2427,13 @@ class ServiceMenuSystem(System):
                 }
         return None
 
-    def _business_control_options(self, business_contexts, *, prefix="business_control", include_business_name=True):
+    def _business_control_options(self, business_contexts, *, prefix="business_control", include_business_name=True, include_local_funds=False):
         options = []
+        assets = self._assets_for(self.player_eid)
+        profile = self._profile_for(self.player_eid)
+        wallet_credits = int(getattr(assets, "credits", 0) or 0) if assets else 0
+        withdraw_step = int(getattr(profile, "withdraw_step", 40) or 40)
+        deposit_step = int(getattr(profile, "deposit_step", 48) or 48)
         for business_context in list(business_contexts or ()):
             if not isinstance(business_context, dict):
                 continue
@@ -2345,11 +2451,23 @@ class ServiceMenuSystem(System):
             current_markup_mode = player_business_markup_mode(business_prop)
             next_markup_mode = player_business_next_markup_mode(business_prop)
             employee_count = len(tuple(player_business_employee_wage_rows(self.sim, business_prop)))
+            business_balance = int(summary.get("account_balance", player_business_account_balance(business_prop)) or 0)
+            options.append({
+                "id": f"{prefix}_status:{business_id}",
+                "label": f"Business status{bracket}",
+            })
+            if include_local_funds:
+                for amount in self._bank_amount_choices(business_balance, withdraw_step):
+                    options.append({
+                        "id": f"{prefix}_withdraw:{business_id}:{int(amount)}",
+                        "label": f"Store withdraw{bracket}: {_credit_amount_label(amount)}",
+                    })
+                for amount in self._bank_amount_choices(wallet_credits, deposit_step):
+                    options.append({
+                        "id": f"{prefix}_deposit:{business_id}:{int(amount)}",
+                        "label": f"Store deposit{bracket}: {_credit_amount_label(amount)}",
+                    })
             options.extend((
-                {
-                    "id": f"{prefix}_status:{business_id}",
-                    "label": f"Business status{bracket}",
-                },
                 {
                     "id": f"{prefix}_policy:{business_id}:{next_policy}",
                     "label": (
@@ -2937,6 +3055,7 @@ class ServiceMenuSystem(System):
                 (owner_business_context,),
                 prefix="business_control",
                 include_business_name=False,
+                include_local_funds=True,
             ))
         if access.can_use_services and _property_is_storefront(prop):
             storefront_service = _storefront_service_profile(self.sim, prop, actor_eid=eid)
@@ -3637,6 +3756,8 @@ class ServiceMenuSystem(System):
             return "Business Desk", ["That business desk is no longer available here."]
         if option_id.startswith("business_control_status:"):
             return "Business status", ["That business record is no longer available through this desk."]
+        if option_id.startswith("business_control_deposit:") or option_id.startswith("business_control_withdraw:"):
+            return "Business funds", ["That business fund transfer is no longer available through this desk."]
         if option_id.startswith("business_control_policy:"):
             return "Business policy", ["That business record is no longer available through this desk."]
         if option_id.startswith("business_control_hours:"):
@@ -3661,7 +3782,7 @@ class ServiceMenuSystem(System):
     def _business_control_prefix_and_action(self, option_id):
         option_id = str(option_id or "").strip().lower()
         for prefix in ("business_control", "banking_business"):
-            for action in ("status", "policy", "hours", "markup", "employees", "wage"):
+            for action in ("status", "deposit", "withdraw", "policy", "hours", "markup", "employees", "wage"):
                 marker = f"{prefix}_{action}:"
                 if option_id.startswith(marker):
                     return prefix, action, option_id[len(marker):]
@@ -3702,6 +3823,30 @@ class ServiceMenuSystem(System):
                 lines or ["No business status is available right now."],
                 property_id=provider_id,
             )
+            return True
+
+        if action in {"deposit", "withdraw"}:
+            amount = _int_or_default(parts[1] if len(parts) >= 2 else 0, 0)
+            if amount <= 0:
+                self._present_service_result("Business funds", ["That transfer amount is invalid."], property_id=provider_id)
+                return True
+            self._begin_pending_service_result(
+                channel="banking",
+                property_id=provider_id,
+                property_name=(provider_prop or {}).get("name", provider_id) if isinstance(provider_prop, dict) else provider_id,
+                service="banking",
+            )
+            self.sim.emit(Event(
+                "finance_service_request",
+                eid=self.player_eid,
+                property_id=provider_id,
+                service="banking",
+                kind=action,
+                amount=amount,
+                account_kind="business",
+                business_property_id=business_property_id,
+                local_business_transfer=True,
+            ))
             return True
 
         if action == "employees":

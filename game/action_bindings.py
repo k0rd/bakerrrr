@@ -7,12 +7,13 @@ from dataclasses import dataclass
 from ui.input_keys import KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP
 
 
-ACTION_BINDINGS_VERSION = 1
+ACTION_BINDINGS_VERSION = 2
 ACTION_MENU_KEY = ord("\t")
 PHYSICAL_INPUT_KINDS = frozenset({"key", "button", "axis", "hat"})
 CONTROLLER_DEADZONE = 0.35
 CONTROLLER_REPEAT_DELAY = 0.18
 CONTROLLER_REPEAT_INTERVAL = 0.09
+CHORD_MODIFIER_AXES = frozenset({"left_trigger", "right_trigger"})
 
 CONTROLLER_BUTTON_LABELS = {
     "south": "Button South",
@@ -47,6 +48,8 @@ CONTROLLER_AXIS_LABELS = {
 PROTECTED_CONTROLLER_BUTTONS = frozenset({
     "south",
     "east",
+    "west",
+    "north",
     "view",
     "select",
     "back",
@@ -59,7 +62,16 @@ PROTECTED_CONTROLLER_BUTTONS = frozenset({
     "dpad_left",
     "dpad_right",
 })
-PROTECTED_CONTROLLER_AXES = frozenset({"left_x", "left_y", "left_stick", "right_x", "right_y", "right_stick"})
+PROTECTED_CONTROLLER_AXES = frozenset({
+    "left_x",
+    "left_y",
+    "left_stick",
+    "right_x",
+    "right_y",
+    "right_stick",
+    "left_trigger",
+    "right_trigger",
+})
 PROTECTED_CONTROLLER_HATS = frozenset({"dpad", "hat0"})
 
 
@@ -69,6 +81,7 @@ class ActionSpec:
     label: str
     category: str
     default_keys: tuple[int, ...] = ()
+    default_inputs: tuple[dict, ...] = ()
     contexts: tuple[str, ...] = ("local",)
     rebindable: bool = True
     protected: bool = False
@@ -79,29 +92,29 @@ class ActionSpec:
 ACTION_SPECS = (
     ActionSpec("action_menu", "Action menu", "system", (ACTION_MENU_KEY,), contexts=("local", "overworld"), rebindable=False, protected=True, menu=False),
     ActionSpec("help", "Help", "system", (ord("?"),), contexts=("local", "overworld"), rebindable=False, protected=True),
-    ActionSpec("look", "Look", "world", (ord("x"),), description="Open the look cursor."),
-    ActionSpec("talk", "Talk", "world", (ord("/"),), description="Target someone to talk to."),
-    ActionSpec("interact", "Interact", "world", (ord("'"),), description="Target a nearby thing to use."),
-    ActionSpec("service", "Service", "world", (ord("."),), description="Use the service at your tile."),
+    ActionSpec("look", "Look", "world", (ord("x"),), ({"kind": "button", "code": "dpad_left", "modifiers": ("right_trigger",)},), description="Open the look cursor."),
+    ActionSpec("talk", "Talk", "world", (ord("/"),), ({"kind": "button", "code": "west", "modifiers": ("right_trigger",)},), description="Target someone to talk to."),
+    ActionSpec("interact", "Interact", "world", (ord("'"),), ({"kind": "button", "code": "dpad_left", "modifiers": ("left_trigger",)}, {"kind": "button", "code": "south", "modifiers": ("left_trigger",)}), description="Target a nearby thing to use."),
+    ActionSpec("service", "Service", "world", (ord("."),), ({"kind": "button", "code": "dpad_right", "modifiers": ("left_trigger",)}, {"kind": "button", "code": "east", "modifiers": ("left_trigger",)}), description="Use the service at your tile."),
     ActionSpec("lock", "Lock / unlock", "world", (ord(";"),), description="Lock or unlock a nearby door."),
-    ActionSpec("pickup", "Pick up", "items", (ord(","),), description="Pick up nearby items."),
+    ActionSpec("pickup", "Pick up", "items", (ord(","),), ({"kind": "button", "code": "dpad_down", "modifiers": ("left_trigger",)}, {"kind": "button", "code": "west", "modifiers": ("left_trigger",)}), description="Pick up nearby items."),
     ActionSpec("drop", "Drop", "items", (ord("r"), ord("R")), description="Drop from inventory."),
-    ActionSpec("use_item", "Use / equip", "items", (ord("u"), ord("U")), description="Use, equip, stow, or throw an item."),
-    ActionSpec("inventory", "Inventory", "items", (ord("i"), ord("I")), contexts=("local", "overworld")),
+    ActionSpec("use_item", "Use / equip", "items", (ord("u"), ord("U")), ({"kind": "button", "code": "dpad_right", "modifiers": ("right_trigger",)},), description="Use, equip, stow, or throw an item."),
+    ActionSpec("inventory", "Inventory", "items", (ord("i"), ord("I")), ({"kind": "button", "code": "dpad_up", "modifiers": ("left_trigger",)}, {"kind": "button", "code": "north", "modifiers": ("left_trigger",)}), contexts=("local", "overworld")),
     ActionSpec("character", "Character sheet", "info", (ord("+"),), contexts=("local", "overworld")),
-    ActionSpec("operations", "Operations report", "info", (ord("o"), ord("O")), contexts=("local", "overworld")),
-    ActionSpec("notebooks", "Notebooks", "info", (ord("y"), ord("Y")), contexts=("local", "overworld")),
+    ActionSpec("operations", "Operations report", "info", (ord("o"), ord("O")), ({"kind": "button", "code": "north", "modifiers": ("right_trigger",)},), contexts=("local", "overworld")),
+    ActionSpec("notebooks", "Notebooks", "info", (ord("y"), ord("Y")), ({"kind": "button", "code": "dpad_down", "modifiers": ("right_trigger",)},), contexts=("local", "overworld")),
     ActionSpec("event_log", "Event log", "info", (ord("L"),), contexts=("local", "overworld")),
     ActionSpec("debug", "Debug overlay", "info", (ord("D"),), contexts=("local", "overworld"), description="Only opens in debug-enabled builds."),
-    ActionSpec("map", "Map", "travel", (ord("X"),), description="Open local/overworld map view."),
-    ActionSpec("map_enter_local", "Return to street", "travel", (ord("t"),), contexts=("local", "overworld")),
+    ActionSpec("map", "Map", "travel", (ord("X"),), ({"kind": "button", "code": "dpad_up", "modifiers": ("right_trigger",)},), description="Open local/overworld map view."),
+    ActionSpec("map_enter_local", "Return to street", "travel", (ord("t"),), ({"kind": "button", "code": "south", "modifiers": ("right_trigger",)},), contexts=("local", "overworld"), rebindable=False, protected=True),
     ActionSpec("wait", "Wait", "world", (ord(" "), ord("5")), contexts=("local", "overworld")),
     ActionSpec("sneak", "Sneak", "caution", (ord("S"),)),
     ActionSpec("cover", "Take cover", "caution", (ord("C"),)),
     ActionSpec("cover_hop", "Hop cover", "caution", (ord("v"),)),
     ActionSpec("floor_up", "Go upstairs", "travel", (ord(">"), ord("]"))),
     ActionSpec("floor_down", "Go downstairs", "travel", (ord("<"), ord("["))),
-    ActionSpec("aim_target_next", "Target next", "combat", (ord("f"),), description="Cycle target lock or open melee aim."),
+    ActionSpec("aim_target_next", "Target next", "combat", (ord("f"),), ({"kind": "button", "code": "right_shoulder"},), description="Cycle target lock or open melee aim."),
     ActionSpec("aim_target_prev", "Target previous", "combat", (ord("F"),), description="Cycle target lock backward."),
     ActionSpec("free_aim", "Free aim", "combat", (), description="Open the aim cursor."),
     ActionSpec("fire_locked", "Fire locked target", "combat", (), description="Fire at the current aim lock."),
@@ -111,7 +124,7 @@ ACTION_SPECS = (
     ActionSpec("window_entry", "Window entry", "caution", (ord("W"),)),
     ActionSpec("forced_breach", "Wall breach", "caution", (ord("K"),)),
     ActionSpec("purchase_property", "Buy property", "world", (ord("p"), ord("P"))),
-    ActionSpec("vehicle_headlights", "Headlights", "vehicle", (ord("H"),), contexts=("local",)),
+    ActionSpec("vehicle_headlights", "Headlights", "vehicle", (ord("H"),), ({"kind": "button", "code": "east", "modifiers": ("right_trigger",)},), contexts=("local",)),
     ActionSpec("quit", "Save and quit", "system", (ord("Q"),), contexts=("local", "overworld"), rebindable=False, protected=True),
     ActionSpec("overworld_scan", "Scan map", "travel", (ord("x"),), contexts=("overworld",)),
     ActionSpec("marker_add", "Add marker", "travel", (ord("m"), ord("M")), contexts=("overworld",)),
@@ -160,7 +173,27 @@ PROTECTED_KEY_CODES = frozenset({
     27,
     127,
     ord("?"),
+    ord("t"),
 }) | _movement_key_codes()
+
+
+def _modifier_names(raw):
+    if not isinstance(raw, dict):
+        return ()
+    source = raw.get("modifiers", ())
+    if isinstance(source, str):
+        source = [source]
+    if not isinstance(source, (list, tuple, set, frozenset)):
+        return ()
+    names = []
+    seen = set()
+    for value in source:
+        name = str(value or "").strip().lower()
+        if name not in CHORD_MODIFIER_AXES or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return tuple(sorted(names))
 
 
 def default_control_bindings():
@@ -188,6 +221,9 @@ def normalize_physical_input(raw):
         for field in ("code", "axis", "hat", "value", "direction", "device_guid", "dx", "dy", "source"):
             if field in raw:
                 cleaned[field] = raw.get(field)
+        modifiers = _modifier_names(raw)
+        if modifiers:
+            cleaned["modifiers"] = modifiers
         if "code" not in cleaned and kind == "button":
             return None
         if kind == "button":
@@ -217,14 +253,16 @@ def input_signature(raw):
     if not physical:
         return ""
     kind = str(physical.get("kind", "") or "").strip().lower()
+    modifiers = "+".join(_modifier_names(physical))
+    prefix = f"mods:{modifiers}|" if modifiers else ""
     if kind == "key":
-        return f"key:{int(physical.get('code'))}"
+        return f"{prefix}key:{int(physical.get('code'))}"
     if kind == "button":
-        return f"button:{physical.get('device_guid', '')}:{physical.get('code')}"
+        return f"{prefix}button:{physical.get('device_guid', '')}:{physical.get('code')}"
     if kind == "axis":
-        return f"axis:{physical.get('device_guid', '')}:{physical.get('axis')}:{physical.get('value', physical.get('direction', ''))}"
+        return f"{prefix}axis:{physical.get('device_guid', '')}:{physical.get('axis')}:{physical.get('value', physical.get('direction', ''))}"
     if kind == "hat":
-        return f"hat:{physical.get('device_guid', '')}:{physical.get('hat')}:{physical.get('value', physical.get('direction', ''))}"
+        return f"{prefix}hat:{physical.get('device_guid', '')}:{physical.get('hat')}:{physical.get('value', physical.get('direction', ''))}"
     return ""
 
 
@@ -235,17 +273,25 @@ def is_protected_physical_input(raw):
     kind = str(physical.get("kind", "") or "").strip().lower()
     if kind == "key":
         return int(physical.get("code")) in PROTECTED_KEY_CODES
+    modifiers = _modifier_names(physical)
     if kind == "button":
         code = physical.get("code")
         if isinstance(code, int):
             return False
-        return str(code or "").strip().lower() in PROTECTED_CONTROLLER_BUTTONS
+        code = str(code or "").strip().lower()
+        if code in {"view", "select", "back", "guide", "start", "menu", "left_shoulder"}:
+            return True
+        if modifiers and code in {"south", "east", "west", "north", "dpad_up", "dpad_down", "dpad_left", "dpad_right"}:
+            return False
+        return code in PROTECTED_CONTROLLER_BUTTONS
     if kind == "axis":
         axis = physical.get("axis")
         if isinstance(axis, int):
             return False
         return str(axis or "").strip().lower() in PROTECTED_CONTROLLER_AXES
     if kind == "hat":
+        if modifiers:
+            return False
         return str(physical.get("hat", "") or "").strip().lower() in PROTECTED_CONTROLLER_HATS
     return True
 
@@ -295,7 +341,14 @@ def action_default_inputs(action_id):
     spec = ACTION_SPECS_BY_ID.get(str(action_id or ""))
     if not spec:
         return ()
-    return tuple(key_physical_input(code) for code in spec.default_keys if key_physical_input(code))
+    keyed = tuple(key_physical_input(code) for code in spec.default_keys if key_physical_input(code))
+    shaped = tuple(
+        physical
+        for raw in tuple(getattr(spec, "default_inputs", ()) or ())
+        for physical in (normalize_physical_input(raw),)
+        if physical
+    )
+    return keyed + shaped
 
 
 def action_custom_inputs(bindings_state, action_id):
@@ -338,14 +391,18 @@ def physical_input_label(raw):
     physical = normalize_physical_input(raw)
     if not physical:
         return "unbound"
+    modifiers = _modifier_names(physical)
+    modifier_prefix = ""
+    if modifiers:
+        modifier_prefix = " + ".join(CONTROLLER_AXIS_LABELS.get(name, name.replace("_", " ").title()) for name in modifiers) + " + "
     kind = physical.get("kind")
     if kind == "key":
-        return key_label(physical.get("code"))
+        return modifier_prefix + key_label(physical.get("code"))
     if kind == "button":
         code = physical.get("code")
         if isinstance(code, str):
-            return CONTROLLER_BUTTON_LABELS.get(code, f"Button {code.replace('_', ' ').title()}")
-        return f"Button {code}"
+            return modifier_prefix + CONTROLLER_BUTTON_LABELS.get(code, f"Button {code.replace('_', ' ').title()}")
+        return modifier_prefix + f"Button {code}"
     if kind == "axis":
         axis = physical.get("axis")
         direction = str(physical.get("value", physical.get("direction", "")) or "").strip()
@@ -353,10 +410,11 @@ def physical_input_label(raw):
             label = CONTROLLER_AXIS_LABELS.get(axis, f"Axis {axis.replace('_', ' ').title()}")
         else:
             label = f"Axis {axis}"
-        return f"{label} {direction}".strip()
+        return modifier_prefix + f"{label} {direction}".strip()
     if kind == "hat":
         value = str(physical.get("value", physical.get("direction", "")) or "").strip()
-        return f"D-pad {value.replace('_', ' ').title()}".strip() if str(physical.get("hat")) == "dpad" else f"Hat {physical.get('hat')} {value}".strip()
+        label = f"D-pad {value.replace('_', ' ').title()}".strip() if str(physical.get("hat")) == "dpad" else f"Hat {physical.get('hat')} {value}".strip()
+        return modifier_prefix + label
     return "input"
 
 

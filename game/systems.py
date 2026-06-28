@@ -472,6 +472,7 @@ from game.system_support.item_runtime import (
     _item_weapon_id,
     _weapon_uses_ammo,
 )
+from game.weapon_equipment_runtime import drop_actor_equipped_weapon
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
     ACTION_OFFENSE_CONTEXT_BONUS,
@@ -4764,17 +4765,15 @@ class SuppressionSystem(System):
         if collider:
             collider.blocks = True
 
-        # Drop weapon on the ground.
-        loadouts = self.sim.ecs.get(WeaponLoadout)
-        loadout = loadouts.get(eid)
-        dropped_weapon = None
-        if loadout and loadout.weapon_ids:
-            weapon_id = loadout.current_weapon() or (loadout.weapon_ids[0] if loadout.weapon_ids else None)
-            if weapon_id:
-                dropped_weapon = weapon_id
-                loadout.weapon_ids = [w for w in loadout.weapon_ids if w != weapon_id]
-                if hasattr(loadout, "_current_index"):
-                    loadout._current_index = 0
+        drop_result = drop_actor_equipped_weapon(
+            self.sim,
+            eid,
+            pos.x,
+            pos.y,
+            pos.z,
+            reason="surrender",
+        )
+        dropped_weapon = drop_result.get("weapon_id") if drop_result.get("ok") else None
 
         self.sim.emit(Event(
             "npc_surrendered",
@@ -4783,6 +4782,8 @@ class SuppressionSystem(System):
             y=pos.y,
             z=pos.z,
             dropped_weapon=dropped_weapon,
+            dropped_item_id=drop_result.get("item_id") if drop_result.get("ok") else None,
+            dropped_ground_item_id=drop_result.get("ground_item_id") if drop_result.get("ok") else None,
         ))
         return True
 

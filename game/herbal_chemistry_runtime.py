@@ -22,7 +22,7 @@ from game.flora_runtime import (
     load_flora_catalog,
     normalize_flora_harvest_state,
 )
-from game.item_semantics import identify_item_for_actor
+from game.item_semantics import identify_item_for_actor, item_display_name_for_actor
 from game.items import ITEM_CATALOG, item_display_name
 from game.json_metadata import split_object_document
 from game.system_support.interaction_ordering import _manhattan
@@ -47,6 +47,12 @@ HERBAL_INGREDIENT_ITEM_IDS = {
     "leaf_clippings",
     "moss_scrapings",
     "vine_cuttings",
+}
+HERBAL_INGREDIENT_DISPLAY_PARTS = {
+    "fresh_blossoms": "Blossoms",
+    "leaf_clippings": "Clippings",
+    "moss_scrapings": "Scrapings",
+    "vine_cuttings": "Cuttings",
 }
 INGREDIENT_ITEM_BY_FORM = {
     "flower": "fresh_blossoms",
@@ -320,6 +326,15 @@ def plant_chemistry_class(sim, plant_id):
     return str(herbal_chemistry_profiles(sim).get(plant_id, "") or "").strip().lower()
 
 
+def herbal_ingredient_display_name(item_id, plant_name):
+    item_id = _key(item_id)
+    plant_name = str(plant_name or "").replace("_", " ").strip()
+    part = HERBAL_INGREDIENT_DISPLAY_PARTS.get(item_id, "")
+    if not plant_name or not part:
+        return item_display_name(item_id, item_catalog=ITEM_CATALOG)
+    return f"{plant_name.title()} {part}"
+
+
 def known_plant_traits_for_actor(sim, eid):
     known_traits, _known_recipes = ensure_herbal_state(sim)
     return dict(known_traits.get(_actor_key(eid), {}) or {})
@@ -551,6 +566,7 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         "harvested_tick": _safe_int(getattr(sim, "tick", 0), 0),
         "legal_status": "legal",
     }
+    metadata["display_name"] = herbal_ingredient_display_name(item_id, metadata["source_plant_name"])
     if tool.get("item_id"):
         metadata["tool_item_id"] = tool.get("item_id")
     owner_tag = "player" if eid == getattr(sim, "player_eid", None) else "npc"
@@ -595,7 +611,12 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         tool_item_id=tool.get("item_id"),
         material_units=int(units),
         output_item_id=item_id,
-        output_item_name=item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG),
+        output_item_name=item_display_name_for_actor(
+            sim,
+            eid,
+            {"item_id": item_id, "metadata": metadata},
+            item_catalog=ITEM_CATALOG,
+        ),
         output_instance_id=instance_id,
         plant_part=metadata.get("plant_part"),
         bloom_state=metadata.get("bloom_state"),
@@ -781,7 +802,7 @@ def craft_herbal_medicine(sim, eid, recipe_id=None, ingredient_instance_ids=None
         "output_item_name": item_display_name(output_item_id, metadata=output_metadata, item_catalog=ITEM_CATALOG),
         "output_instance_id": instance_id,
         "ingredient_count": len(selected),
-        "ingredient_names": tuple(item_display_name(entry.get("item_id"), metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG) for entry in selected),
+        "ingredient_names": tuple(item_display_name_for_actor(sim, eid, entry, item_catalog=ITEM_CATALOG) for entry in selected),
         "component_plants": tuple(row.get("plant_name") or row.get("plant_id") for row in component_payload),
         "credits_spent": fee,
         "mode": mode,

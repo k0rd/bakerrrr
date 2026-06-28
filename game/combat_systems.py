@@ -100,6 +100,7 @@ from game.system_support.structure_damage_runtime import (
     structural_surface_kind as _structural_surface_kind,
     structural_surface_label as _structural_surface_label,
 )
+from game.weapon_equipment_runtime import sync_linked_weapon_item_reserve_ammo
 from game.weapons import weapon_by_id
 
 THREAT_STATES = {"protecting", "investigating"}
@@ -212,27 +213,49 @@ class WeaponSystem(System):
             return {}
         return loadout.weapon_instance(weapon_id)
 
-    def _consume_player_weapon_ammo(self, eid, loadout, weapon):
-        if eid != self.player_eid:
-            return True, None
+    def _consume_weapon_ammo(self, eid, loadout, weapon):
         if not _weapon_uses_ammo(weapon):
             return True, None
 
         weapon_id = str(weapon.get("id", ""))
+        instance_id = loadout.weapon_inventory_instance_id(weapon_id)
         current = int(loadout.reserve_ammo_value(
             weapon_id,
             default=_default_weapon_reserve_ammo(weapon),
+            instance_id=instance_id or None,
         ))
-        if loadout.reserve_ammo_value(weapon_id, default=None) is None:
-            loadout.set_reserve_ammo_value(weapon_id, current)
+        if loadout.reserve_ammo_value(weapon_id, default=None, instance_id=instance_id or None) is None:
+            loadout.set_reserve_ammo_value(weapon_id, current, instance_id=instance_id or None)
+            sync_linked_weapon_item_reserve_ammo(
+                self.sim,
+                eid,
+                weapon_id,
+                current,
+                instance_id=instance_id or None,
+            )
 
         ammo_per_shot = int(max(1, weapon.get("ammo_per_shot", 1)))
         if current < ammo_per_shot:
+            sync_linked_weapon_item_reserve_ammo(
+                self.sim,
+                eid,
+                weapon_id,
+                current,
+                instance_id=instance_id or None,
+            )
             return False, current
 
         remaining = loadout.set_reserve_ammo_value(
             weapon_id,
             max(0, current - ammo_per_shot),
+            instance_id=instance_id or None,
+        )
+        sync_linked_weapon_item_reserve_ammo(
+            self.sim,
+            eid,
+            weapon_id,
+            remaining,
+            instance_id=instance_id or None,
         )
         return True, int(remaining)
 
@@ -1444,7 +1467,7 @@ class WeaponSystem(System):
             self.sim.emit(Event("weapon_fire_blocked", eid=eid, reason="no_target"))
             return
 
-        ammo_ok, ammo_remaining = self._consume_player_weapon_ammo(
+        ammo_ok, ammo_remaining = self._consume_weapon_ammo(
             eid=eid,
             loadout=loadout,
             weapon=weapon,

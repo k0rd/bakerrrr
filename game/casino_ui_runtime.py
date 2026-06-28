@@ -9,6 +9,7 @@ CASINO_MACHINE_SERVICE_IDS = (
     "video_poker",
     "keno",
     "plinko",
+    "crash",
 )
 CASINO_TABLE_SERVICE_IDS = (
     "roulette",
@@ -44,6 +45,7 @@ def default_casino_ui_state():
         "floor_page": "games",
         "service": "",
         "session": None,
+        "art": None,
         "return_to": "",
         "return_option_id": "",
     }
@@ -69,6 +71,7 @@ def ensure_casino_ui_state(sim):
     state.setdefault("floor_page", "games")
     state.setdefault("service", "")
     state.setdefault("session", None)
+    state.setdefault("art", None)
     state.setdefault("return_to", "")
     state.setdefault("return_option_id", "")
     return state

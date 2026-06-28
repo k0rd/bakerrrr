@@ -30,6 +30,8 @@ from game.service_runtime import (
     CASINO_PLINKO_LANE_COUNT,
     TRANSIT_SERVICE_IDS,
     _casino_apply_round_result,
+    _casino_crash_resolve,
+    _casino_crash_start,
     _casino_game_profile,
     _casino_plinko_resolve,
     _casino_round_seed,
@@ -2066,6 +2068,16 @@ class SiteServiceSystem(System):
                     except (TypeError, ValueError):
                         drop_lane = CASINO_PLINKO_LANE_COUNT // 2
                 round_result = _casino_plinko_resolve(seed_token, wager, drop_lane)
+            elif service == "crash":
+                session = _casino_crash_start(seed_token, wager)
+                action = "ride"
+                if isinstance(request, dict):
+                    action = str(request.get("action", action) or action).strip().lower()
+                    if action not in {"ride", "cashout"}:
+                        action = "ride"
+                next_session, round_result = _casino_crash_resolve(session, action)
+                if not round_result and next_session:
+                    _ignored, round_result = _casino_crash_resolve(next_session, "cashout")
             else:
                 self.sim.emit(Event(
                     "site_service_blocked",

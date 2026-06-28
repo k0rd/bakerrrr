@@ -513,6 +513,31 @@ def item_unknown_inspect_text_for_actor(sim, actor_eid, item_or_entry, *, item_c
     return f"{name} x{quantity} [identity unknown] - {detail_text}"
 
 
+def _herbal_trait_label_for_actor(sim, actor_eid, item_or_entry) -> str:
+    item_id = _entry_item_id(item_or_entry)
+    metadata = _entry_metadata(item_or_entry)
+    if item_id not in {"fresh_blossoms", "leaf_clippings", "moss_scrapings", "vine_cuttings"}:
+        return ""
+    plant_id = _key(metadata.get("source_plant_id"))
+    class_id = _key(metadata.get("chemistry_class"))
+    if not plant_id or not class_id:
+        return ""
+    state = getattr(sim, "herbal_known_plant_traits", None)
+    if not isinstance(state, dict):
+        return ""
+    try:
+        actor_key = str(int(actor_eid))
+    except (TypeError, ValueError):
+        actor_key = str(actor_eid or "").strip()
+    actor_rows = state.get(actor_key, {})
+    if not isinstance(actor_rows, dict) or plant_id not in actor_rows:
+        return ""
+    row = actor_rows.get(plant_id, {})
+    if isinstance(row, dict):
+        class_id = _key(row.get("chemistry_class")) or class_id
+    return class_id.replace("_", " ")
+
+
 def item_display_name_for_actor(sim, actor_eid, item_or_entry, *, identified=None, item_catalog=None) -> str:
     """Return what an actor should call an item."""
     item_id = _entry_item_id(item_or_entry)
@@ -521,7 +546,11 @@ def item_display_name_for_actor(sim, actor_eid, item_or_entry, *, identified=Non
         identified = item_is_identified_for_actor(sim, actor_eid, item_or_entry, item_catalog=item_catalog)
     if item_requires_identification(item_or_entry, item_catalog=item_catalog) and not identified:
         return item_unknown_name_for_actor(sim, actor_eid, item_or_entry, item_catalog=item_catalog)
-    return item_display_name(item_id, metadata=metadata, item_catalog=item_catalog or ITEM_CATALOG)
+    name = item_display_name(item_id, metadata=metadata, item_catalog=item_catalog or ITEM_CATALOG)
+    herbal_trait = _herbal_trait_label_for_actor(sim, actor_eid, item_or_entry)
+    if herbal_trait and f"[{herbal_trait}]" not in name.lower():
+        return f"{name} [{herbal_trait}]"
+    return name
 
 
 def is_phone_item(item_or_entry, item_catalog=None) -> bool:

@@ -5357,6 +5357,270 @@ class PygameView:
         self._flush_queued_draws()
         self._draw_segments_now(x, y, segments, max_width=max_width, attrs=attrs)
 
+    def draw_casino_table_art(self, x, y, width, height, state):
+        self._flush_queued_draws()
+        if not isinstance(state, dict):
+            return 0
+        try:
+            x = int(x)
+            y = int(y)
+            width = int(width)
+            height = int(height)
+        except (TypeError, ValueError):
+            return 0
+        if width < 18 or height < 4:
+            return 0
+        if x < 0 or y < 0 or x >= self.width_cells or y >= self.height_cells:
+            return 0
+        width = max(1, min(width, self.width_cells - x))
+        height = max(1, min(height, self.height_cells - y))
+        used_cells = max(4, min(height, 7))
+        rect = self.pygame.Rect(x * self.cell_px, y * self.cell_px, width * self.cell_px, used_cells * self.cell_px)
+        if rect.w <= 0 or rect.h <= 0:
+            return 0
+
+        art = state.get("art") if isinstance(state.get("art"), dict) else None
+        session = state.get("session") if isinstance(state.get("session"), dict) else None
+        payload = art or session or {}
+        service = str(state.get("service") or payload.get("service") or "").strip().lower()
+        if not service:
+            return 0
+
+        felt = (14, 42, 36)
+        felt_alt = (19, 55, 47)
+        rail = (87, 55, 30)
+        gold = self._color_value("casino_gold")
+        cursor = self._color_value("casino_cursor")
+        muted = (133, 145, 139)
+        red = (216, 42, 64)
+        black = (23, 29, 34)
+        white = (232, 229, 214)
+        pip_dark = (28, 32, 36)
+        self.pygame.draw.rect(self.surface, felt, rect)
+        self.pygame.draw.rect(self.surface, felt_alt, rect.inflate(-max(2, self.cell_px // 3), -max(2, self.cell_px // 3)))
+        self.pygame.draw.rect(self.surface, rail, rect, max(1, self.cell_px // 8))
+        self.pygame.draw.line(self.surface, gold, (rect.left + 3, rect.top + 3), (rect.right - 4, rect.top + 3), 1)
+
+        def _text(text, px, py, color=white, font=None):
+            font = font or self._ui_font
+            surface = font.render(str(text), True, color)
+            self.surface.blit(surface, (int(px), int(py)))
+
+        def _center_text(text, target, color=white, font=None):
+            font = font or self._ui_font
+            text = str(text)
+            if not text or target.w <= 0 or target.h <= 0:
+                return
+            fitted = self._fit_text_to_pixel_width(text, font, max(1, target.w - 4))
+            if not fitted:
+                return
+            surface = font.render(fitted, True, color)
+            self.surface.blit(surface, (
+                target.left + max(0, (target.w - surface.get_width()) // 2),
+                target.top + max(0, (target.h - surface.get_height()) // 2),
+            ))
+
+        suit_label = {"S": "♠", "H": "♥", "D": "♦", "C": "♣"}
+
+        def _card_parts(card):
+            code = str(card or "").strip().upper()
+            if len(code) < 2 or code == "??":
+                return "?", "?", muted
+            rank = code[:-1] or code[0]
+            suit = code[-1]
+            rank = "10" if rank == "T" else rank
+            color = red if suit in {"H", "D"} else black
+            return rank, suit_label.get(suit, suit), color
+
+        def _draw_card(card_rect, card, *, hidden=False):
+            card_rect = self.pygame.Rect(card_rect)
+            self.pygame.draw.rect(self.surface, (244, 241, 226), card_rect, border_radius=max(2, self.cell_px // 6))
+            self.pygame.draw.rect(self.surface, (86, 75, 58), card_rect, 1, border_radius=max(2, self.cell_px // 6))
+            if hidden or str(card or "").strip() == "??":
+                inset = max(3, self.cell_px // 5)
+                back = card_rect.inflate(-inset, -inset)
+                self.pygame.draw.rect(self.surface, (56, 83, 126), back, border_radius=max(1, self.cell_px // 8))
+                self.pygame.draw.line(self.surface, (180, 205, 238), back.topleft, back.bottomright, 1)
+                self.pygame.draw.line(self.surface, (180, 205, 238), back.topright, back.bottomleft, 1)
+                return
+            rank, suit, color = _card_parts(card)
+            _text(rank, card_rect.left + 3, card_rect.top + 1, color, self._ui_bold_font)
+            _center_text(suit, card_rect.inflate(-4, -4), color, self._ui_bold_font)
+
+        def _draw_cards_row(cards, top, label="", hidden_tail=False):
+            cards = [card for card in list(cards or ())][:7]
+            if not cards:
+                return 0
+            label_w = max(0, min(rect.w // 5, self.cell_px * 7))
+            if label:
+                label_rect = self.pygame.Rect(rect.left + 8, top, label_w, self.cell_px)
+                _center_text(label, label_rect, gold, self._ui_font)
+            available_w = rect.w - label_w - 20
+            card_w = max(self.cell_px + 4, min(self.cell_px * 3, available_w // max(1, len(cards))))
+            card_h = max(self.cell_px * 2, min(self.cell_px * 4, rect.bottom - top - 5))
+            gap = max(3, min(self.cell_px // 2, (available_w - (card_w * len(cards))) // max(1, len(cards) - 1) if len(cards) > 1 else self.cell_px // 2))
+            start_x = rect.left + 10 + label_w
+            for idx, card in enumerate(cards):
+                card_rect = self.pygame.Rect(start_x + (idx * (card_w + gap)), top, card_w, card_h)
+                _draw_card(card_rect, card, hidden=hidden_tail and idx == len(cards) - 1)
+            return card_h
+
+        def _draw_die(die_rect, value):
+            try:
+                value = max(1, min(6, int(value)))
+            except (TypeError, ValueError):
+                value = 1
+            die_rect = self.pygame.Rect(die_rect)
+            self.pygame.draw.rect(self.surface, white, die_rect, border_radius=max(2, self.cell_px // 5))
+            self.pygame.draw.rect(self.surface, (78, 76, 67), die_rect, 1, border_radius=max(2, self.cell_px // 5))
+            cx = die_rect.centerx
+            cy = die_rect.centery
+            dx = max(2, die_rect.w // 4)
+            dy = max(2, die_rect.h // 4)
+            spots = {
+                1: [(cx, cy)],
+                2: [(cx - dx, cy - dy), (cx + dx, cy + dy)],
+                3: [(cx - dx, cy - dy), (cx, cy), (cx + dx, cy + dy)],
+                4: [(cx - dx, cy - dy), (cx + dx, cy - dy), (cx - dx, cy + dy), (cx + dx, cy + dy)],
+                5: [(cx - dx, cy - dy), (cx + dx, cy - dy), (cx, cy), (cx - dx, cy + dy), (cx + dx, cy + dy)],
+                6: [(cx - dx, cy - dy), (cx + dx, cy - dy), (cx - dx, cy), (cx + dx, cy), (cx - dx, cy + dy), (cx + dx, cy + dy)],
+            }
+            radius = max(2, min(die_rect.w, die_rect.h) // 11)
+            for spot in spots.get(value, spots[1]):
+                self.pygame.draw.circle(self.surface, pip_dark, spot, radius)
+
+        def _last_roll_pair():
+            for key in ("roll_pairs", "roll_history"):
+                rolls = list(payload.get(key, ()) or ())
+                if not rolls:
+                    continue
+                raw = rolls[-1]
+                if isinstance(raw, dict):
+                    return int(raw.get("die_one", 1) or 1), int(raw.get("die_two", 1) or 1)
+                if isinstance(raw, (list, tuple)) and len(raw) >= 2:
+                    return int(raw[0] or 1), int(raw[1] or 1)
+            return 3, 4
+
+        def _draw_roulette():
+            wheel = self.pygame.Rect(rect.left + 12, rect.top + 10, min(rect.h - 20, rect.w // 3), min(rect.h - 20, rect.w // 3))
+            wheel.center = (rect.left + max(wheel.w // 2 + 12, rect.w // 4), rect.centery)
+            radius = max(8, min(wheel.w, wheel.h) // 2)
+            center = wheel.center
+            for idx in range(24):
+                angle = (math.tau / 24.0) * idx
+                color = red if idx % 2 else black
+                end = (center[0] + int(math.cos(angle) * radius), center[1] + int(math.sin(angle) * radius))
+                self.pygame.draw.line(self.surface, color, center, end, max(2, radius // 6))
+            self.pygame.draw.circle(self.surface, gold, center, radius, 2)
+            self.pygame.draw.circle(self.surface, (28, 76, 46), center, max(4, radius // 3))
+            spin_number = payload.get("spin_number", None)
+            label = "--" if spin_number is None else str(spin_number)
+            label_rect = self.pygame.Rect(rect.centerx, rect.top + self.cell_px, rect.right - rect.centerx - 8, rect.h - self.cell_px * 2)
+            _center_text("ROULETTE", label_rect.move(0, -self.cell_px), gold, self._ui_bold_font)
+            _center_text(f"Pocket {label}", label_rect, cursor, self._ui_bold_font)
+
+        def _draw_crash():
+            graph = rect.inflate(-self.cell_px, -self.cell_px)
+            graph.top += max(0, self.cell_px // 3)
+            graph.h = max(12, graph.h - self.cell_px // 3)
+            self.pygame.draw.line(self.surface, muted, (graph.left, graph.bottom), (graph.right, graph.bottom), 1)
+            self.pygame.draw.line(self.surface, muted, (graph.left, graph.top), (graph.left, graph.bottom), 1)
+            history = []
+            for value in list(payload.get("history", ()) or (1.0,)):
+                try:
+                    history.append(max(1.0, float(value)))
+                except (TypeError, ValueError):
+                    continue
+            if not history:
+                history = [1.0]
+            max_mult = max(2.0, max(history), float(payload.get("crash_point", 0.0) or 0.0))
+            points = []
+            for idx, value in enumerate(history):
+                px = graph.left + int((graph.w - 2) * (idx / max(1, len(history) - 1)))
+                py = graph.bottom - int((graph.h - 2) * ((value - 1.0) / max(0.1, max_mult - 1.0)))
+                points.append((px, py))
+            if len(points) == 1:
+                points.append((graph.left + max(8, graph.w // 8), points[0][1] - max(2, graph.h // 12)))
+            if len(points) >= 2:
+                self.pygame.draw.lines(self.surface, cursor, False, points, max(2, self.cell_px // 7))
+            if str(payload.get("outcome_key", "")).strip().lower() == "crash":
+                mark = points[-1]
+                self.pygame.draw.line(self.surface, red, (mark[0] - 6, mark[1] - 6), (mark[0] + 6, mark[1] + 6), 2)
+                self.pygame.draw.line(self.surface, red, (mark[0] + 6, mark[1] - 6), (mark[0] - 6, mark[1] + 6), 2)
+            current = float(payload.get("current_multiplier", history[-1]) or history[-1])
+            cashout = float(payload.get("cashout_multiplier", 0.0) or 0.0)
+            label = f"x{cashout:.2f} cashed" if cashout > 0 else f"x{current:.2f}"
+            _text("CRASH", graph.left + 6, graph.top + 3, gold, self._ui_bold_font)
+            _text(label, graph.right - max(self.cell_px * 8, 90), graph.top + 3, cursor, self._ui_bold_font)
+
+        if service in {"video_poker", "baccarat", "three_card_poker", "twenty_one", "casino_holdem"}:
+            top = rect.top + 9
+            dealer = payload.get("dealer_cards") or payload.get("banker_cards") or ()
+            player = payload.get("cards") or payload.get("player_cards") or ()
+            hands = payload.get("hands") or payload.get("player_hands") or ()
+            if hands and not player:
+                first = list(hands)[0]
+                if isinstance(first, dict):
+                    player = first.get("cards", ())
+                else:
+                    player = first
+            board = payload.get("board") or payload.get("flop") or ()
+            if dealer:
+                top += _draw_cards_row(dealer, top, "Dealer" if service != "baccarat" else "Banker", hidden_tail=(service == "twenty_one" and not payload.get("outcome_key")))
+            if board:
+                top += 5
+                top += _draw_cards_row(board, top, "Board")
+            if player:
+                top += 5
+                _draw_cards_row(player, top, "You" if service != "baccarat" else "Player")
+        elif service == "roulette":
+            _draw_roulette()
+        elif service == "craps":
+            die_one, die_two = _last_roll_pair()
+            size = min(rect.h - 24, rect.w // 5)
+            size = max(self.cell_px * 2, size)
+            start_x = rect.left + rect.w // 2 - size - 6
+            top = rect.top + (rect.h - size) // 2
+            _draw_die(self.pygame.Rect(start_x, top, size, size), die_one)
+            _draw_die(self.pygame.Rect(start_x + size + 12, top, size, size), die_two)
+            _center_text("CRAPS", self.pygame.Rect(rect.left + 8, rect.top + 4, rect.w - 16, self.cell_px), gold, self._ui_bold_font)
+        elif service == "crash":
+            _draw_crash()
+        elif service == "plinko":
+            board = rect.inflate(-self.cell_px, -self.cell_px // 2)
+            rows = 6
+            for row in range(rows):
+                count = row + 3
+                y_pos = board.top + self.cell_px + int((board.h - self.cell_px * 2) * (row / max(1, rows - 1)))
+                for idx in range(count):
+                    x_pos = board.left + int(board.w * ((idx + 1) / (count + 1)))
+                    self.pygame.draw.circle(self.surface, gold, (x_pos, y_pos), max(2, self.cell_px // 8))
+            path = list(payload.get("path", ()) or ())
+            if path:
+                last = path[-1]
+                lane_count = max(1, 7)
+                ball_x = board.left + int(board.w * ((int(last) + 1) / (lane_count + 1)))
+                ball_y = board.bottom - self.cell_px
+            else:
+                ball_x = board.centerx
+                ball_y = board.top + self.cell_px // 2
+            self.pygame.draw.circle(self.surface, cursor, (ball_x, ball_y), max(4, self.cell_px // 4))
+            _text("PLINKO", board.left + 6, board.top + 4, gold, self._ui_bold_font)
+        elif service == "slots":
+            reels = list(payload.get("reels", ()) or ("BELL", "BAR", "7"))
+            reel_w = max(self.cell_px * 3, min(self.cell_px * 6, (rect.w - self.cell_px * 3) // max(1, len(reels))))
+            reel_h = max(self.cell_px * 3, rect.h - self.cell_px * 2)
+            start_x = rect.centerx - ((reel_w * len(reels)) + (self.cell_px * (len(reels) - 1))) // 2
+            top = rect.top + (rect.h - reel_h) // 2
+            for idx, symbol in enumerate(reels[:5]):
+                reel = self.pygame.Rect(start_x + idx * (reel_w + self.cell_px), top, reel_w, reel_h)
+                self.pygame.draw.rect(self.surface, (232, 225, 202), reel, border_radius=max(2, self.cell_px // 5))
+                self.pygame.draw.rect(self.surface, gold, reel, 2, border_radius=max(2, self.cell_px // 5))
+                _center_text(str(symbol).replace("_", " ")[:7], reel, red if str(symbol).upper() == "7" else black, self._ui_bold_font)
+        else:
+            _center_text(str(service).replace("_", " ").title(), rect, gold, self._ui_bold_font)
+        return used_cells
+
     def _is_close_event(self, event):
         close_types = {self.pygame.QUIT}
         window_close = getattr(self.pygame, "WINDOWCLOSE", None)
@@ -5490,6 +5754,41 @@ class PygameView:
             if self._controller_button_state.get((int(instance_id), "left_shoulder")):
                 return True
         return False
+
+    def _active_chord_modifiers(self, instance_id=None, *, source="controller"):
+        modifiers = []
+        if source == "joystick":
+            ids = [instance_id] if instance_id is not None else tuple(self._raw_joysticks.keys())
+            for raw_id in ids:
+                try:
+                    raw_id = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                if self._normalized_axis_value(self._raw_axis_state.get((raw_id, 4), 0.0)) >= 0.55:
+                    modifiers.append("left_trigger")
+                if self._normalized_axis_value(self._raw_axis_state.get((raw_id, 5), 0.0)) >= 0.55:
+                    modifiers.append("right_trigger")
+        else:
+            ids = [instance_id] if instance_id is not None else self._controller_input_instance_ids()
+            for controller_id in ids:
+                try:
+                    controller_id = int(controller_id)
+                except (TypeError, ValueError):
+                    continue
+                if self._normalized_axis_value(self._controller_axis_state.get((controller_id, "left_trigger"), 0.0)) >= 0.55:
+                    modifiers.append("left_trigger")
+                if self._normalized_axis_value(self._controller_axis_state.get((controller_id, "right_trigger"), 0.0)) >= 0.55:
+                    modifiers.append("right_trigger")
+        return tuple(sorted(set(modifiers)))
+
+    def _with_chord_modifiers(self, physical, instance_id=None, *, source="controller"):
+        if not isinstance(physical, dict):
+            return physical
+        modifiers = self._active_chord_modifiers(instance_id, source=source)
+        if modifiers:
+            physical = dict(physical)
+            physical["modifiers"] = modifiers
+        return physical
 
     def _filter_controller_delta(self, delta):
         try:
@@ -5657,6 +5956,8 @@ class PygameView:
             self._last_controller_move_at = 0.0
             self._next_controller_repeat_at = 0.0
             return None
+        if source_kind == "digital" and self._active_chord_modifiers():
+            return None
         repeat_delay = _CONTROLLER_DIGITAL_REPEAT_DELAY if source_kind == "digital" else CONTROLLER_REPEAT_DELAY
         repeat_interval = _CONTROLLER_DIGITAL_REPEAT_INTERVAL if source_kind == "digital" else CONTROLLER_REPEAT_INTERVAL
         if delta != self._last_controller_move_delta:
@@ -5721,7 +6022,8 @@ class PygameView:
         self._last_controller_look_at = now
         self._next_controller_look_repeat_at = now + _CONTROLLER_LOOK_REPEAT_DELAY
 
-    def _button_press_is_duplicate(self, state, accepted_at, key, *, pressed, window=_CONTROLLER_BUTTON_DEDUPE_SECONDS):
+    def _button_press_is_duplicate(self, state, accepted_at, key, *, pressed, window=_CONTROLLER_BUTTON_DEDUPE_SECONDS, accept_key=None):
+        accept_key = key if accept_key is None else accept_key
         now = time.monotonic()
         if not pressed:
             state[key] = False
@@ -5730,19 +6032,20 @@ class PygameView:
         was_pressed = bool(state.get(key))
         state[key] = True
         try:
-            last_at = float(accepted_at.get(key, 0.0) or 0.0)
+            last_at = float(accepted_at.get(accept_key, 0.0) or 0.0)
         except (TypeError, ValueError):
             last_at = 0.0
         if was_pressed or (last_at and now - last_at < float(window)):
             self._input_debug(
                 "button_dedupe_drop",
                 key=key,
+                accept_key=accept_key,
                 was_pressed=bool(was_pressed),
                 age=round(now - last_at, 6) if last_at else None,
                 window=float(window),
             )
             return True
-        accepted_at[key] = now
+        accepted_at[accept_key] = now
         return False
 
     def _input_source_kind(self, physical):
@@ -5834,11 +6137,14 @@ class PygameView:
         instance_id = int(getattr(event, "which", 0) or 0)
         code = _SDL_CONTROLLER_BUTTONS.get(int(getattr(event, "button", -1)), f"button_{getattr(event, 'button', 0)}")
         key = (instance_id, code)
+        modifiers = self._active_chord_modifiers(instance_id, source="controller")
+        accept_key = (instance_id, code, modifiers)
         duplicate = self._button_press_is_duplicate(
             self._controller_button_state,
             self._controller_button_accept_at,
             key,
             pressed=pressed,
+            accept_key=accept_key,
         )
         if duplicate:
             if pressed and code in _CONTROLLER_DPAD_DELTAS:
@@ -5852,36 +6158,47 @@ class PygameView:
                 if delta == (0, 0):
                     return None
                 self._prime_controller_repeat_delay(delta)
-                return {
+                return self._with_chord_modifiers({
                     "kind": "button",
                     "code": code,
                     "dx": int(delta[0]),
                     "dy": int(delta[1]),
                     "source": "controller",
-                }
+                }, instance_id, source="controller")
             return None
         if not pressed:
             return None
-        return {"kind": "button", "code": code, "source": "controller"}
+        return self._with_chord_modifiers(
+            {"kind": "button", "code": code, "source": "controller"},
+            instance_id,
+            source="controller",
+        )
 
     def _map_raw_button_event(self, event, *, pressed):
         instance_id = int(getattr(event, "instance_id", getattr(event, "which", 0)) or 0)
         button = int(getattr(event, "button", 0) or 0)
         key = (instance_id, button)
+        modifiers = self._active_chord_modifiers(instance_id, source="joystick")
+        accept_key = (instance_id, button, modifiers)
         if self._button_press_is_duplicate(
             self._raw_button_state,
             self._raw_button_accept_at,
             key,
             pressed=pressed,
+            accept_key=accept_key,
         ):
             return None
         joystick = self._raw_joysticks.get(instance_id)
-        return {
-            "kind": "button",
-            "code": button,
-            "device_guid": self._device_guid(joystick, fallback=f"joy{instance_id}"),
-            "source": "joystick",
-        }
+        return self._with_chord_modifiers(
+            {
+                "kind": "button",
+                "code": button,
+                "device_guid": self._device_guid(joystick, fallback=f"joy{instance_id}"),
+                "source": "joystick",
+            },
+            instance_id,
+            source="joystick",
+        )
 
     def _map_event_input(self, event):
         mapped_key = self._map_key(event)
@@ -5921,6 +6238,8 @@ class PygameView:
                 return None
             if axis in {"right_x", "right_y"}:
                 return self._controller_right_stick_input_for_instance(instance_id, source="controller")
+            if axis in {"left_trigger", "right_trigger"}:
+                return None
             return self._axis_press_input((instance_id, axis), axis=axis, value=value, source="controller")
 
         joy_button_down = getattr(pg, "JOYBUTTONDOWN", None)
@@ -5940,6 +6259,8 @@ class PygameView:
                 return None
             if axis in {2, 3}:
                 return self._controller_right_stick_input_for_instance(instance_id, source="joystick")
+            if axis in {4, 5}:
+                return None
             joystick = self._raw_joysticks.get(instance_id)
             return self._axis_press_input(
                 (instance_id, axis),
@@ -5972,16 +6293,20 @@ class PygameView:
             self._raw_hat_accept_at[dedupe_key] = now
             self._prime_controller_repeat_delay((dx, dy))
             joystick = self._raw_joysticks.get(instance_id)
-            return {
-                "kind": "hat",
-                "hat": f"hat{hat}",
-                "value": f"{dx},{dy}",
-                "direction": f"{dx},{dy}",
-                "dx": dx,
-                "dy": dy,
-                "device_guid": self._device_guid(joystick, fallback=f"joy{instance_id}"),
-                "source": "joystick",
-            }
+            return self._with_chord_modifiers(
+                {
+                    "kind": "hat",
+                    "hat": f"hat{hat}",
+                    "value": f"{dx},{dy}",
+                    "direction": f"{dx},{dy}",
+                    "dx": dx,
+                    "dy": dy,
+                    "device_guid": self._device_guid(joystick, fallback=f"joy{instance_id}"),
+                    "source": "joystick",
+                },
+                instance_id,
+                source="joystick",
+            )
         return None
 
     def _pump_inputs(self, *, include_repeat=True):
@@ -6028,6 +6353,8 @@ class PygameView:
                 return int(physical.get("code"))
             except (TypeError, ValueError):
                 return None
+        if physical.get("modifiers"):
+            return None
         if physical.get("kind") == "button":
             code = str(physical.get("code", "") or "").strip().lower()
             if code == "south":

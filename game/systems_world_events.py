@@ -24,6 +24,7 @@ from game.hunting_runtime import (
     hunting_yield_profile,
 )
 from game.items import ITEM_CATALOG
+from game.weapon_equipment_runtime import equip_linked_weapon_item
 from game.weapons import weapon_by_id
 from game.world_event_presentation import world_event_effect_summary
 from game import systems as _systems
@@ -350,24 +351,18 @@ class WorldEventsSystem(System):
 
     def _equip_event_hunter(self, eid, rng, *, career="hunter"):
         weapon_item_id = "hunting_rifle" if str(career or "").strip().lower() == "hunter" else "varmint_rifle"
-        instance_id = self._add_event_actor_item(
+        equip_linked_weapon_item(
+            self.sim,
             eid,
-            weapon_item_id,
-            metadata={"source": "hunter_party", "equipped": True},
+            item_id=weapon_item_id,
+            rng=rng,
+            owner_tag="npc",
+            metadata={"source": "hunter_party"},
+            source_kind="hunter_party",
+            reserve_ammo=18,
         )
         self._add_event_actor_item(eid, FIELD_KNIFE_ITEM_ID, metadata={"source": "hunter_party", "field_kit": True})
         self._add_event_actor_item(eid, KILL_BAG_ITEM_ID, metadata={"source": "hunter_party", "field_kit": True})
-
-        item_def = ITEM_CATALOG.get(weapon_item_id, {})
-        weapon_id = str(item_def.get("weapon_id", "") or "").strip()
-        if weapon_id:
-            loadout = self.sim.ecs.get(WeaponLoadout).get(eid)
-            if loadout is None:
-                loadout = WeaponLoadout()
-                self.sim.ecs.add(eid, loadout)
-            loadout.add_weapon(weapon_id, instance={"inventory_instance_id": instance_id, "source": "hunter_party"})
-            loadout.equip(weapon_id)
-            loadout.set_reserve_ammo_value(weapon_id, 18)
 
         self.sim.ecs.add(
             eid,

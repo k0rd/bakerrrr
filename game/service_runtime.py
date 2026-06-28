@@ -1517,14 +1517,14 @@ CASINO_KENO_NUMBER_COUNT = 40
 CASINO_KENO_DRAW_COUNT = 20
 CASINO_KENO_MAX_PICKS = 8
 CASINO_KENO_PAYOUT_MULTIPLIERS = {
-    1: {1: 2},
-    2: {2: 3},
-    3: {2: 1, 3: 4},
-    4: {3: 2, 4: 8},
-    5: {4: 4, 5: 10},
-    6: {4: 1, 5: 5, 6: 20},
-    7: {5: 1, 6: 8, 7: 60},
-    8: {6: 2, 7: 20, 8: 100},
+    1: {1: 1.8},
+    2: {2: 3.6},
+    3: {2: 1.0, 3: 4.0},
+    4: {3: 2.0, 4: 8.0},
+    5: {3: 0.5, 4: 3.0, 5: 12.0},
+    6: {4: 1.0, 5: 5.0, 6: 30.0},
+    7: {5: 2.0, 6: 8.0, 7: 50.0},
+    8: {5: 0.5, 6: 3.0, 7: 18.0, 8: 120.0},
 }
 CASINO_CRAPS_MAX_POINT_ROLLS = 32
 CASINO_ROULETTE_NUMBER_MAX = 36
@@ -1615,6 +1615,15 @@ CASINO_GAME_PROFILES = {
         "prompt": "Choose a chip size and a drop lane.",
         "note": "The center buckets pay best if the pegs break your way.",
         "social_gain": (1, 3),
+    },
+    "crash": {
+        "title": "Crash",
+        "service_label": "crash",
+        "menu_label": "Play crash",
+        "bet_options": (5, 15, 30),
+        "prompt": "Post a stake, ride the rising multiplier, and cash out before the graph breaks.",
+        "note": "Each step gets hotter. Cash out early for a smaller win, or ride too long and lose the stake.",
+        "social_gain": (1, 4),
     },
     "twenty_one": {
         "title": "21",
@@ -2378,8 +2387,33 @@ def _casino_keno_toggle_pick(session, number):
     return current
 
 
+def _casino_keno_payout_multiplier(pick_count, hit_count):
+    try:
+        pick_count = int(pick_count)
+        hit_count = int(hit_count)
+    except (TypeError, ValueError):
+        return 0.0
+    return float(CASINO_KENO_PAYOUT_MULTIPLIERS.get(pick_count, {}).get(hit_count, 0.0) or 0.0)
+
+
+def _casino_keno_multiplier_text(multiplier):
+    try:
+        value = float(multiplier)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value <= 0.0:
+        return "x0"
+    if abs(value - round(value)) < 0.001:
+        return f"x{int(round(value))}"
+    return f"x{value:.1f}".rstrip("0").rstrip(".")
+
+
 def _casino_keno_outcome_text(pick_count, hit_count, payout_mult):
-    if int(payout_mult) <= 0:
+    try:
+        payout_value = float(payout_mult)
+    except (TypeError, ValueError):
+        payout_value = 0.0
+    if payout_value <= 0:
         return (
             "Blank board.",
             "The blower misses your ticket and the house keeps the wager.",
@@ -2417,8 +2451,8 @@ def _casino_keno_draw(session):
     hit_numbers = tuple(number for number in picks if number in drawn_set)
     pick_count = len(picks)
     hit_count = len(hit_numbers)
-    payout_mult = int(CASINO_KENO_PAYOUT_MULTIPLIERS.get(pick_count, {}).get(hit_count, 0))
-    payout = int(max(0, payout_mult) * int(current.get("wager", 0)))
+    payout_mult = _casino_keno_payout_multiplier(pick_count, hit_count)
+    payout = int(round(max(0.0, payout_mult) * int(current.get("wager", 0))))
     headline, detail = _casino_keno_outcome_text(pick_count, hit_count, payout_mult)
     result_lines = []
     result_lines.extend(_casino_ascii_keno_board(picks=picks, drawn=drawn_numbers, hits=hit_numbers))
@@ -2432,9 +2466,9 @@ def _casino_keno_draw(session):
             else f"Hits: none (0/{pick_count})."
         ),
         (
-            f"Pay table: x{payout_mult} on {hit_count} hit{'s' if hit_count != 1 else ''}."
+            f"Pay row {pick_count}: {_casino_keno_multiplier_text(payout_mult)} on {hit_count} hit{'s' if hit_count != 1 else ''}."
             if payout_mult > 0
-            else "Pay table: no return on this miss."
+            else f"Pay row {pick_count}: no return on this miss."
         ),
         detail,
     ])
@@ -2457,7 +2491,7 @@ def _casino_keno_draw(session):
         "hit_numbers": hit_numbers,
         "pick_count": int(pick_count),
         "hit_count": int(hit_count),
-        "payout_mult": int(payout_mult),
+        "payout_mult": float(payout_mult),
         "number_count": int(CASINO_KENO_NUMBER_COUNT),
         "draw_count": int(CASINO_KENO_DRAW_COUNT),
         "max_picks": int(CASINO_KENO_MAX_PICKS),
@@ -3936,6 +3970,148 @@ def _casino_plinko_resolve(seed_token, wager, drop_lane):
     }
 
 
+def _casino_crash_target_multiplier(seed_token):
+    rng = random.Random(f"{seed_token}:crash:point")
+    roll = rng.random()
+    if roll < 0.045:
+        return 1.0 + rng.random() * 0.12
+    if roll < 0.62:
+        return 1.18 + rng.random() * 1.15
+    if roll < 0.88:
+        return 2.35 + rng.random() * 2.35
+    if roll < 0.975:
+        return 4.8 + rng.random() * 5.8
+    return 10.8 + rng.random() * 19.2
+
+
+def _casino_crash_multiplier_for_step(step):
+    try:
+        step = int(step)
+    except (TypeError, ValueError):
+        step = 0
+    step = max(0, step)
+    return round(1.0 + (step * 0.18) + ((step * step) * 0.018), 2)
+
+
+def _casino_crash_start(seed_token, wager):
+    crash_point = round(float(_casino_crash_target_multiplier(seed_token)), 2)
+    return {
+        "service": "crash",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": int(wager),
+        "step": 0,
+        "current_multiplier": 1.0,
+        "crash_point": crash_point,
+        "history": (1.0,),
+    }
+
+
+def _casino_crash_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    try:
+        step = max(0, int(session.get("step", 0) or 0))
+    except (TypeError, ValueError):
+        step = 0
+    seed_token = str(session.get("seed_token", "")).strip()
+    try:
+        crash_point = round(float(session.get("crash_point", 0.0) or 0.0), 2)
+    except (TypeError, ValueError):
+        crash_point = 0.0
+    if crash_point <= 0.0:
+        crash_point = round(float(_casino_crash_target_multiplier(seed_token)), 2)
+    history = []
+    for value in list(session.get("history", ()) or ()):
+        try:
+            history.append(round(max(1.0, float(value)), 2))
+        except (TypeError, ValueError):
+            continue
+    current_multiplier = round(float(session.get("current_multiplier", _casino_crash_multiplier_for_step(step)) or 1.0), 2)
+    if not history:
+        history = [1.0]
+    if history[-1] != current_multiplier:
+        history.append(current_multiplier)
+    return {
+        "service": "crash",
+        "seed_token": seed_token,
+        "wager": int(session.get("wager", 0)),
+        "stake": int(session.get("stake", session.get("wager", 0))),
+        "step": int(step),
+        "current_multiplier": float(current_multiplier),
+        "crash_point": float(crash_point),
+        "history": tuple(history[-18:]),
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+    }
+
+
+def _casino_crash_resolve(session, action):
+    current = _casino_crash_normalize_session(session)
+    if not current:
+        return None, None
+    action = str(action or "").strip().lower()
+    multiplier = float(current.get("current_multiplier", 1.0) or 1.0)
+    crash_point = float(current.get("crash_point", 1.0) or 1.0)
+    wager = int(current.get("wager", 0))
+    if action == "cashout":
+        payout = int(round(float(wager) * multiplier))
+        result_lines = [
+            f"Cash out: x{multiplier:.2f}.",
+            f"Crash point: x{crash_point:.2f}.",
+            "You step off the graph before it breaks.",
+        ]
+        return None, {
+            "service": "crash",
+            "wager": int(wager),
+            "stake": int(current.get("stake", wager)),
+            "payout": int(payout),
+            "outcome_key": "cashout",
+            "headline": f"Cash out at x{multiplier:.2f}.",
+            "detail": "The line keeps screaming, but your credits are already off the table.",
+            "summary": f"Crash cashout x{multiplier:.2f} before x{crash_point:.2f}.",
+            "result_lines": result_lines,
+            "cashout_multiplier": float(multiplier),
+            "crash_point": float(crash_point),
+            "history": tuple(current.get("history", ()) or ()),
+            "social_gain": _casino_social_gain("crash", f"{current.get('seed_token', '')}:cashout:{multiplier:.2f}"),
+            "stake_already_paid": True,
+        }
+    if action != "ride":
+        return current, None
+
+    next_step = int(current.get("step", 0)) + 1
+    next_multiplier = float(_casino_crash_multiplier_for_step(next_step))
+    history = list(current.get("history", ()) or ())
+    history.append(round(next_multiplier, 2))
+    if next_multiplier >= crash_point:
+        result_lines = [
+            f"Crash: x{crash_point:.2f}.",
+            f"You were riding x{next_multiplier:.2f}.",
+            "The graph snaps vertical, then drops dead.",
+        ]
+        return None, {
+            "service": "crash",
+            "wager": int(wager),
+            "stake": int(current.get("stake", wager)),
+            "payout": 0,
+            "outcome_key": "crash",
+            "headline": f"Crash at x{crash_point:.2f}.",
+            "detail": "The multiplier breaks before you can pull the stake off the glass.",
+            "summary": f"Crash point x{crash_point:.2f}; ride reached x{next_multiplier:.2f}.",
+            "result_lines": result_lines,
+            "cashout_multiplier": 0.0,
+            "crash_point": float(crash_point),
+            "history": tuple(history[-18:]),
+            "social_gain": _casino_social_gain("crash", f"{current.get('seed_token', '')}:crash:{crash_point:.2f}"),
+            "stake_already_paid": True,
+        }
+    current["step"] = int(next_step)
+    current["current_multiplier"] = round(next_multiplier, 2)
+    current["history"] = tuple(history[-18:])
+    return current, None
+
+
 def _casino_blackjack_can_split(cards):
     cards = list(cards or ())
     if len(cards) != 2:
@@ -4689,10 +4865,16 @@ __all__ = [
     "_casino_craps_normalize_session",
     "_casino_craps_resolve",
     "_casino_craps_start",
+    "_casino_crash_normalize_session",
+    "_casino_crash_multiplier_for_step",
+    "_casino_crash_resolve",
+    "_casino_crash_start",
     "_casino_game_profile",
     "_casino_game_title",
     "_casino_keno_draw",
+    "_casino_keno_multiplier_text",
     "_casino_keno_normalize_session",
+    "_casino_keno_payout_multiplier",
     "_casino_keno_start",
     "_casino_keno_toggle_pick",
     "_casino_holdem_resolve",

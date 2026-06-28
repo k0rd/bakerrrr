@@ -741,6 +741,7 @@ class InputSystem(System):
         if not physical:
             return None
         kind = str(physical.get("kind", "") or "").strip().lower()
+        has_modifiers = bool(physical.get("modifiers"))
         if kind == "key":
             try:
                 return int(physical.get("code"))
@@ -748,16 +749,20 @@ class InputSystem(System):
                 return None
         if kind == "button":
             code = str(physical.get("code", "") or "").strip().lower()
+            if has_modifiers and code not in {"view", "select", "back", "guide", "start", "menu"}:
+                return None
             if code == "south":
                 return 10
             if code == "east":
                 return 27
             if code in {"view", "select", "back"}:
                 return ACTION_MENU_KEY
+            if code == "left_shoulder":
+                return ord("t") if self._player_in_vehicle() and not self._action_menu_state().get("open") else None
             if code == "west":
-                return ord("b") if self._action_menu_state().get("open") else None
+                return ord("b") if self._action_menu_state().get("open") else 127
             if code == "north":
-                return ord("r") if self._action_menu_state().get("open") else None
+                return ord("r") if self._action_menu_state().get("open") else ord("t")
         if kind == "axis" and str(physical.get("axis", "") or "").strip().lower() == "right_stick":
             return None
         try:
@@ -780,6 +785,8 @@ class InputSystem(System):
     def _input_movement_delta(self, physical):
         physical = self._normalize_input_event(physical)
         if not physical:
+            return None
+        if physical.get("modifiers"):
             return None
         if str(physical.get("kind", "") or "").strip().lower() == "axis":
             axis = str(physical.get("axis", "") or "").strip().lower()
@@ -856,6 +863,13 @@ class InputSystem(System):
     def _action_context(self, zoom_mode=None):
         mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower()
         return "overworld" if mode == "overworld" else "local"
+
+    def _action_for_physical_or_key(self, physical_input, key=None, *, zoom_mode=None):
+        context = self._action_context(zoom_mode)
+        action_id = action_for_input(self.control_bindings, physical_input, context=context)
+        if action_id or key is None:
+            return action_id
+        return action_for_key(self.control_bindings, key, context=context)
 
     def _action_menu_rows(self, zoom_mode=None):
         context = self._action_context(zoom_mode)
@@ -4884,7 +4898,7 @@ class InputSystem(System):
                 self._emit_turn_action("overworld_travel", dx=dx, dy=dy)
                 return
 
-            action_id = action_for_input(self.control_bindings, physical_input, context=self._action_context(zoom_mode))
+            action_id = self._action_for_physical_or_key(physical_input, key, zoom_mode=zoom_mode)
             if action_id and self._execute_action(action_id, key=key, zoom_mode=zoom_mode):
                 return
 
@@ -4907,7 +4921,7 @@ class InputSystem(System):
                 self._sync_local_drive_after_vehicle_command(brake_tapped=dy > 0)
             return
 
-        action_id = action_for_input(self.control_bindings, physical_input, context=self._action_context(zoom_mode))
+        action_id = self._action_for_physical_or_key(physical_input, key, zoom_mode=zoom_mode)
         if action_id and self._execute_action(action_id, key=key, zoom_mode=zoom_mode):
             return
 

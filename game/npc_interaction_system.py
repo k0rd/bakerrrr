@@ -455,6 +455,17 @@ class NPCInteractionSystem(System):
         "leave",
     }
     MISSTEP_TOPICS = ("weird", "pry", "insult")
+    RARE_FEATURE_TEACHING_CHANCE = 0.02
+    RARE_FEATURE_TEACHING_LINES = (
+        "No clean work from me. Strange thing, though: more than thirty original plants grow out here, and careful hands can crossbreed them into new seed.",
+        "No lead I would sell you. If you hunt, a field knife and a kill bag turn a carcass into real meat; a butcher makes it travel better.",
+        "Nothing live on my board. Road hubs matter, though. Coaches run out of truck stops, roadhouses, and relay posts when city transit runs out.",
+        "No quiet job today. If you own a place, check it in person sometimes; the counter can move pocket cash into that store reserve without a bank.",
+        "Nothing useful to chase. Long sleep can carry dreams now; they look real enough, but they cannot hurt the waking city.",
+        "No work I trust right now. Herbalists sell more than care; recipes can teach which local plants carry the useful chemistry.",
+        "No opening today. If a place has a contractor desk, owned businesses can sometimes be refit into a different kind of shop.",
+        "Nothing clean. But if you are driving at night, headlights are not just decoration; they throw real light.",
+    )
     CONVERSATION_SAFE_TOPICS = {
         "name",
         "job",
@@ -11138,7 +11149,30 @@ class NPCInteractionSystem(System):
             count=ask_count,
             outcome=outcome,
             context=context,
+            prompt_text=context.get("selected_player_prompt_text", ""),
         )
+
+    def _rare_feature_teaching_line(self, context, topic_id, ask_count):
+        topic_id = str(topic_id or "").strip().lower()
+        if topic_id not in {"opportunities", "side_job"}:
+            return ""
+        try:
+            ask_count = max(1, int(ask_count))
+        except (TypeError, ValueError):
+            ask_count = 1
+        if ask_count != 1:
+            return ""
+        npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
+        if npc_eid is None:
+            return ""
+        seed = getattr(self.sim, "seed", 0)
+        rng = random.Random(f"{seed}:rare-feature-teaching:{npc_eid}:{topic_id}:{ask_count}")
+        if rng.random() >= float(self.RARE_FEATURE_TEACHING_CHANCE):
+            return ""
+        lines = tuple(str(line).strip() for line in self.RARE_FEATURE_TEACHING_LINES if str(line).strip())
+        if not lines:
+            return ""
+        return str(lines[rng.randrange(len(lines))]).strip()
 
     def _dialogue_initiative_line(self, context, topic_id):
         topic_id = str(topic_id or "").strip().lower()
@@ -12043,6 +12077,7 @@ class NPCInteractionSystem(System):
             available.append({
                 "id": topic_id,
                 "label": label,
+                "prompt_text": label,
                 "player_line": _dialogue_topic_player_line(
                     topic_id,
                     seed=self.sim.seed,
@@ -12949,6 +12984,10 @@ class NPCInteractionSystem(System):
                         or self._cycled_dialogue_line(self._opportunity_risk_lines(context, quality=quality, include_final_operation=False), 1)
                     ),
                 ))
+            if not summary:
+                feature_line = self._rare_feature_teaching_line(context, topic_id, ask_count)
+                if feature_line:
+                    return {"npc_lines": [feature_line]}
             return {
                 "npc_lines": [
                     self._say(
@@ -13290,6 +13329,9 @@ class NPCInteractionSystem(System):
         if topic_id == "side_job":
             offer = context.get("side_job_offer") or self._ensure_side_job_offer(context)
             if not offer:
+                feature_line = self._rare_feature_teaching_line(context, topic_id, ask_count)
+                if feature_line:
+                    return {"npc_lines": [feature_line]}
                 return {"npc_lines": [self._say("side_job_none", context, topic_id=topic_id, count=ask_count)]}
             issuer = offer.get("issuer", {}) if isinstance(offer.get("issuer"), dict) else {}
             favor_target = str(issuer.get("organization_name", "")).strip() or str(issuer.get("npc_name", "")).strip() or "me"
@@ -14095,17 +14137,18 @@ class NPCInteractionSystem(System):
             return
         previous_topic_id = str(self._dialogue_memory(npc_eid).get("last_topic_id", "")).strip().lower()
         selected_row = self._current_dialog_selected_row()
+        topic_row = next(
+            (
+                row
+                for row in list(state.get("topics", ()) or ())
+                if isinstance(row, dict) and str(row.get("id", "")).strip().lower() == topic_id
+            ),
+            None,
+        )
         if topic_id in {"hire", "hire_manager", "hire_staff", "fire"} and not (
             isinstance(selected_row, dict) and str(selected_row.get("id", "")).strip().lower() == topic_id
         ):
-            selected_row = next(
-                (
-                    row
-                    for row in list(state.get("topics", ()) or ())
-                    if isinstance(row, dict) and str(row.get("id", "")).strip().lower() == topic_id
-                ),
-                selected_row,
-            )
+            selected_row = topic_row or selected_row
         previous_index = int(state.get("selected_index", 0))
         previous_topic_ids = {
             str(row.get("id", "")).strip().lower()
@@ -14118,13 +14161,20 @@ class NPCInteractionSystem(System):
             self._close_dialog()
             self.sim.log.add("The conversation slips away.", channel="social", priority="low")
             return
+        player_line_override = ""
+        selected_prompt_text = ""
+        if topic_id in self.MISSTEP_TOPICS and isinstance(topic_row, dict):
+            selected_row = topic_row
+        if isinstance(selected_row, dict) and str(selected_row.get("id", "")).strip().lower() == topic_id:
+            player_line_override = str(selected_row.get("player_line") or selected_row.get("label") or "").strip()
+            selected_prompt_text = str(selected_row.get("prompt_text") or selected_row.get("label") or "").strip()
+        if topic_id in self.MISSTEP_TOPICS and selected_prompt_text:
+            context = dict(context)
+            context["selected_player_prompt_text"] = selected_prompt_text
         response = self._resolve_dialog_topic(context, topic_id)
         response = self._apply_dialogue_initiative(context, topic_id, response)
         response = self._apply_dialogue_repeat_friction(context, topic_id, response)
         self._remember_revealed_social_lead_names(context, response)
-        player_line_override = ""
-        if isinstance(selected_row, dict) and str(selected_row.get("id", "")).strip().lower() == topic_id:
-            player_line_override = str(selected_row.get("player_line") or selected_row.get("label") or "").strip()
         self._append_dialogue_response(
             context,
             topic_id,

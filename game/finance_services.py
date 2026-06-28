@@ -212,6 +212,19 @@ class FinanceSystem(System):
     def _profile_for(self, eid):
         return self.sim.ecs.get(FinancialProfile).get(eid)
 
+    def _actor_owns_property(self, eid, prop):
+        if not isinstance(prop, dict):
+            return False
+        try:
+            if prop.get("owner_eid") is not None and int(prop.get("owner_eid")) == int(eid):
+                return True
+        except (TypeError, ValueError):
+            if prop.get("owner_eid") == eid:
+                return True
+        assets = self._assets_for(eid)
+        property_id = str(prop.get("id", "") or "").strip()
+        return bool(assets is not None and property_id and property_id in getattr(assets, "owned_property_ids", set()))
+
     def _profile_debt_amount(self, profile, debt_key="general"):
         if not profile:
             return 0
@@ -481,7 +494,7 @@ class FinanceSystem(System):
                 pos = self._position_for(eid)
                 owned_businesses = _player_owned_businesses_for_actor(self.sim, eid, pos=pos)
                 business_prop = owned_businesses[0] if owned_businesses else None
-            if not _property_supports_player_business(business_prop) or business_prop.get("owner_eid") != eid:
+            if not _property_supports_player_business(business_prop) or not self._actor_owns_property(eid, business_prop):
                 self.sim.emit(Event(
                     "banking_action_blocked",
                     eid=eid,
@@ -1068,8 +1081,20 @@ class FinanceSystem(System):
             self.sim.emit(Event(event_name, eid=eid, reason=blocked_reason))
             return
 
+        account_kind = str(event.data.get("account_kind", "") or "").strip().lower()
+        business_property_id = str(event.data.get("business_property_id", "") or "").strip()
+        local_business_transfer = False
+        if service == "banking" and account_kind == "business" and bool(event.data.get("local_business_transfer")):
+            business_prop = _resolve_property_record(self.sim, business_property_id) if business_property_id else prop
+            local_business_transfer = (
+                isinstance(business_prop, dict)
+                and str(business_prop.get("id", "") or "").strip() == str(prop.get("id", "") or "").strip()
+                and _property_supports_player_business(business_prop)
+                and self._actor_owns_property(eid, business_prop)
+            )
+
         services = set(_finance_services_for_property(prop))
-        if service not in services:
+        if service not in services and not local_business_transfer:
             self.sim.emit(Event(
                 event_name,
                 eid=eid,
@@ -1089,7 +1114,7 @@ class FinanceSystem(System):
                 y=pos.y,
                 z=pos.z,
             )
-            if not access.can_use_services:
+            if not access.can_use_services and not local_business_transfer:
                 self.sim.emit(Event(
                     event_name,
                     eid=eid,

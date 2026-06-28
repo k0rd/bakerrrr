@@ -4059,13 +4059,25 @@ class RenderSystem(System):
             rail_x = panel_x + panel_w - rail_w - 2
             body_w = max(12, rail_x - body_x - 2)
             rail_h = max(1, divider_y - body_top)
+            text_body_top = body_top
+            text_body_h = body_h
+
+            draw_casino_art = getattr(self.view, "draw_casino_table_art", None)
+            if callable(draw_casino_art) and body_h >= 5:
+                try:
+                    art_h = int(draw_casino_art(body_x, body_top, body_w, min(7, max(4, body_h // 2)), casino_ui) or 0)
+                except Exception:
+                    art_h = 0
+                if art_h > 0:
+                    text_body_top = min(divider_y - 1, body_top + art_h + 1)
+                    text_body_h = max(1, divider_y - text_body_top)
 
             wrapped_body = []
             for raw in list(casino_ui.get("body_lines", ()) or ()) or ["The floor is quiet."]:
                 wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
                 wrapped_body.extend(wrapped)
-            for idx, line in enumerate(wrapped_body[:body_h]):
-                self._draw_display_line(body_x, body_top + idx, _clip_display_line(line, body_w), body_w)
+            for idx, line in enumerate(wrapped_body[:text_body_h]):
+                self._draw_display_line(body_x, text_body_top + idx, _clip_display_line(line, body_w), body_w)
 
             self.view.draw_text(rail_x - 1, body_top, "|")
             for offset in range(1, rail_h):

@@ -222,9 +222,15 @@ class ItemActionRuntime:
                 instance_id=entry.get("instance_id"),
             )
             if current < 0:
+                metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                reserve_from_item = metadata.get("reserve_ammo")
+                try:
+                    reserve_from_item = max(0, int(reserve_from_item))
+                except (TypeError, ValueError):
+                    reserve_from_item = None
                 loadout.set_reserve_ammo_value(
                     weapon_id,
-                    int(_default_weapon_reserve_ammo(weapon)),
+                    int(reserve_from_item if reserve_from_item is not None else _default_weapon_reserve_ammo(weapon)),
                     instance_id=entry.get("instance_id"),
                 )
         loadout.equip(weapon_id)

@@ -51,7 +51,7 @@ from game.property_runtime import property_is_vehicle, vehicle_fuel_values
 from game.skills import seed_skill_profile
 from game.system_support.npc_behavior_runtime import behavior_profile_for_spawn
 from game.vehicle_motion import local_route_accessible_at, vehicle_top_speed
-from game.weapons import roll_weapon_instance
+from game.weapon_equipment_runtime import equip_linked_weapon_item
 
 
 RESIDENTIAL_ARCHETYPES = {
@@ -1454,28 +1454,16 @@ def _seed_chunk_social_bonds(sim, actor_contexts):
 
 
 def _equip_npc_weapon(sim, eid, rng, item_id):
-    inventory = sim.ecs.get(Inventory).get(eid)
-    loadout = sim.ecs.get(WeaponLoadout).get(eid)
-    item_def = ITEM_CATALOG.get(item_id, {})
-    weapon_id = str(item_def.get("weapon_id", "") or "").strip()
-    if not inventory or not loadout or not weapon_id:
-        return False
-    added, instance_id = inventory.add_item(
+    result = equip_linked_weapon_item(
+        sim,
+        eid,
         item_id=item_id,
-        quantity=1,
-        stack_max=int(max(1, item_def.get("stack_max", 1))),
-        instance_factory=sim.new_item_instance_id,
-        owner_eid=eid,
+        rng=rng,
         owner_tag="npc",
-        metadata={"ambient_spawn": True, "equipped": True},
+        metadata={"ambient_spawn": True},
+        source_kind="ambient_spawn",
     )
-    if not added:
-        return False
-    instance = roll_weapon_instance(rng, weapon_id, named_chance=0.08)
-    instance["inventory_instance_id"] = instance_id
-    loadout.add_weapon(weapon_id, instance=instance)
-    loadout.equip(weapon_id)
-    return True
+    return bool(result.get("ok"))
 
 
 def _equip_npc_armor(sim, eid, item_id):
