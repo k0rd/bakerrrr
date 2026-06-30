@@ -36,7 +36,9 @@ def active_contractor_record(sim, npc_eid, *, ally_eid=None, jobs=None):
             same_npc = key == npc_eid
         if not same_npc or not isinstance(rec, dict):
             continue
-        if int(rec.get("until", 0) or 0) <= tick:
+        if not bool(rec.get("indefinite", False)) and int(rec.get("until", 0) or 0) <= tick:
+            continue
+        if any(int(rec.get(key, 0) or 0) > 0 for key in ("fired_tick", "jailed_tick", "killed_tick", "ended_tick")):
             continue
         job = str(rec.get("job", "") or "").strip().lower()
         if job_keys is not None and job not in job_keys:

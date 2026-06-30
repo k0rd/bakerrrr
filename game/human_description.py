@@ -494,6 +494,7 @@ def build_human_description_profile(seed, *, eid=None, identity=None, personal_n
         "complexion_phrase": complexion_phrase,
         "hair_phrase": hair_phrase,
         "hair_compact": hair_compact,
+        "hair_style_phrase": hair_style_phrase,
         "hair_style_compact": hair_style_compact,
         "attire_phrase": attire_phrase,
         "attire_compact": attire_compact,
@@ -645,14 +646,7 @@ def human_conversation_presentation(seed, *, eid=None, identity=None, personal_n
     demeanor_tail = ""
     if rng.random() < 0.54:
         demeanor_tail = f", and the whole look feels {profile['demeanor_phrase']}"
-    elif rng.random() < 0.24:
-        demeanor_tail = f", with {profile['accessory_phrase']} finishing the look"
-    attire_bits = [
-        str(profile.get("attire_phrase", "")).strip(),
-        str(profile.get("palette_phrase", "")).strip(),
-        str(profile.get("condition_phrase", "")).strip(),
-    ]
-    attire_bits = [bit for bit in attire_bits if bit]
+    grooming_sentence = str(profile.get("grooming_sentence", "") or "").strip()
 
     segments = [
         _conversation_segment(f"You see a {identity_noun} here. "),
@@ -674,17 +668,12 @@ def human_conversation_presentation(seed, *, eid=None, identity=None, personal_n
         if eye_phrase:
             segments.append(_conversation_segment(" and "))
         segments.append(_conversation_segment(complexion_phrase, color=_complexion_descriptor_color_key(profile)))
-    segments.append(_conversation_segment(" stand out against "))
-    for idx, bit in enumerate(attire_bits):
-        bit_color = str(profile.get("render_color_key", "") or "").strip() or None
-        if idx == len(attire_bits) - 1:
-            bit_color = None if bit == str(profile.get("condition_phrase", "")).strip() else bit_color
-        if idx > 0:
-            segments.append(_conversation_segment(", "))
-        segments.append(_conversation_segment(bit, color=bit_color))
+    segments.append(_conversation_segment(" stand out"))
     if demeanor_tail:
         segments.append(_conversation_segment(demeanor_tail))
     segments.append(_conversation_segment("."))
+    if grooming_sentence:
+        segments.append(_conversation_segment(f" {grooming_sentence}"))
     plain = _conversation_text(segments).strip()
     return {
         "text": plain,
@@ -726,8 +715,6 @@ def human_look_description_clause(seed, *, eid=None, identity=None, personal_nam
         return ""
     bits = (
         profile["stature_compact"],
-        profile["attire_compact"],
-        profile.get("palette_compact", ""),
         profile["hair_compact"],
         profile["standout_compact"],
         profile["demeanor_compact"],

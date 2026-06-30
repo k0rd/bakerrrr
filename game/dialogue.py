@@ -22,6 +22,7 @@ TOPIC_ORDER = (
     "object_meaning",
     "workplace",
     "organization",
+    "cult",
     "supervisor",
     "coworkers",
     "people",
@@ -94,6 +95,7 @@ TOPIC_ORDER = (
     "backup_goto_wait",
     "backup_wait_return",
     "backup_kill",
+    "bodyguard_stand_down",
     "objective",
     "angle",
     "risk",
@@ -192,6 +194,11 @@ TOPIC_DEFS = {
         "label": "Who do you work for?",
         "root": False,
         "unlocks": ("supervisor", "coworkers", "people"),
+    },
+    "cult": {
+        "label": "What's that circle about?",
+        "root": True,
+        "unlocks": (),
     },
     "supervisor": {
         "label": "Who runs things there?",
@@ -727,6 +734,11 @@ TOPIC_DEFS = {
     "fence": {
         "label": "I have some things I need to move quietly.",
         "root": False,
+        "unlocks": (),
+    },
+    "bodyguard_stand_down": {
+        "label": "Stand down from this detail.",
+        "root": True,
         "unlocks": (),
     },
 }
@@ -1955,6 +1967,12 @@ PLAYER_TOPIC_BANKS = {
             ),
         },
     ),
+    "bodyguard_stand_down": (
+        "I'm standing you down from this detail.",
+        "Clear your post. You're released from this assignment.",
+        "You're off this protection detail. Stand down clean.",
+        "Close your post and step off the contract.",
+    ),
 }
 
 
@@ -1994,6 +2012,7 @@ PLAYER_CONNECTIVE_SKIP_TOPICS = {
     "backup_goto_wait",
     "backup_wait_return",
     "backup_kill",
+    "bodyguard_stand_down",
 }
 
 
@@ -3325,6 +3344,32 @@ DIALOGUE_BANKS = {
         "Nobody organized enough to call it a proper outfit.",
         "No letterhead. No patch. Just people asking for things.",
         "If there is an outfit, nobody gave me the shirt.",
+    ),
+    "cult_member": (
+        "{cult_name} asks for {cult_devotion}. Dress is {cult_uniform}. Meetings are not for every passerby.",
+        "The circle keeps to {cult_devotion}. If you wear {cult_uniform}, they expect you to mean it.",
+        "{cult_name} is not a shop sign. It is people, dress, meetings, and consequences.",
+        "You can call it strange if you want. Around us it means {cult_devotion}, and the clothes say who is inside.",
+        "If you are looking at the colors, you are seeing the easy part. The hard part is keeping the code.",
+    ),
+    "cult_official": (
+        "{cult_name} keeps {cult_devotion}. I can explain membership, donations, clothing, and when the circle meets.",
+        "We do not drag anyone in. We count people who choose the code and keep the dress.",
+        "Membership has a shape: {cult_uniform}, {cult_devotion}, and no pretending betrayal is just weather.",
+        "I speak for the circle here. The leader is not a counter service.",
+        "If you want the door opened, start with the code and the clothing. The rest comes slower.",
+    ),
+    "cult_shunned": (
+        "{cult_name} is not open to you.",
+        "The circle already carried your name. No business.",
+        "You are outside the door now. That is the whole answer.",
+        "No sale, no meeting, no audience. Walk clear.",
+    ),
+    "cult_unknown": (
+        "People gather. People dress alike. That is all I am saying.",
+        "If there is a circle here, it has not opened itself to me.",
+        "I see the colors too. I do not know what they mean.",
+        "Ask someone wearing the mark if they want to be asked.",
     ),
     "supervisor": (
         "{supervisor_summary}",
@@ -5016,6 +5061,10 @@ def topic_label(topic_id, context=None):
         if context.get("workplace_here"):
             return "Who's the outfit behind this place?"
         return f"Who's the outfit behind {context['workplace_name']}?"
+    if topic_id == "cult" and context.get("cult_name"):
+        return f"What's {context['cult_name']} asking from people?"
+    if topic_id == "cult":
+        return "What's that circle about?"
     if topic_id == "supervisor" and context.get("workplace_here"):
         if str(context.get("organization_role", "")).strip().lower() == "owner":
             return "Anybody above you here?"

@@ -3257,6 +3257,22 @@
     "legal_status": "legal",
     "effects": []
   },
+  "orange_jumpsuit": {
+    "name": "Orange Jumpsuit",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "justice_issue",
+      "legal"
+    ],
+    "appearance_slots": [
+      "full_body"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
   "boots": {
     "name": "Boots",
     "glyph": "[",
@@ -3327,7 +3343,7 @@
       "legal"
     ],
     "appearance_slots": [
-      "hat"
+      "earrings"
     ],
     "legal_status": "legal",
     "effects": []
@@ -3602,6 +3618,24 @@
       "role_id": "worker",
       "strength": 0.65
     }
+  },
+  "security_earpiece": {
+    "name": "Security Earpiece",
+    "glyph": "'",
+    "stack_max": 1,
+    "tags": [
+      "comms",
+      "communication",
+      "cosmetic",
+      "security",
+      "wearable",
+      "restricted"
+    ],
+    "appearance_slots": [
+      "earrings"
+    ],
+    "legal_status": "restricted",
+    "effects": []
   },
   "patrol_rain_shell": {
     "name": "Patrol Rain Shell",

@@ -4,7 +4,9 @@ from engine.events import Event
 from engine.systems import System
 from game.appearance_loadout import apply_appearance_service
 from engine.underground import UNDERGROUND_ACCESS_SERVICE
+from game.bodyguard_runtime import BODYGUARD_SERVICE_ID, fire_bodyguard_contract, hire_bodyguard_contract
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, PropertyKnowledge, StatusEffects, VehicleState, Vitality
+from game.cult_runtime import CULT_SERVICE_IDS, apply_cult_service
 from game.items import ITEM_CATALOG, item_display_name
 from game.herbal_chemistry_runtime import craft_herbal_medicine, purchase_herbal_recipe
 from game.hunting_runtime import convert_meat_stack
@@ -724,6 +726,21 @@ class SiteServiceSystem(System):
             service,
             current_tick=getattr(self.sim, "tick", 0),
         )
+        try:
+            from game.cult_runtime import cult_property_association, cult_service_cost_multiplier
+            cult_assoc = cult_property_association(self.sim, prop)
+            cult_mult = cult_service_cost_multiplier(self.sim, prop, eid)
+        except Exception:
+            cult_assoc = {}
+            cult_mult = 1.0
+        if cult_assoc and abs(float(cult_mult) - 1.0) > 0.001:
+            cult = cult_assoc.get("cult") if isinstance(cult_assoc, dict) else None
+            cult_name = str((cult or {}).get("name", "the circle") or "the circle").strip()
+            bundle = _merge_practice_bundle(
+                bundle,
+                extra_modifiers={"service_cost_mult": float(cult_mult)},
+                extra_note=f"{cult_name} charges outsiders more at this counter",
+            )
         posture = effective_org_access_posture(
             self.sim,
             eid,
@@ -2161,6 +2178,12 @@ class SiteServiceSystem(System):
         if service == "business_remodel":
             self._apply_business_remodel_service(eid, prop, request=request)
             return True
+        if service == BODYGUARD_SERVICE_ID:
+            self._apply_bodyguard_contract_service(eid, prop, request=request)
+            return True
+        if service in CULT_SERVICE_IDS:
+            self._apply_cult_service(eid, prop, service, request=request)
+            return True
         if service == "appearance_style":
             self._apply_appearance_style_service(eid, prop, request=request)
             return True
@@ -2180,6 +2203,97 @@ class SiteServiceSystem(System):
             self._apply_vehicle_fetch(eid, prop, pos)
             return True
         return False
+
+    def _apply_bodyguard_contract_service(self, eid, prop, request=None):
+        request = request if isinstance(request, dict) else {}
+        action = str(request.get("bodyguard_action", "hire") or "hire").strip().lower()
+        if action == "fire":
+            result = fire_bodyguard_contract(
+                self.sim,
+                eid,
+                team_id=request.get("team_id"),
+                guard_eid=request.get("guard_eid"),
+                protection_channel_id=request.get("protection_channel_id"),
+            )
+            if not result.get("ok"):
+                self.sim.emit(Event(
+                    "site_service_blocked",
+                    eid=eid,
+                    property_id=prop["id"],
+                    property_name=prop.get("name", prop["id"]),
+                    service=BODYGUARD_SERVICE_ID,
+                    reason=result.get("reason", "invalid_target"),
+                ))
+                return
+            self.sim.emit(Event(
+                "site_service_used",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=BODYGUARD_SERVICE_ID,
+                bodyguard_action="fire",
+                guard_count=int(result.get("guard_count", 0) or 0),
+                guard_eids=tuple(result.get("guard_eids", ()) or ()),
+                team_id=str(request.get("team_id", "") or "").strip(),
+                protection_channel_id=str(result.get("protection_channel_id", request.get("protection_channel_id", "")) or "").strip(),
+            ))
+            return
+
+        result = hire_bodyguard_contract(
+            self.sim,
+            eid,
+            prop,
+            tier=request.get("tier", "solo"),
+            assignment_kind=request.get("assignment_kind", "principal"),
+            principal_eid=request.get("principal_eid", eid),
+            property_id=request.get("target_property_id") or request.get("property_target_id"),
+        )
+        if not result.get("ok"):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=BODYGUARD_SERVICE_ID,
+                reason=result.get("reason", "blocked"),
+                cost=int(result.get("cost", 0) or 0),
+                credits=int(result.get("credits", 0) or 0),
+                active_count=int(result.get("active_count", 0) or 0),
+                available_slots=int(result.get("available_slots", 0) or 0),
+                max_slots=int(result.get("max_slots", 0) or 0),
+            ))
+            return
+        payload = {
+            key: value
+            for key, value in result.items()
+            if key not in {"ok", "reason"}
+        }
+        payload["property_id"] = prop["id"]
+        payload["property_name"] = prop.get("name", prop["id"])
+        self.sim.emit(Event("site_service_used", **payload))
+
+    def _apply_cult_service(self, eid, prop, service, request=None):
+        result = apply_cult_service(self.sim, eid, prop, service, request=request)
+        base = {
+            "eid": eid,
+            "property_id": prop["id"],
+            "property_name": prop.get("name", prop["id"]),
+            "service": service,
+            "cult_id": str(result.get("cult_id", "") or "").strip(),
+            "cult_name": str(result.get("cult_name", "") or "").strip(),
+            "lines": tuple(result.get("lines", ()) or ()),
+            "cost": int(result.get("cost", 0) or 0),
+            "credits": int(result.get("credits", 0) or 0),
+            "credits_spent": int(result.get("credits_spent", 0) or 0),
+        }
+        if not result.get("ok"):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                **base,
+                reason=str(result.get("reason", "blocked") or "blocked").strip().lower(),
+            ))
+            return
+        self.sim.emit(Event("site_service_used", **base))
 
     def _apply_service_job_board(self, eid, prop, service, request=None):
         request = request if isinstance(request, dict) else {}

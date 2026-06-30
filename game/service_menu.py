@@ -1,6 +1,14 @@
 from engine.events import Event
 from engine.systems import System
 from game.appearance_loadout import STYLE_SERVICE_OPTIONS, style_service_kinds_for_property
+from game.bodyguard_runtime import (
+    BODYGUARD_MAX_CHANNEL_GUARDS,
+    BODYGUARD_SERVICE_ID,
+    BODYGUARD_TIER_PROFILES,
+    active_bodyguard_contracts,
+    bodyguard_channel_summary,
+)
+from game.cult_runtime import CULT_SERVICE_IDS, cult_property_association, cult_services_for_property
 from game.components import FinancialProfile, Inventory, NPCNeeds, NPCSettlement, NPCRoutine, Occupation, PlayerAssets, Position
 from game.casino_ui_runtime import (
     CASINO_FLOOR_ARCHETYPES,
@@ -3045,7 +3053,9 @@ class ServiceMenuSystem(System):
             y=pos.y,
             z=pos.z,
         )
-        if not access.can_use_services and not dispatch_ok and not owner_business_ok:
+        cult_assoc = cult_property_association(self.sim, prop)
+        cult_contact_ok = bool(cult_assoc.get("always_contact"))
+        if not access.can_use_services and not dispatch_ok and not owner_business_ok and not cult_contact_ok:
             return [], None
 
         options = []
@@ -3074,6 +3084,8 @@ class ServiceMenuSystem(System):
 
         for site_service in _site_services_for_property(prop) if access.can_use_services else ():
             options.append({"id": site_service, "label": _service_menu_option_label(site_service)})
+        for cult_service in cult_services_for_property(self.sim, prop, actor_eid=eid) if (access.can_use_services or cult_contact_ok) else ():
+            options.append({"id": cult_service, "label": _service_menu_option_label(cult_service)})
 
         if dispatch_ok:
             options.append({"id": "justice_dispatch", "label": _service_menu_option_label("justice_dispatch")})
@@ -3308,6 +3320,86 @@ class ServiceMenuSystem(System):
             "casino_session": None,
         })
 
+    def _open_bodyguard_contract_menu(self, prop):
+        state = self._dialog_ui_state()
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        prop_name = str(prop.get("name", prop.get("id", "Contractor Desk"))).strip() or "Contractor Desk"
+        topics = [{"id": "service_menu:root", "label": "Back"}]
+        targets = [("principal", str(self.player_eid), "Protect me")]
+        pos = self._position_for(self.player_eid)
+        for owned_prop in player_owned_businesses_for_actor(self.sim, self.player_eid, pos=pos):
+            owned_id = str(owned_prop.get("id", "") or "").strip()
+            if not owned_id:
+                continue
+            label = str(owned_prop.get("metadata", {}).get("business_name", owned_prop.get("name", owned_id))).strip() or owned_id
+            targets.append(("property", owned_id, f"Protect {label}"))
+
+        for target_kind, target_id, target_label in targets:
+            summary_kwargs = {"assignment_kind": target_kind}
+            if target_kind == "principal":
+                summary_kwargs["principal_eid"] = self.player_eid
+            else:
+                summary_kwargs["property_id"] = target_id
+            summary = bodyguard_channel_summary(self.sim, **summary_kwargs)
+            active_count = int(summary.get("active_count", 0) or 0)
+            available_slots = int(summary.get("available_slots", 0) or 0)
+            for tier, profile in BODYGUARD_TIER_PROFILES.items():
+                label = str(profile.get("label", tier)).strip().title()
+                count = int(profile.get("count", 1) or 1)
+                cost = int(profile.get("cost", 0) or 0)
+                detail_note = f"detail {active_count}/{BODYGUARD_MAX_CHANNEL_GUARDS}"
+                if active_count:
+                    detail_note = f"add to detail {active_count}/{BODYGUARD_MAX_CHANNEL_GUARDS}"
+                if count > available_slots:
+                    detail_note = f"detail full {active_count}/{BODYGUARD_MAX_CHANNEL_GUARDS}"
+                topics.append({
+                    "id": f"{BODYGUARD_SERVICE_ID}:hire|{tier}|{target_kind}|{target_id}",
+                    "label": f"{target_label}: {label} ({count} guard{'s' if count != 1 else ''}, {_credit_amount_label(cost)}, {detail_note})",
+                })
+
+        active = active_bodyguard_contracts(self.sim, hired_by_eid=self.player_eid)
+        seen_channels = set()
+        for _guard_eid, rec in active:
+            channel_id = str(rec.get("protection_channel_id", "") or "").strip()
+            if not channel_id or channel_id in seen_channels:
+                continue
+            seen_channels.add(channel_id)
+            if str(rec.get("assignment_kind", "")).strip().lower() == "property":
+                target_prop = self.sim.properties.get(rec.get("property_id"))
+                target_name = str((target_prop or {}).get("metadata", {}).get("business_name", (target_prop or {}).get("name", "property"))).strip() or "property"
+            else:
+                target_name = "you"
+            count = len(active_bodyguard_contracts(self.sim, hired_by_eid=self.player_eid, protection_channel_id=channel_id))
+            topics.append({
+                "id": f"{BODYGUARD_SERVICE_ID}:fire_channel|{channel_id}",
+                "label": f"Release detail guarding {target_name} ({count} guard{'s' if count != 1 else ''})",
+            })
+
+        transcript = [
+            f"{prop_name} posts protective contractors.",
+            "They group by protected person or place, hold ringed exterior lines, and choose their own force if a threat presses.",
+        ]
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": prop.get("id"),
+            "title": f"Bodyguards: {prop_name}",
+            "subtitle": "One-time fee | independent force",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Add guards to a protected detail or release the whole detail.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": BODYGUARD_SERVICE_ID,
+            "casino_session": None,
+        })
+
     def _close_service_menu(self):
         self._clear_pending_service_result()
         self._clear_casino_session()
@@ -3489,6 +3581,36 @@ class ServiceMenuSystem(System):
                 services_text = ", ".join(site_services + finance_services)
                 lines.append(f"Service profile: {services_text}.")
             return f"Business Refit: {prop_name}", lines
+        if service == BODYGUARD_SERVICE_ID:
+            action = str(event.data.get("bodyguard_action", "hire") or "hire").strip().lower()
+            if action == "fire":
+                count = int(event.data.get("guard_count", 0) or 0)
+                lines = [
+                    f"Released {count} bodyguard{'s' if count != 1 else ''}.",
+                    "They are no longer under contract and will not hold the perimeter for you.",
+                ]
+                return f"Bodyguards: {prop_name}", lines
+            tier_label = str(event.data.get("tier_label", "bodyguard detail")).strip() or "bodyguard detail"
+            target_name = str(event.data.get("target_name", "the assignment")).strip() or "the assignment"
+            count = int(event.data.get("guard_count", 0) or 0)
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            active_count = int(event.data.get("active_guard_count", count) or count)
+            lines = [
+                f"{prop_name} assigns a {tier_label} to {target_name}.",
+                f"{count} guard{'s' if count != 1 else ''} contracted for {_credit_amount_label(credits_spent)}; detail strength is now {active_count}/{BODYGUARD_MAX_CHANNEL_GUARDS}.",
+                "They sort into close, outer, and perimeter rings, warn from the close line, and answer shared threat calls.",
+            ]
+            return f"Bodyguards: {prop_name}", lines
+        if service in CULT_SERVICE_IDS:
+            lines = [
+                str(line).strip()
+                for line in tuple(event.data.get("lines", ()) or event.data.get("result_lines", ()) or ())
+                if str(line).strip()
+            ]
+            if not lines:
+                lines = [f"{prop_name} handles the circle request."]
+            cult_name = str(event.data.get("cult_name", "") or "").strip()
+            return f"{_site_service_label(service).title()}: {cult_name or prop_name}", lines
         if service == "vending":
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             credits_spent = int(event.data.get("credits_spent", 0))
@@ -4046,6 +4168,56 @@ class ServiceMenuSystem(System):
                 f"{target_name} costs {_credit_amount_label(cost)} to refit as {target_label}.",
                 f"You only have {_credit_amount_label(credits)} available.",
             ]
+        if service == BODYGUARD_SERVICE_ID:
+            if reason == "no_credits":
+                cost = int(event.data.get("cost", 0) or 0)
+                credits = int(event.data.get("credits", 0) or 0)
+                return f"Bodyguards: {prop_name}", [
+                    f"That protective contract costs {_credit_amount_label(cost)}.",
+                    f"You only have {_credit_amount_label(credits)} on hand.",
+                ]
+            if reason in {"invalid_target", "invalid_assignment"}:
+                return f"Bodyguards: {prop_name}", [
+                    "That protective assignment is no longer valid.",
+                    "Choose yourself or a current owned business.",
+                ]
+            if reason == "invalid_tier":
+                return f"Bodyguards: {prop_name}", ["That bodyguard tier is not posted anymore."]
+            if reason == "assignment_full":
+                active = int(event.data.get("active_count", 0) or 0)
+                maximum = int(event.data.get("max_slots", BODYGUARD_MAX_CHANNEL_GUARDS) or BODYGUARD_MAX_CHANNEL_GUARDS)
+                return f"Bodyguards: {prop_name}", [
+                    f"That protected detail is already full at {active}/{maximum} guards.",
+                    "Release guards from the detail before adding more.",
+                ]
+        if service in CULT_SERVICE_IDS:
+            cult_name = str(event.data.get("cult_name", "") or "").strip()
+            title_name = cult_name or prop_name
+            event_lines = [
+                str(line).strip()
+                for line in tuple(event.data.get("lines", ()) or ())
+                if str(line).strip()
+            ]
+            if event_lines:
+                return f"{_site_service_label(service).title()}: {title_name}", event_lines
+            if reason == "shunned":
+                return f"{_site_service_label(service).title()}: {title_name}", [
+                    "The contact will not open business with you.",
+                    "This is circle business, not law business.",
+                ]
+            if reason == "not_member":
+                return f"{_site_service_label(service).title()}: {title_name}", [
+                    "That part is for members only.",
+                    "Ask the contact what membership would mean first.",
+                ]
+            if reason == "no_credits":
+                cost = int(event.data.get("cost", 0) or 0)
+                credits = int(event.data.get("credits", 0) or 0)
+                return f"{_site_service_label(service).title()}: {title_name}", [
+                    f"The ask is {_credit_amount_label(cost)}.",
+                    f"You only have {_credit_amount_label(credits)} on hand.",
+                ]
+            return f"{_site_service_label(service).title()}: {title_name}", ["That circle request is not available right now."]
         if reason == "no_credits" and service == "vending":
             cost = int(event.data.get("cost", 0))
             credits = int(event.data.get("credits", 0))
@@ -4671,6 +4843,70 @@ class ServiceMenuSystem(System):
         if option_id == "trade_sell":
             self._close_service_menu()
             self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="sell", property_id=property_id))
+            return
+        if option_id == BODYGUARD_SERVICE_ID:
+            if isinstance(prop, dict):
+                self._open_bodyguard_contract_menu(prop)
+            else:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+            return
+        if option_id.startswith(f"{BODYGUARD_SERVICE_ID}:"):
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            prop_name = prop.get("name", property_id)
+            payload = {
+                "eid": self.player_eid,
+                "property_id": property_id,
+                "service": BODYGUARD_SERVICE_ID,
+                "property_name": prop_name,
+            }
+            detail = option_id.partition(":")[2]
+            if detail.startswith("hire|"):
+                parts = detail.split("|")
+                if len(parts) != 4:
+                    self._present_service_result("Bodyguards", ["That bodyguard posting is no longer valid."])
+                    return
+                _verb, tier, target_kind, target_id = parts
+                payload.update({
+                    "bodyguard_action": "hire",
+                    "tier": tier,
+                    "assignment_kind": target_kind,
+                })
+                if target_kind == "principal":
+                    payload["principal_eid"] = self.player_eid
+                else:
+                    payload["target_property_id"] = target_id
+            elif detail.startswith("fire|"):
+                team_id = detail.partition("|")[2]
+                if not team_id:
+                    self._present_service_result("Bodyguards", ["That bodyguard team is no longer valid."])
+                    return
+                payload.update({
+                    "bodyguard_action": "fire",
+                    "team_id": team_id,
+                })
+            elif detail.startswith("fire_channel|"):
+                channel_id = detail.partition("|")[2]
+                if not channel_id:
+                    self._present_service_result("Bodyguards", ["That bodyguard detail is no longer valid."])
+                    return
+                payload.update({
+                    "bodyguard_action": "fire",
+                    "protection_channel_id": channel_id,
+                })
+            else:
+                self._present_service_result("Bodyguards", ["That bodyguard option is no longer valid."])
+                return
+            self._begin_pending_service_result(
+                channel="site",
+                property_id=property_id,
+                property_name=prop_name,
+                service=BODYGUARD_SERVICE_ID,
+            )
+            self.sim.emit(Event("site_service_request", **payload))
             return
         if option_id in CASINO_GAME_SERVICE_IDS:
             if isinstance(prop, dict):

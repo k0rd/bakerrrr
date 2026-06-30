@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from game.components import AI, Position
 from game.components import PlayerAssets
+from game.cult_runtime import cult_local_situation_rows
 from game.economy import strongest_local_trade_pressure_for_property
 from game.incident_runtime import incident_record
 from game.meaningful_objects_runtime import meaningful_object_fixture_cue
@@ -1128,6 +1129,11 @@ def local_situation_rows(sim, player_eid=None, *, limit=4, current_chunk_only=Tr
         rows.append(row)
 
     for row in _reported_incident_hold_rows(sim, player_pos=player_pos, player_eid=player_eid):
+        if current_chunk_only and not _same_chunk(sim, player_pos, row.get("anchor")):
+            continue
+        rows.append(row)
+
+    for row in cult_local_situation_rows(sim, player_pos=player_pos, player_eid=player_eid):
         if current_chunk_only and not _same_chunk(sim, player_pos, row.get("anchor")):
             continue
         rows.append(row)

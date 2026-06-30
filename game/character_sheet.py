@@ -129,6 +129,17 @@ def _sheet_species_label(identity):
     return species.replace("_", " ").title()
 
 
+def _run_nonce_text(sim):
+    traits = getattr(sim, "world_traits", {})
+    start = traits.get("playtest_start", {}) if isinstance(traits, dict) else {}
+    if not isinstance(start, dict):
+        return "-"
+    value = start.get("nonce")
+    if value is None or str(value).strip() == "":
+        return "-"
+    return str(value).strip()
+
+
 def _sheet_biological_sex_label(identity):
     if identity is None:
         return "unknown"
@@ -239,7 +250,7 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     summary_lines.extend([
         "",
         "RUN",
-        f"Tick {int(getattr(sim, 'tick', 0) or 0)} | Seed {getattr(sim, 'seed', '?')}",
+        f"Tick {int(getattr(sim, 'tick', 0) or 0)} | Seed {getattr(sim, 'seed', '?')} | Nonce {_run_nonce_text(sim)}",
         f"{mode_text} | {floor_text} | Chunk {chunk_text}",
         f"Tile {tile_text}",
         f"Insurance {policy_text} | Rumors {rumor_active} active {rumor_shares}/t",

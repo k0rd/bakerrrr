@@ -41,6 +41,7 @@ from game.components import (
     WildlifeBehavior,
 )
 from game.economy import chunk_economy_profile, pick_career_for_workplace
+from game.appearance_loadout import seed_npc_appearance_from_description
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot
 from game.human_identity import seed_human_identity_profile
 from game.npc_names import generate_human_personal_name, human_descriptor
@@ -2760,6 +2761,7 @@ def _spawn_human(
         economy_profile=economy_profile if isinstance(economy_profile, dict) else chunk_economy_profile(sim),
     )
     _seed_npc_inventory(sim, eid, rng, role, workplace_prop=workplace_prop, home_prop=home_prop)
+    seed_npc_appearance_from_description(sim, eid, seed_token=actor_seed_token)
     _seed_npc_gear(sim, eid, rng, role, workplace_prop=workplace_prop, home_prop=home_prop)
     return eid
 

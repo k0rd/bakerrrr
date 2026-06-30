@@ -406,6 +406,8 @@ def build_debug_overlay(
     active_z = int(player_pos.z) if player_pos else 0
     tick = int(getattr(sim, "tick", 0))
     seed = getattr(sim, "seed", "?")
+    playtest_start = getattr(sim, "world_traits", {}).get("playtest_start", {}) if isinstance(getattr(sim, "world_traits", {}), dict) else {}
+    nonce = playtest_start.get("nonce", "-") if isinstance(playtest_start, dict) else "-"
 
     current_lighting = lighting_state(sim)
     if int(current_lighting.get("tick", -1)) != tick:
@@ -480,7 +482,7 @@ def build_debug_overlay(
     lines = [
         _section_header_line("Runtime", color="player"),
         (
-            f"Tick {tick} | Seed {seed} | Zoom {zoom_mode} | "
+            f"Tick {tick} | Seed {seed} | Nonce {nonce} | Zoom {zoom_mode} | "
             f"Layer {'overworld' if zoom_mode == 'overworld' else active_z}"
         ),
     ]

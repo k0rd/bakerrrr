@@ -123,9 +123,19 @@ from game.human_identity import (
     player_address_term,
     pronoun_format_slots,
 )
-from game.human_description import (
-    human_conversation_presentation,
-    human_render_color_key,
+from game.human_description import human_render_color_key
+from game.appearance_loadout import (
+    appearance_color_key,
+    human_live_conversation_presentation,
+)
+from game.cult_runtime import (
+    actor_cult_ids,
+    actor_is_cult_member,
+    actor_is_shunned_by_cult,
+    cult_for_property,
+    ensure_cult_state,
+    mark_cult_known,
+    player_knows_cult,
 )
 from game.outfit_impression import (
     apply_visible_outfit_social_offset,
@@ -282,6 +292,7 @@ from game.dialogue import (
     topic_label as _dialogue_topic_label,
     topic_unlocks as _dialogue_topic_unlocks,
 )
+from game.bodyguard_runtime import BODYGUARD_JOB, fire_bodyguard_contract
 from game.dialogue_runtime import (
     _active_contractor_record,
     _career_label,
@@ -450,6 +461,8 @@ class NPCInteractionSystem(System):
         "where_place",
         "hire",
         "fire",
+        "cult",
+        "bodyguard_stand_down",
         "trade",
         "store_buy_policy",
         "street_appraise",
@@ -508,6 +521,7 @@ class NPCInteractionSystem(System):
         "service_vehicle_sales",
         "service_vehicle_fetch",
         "service_gaming",
+        "bodyguard_stand_down",
         "trade",
         "bye",
         "leave",
@@ -520,6 +534,7 @@ class NPCInteractionSystem(System):
         "security",
         "owner",
         "organization",
+        "cult",
         "supervisor",
         "people",
         "social_incident",
@@ -577,6 +592,8 @@ class NPCInteractionSystem(System):
         "backup_goto_wait",
         "backup_wait_return",
         "backup_kill",
+        "bodyguard_stand_down",
+        "cult",
         "street_buy",
         "side_job",
         "side_job_accept",
@@ -3060,6 +3077,76 @@ class NPCInteractionSystem(System):
             context["has_local_detail"] = bool(detail)
 
         return context
+
+    def _cult_dialogue_context(self, npc_eid, *, current_prop=None):
+        state = ensure_cult_state(self.sim)
+        cult = None
+        role = ""
+        title = ""
+        for cult_id in actor_cult_ids(self.sim, npc_eid):
+            candidate = state.get("cults", {}).get(str(cult_id))
+            if not isinstance(candidate, dict) or candidate.get("disbanded"):
+                continue
+            row = dict(candidate.get("members", {}).get(str(npc_eid), {}) or {})
+            if not row.get("active", True):
+                continue
+            cult = candidate
+            role = str(row.get("role", "member") or "member").strip().lower()
+            title = str(row.get("title", role) or role).strip()
+            break
+        if cult is None and isinstance(current_prop, dict):
+            candidate = cult_for_property(self.sim, current_prop)
+            if isinstance(candidate, dict) and not candidate.get("disbanded") and actor_is_cult_member(self.sim, npc_eid, candidate.get("cult_id")):
+                cult = candidate
+                row = dict(candidate.get("members", {}).get(str(npc_eid), {}) or {})
+                role = str(row.get("role", "member") or "member").strip().lower()
+                title = str(row.get("title", role) or role).strip()
+        if not isinstance(cult, dict):
+            return {"cult_available": False}
+        devotion = dict(cult.get("devotion", {}) or {})
+        uniform = dict(cult.get("uniform", {}) or {})
+        cult_id = str(cult.get("cult_id", "") or "").strip()
+        return {
+            "cult_available": True,
+            "cult_id": cult_id,
+            "cult_name": str(cult.get("name", "the circle") or "the circle").strip(),
+            "cult_role": role or "member",
+            "cult_title": title or role or "member",
+            "cult_official": role in {"leader", "official"},
+            "cult_member": actor_is_cult_member(self.sim, npc_eid, cult_id),
+            "cult_player_member": actor_is_cult_member(self.sim, self.player_eid, cult_id),
+            "cult_player_shunned": actor_is_shunned_by_cult(self.sim, self.player_eid, cult_id),
+            "cult_known": player_knows_cult(self.sim, self.player_eid, cult),
+            "cult_devotion": str(devotion.get("public_line", devotion.get("label", "the circle's code")) or "the circle's code").strip(),
+            "cult_uniform": str(uniform.get("label", "matching clothes") or "matching clothes").strip(),
+        }
+
+    def _resolve_cult_dialogue_topic(self, context, *, ask_count=1):
+        cult_id = str(context.get("cult_id", "") or "").strip()
+        if cult_id:
+            mark_cult_known(self.sim, self.player_eid, cult_id, source="dialogue")
+        if context.get("cult_player_shunned"):
+            bank_id = "cult_shunned"
+        elif context.get("cult_official"):
+            bank_id = "cult_official"
+        elif context.get("cult_member"):
+            bank_id = "cult_member"
+        else:
+            bank_id = "cult_unknown"
+        return {
+            "npc_lines": [
+                self._say(
+                    bank_id,
+                    context,
+                    topic_id="cult",
+                    count=ask_count,
+                    cult_name=context.get("cult_name", "the circle"),
+                    cult_devotion=context.get("cult_devotion", "the code"),
+                    cult_uniform=context.get("cult_uniform", "matching clothes"),
+                    cult_title=context.get("cult_title", "member"),
+                )
+            ]
+        }
 
     def _contract_kill_for_npc(self, npc_eid):
         """Return the active contract_kill opportunity this NPC is the giver for, or None."""
@@ -5924,6 +6011,21 @@ class NPCInteractionSystem(System):
         )
         return rec if isinstance(rec, dict) else None
 
+    def _active_bodyguard_contract(self, npc_eid):
+        rec = _active_contractor_record(
+            self.sim,
+            npc_eid,
+            ally_eid=self.player_eid,
+            jobs={BODYGUARD_JOB},
+        )
+        if not isinstance(rec, dict):
+            return None
+        try:
+            hired_by_player = int(rec.get("hired_by_eid", -1)) == int(self.player_eid)
+        except (TypeError, ValueError):
+            hired_by_player = rec.get("hired_by_eid") == self.player_eid
+        return rec if hired_by_player else None
+
     def _active_peaceful_surrender(self, npc_eid, *, ensure=False):
         rec = _active_contractor_record(
             self.sim,
@@ -7075,6 +7177,7 @@ class NPCInteractionSystem(System):
         street_buy_offer_next_available = False
         street_buy_offer_next_label = ""
         contractor = self._active_backup_contract(npc_eid)
+        bodyguard_contract = self._active_bodyguard_contract(npc_eid)
         peaceful_contract = self._active_peaceful_surrender(npc_eid) if peaceful_orders_only else None
         order_rec = contractor or peaceful_contract
         contractor_status = self._contractor_order_status(order_rec) if order_rec else ""
@@ -7123,6 +7226,13 @@ class NPCInteractionSystem(System):
             {"npc_eid": npc_eid},
             object_dialogue,
         ) if object_dialogue.get("available") else ""
+        cult_context = self._cult_dialogue_context(npc_eid, current_prop=current_prop)
+        if cult_context.get("cult_available"):
+            cult_tag = "circle"
+            if cult_context.get("cult_official"):
+                cult_tag = str(cult_context.get("cult_title", "official") or "official")
+            if cult_tag.lower() not in " | ".join(subtitle_bits).lower():
+                subtitle_bits.append(cult_tag)
         context = {
             "npc_eid": npc_eid,
             "npc_name": display_name,
@@ -7163,6 +7273,7 @@ class NPCInteractionSystem(System):
             "object_meaning_dialogue_key": str((object_dialogue or {}).get("dialogue_key", "") or "").strip(),
             "object_meaning_phrase": object_meaning_phrase,
             "object_meaning_phrase_lc": _dialogue_lower_start(object_meaning_phrase),
+            **cult_context,
             "pressure_attention": int(pressure.get("attention", 0)),
             "pressure_tier": pressure_tier,
             "pressure_goodwill_mult": float(pressure_effects.get("goodwill_mult", 1.0)),
@@ -7317,6 +7428,9 @@ class NPCInteractionSystem(System):
                 and backup_kill_target_eid is not None
                 and (bool(kill_terms.get("trusted")) or bool(kill_terms.get("can_pay")))
             ),
+            "bodyguard_release_available": bool(bodyguard_contract),
+            "bodyguard_contract": dict(bodyguard_contract) if isinstance(bodyguard_contract, dict) else {},
+            "bodyguard_ring": int((bodyguard_contract or {}).get("protection_ring", 0) or 0) if bodyguard_contract else 0,
             "contract_kill_offer": contract_kill_offer,
             "contract_target_role": str(
                 (contract_kill_offer or {}).get("requirements", {}).get("kill_target_role", "")
@@ -11715,6 +11829,9 @@ class NPCInteractionSystem(System):
         return _StyledTranscriptLine(plain, normalized)
 
     def _dialogue_speaker_color(self, npc_eid=None, *, personal_name=""):
+        color = appearance_color_key(self.sim, npc_eid) if npc_eid is not None else None
+        if color:
+            return color
         identity = self._human_identity_for_reference(eid=npc_eid, personal_name=personal_name)
         if is_human_identity(identity):
             color = human_render_color_key(
@@ -11909,9 +12026,9 @@ class NPCInteractionSystem(System):
         identity = context.get("identity")
         if not is_human_identity(identity):
             return ""
-        presentation = human_conversation_presentation(
-            getattr(self.sim, "seed", 0),
-            eid=context.get("npc_eid"),
+        presentation = human_live_conversation_presentation(
+            self.sim,
+            context.get("npc_eid"),
             identity=identity,
             personal_name=getattr(identity, "personal_name", ""),
         )
@@ -12170,6 +12287,8 @@ class NPCInteractionSystem(System):
                     mark=False,
                 ):
                     continue
+            if topic_id == "cult" and not context.get("cult_available"):
+                continue
             if topic_id == "routine" and not self._routine_summary(context):
                 continue
             if topic_id == "workplace" and not context.get("workplace_prop"):
@@ -12193,6 +12312,8 @@ class NPCInteractionSystem(System):
             if topic_id in {"hire_manager", "hire_staff"} and len(tuple(context.get("player_business_hire_roles", ()) or ())) <= 1:
                 continue
             if topic_id == "fire" and not context.get("player_business_fire_option"):
+                continue
+            if topic_id == "bodyguard_stand_down" and not context.get("bodyguard_release_available"):
                 continue
             if topic_id == "introduction" and not self._introduction_target(context):
                 continue
@@ -12668,6 +12789,8 @@ class NPCInteractionSystem(System):
             return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
         if topic_id == "object_meaning":
             return self._resolve_object_meaning_topic(context, ask_count=ask_count)
+        if topic_id == "cult":
+            return self._resolve_cult_dialogue_topic(context, ask_count=ask_count)
         if topic_id in self.SOCIAL_KNOWLEDGE_TOPIC_IDS:
             return self._resolve_social_knowledge_dialogue_topic(context, topic_id, ask_count=ask_count)
         if topic_id == "local_economy":
@@ -12827,6 +12950,35 @@ class NPCInteractionSystem(System):
             else:
                 line = f"Understood. I will clear out of {business_name}."
             return {"npc_lines": [line], "close": True}
+        if topic_id == "bodyguard_stand_down":
+            rec = self._active_bodyguard_contract(npc_eid)
+            if not isinstance(rec, dict):
+                return {"npc_lines": ["That order does not attach to me anymore."]}
+            ring = int(rec.get("protection_ring", 0) or 0)
+            outcome = fire_bodyguard_contract(self.sim, self.player_eid, guard_eid=npc_eid)
+            if not isinstance(outcome, dict) or not outcome.get("ok"):
+                return {"npc_lines": ["I cannot clear the post from here."]}
+            replies = (
+                "Copy. I am off the detail.",
+                "Understood. Clearing the post now.",
+                "Acknowledged. I will step off clean.",
+                "Confirmed. My channel is closed.",
+                "Copy that. I am no longer assigned to this protection line.",
+                "Understood. I will not hold this perimeter further.",
+            )
+            if ring >= 2:
+                replies = (
+                    "Copy. Outer line is clear of me.",
+                    "Acknowledged. I am stepping off the perimeter.",
+                    "Understood. Closing my channel and moving off post.",
+                    "Confirmed. I am out of the outer detail.",
+                    "Copy. Perimeter slot is open.",
+                    "Understood. I will not answer this detail's calls.",
+                )
+            choice = random.Random(
+                f"{self.sim.seed}:bodyguard-stand-down:{npc_eid}:{ask_count}:{rec.get('protection_channel_id')}:{ring}"
+            ).choice(replies)
+            return {"npc_lines": [choice], "close": True}
         if topic_id == "introduction":
             offer = self._offer_introduction(context)
             if offer:
@@ -14629,7 +14781,12 @@ class NPCInteractionSystem(System):
         if not contractors:
             return
         tick = self.sim.tick
-        expired = [eid for eid, rec in list(contractors.items()) if rec.get("until", 0) <= tick]
+        expired = [
+            eid
+            for eid, rec in list(contractors.items())
+            if str(rec.get("job", "") or "").strip().lower() != "bodyguard"
+            and rec.get("until", 0) <= tick
+        ]
         for npc_eid in expired:
             rec = contractors.pop(npc_eid)
             self._clear_contractor_player_heat(
@@ -14645,6 +14802,8 @@ class NPCInteractionSystem(System):
         positions = self.sim.ecs.get(Position)
         for npc_eid, rec in list(contractors.items()):
             job = str(rec.get("job", "distraction") or "distraction").strip().lower()
+            if job == "bodyguard":
+                continue
             ally_eid = rec.get("ally_eid", self.player_eid)
             ally_pos = positions.get(ally_eid)
             if job == "distraction":
@@ -14707,6 +14866,8 @@ class NPCInteractionSystem(System):
         job = str(event.data.get("job", rec.get("job", "distraction")) or "distraction").strip().lower()
         ally_eid = event.data.get("ally_eid", rec.get("ally_eid", self.player_eid))
         ally_pos = self.sim.ecs.get(Position).get(ally_eid)
+        if job == "bodyguard":
+            return
         if job in {"backup", "party"}:
             self._assign_contractor_backup(npc_eid, ally_eid, ally_pos, rec if isinstance(rec, dict) else {})
         else:
@@ -14752,12 +14913,16 @@ class NPCInteractionSystem(System):
     def on_npc_downed(self, event):
         contractors = getattr(self.sim, "contractors", {})
         if isinstance(contractors, dict):
-            contractors.pop(event.data.get("target_eid"), None)
+            rec = contractors.get(event.data.get("target_eid"))
+            if not isinstance(rec, dict) or str(rec.get("job", "") or "").strip().lower() != "bodyguard":
+                contractors.pop(event.data.get("target_eid"), None)
 
     def on_npc_killed(self, event):
         contractors = getattr(self.sim, "contractors", {})
         if isinstance(contractors, dict):
-            contractors.pop(event.data.get("target_eid"), None)
+            rec = contractors.get(event.data.get("target_eid"))
+            if not isinstance(rec, dict) or str(rec.get("job", "") or "").strip().lower() != "bodyguard":
+                contractors.pop(event.data.get("target_eid"), None)
 
     def _assign_peaceful_surrender_hold(self, npc_eid, rec):
         ai = self.sim.ecs.get(AI).get(npc_eid)

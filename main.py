@@ -132,6 +132,8 @@ from game.organization_response import OrganizationResponseSystem
 from game.organization_practice_evolution import OrganizationPracticeEvolutionSystem
 from game.criminal_drive_system import CriminalDriveSystem
 from game.justice_vehicle_system import JusticeVehicleMisuseSystem
+from game.bodyguard_runtime import BodyguardSystem
+from game.cult_runtime import CultSystem
 from game.perception_systems import (
     CombatPacingSystem,
     CoverSystem,
@@ -271,6 +273,16 @@ def _resolve_run_seed(default=None):
     if default is not None:
         return int(default)
     return random.SystemRandom().randrange(1, 2_147_483_648)
+
+
+def _resolve_run_nonce():
+    raw = os.getenv("BAKERRRR_RUN_NONCE")
+    if raw is not None:
+        try:
+            return max(1, int(str(raw).strip()))
+        except (TypeError, ValueError):
+            pass
+    return random.SystemRandom().randrange(1, 1_000_000_000)
 
 
 def _requested_ui_backend(argv=None):
@@ -621,6 +633,8 @@ def _register_runtime_systems(sim, view, player):
     finance_system = FinanceSystem(sim, player)
     site_service_system = SiteServiceSystem(sim, player)
     npc_interaction_system = NPCInteractionSystem(sim, player)
+    bodyguard_system = BodyguardSystem(sim)
+    cult_system = CultSystem(sim)
     combat_pacing_system = CombatPacingSystem(sim, player, engage_radius=10, danger_radius=6, calm_frames_to_exit=14)
     situation_read_system = SituationReadSystem(sim, player)
     world_streaming_system = WorldStreamingSystem(sim, player)
@@ -768,6 +782,8 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(finance_system)
     sim.register_system(site_service_system)
     sim.register_system(npc_interaction_system)
+    sim.register_system(bodyguard_system)
+    sim.register_system(cult_system)
     sim.register_system(weapon_system)
     sim.register_system(world_streaming_system)
     sim.register_system(noise_system)
@@ -1731,7 +1747,7 @@ def _run_new_game_legacy(view, character_name):
     }
     prime_bones_runtime(sim)
     prime_run_echoes_runtime(sim)
-    run_nonce = random.SystemRandom().randrange(1, 1_000_000_000)
+    run_nonce = _resolve_run_nonce()
     run_rng = random.Random(run_nonce)
     start_chunk_cx, start_chunk_cy = _pick_playtest_start_chunk(sim, run_rng)
     start_focus_x, start_focus_y = sim.chunk_origin(start_chunk_cx, start_chunk_cy)
@@ -2791,7 +2807,7 @@ def _run_new_game(view, character_name, gender_identity, *, debug_mode=False, cu
     }
     prime_bones_runtime(sim)
     prime_run_echoes_runtime(sim)
-    run_nonce = random.SystemRandom().randrange(1, 1_000_000_000)
+    run_nonce = _resolve_run_nonce()
     run_rng = random.Random(run_nonce)
     sim.world_traits["playtest_start"] = {"nonce": run_nonce}
 
@@ -2894,7 +2910,7 @@ def _run_tutorial_game(view, character_name, gender_identity, *, debug_mode=Fals
         "tutorial_no_persistence": True,
         "final_op_downed_fails_run": False,
     }
-    run_nonce = random.SystemRandom().randrange(1, 1_000_000_000)
+    run_nonce = _resolve_run_nonce()
     run_rng = random.Random(f"tutorial:{run_nonce}")
     sim.world_traits["playtest_start"] = {"nonce": run_nonce, "tutorial": True}
 

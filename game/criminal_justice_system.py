@@ -59,6 +59,15 @@ from game.items import (
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
 )
+from game.appearance_loadout import (
+    APPEARANCE_METADATA_KEY,
+    APPEARANCE_SLOT_METADATA_KEY,
+    APPEARANCE_WORN_METADATA_KEY,
+    COSMETIC_COLOR_KEYS,
+    appearance_loadout_for,
+    cosmetic_variant_metadata,
+    mark_inventory_instance_worn,
+)
 from game.item_semantics import inventory_has_phone
 from game.quick_travel_ramps import map_mode_active
 from engine.systems import System
@@ -249,6 +258,8 @@ class CriminalJusticeSystem(System):
     EVIDENCE_SURCHARGE_PER_ITEM = 35
     HOMICIDE_SEVERITY_SCORE = 96
     PLAYER_HOMICIDE_BOOKING_SURCHARGE = 120
+    JUSTICE_RELEASE_JUMPSUIT_ITEM_ID = "orange_jumpsuit"
+    JUSTICE_RELEASE_JUMPSUIT_SLOT = "full_body"
     NPC_CUSTODY_ARCHETYPES_BY_TIER = {
         "questioning": ("jail",),
         "wanted": ("jail",),
@@ -3137,6 +3148,8 @@ class CriminalJusticeSystem(System):
                 "held_reason_labels": (),
                 "forfeited_reason_labels": (),
                 "ignored_reason_labels": (),
+                "evidence_worn_clothing_removed": False,
+                "evidence_worn_clothing_labels": (),
             }
 
         confiscated_units = 0
@@ -3158,6 +3171,7 @@ class CriminalJusticeSystem(System):
         ignored_reason_labels = []
         held_entries = []
         forfeited_entries = []
+        evidence_worn_clothing_labels = []
         inspection = inspection if isinstance(inspection, dict) else (
             self._inspect_actor_inventory(self.player_eid, update_inventory=True) if remove else {}
         )
@@ -3174,6 +3188,7 @@ class CriminalJusticeSystem(System):
             item_id = str(entry.get("item_id", "") or "").strip().lower()
             metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
             item_name = item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG)
+            was_worn_evidence_clothing = self._entry_is_worn_evidence_clothing(entry, hold_policy)
             if bucket_name == "latent_claim_violation" and not hold_policy.get("objective_protected"):
                 ignored_units += quantity
                 ignored_labels.append(item_name)
@@ -3238,6 +3253,8 @@ class CriminalJusticeSystem(System):
                 weapon_units += removed_qty
             labels.append(item_name)
             if remove:
+                if was_worn_evidence_clothing:
+                    evidence_worn_clothing_labels.append(item_name)
                 self._emit_removed_gear_events(self.player_eid, removed, reason="confiscated")
 
         deduped_labels = tuple(dict.fromkeys(label for label in labels if str(label).strip()))
@@ -3247,6 +3264,7 @@ class CriminalJusticeSystem(System):
         deduped_held_reasons = tuple(dict.fromkeys(label for label in held_reason_labels if str(label).strip()))
         deduped_forfeited_reasons = tuple(dict.fromkeys(label for label in forfeited_reason_labels if str(label).strip()))
         deduped_ignored_reasons = tuple(dict.fromkeys(label for label in ignored_reason_labels if str(label).strip()))
+        deduped_evidence_worn_clothing = tuple(dict.fromkeys(label for label in evidence_worn_clothing_labels if str(label).strip()))
         return {
             "confiscated_units": confiscated_units,
             "held_units": held_units,
@@ -3267,6 +3285,140 @@ class CriminalJusticeSystem(System):
             "held_reason_labels": deduped_held_reasons[:4],
             "forfeited_reason_labels": deduped_forfeited_reasons[:4],
             "ignored_reason_labels": deduped_ignored_reasons[:4],
+            "evidence_worn_clothing_removed": bool(deduped_evidence_worn_clothing),
+            "evidence_worn_clothing_labels": deduped_evidence_worn_clothing[:4],
+        }
+
+    def _entry_is_worn_evidence_clothing(self, entry, hold_policy):
+        if not isinstance(entry, dict) or not isinstance(hold_policy, dict):
+            return False
+        if not bool(hold_policy.get("incident_evidence")):
+            return False
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        if not bool(metadata.get(APPEARANCE_WORN_METADATA_KEY)):
+            return False
+        item_id = str(entry.get("item_id", "") or "").strip().lower()
+        item_def = ITEM_CATALOG.get(item_id, {})
+        tags = {
+            str(tag).strip().lower()
+            for tag in tuple(item_def.get("tags", ()) or ())
+            if str(tag).strip()
+        }
+        if "clothing" not in tags and "cosmetic" not in tags:
+            return False
+        nested = metadata.get(APPEARANCE_METADATA_KEY) if isinstance(metadata.get(APPEARANCE_METADATA_KEY), dict) else {}
+        slots = metadata.get("appearance_slots") or nested.get("slots") or item_def.get("appearance_slots") or ()
+        slots = {
+            str(slot).strip().lower()
+            for slot in tuple(slots or ())
+            if str(slot).strip()
+        }
+        worn_slot = str(metadata.get(APPEARANCE_SLOT_METADATA_KEY, "") or "").strip().lower()
+        if worn_slot:
+            slots.add(worn_slot)
+        return bool(slots.intersection({"full_body", "top", "bottom"}))
+
+    def _justice_release_jumpsuit_metadata(self, *, booking_prop=None):
+        metadata = cosmetic_variant_metadata(
+            self.JUSTICE_RELEASE_JUMPSUIT_ITEM_ID,
+            seed_token=f"booking-release:{getattr(self.sim, 'seed', 0)}:{getattr(self.sim, 'tick', 0)}:{self.player_eid}",
+            item_catalog=ITEM_CATALOG,
+        )
+        metadata = dict(metadata or {})
+        accent = COSMETIC_COLOR_KEYS.get("safety_orange", "clothing_orange")
+        nested = dict(metadata.get(APPEARANCE_METADATA_KEY) or {})
+        nested.update({
+            "type": self.JUSTICE_RELEASE_JUMPSUIT_ITEM_ID,
+            "label": "jumpsuit",
+            "slots": [self.JUSTICE_RELEASE_JUMPSUIT_SLOT],
+            "color": "safety_orange",
+            "material": "cotton",
+            "style": "issued",
+            "accent_color": accent,
+            "worn_slot": self.JUSTICE_RELEASE_JUMPSUIT_SLOT,
+        })
+        metadata.update({
+            "appearance_type": self.JUSTICE_RELEASE_JUMPSUIT_ITEM_ID,
+            "appearance_label": "jumpsuit",
+            "appearance_slots": [self.JUSTICE_RELEASE_JUMPSUIT_SLOT],
+            "color": "safety_orange",
+            "material": "cotton",
+            "style": "issued",
+            "accent_color": accent,
+            "display_name": "Issued Orange Jumpsuit",
+            APPEARANCE_METADATA_KEY: nested,
+            APPEARANCE_WORN_METADATA_KEY: True,
+            APPEARANCE_SLOT_METADATA_KEY: self.JUSTICE_RELEASE_JUMPSUIT_SLOT,
+            "justice_issued": True,
+            "justice_issue_reason": "evidence_clothing_release",
+            "justice_booking_tick": int(getattr(self.sim, "tick", 0) or 0),
+        })
+        if isinstance(booking_prop, dict):
+            metadata["justice_booking_property_id"] = booking_prop.get("id")
+            metadata["justice_booking_property_name"] = booking_prop.get("name")
+        return metadata
+
+    def _force_clear_player_jumpsuit_conflicts(self):
+        loadout = appearance_loadout_for(self.sim, self.player_eid, create=True)
+        if loadout is None:
+            return
+        for slot in ("full_body", "top", "bottom"):
+            instance_id = str(loadout.slots.get(slot) or "").strip()
+            if instance_id:
+                mark_inventory_instance_worn(self.sim, self.player_eid, instance_id, worn=False)
+            loadout.slots[slot] = None
+
+    def _issue_booking_jumpsuit_if_needed(self, confiscation, *, booking_prop=None):
+        if not isinstance(confiscation, dict):
+            return {}
+        if not bool(confiscation.get("evidence_worn_clothing_removed")):
+            return {}
+        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
+        item_def = ITEM_CATALOG.get(self.JUSTICE_RELEASE_JUMPSUIT_ITEM_ID, {})
+        if inventory is None or not item_def:
+            return {
+                "issued": False,
+                "reason": "missing_inventory_or_item",
+            }
+        self._force_clear_player_jumpsuit_conflicts()
+        metadata = self._justice_release_jumpsuit_metadata(booking_prop=booking_prop)
+        added, instance_id = inventory.add_item(
+            item_id=self.JUSTICE_RELEASE_JUMPSUIT_ITEM_ID,
+            quantity=1,
+            stack_max=item_def.get("stack_max", 1),
+            instance_factory=self.sim.new_item_instance_id,
+            owner_eid=self.player_eid,
+            owner_tag="player",
+            metadata=metadata,
+        )
+        if not added or not instance_id:
+            return {
+                "issued": False,
+                "reason": "inventory_full",
+            }
+        loadout = appearance_loadout_for(self.sim, self.player_eid, create=True)
+        if loadout is not None:
+            loadout.slots[self.JUSTICE_RELEASE_JUMPSUIT_SLOT] = str(instance_id)
+        item_name = item_display_name(
+            self.JUSTICE_RELEASE_JUMPSUIT_ITEM_ID,
+            metadata=metadata,
+            item_catalog=ITEM_CATALOG,
+        )
+        self.sim.emit(Event(
+            "appearance_item_equipped",
+            eid=self.player_eid,
+            item_id=self.JUSTICE_RELEASE_JUMPSUIT_ITEM_ID,
+            instance_id=str(instance_id),
+            item_name=item_name,
+            slot=self.JUSTICE_RELEASE_JUMPSUIT_SLOT,
+            reason="justice_booking_release",
+        ))
+        return {
+            "issued": True,
+            "item_id": self.JUSTICE_RELEASE_JUMPSUIT_ITEM_ID,
+            "instance_id": str(instance_id),
+            "item_name": item_name,
+            "reason": "evidence_clothing_removed",
         }
 
     def _confiscate_player_inventory(self, *, booking_prop=None, inspection=None, keep_contraband=False):
@@ -3452,6 +3604,16 @@ class CriminalJusticeSystem(System):
             if ignored_reasons:
                 line += f" because {ignored_reasons}"
             lines.append(line + ".")
+        if bool(confiscation.get("booking_jumpsuit_issued")):
+            item_name = str(confiscation.get("booking_jumpsuit_item_name", "") or "").strip() or "orange jumpsuit"
+            item_phrase = item_name[:1].lower() + item_name[1:] if item_name else "orange jumpsuit"
+            if not item_phrase.lower().startswith(("a ", "an ")):
+                item_phrase = f"an {item_phrase}"
+            evidence_labels = self._label_list_text(confiscation.get("evidence_worn_clothing_labels", ()))
+            line = f"Discharged in {item_phrase}"
+            if evidence_labels:
+                line += f" after evidence clothing was held ({evidence_labels})"
+            lines.append(line + ".")
         if held_count <= 0 and forfeited_count <= 0:
             lines.append("No property was held or forfeited.")
 
@@ -3541,6 +3703,15 @@ class CriminalJusticeSystem(System):
             else {}
         )
         confiscation = self._confiscate_player_inventory(booking_prop=booking_prop, inspection=inspection)
+        jumpsuit_issue = self._issue_booking_jumpsuit_if_needed(confiscation, booking_prop=booking_prop)
+        if bool(jumpsuit_issue.get("issued")):
+            confiscation["booking_jumpsuit_issued"] = True
+            confiscation["booking_jumpsuit_item_id"] = jumpsuit_issue.get("item_id")
+            confiscation["booking_jumpsuit_instance_id"] = jumpsuit_issue.get("instance_id")
+            confiscation["booking_jumpsuit_item_name"] = jumpsuit_issue.get("item_name")
+        elif jumpsuit_issue:
+            confiscation["booking_jumpsuit_issue_failed"] = True
+            confiscation["booking_jumpsuit_issue_reason"] = jumpsuit_issue.get("reason")
         fine_due = int(self._player_fine_amount(snapshot)) + int(evidence_surcharge)
         restitution_due = int(snapshot.get("restitution_due", 0) or 0)
         restitution_property_count = int(snapshot.get("restitution_property_count", 0) or 0)
@@ -3645,6 +3816,10 @@ class CriminalJusticeSystem(System):
             seized_entries=tuple(confiscation.get("held_entries", ()) or ()) + tuple(confiscation.get("forfeited_entries", ()) or ()),
             held_reason_labels=tuple(confiscation.get("held_reason_labels", ()) or ()),
             forfeited_reason_labels=tuple(confiscation.get("forfeited_reason_labels", ()) or ()),
+            evidence_worn_clothing_labels=tuple(confiscation.get("evidence_worn_clothing_labels", ()) or ()),
+            booking_jumpsuit_issued=bool(confiscation.get("booking_jumpsuit_issued")),
+            booking_jumpsuit_item_id=str(confiscation.get("booking_jumpsuit_item_id", "") or ""),
+            booking_jumpsuit_item_name=str(confiscation.get("booking_jumpsuit_item_name", "") or ""),
             ignored_item_count=int(confiscation.get("ignored_units", 0) or 0),
             ignored_labels=tuple(confiscation.get("ignored_labels", ()) or ()),
             ignored_reason_labels=tuple(confiscation.get("ignored_reason_labels", ()) or ()),

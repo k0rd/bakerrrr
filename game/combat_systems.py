@@ -31,6 +31,7 @@ from game.components import (
     WeaponUseProfile,
 )
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
+from game.appearance_loadout import appearance_metadata_as_loose_item
 from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.checks import (
     crime_sensitivity as _crime_sensitivity,
@@ -1124,6 +1125,7 @@ class WeaponSystem(System):
                         continue
                     qty = int(entry.get("quantity", 1))
                     meta = dict(entry.get("metadata") or {})
+                    meta = appearance_metadata_as_loose_item(meta)
                     meta = stamp_item_provenance(
                         self.sim,
                         {

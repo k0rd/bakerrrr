@@ -80,6 +80,7 @@ APPEARANCE_PALETTE: tuple[AppearancePaletteRow, ...] = (
     _row("burgundy", (142, 45, 82), 125, "magenta", tags=("red", "purple", "dark", "polished"), weight=3),
     _row("crimson", (202, 46, 66), 160, "red", attrs=("bold",), tags=("red", "bright", "flashy"), weight=2),
     _row("orange", (232, 126, 54), 208, "yellow", attrs=("bold",), tags=("warm", "bright", "flashy"), weight=3),
+    _row("safety_orange", (255, 100, 18), 202, "yellow", attrs=("bold",), tags=("warm", "bright", "flashy", "safety", "high_visibility"), weight=0),
     _row("amber", (222, 156, 54), 214, "yellow", attrs=("bold",), tags=("warm", "bright", "earth"), weight=3),
     _row("mustard", (190, 154, 58), 178, "yellow", tags=("warm", "earth", "muted"), weight=4),
     _row("yellow", (236, 210, 72), 226, "yellow", attrs=("bold",), tags=("warm", "bright", "flashy"), weight=2),

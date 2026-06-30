@@ -11,6 +11,7 @@ from game.appearance_palette import (
 )
 from game.components import AppearanceLoadout, ArmorLoadout, CreatureIdentity, Inventory
 from game.human_description import build_human_description_profile, human_self_physical_summary, human_render_color_key
+from game.human_identity import pronoun_format_slots
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG, item_display_name, item_inventory_slot_cost
 
@@ -128,6 +129,12 @@ COSMETIC_ITEM_IDS = {
         "slots": ("full_body",),
         "materials": ("cotton", "linen", "satin", "knit"),
         "styles": ("simple", "fitted", "loose", "sharp"),
+    },
+    "orange_jumpsuit": {
+        "label": "jumpsuit",
+        "slots": ("full_body",),
+        "materials": ("cotton",),
+        "styles": ("issued",),
     },
     "boots": {
         "label": "boots",
@@ -248,8 +255,18 @@ COSMETIC_COLORS = appearance_color_words()
 COSMETIC_COLOR_KEYS = {word: render_key_for_color_word(word) for word in COSMETIC_COLORS}
 CLOTHING_RENDER_COLOR_KEYS = tuple(dict.fromkeys(COSMETIC_COLOR_KEYS.values()))
 STYLE_SERVICE_OPTIONS = {
-    "hair_style": ("cropped", "short", "bob", "braided", "loose", "nape-tied"),
-    "hair_color": ("black", "brown", "auburn", "blonde", "silver", "copper"),
+    "hair_style": (
+        "cropped", "short", "bob", "braided", "loose", "nape-tied",
+        "loose hair", "pinned-back hair", "side braid", "sharp bob", "high tail", "swept-back hair",
+        "close sides", "slicked-back hair", "unruly hair", "rough crop", "neat part", "tied-back hair",
+        "jaw-cut hair", "one-sided shave", "capped hair", "nape tie", "brow-falling hair", "uneven cut",
+        "clipped-back hair", "careless tie", "heavy wave", "tight braids", "sharp short cut", "loose knot",
+    ),
+    "hair_color": (
+        "black", "brown", "auburn", "blonde", "silver", "copper",
+        "dark brown", "chestnut", "warm brown", "ash blond", "honey blond", "platinum blond",
+        "copper-red", "charcoal",
+    ),
     "makeup": ("none", "clean", "subtle", "smoky", "bold"),
     "makeup_eyes": ("none", "clean", "subtle", "smoky", "bold"),
     "makeup_lips": ("none", "clear", "soft", "dark", "bold"),
@@ -342,6 +359,107 @@ STARTER_OUTFIT_COLOR_BUCKETS = {
     "human_wine": ("wine", "red", "black"),
 }
 STARTER_SHOE_COLORS = ("black", "brown", "charcoal", "gray")
+NPC_DESCRIBED_OUTFIT_METADATA_KEY = "npc_described_outfit"
+NPC_DESCRIBED_OUTFIT_SOURCE = "seeded_description_outfit"
+NPC_DESCRIPTION_COLOR_BUCKETS = {
+    "human_charcoal": {
+        "outer": ("charcoal", "black", "slate"),
+        "top": ("gray", "smoke", "white"),
+        "bottom": ("charcoal", "black", "slate"),
+        "shoes": ("black", "charcoal"),
+        "accessory": ("silver", "steel", "onyx"),
+    },
+    "human_olive": {
+        "outer": ("olive", "moss", "brown"),
+        "top": ("tan", "cream", "khaki"),
+        "bottom": ("brown", "olive", "moss"),
+        "shoes": ("brown", "black"),
+        "accessory": ("brass", "copper", "bronze"),
+    },
+    "human_denim": {
+        "outer": ("denim", "slate", "blue"),
+        "top": ("gray", "ash", "white"),
+        "bottom": ("denim", "slate", "navy"),
+        "shoes": ("black", "charcoal", "brown"),
+        "accessory": ("steel", "silver", "onyx"),
+    },
+    "human_accent": {
+        "outer": ("charcoal", "black", "rust"),
+        "top": ("cream", "white", "gold"),
+        "bottom": ("black", "slate", "charcoal"),
+        "shoes": ("black", "charcoal"),
+        "accessory": ("gold", "cobalt", "coral", "brass"),
+    },
+    "human_monochrome": {
+        "outer": ("black", "charcoal", "gray"),
+        "top": ("white", "ivory", "gray"),
+        "bottom": ("black", "gray", "charcoal"),
+        "shoes": ("black", "gray"),
+        "accessory": ("silver", "steel", "onyx"),
+    },
+    "human_rust": {
+        "outer": ("rust", "brown", "copper"),
+        "top": ("cream", "tan", "ivory"),
+        "bottom": ("brown", "smoke", "rust"),
+        "shoes": ("brown", "black"),
+        "accessory": ("copper", "brass", "bronze"),
+    },
+    "human_slate": {
+        "outer": ("slate", "navy", "blue"),
+        "top": ("sky", "ash", "gray"),
+        "bottom": ("navy", "denim", "slate"),
+        "shoes": ("black", "charcoal"),
+        "accessory": ("steel", "silver", "blue"),
+    },
+    "human_wine": {
+        "outer": ("wine", "burgundy", "charcoal"),
+        "top": ("cream", "ivory", "pink"),
+        "bottom": ("black", "wine", "charcoal"),
+        "shoes": ("black", "brown"),
+        "accessory": ("brass", "gold", "copper"),
+    },
+}
+NPC_DESCRIPTION_ATTIRE_ITEMS = {
+    "dark fitted coat": ("coat", "tee", "trousers", "boots"),
+    "tailored jacket": ("blazer", "button_up", "trousers", "boots"),
+    "long cardigan": ("cardigan", "sweater", "trousers", "boots"),
+    "sharp blouse and coat": ("coat", "blouse", "trousers", "boots"),
+    "clean-cut jacket": ("jacket", "blouse", "skirt", "sneakers"),
+    "structured coat": ("coat", "sweater", "trousers", "boots"),
+    "weathered bomber jacket": ("jacket", "tee", "trousers", "boots"),
+    "heavy coat": ("coat", "button_up", "trousers", "boots"),
+    "dark blazer": ("blazer", "button_up", "trousers", "boots"),
+    "field jacket": ("jacket", "tee", "trousers", "boots"),
+    "denim jacket": ("jacket", "button_up", "trousers", "boots"),
+    "thick overshirt": ("overshirt", "tee", "trousers", "boots"),
+    "boxy coat": ("coat", "turtleneck", "trousers", "boots"),
+    "straight-cut jacket": ("jacket", "turtleneck", "trousers", "boots"),
+    "oversized overshirt": ("overshirt", "turtleneck", "trousers", "boots"),
+    "cropped jacket": ("jacket", "turtleneck", "trousers", "boots"),
+    "sleeveless vest": ("vest", "turtleneck", "trousers", "boots"),
+    "severe long coat": ("coat", "turtleneck", "trousers", "boots"),
+    "mixed dark coat": ("coat", "tee", "trousers", "boots"),
+    "sharp jacket": ("jacket", "blouse", "trousers", "boots", "scarf"),
+    "weathered coat": ("coat", "button_up", "trousers", "boots"),
+    "structured blazer": ("blazer", "button_up", "trousers", "boots"),
+    "neat overshirt": ("overshirt", "tee", "trousers", "boots"),
+    "layered long coat": ("coat", "sweater", "trousers", "boots"),
+}
+NPC_DESCRIPTION_ACCESSORY_ITEMS = {
+    "silver rings": ("ring",),
+    "small earrings": ("earrings",),
+    "narrow scarf": ("scarf",),
+    "watch chain": ("watch",),
+    "fingerless gloves": ("gloves",),
+    "heavy rings": ("ring",),
+    "chain and cuff": ("necklace", "bracelet"),
+    "wrapped scarf": ("scarf",),
+    "ear studs": ("earrings",),
+    "rings and watchband": ("ring", "watch"),
+    "scarf and id tag": ("scarf",),
+    "bracelets and gloves": ("bracelet", "gloves"),
+    "bag and rings": ("ring",),
+}
 
 
 @dataclass(frozen=True)
@@ -450,6 +568,66 @@ def seed_appearance_skin_marks_from_description(sim, eid, *, loadout=None):
                 source=mark.get("source") or "seeded_description",
             )
     loadout.skin_marks_seeded = True
+    return True
+
+
+def _seeded_makeup_for_profile(profile, rng):
+    profile = profile if isinstance(profile, dict) else {}
+    style_axis = _key(profile.get("style_axis"))
+    grooming = _key(profile.get("grooming_sentence"))
+    standout = _key(profile.get("standout_compact"))
+    global_makeup = ""
+    regions = {}
+    if standout == "sharp eyeliner":
+        global_makeup = "clean"
+        regions["eyes"] = "bold"
+    elif "makeup" in grooming:
+        global_makeup = rng.choice(("clean", "subtle"))
+    elif style_axis == "femme" and rng.random() < 0.42:
+        global_makeup = rng.choice(("clean", "subtle"))
+    elif style_axis == "mixed" and rng.random() < 0.22:
+        global_makeup = "subtle"
+    elif style_axis == "androgynous" and rng.random() < 0.12:
+        global_makeup = "clean"
+    return global_makeup, regions
+
+
+def seed_npc_innate_appearance_from_description(sim, eid, *, seed_token=""):
+    loadout = appearance_loadout_for(sim, eid, create=True)
+    if loadout is None:
+        return False
+    if bool(getattr(loadout, "description_appearance_seeded", False)):
+        return False
+    identity = sim.ecs.get(CreatureIdentity).get(eid) if sim is not None else None
+    profile = build_human_description_profile(
+        getattr(sim, "seed", 0),
+        eid=eid,
+        identity=identity,
+        personal_name=getattr(identity, "personal_name", None),
+    )
+    if not isinstance(profile, dict):
+        return False
+
+    seed_appearance_skin_marks_from_description(sim, eid, loadout=loadout)
+    overrides = dict(getattr(loadout, "body_overrides", {}) or {})
+    for key in ("hair_color", "hair_texture", "hair_length", "hair_style_compact", "hair_style_phrase"):
+        source_key = "hair_style_compact" if key == "hair_style_compact" else key
+        value = _text(profile.get(source_key))
+        if value and not _text(overrides.get(key)):
+            overrides[key] = value
+    if not _text(overrides.get("hair_style")) and _text(profile.get("hair_style_compact")):
+        overrides["hair_style"] = _text(profile.get("hair_style_compact"))
+    rng = random.Random(f"npc-innate-appearance:{getattr(sim, 'seed', 0)}:{eid}:{seed_token}:{profile.get('seed_token')}")
+    makeup, regions = _seeded_makeup_for_profile(profile, rng)
+    if makeup and not _text(overrides.get("makeup")) and not _tattoo_conflict_regions(loadout):
+        overrides["makeup"] = makeup
+    loadout.body_overrides = AppearanceLoadout._clean_overrides(overrides)
+    makeup_regions = dict(getattr(loadout, "makeup_regions", {}) or {})
+    for region, value in regions.items():
+        if not _makeup_region_blocked(loadout, region) and not _text(makeup_regions.get(region)):
+            makeup_regions[region] = value
+    loadout.makeup_regions = AppearanceLoadout._clean_overrides(makeup_regions)
+    loadout.description_appearance_seeded = True
     return True
 
 
@@ -693,6 +871,134 @@ def _starter_outfit_color(sim, eid, identity, rng):
     return rng.choice(tuple(options))
 
 
+def _description_color_for(profile, slot, rng, item_id=""):
+    render_key = _key((profile or {}).get("render_color_key")) or "human_charcoal"
+    buckets = NPC_DESCRIPTION_COLOR_BUCKETS.get(render_key, NPC_DESCRIPTION_COLOR_BUCKETS["human_charcoal"])
+    bucket_key = "accessory" if slot in {"hat", "earrings", "necklace", "bracelet", "ring_left", "ring_right"} else slot
+    options = tuple(buckets.get(bucket_key) or buckets.get("top") or ("charcoal",))
+    color = rng.choice(options)
+    if _key(item_id) == "jacket" and "denim" in _key((profile or {}).get("attire_compact")):
+        color = "denim"
+    if _key(item_id) == "ring" and "silver" in _key((profile or {}).get("accessory_compact")):
+        color = "silver"
+    return color
+
+
+def _appearance_slot_for_item(item_id, loadout):
+    slots = tuple(COSMETIC_ITEM_IDS.get(_key(item_id), {}).get("slots", ()) or ())
+    if set(slots) == {"ring_left", "ring_right"}:
+        return "ring_right" if loadout.slots.get("ring_left") else "ring_left"
+    return slots[0] if slots else ""
+
+
+def _npc_has_described_outfit(inventory):
+    if inventory is None:
+        return False
+    for entry in tuple(getattr(inventory, "items", ()) or ()):
+        metadata = entry.get("metadata") if isinstance(entry, dict) else {}
+        if isinstance(metadata, dict) and metadata.get(NPC_DESCRIBED_OUTFIT_METADATA_KEY):
+            return True
+    return False
+
+
+def _description_item_metadata(item_id, *, color, profile, slot, seed_token):
+    metadata = cosmetic_variant_metadata(item_id, seed_token=seed_token, item_catalog=ITEM_CATALOG)
+    metadata = _metadata_with_color(metadata, color=color)
+    metadata = _metadata_with_worn(metadata, worn=True, slot=slot)
+    metadata[NPC_DESCRIBED_OUTFIT_METADATA_KEY] = True
+    metadata["described_outfit"] = True
+    metadata["ambient_spawn"] = True
+    metadata["source"] = NPC_DESCRIBED_OUTFIT_SOURCE
+    metadata["description_seed_token"] = _text((profile or {}).get("seed_token"))
+    metadata["description_attire_compact"] = _text((profile or {}).get("attire_compact"))
+    metadata["description_accessory_compact"] = _text((profile or {}).get("accessory_compact"))
+    nested = dict(metadata.get(APPEARANCE_METADATA_KEY) or {})
+    nested[NPC_DESCRIBED_OUTFIT_METADATA_KEY] = True
+    nested["described_outfit"] = True
+    nested["source"] = NPC_DESCRIBED_OUTFIT_SOURCE
+    metadata[APPEARANCE_METADATA_KEY] = nested
+    return metadata
+
+
+def seed_npc_described_outfit(sim, eid, *, seed_token=""):
+    loadout = appearance_loadout_for(sim, eid, create=True)
+    inventory = _inventory_for(sim, eid)
+    if loadout is None or inventory is None:
+        return ()
+    if _npc_has_described_outfit(inventory):
+        return ()
+
+    identity = sim.ecs.get(CreatureIdentity).get(eid) if sim is not None else None
+    profile = build_human_description_profile(
+        getattr(sim, "seed", 0),
+        eid=eid,
+        identity=identity,
+        personal_name=getattr(identity, "personal_name", None),
+    )
+    if not isinstance(profile, dict):
+        return ()
+
+    attire_key = _key(profile.get("attire_compact"))
+    accessory_key = _key(profile.get("accessory_compact"))
+    item_ids = list(NPC_DESCRIPTION_ATTIRE_ITEMS.get(attire_key, ("jacket", "tee", "trousers", "boots")))
+    for item_id in NPC_DESCRIPTION_ACCESSORY_ITEMS.get(accessory_key, ()):
+        if item_id not in item_ids:
+            item_ids.append(item_id)
+
+    rng = random.Random(f"npc-described-outfit:{getattr(sim, 'seed', 0)}:{eid}:{seed_token}:{profile.get('seed_token')}")
+    seeded = []
+    for item_id in item_ids:
+        item_id = _key(item_id)
+        item_def = ITEM_CATALOG.get(item_id)
+        if not item_def or item_id not in COSMETIC_ITEM_IDS:
+            continue
+        slot = _appearance_slot_for_item(item_id, loadout)
+        if slot not in APPEARANCE_SLOTS:
+            continue
+        if loadout.slots.get(slot):
+            continue
+        if any(loadout.slots.get(conflict) for conflict in _slot_conflicts(slot)):
+            continue
+        color = _description_color_for(profile, slot, rng, item_id=item_id)
+        metadata = _description_item_metadata(
+            item_id,
+            color=color,
+            profile=profile,
+            slot=slot,
+            seed_token=f"{seed_token}:{eid}:{item_id}:{slot}",
+        )
+        added, instance_id = inventory.add_item(
+            item_id=item_id,
+            quantity=1,
+            stack_max=item_def.get("stack_max", 1),
+            instance_factory=sim.new_item_instance_id,
+            owner_eid=eid,
+            owner_tag="npc",
+            metadata=metadata,
+        )
+        if not added or not instance_id:
+            continue
+        loadout.slots[slot] = str(instance_id).strip()
+        seeded.append({
+            "item_id": item_id,
+            "instance_id": str(instance_id),
+            "slot": slot,
+            "item_name": item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG),
+            "attire_compact": attire_key,
+            "accessory_compact": accessory_key,
+        })
+    return tuple(seeded)
+
+
+def seed_npc_appearance_from_description(sim, eid, *, seed_token=""):
+    innate_seeded = seed_npc_innate_appearance_from_description(sim, eid, seed_token=seed_token)
+    outfit_rows = seed_npc_described_outfit(sim, eid, seed_token=seed_token)
+    return {
+        "innate_seeded": bool(innate_seeded),
+        "outfit_rows": tuple(outfit_rows),
+    }
+
+
 def seed_player_starting_outfit(sim, eid, *, seed_token=""):
     loadout = appearance_loadout_for(sim, eid, create=True)
     inventory = _inventory_for(sim, eid)
@@ -775,6 +1081,10 @@ def mark_inventory_instance_worn(sim, eid, instance_id, *, worn, slot=None):
     metadata = _metadata_with_worn(entry.get("metadata"), worn=bool(worn), slot=slot)
     inventory.update_item_metadata(instance_id, metadata=metadata, replace=True)
     return True
+
+
+def appearance_metadata_as_loose_item(metadata):
+    return _metadata_with_worn(metadata, worn=False)
 
 
 def _find_entry_by_instance(sim, eid, instance_id):
@@ -1013,10 +1323,10 @@ def _entry_for_slot(sim, eid, slot):
     return inventory.find(instance_id=instance_id) if inventory else None
 
 
-def _outfit_sentence(sim, eid):
+def _outfit_parts(sim, eid):
     loadout = appearance_loadout_for(sim, eid, create=False)
     if loadout is None:
-        return ""
+        return []
     parts = []
     full_body = _entry_for_slot(sim, eid, "full_body")
     if full_body:
@@ -1047,6 +1357,11 @@ def _outfit_sentence(sim, eid):
         phrase = _entry_phrase(shoes, article=True)
         if phrase:
             parts.append(phrase)
+    return parts
+
+
+def _outfit_sentence(sim, eid):
+    parts = _outfit_parts(sim, eid)
     if not parts:
         return ""
     if len(parts) == 1:
@@ -1054,7 +1369,7 @@ def _outfit_sentence(sim, eid):
     return f"I am wearing {', '.join(parts[:-1])}, and {parts[-1]}."
 
 
-def _adornment_sentence(sim, eid):
+def _adornment_parts(sim, eid):
     bits = []
     for slot in ("hat", "earrings", "necklace", "bracelet", "ring_left", "ring_right"):
         entry = _entry_for_slot(sim, eid, slot)
@@ -1063,6 +1378,11 @@ def _adornment_sentence(sim, eid):
         phrase = _entry_phrase(entry, compact=True, article=True)
         if phrase:
             bits.append(phrase)
+    return bits
+
+
+def _adornment_sentence(sim, eid):
+    bits = _adornment_parts(sim, eid)
     if not bits:
         return ""
     if len(bits) == 1:
@@ -1070,28 +1390,32 @@ def _adornment_sentence(sim, eid):
     return f"I have {', '.join(bits[:-1])}, and {bits[-1]} on."
 
 
-def _skin_mark_phrase(mark):
+def _skin_mark_phrase(mark, *, possessive_adj="my", first_person=True):
     if not isinstance(mark, dict):
         return ""
-    phrase = _text(mark.get("self_phrase"))
+    phrase = _text(mark.get("self_phrase")) if first_person else ""
     if phrase:
         return phrase
+    if not first_person:
+        phrase = _text(mark.get("description"))
+        if phrase:
+            return phrase
     kind = _key(mark.get("kind")) or "mark"
     design = _text(mark.get("design"))
     slot = _key(mark.get("slot"))
     label = SKIN_MARK_SLOT_LABELS.get(slot, slot.replace("_", " ").title()).lower()
     if kind == "tattoo":
-        return f"a {design or 'linework'} tattoo on my {label}"
+        return f"a {design or 'linework'} tattoo on {possessive_adj} {label}"
     if kind == "burn":
-        return f"an old burn mark near my {label}"
+        return f"an old burn mark near {possessive_adj} {label}"
     if kind == "nick":
-        return f"a nick at my {label}"
+        return f"a nick at {possessive_adj} {label}"
     if kind == "scar":
-        return f"a scar at my {label}"
+        return f"a scar at {possessive_adj} {label}"
     return _text(mark.get("description"))
 
 
-def _skin_mark_sentence(loadout):
+def _skin_mark_sentence(loadout, *, subject="I", possessive_adj="my", have="have", first_person=True):
     marks = dict(getattr(loadout, "skin_marks", {}) or {})
     if not marks:
         return ""
@@ -1101,7 +1425,7 @@ def _skin_mark_sentence(loadout):
         mark = marks.get(slot)
         if not isinstance(mark, dict):
             continue
-        phrase = _skin_mark_phrase(mark)
+        phrase = _skin_mark_phrase(mark, possessive_adj=possessive_adj, first_person=first_person)
         if phrase:
             phrases.append(phrase)
         covered = mark.get("covered_mark") if isinstance(mark.get("covered_mark"), dict) else None
@@ -1110,7 +1434,7 @@ def _skin_mark_sentence(loadout):
             coverups.append(f"it covers an older {covered_kind}")
     if not phrases:
         return ""
-    sentence = f"I have {_join_with_and(phrases)}."
+    sentence = f"{subject} have {_join_with_and(phrases)}." if first_person else f"{subject} {have} {_join_with_and(phrases)}."
     if coverups:
         sentence = f"{sentence[:-1]}, and {_join_with_and(coverups)}."
     return sentence
@@ -1142,6 +1466,244 @@ def _salon_sentence(loadout):
         return ""
     sentence = _join_with_and(bits)
     return sentence[:1].upper() + sentence[1:] + "." if sentence else ""
+
+
+def _identity_noun_for_profile(profile):
+    gender_identity = _key((profile or {}).get("gender_identity"))
+    return {
+        "woman": "woman",
+        "man": "man",
+        "nonbinary": "person",
+    }.get(gender_identity, "person")
+
+
+HAIR_STYLE_PHRASE_BY_COMPACT = {
+    "loose hair": "worn loose",
+    "pinned-back hair": "pinned back with a clip",
+    "side braid": "braided over one shoulder",
+    "sharp bob": "cut in a sharp bob",
+    "high tail": "gathered into a high tail",
+    "swept-back hair": "swept behind one ear",
+    "close sides": "cut close at the sides",
+    "slicked-back hair": "slicked back",
+    "unruly hair": "left a little unruly",
+    "rough crop": "trimmed into a rough crop",
+    "neat part": "parted neatly",
+    "tied-back hair": "tied back at the nape",
+    "jaw-cut hair": "cut blunt at the jaw",
+    "one-sided shave": "shaved at one side",
+    "capped hair": "tucked beneath a cap",
+    "nape tie": "gathered at the nape",
+    "brow-falling hair": "falling across the brow",
+    "uneven cut": "cut uneven on purpose",
+    "clipped-back hair": "worn loose with one side clipped back",
+    "careless tie": "tied up carelessly",
+    "heavy wave": "let down in a heavy wave",
+    "tight braids": "worked into tight braids",
+    "sharp short cut": "cut short but styled sharply",
+    "loose knot": "kept in a loose knot",
+    "short": "worn short",
+    "bob": "cut in a bob",
+    "braided": "braided",
+    "loose": "worn loose",
+    "nape-tied": "tied at the nape",
+}
+
+
+def _live_hair_phrase(loadout, profile):
+    overrides = dict(getattr(loadout, "body_overrides", {}) or {}) if loadout is not None else {}
+    length = _text(overrides.get("hair_length") or (profile or {}).get("hair_length"))
+    color = _text(overrides.get("hair_color") or (profile or {}).get("hair_color"))
+    texture = _text(overrides.get("hair_texture") or (profile or {}).get("hair_texture"))
+    style = _text(overrides.get("hair_style_phrase"))
+    if not style:
+        style = HAIR_STYLE_PHRASE_BY_COMPACT.get(_key(overrides.get("hair_style"))) or _text(overrides.get("hair_style"))
+    if not style:
+        style = HAIR_STYLE_PHRASE_BY_COMPACT.get(_key((profile or {}).get("hair_style_compact"))) or _text((profile or {}).get("hair_style_phrase"))
+    bits = [length, color, texture, "hair"]
+    base = " ".join(bit for bit in bits if bit)
+    if base and style:
+        return f"{base} {style}"
+    return base or style
+
+
+def _makeup_sentence_for_subject(loadout, *, subject, have):
+    overrides = dict(getattr(loadout, "body_overrides", {}) or {}) if loadout is not None else {}
+    makeup_regions = dict(getattr(loadout, "makeup_regions", {}) or {}) if loadout is not None else {}
+    bits = []
+    makeup = _text(overrides.get("makeup"))
+    if makeup and _key(makeup) != "none":
+        bits.append(f"{makeup} makeup")
+    region_labels = {"eyes": "eye", "lips": "lip", "cheeks": "cheek"}
+    for region in ("eyes", "lips", "cheeks"):
+        value = _text(makeup_regions.get(region))
+        if value and _key(value) != "none":
+            bits.append(f"{value} {region_labels.get(region, region)} makeup")
+    if not bits:
+        return ""
+    return f"{subject} {have} {_join_with_and(bits)}."
+
+
+def _outfit_sentence_for_subject(sim, eid, *, subject, be):
+    parts = _outfit_parts(sim, eid)
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return f"{subject} {be} wearing {parts[0]}."
+    return f"{subject} {be} wearing {', '.join(parts[:-1])}, and {parts[-1]}."
+
+
+def _adornment_sentence_for_subject(sim, eid, *, subject, have):
+    bits = _adornment_parts(sim, eid)
+    if not bits:
+        return ""
+    if len(bits) == 1:
+        return f"{subject} {have} {bits[0]} on."
+    return f"{subject} {have} {', '.join(bits[:-1])}, and {bits[-1]} on."
+
+
+def _appearance_segment(text, *, color=None, attrs=0):
+    return {"text": str(text or ""), "color": color, "attrs": int(attrs or 0)}
+
+
+def _appearance_text(segments):
+    return "".join(str(segment.get("text", "")) for segment in segments if isinstance(segment, dict))
+
+
+def human_live_conversation_presentation(sim, eid, *, identity=None, personal_name=None):
+    if sim is None or eid is None:
+        return {"text": "", "segments": []}
+    if identity is None:
+        identity = sim.ecs.get(CreatureIdentity).get(eid)
+    resolved_name = personal_name or getattr(identity, "personal_name", "")
+    profile = build_human_description_profile(
+        getattr(sim, "seed", 0),
+        eid=eid,
+        identity=identity,
+        personal_name=resolved_name,
+    )
+    if not isinstance(profile, dict):
+        return {"text": "", "segments": []}
+    loadout = appearance_loadout_for(sim, eid, create=False)
+    slots = pronoun_format_slots(
+        str(getattr(identity, "pronoun_set", "") or "").strip().lower() or profile.get("gender_identity"),
+        prefix="person",
+        personal_name=resolved_name,
+        seed_token=profile.get("seed_token"),
+    )
+    subject = str(slots.get("person_subject_cap", "They") or "They")
+    possessive = str(slots.get("person_possessive_adj_cap", "Their") or "Their")
+    possessive_lower = str(slots.get("person_possessive_adj", "their") or "their")
+    be = str(slots.get("person_be", "are") or "are")
+    have = str(slots.get("person_have", "have") or "have")
+    identity_noun = _identity_noun_for_profile(profile)
+    hair = _live_hair_phrase(loadout, profile)
+    stature = _text(profile.get("stature_phrase"))
+    segments = [_appearance_segment(f"You see a {identity_noun} here. ")]
+    if stature and hair:
+        segments.append(_appearance_segment(f"{subject} {be} {stature} and {have} "))
+        segments.append(_appearance_segment(hair, color=human_render_color_key(getattr(sim, "seed", 0), eid=eid, identity=identity, personal_name=resolved_name)))
+        segments.append(_appearance_segment(". "))
+    elif stature:
+        segments.append(_appearance_segment(f"{subject} {be} {stature}. "))
+    elif hair:
+        segments.append(_appearance_segment(f"{subject} {have} "))
+        segments.append(_appearance_segment(hair, color=human_render_color_key(getattr(sim, "seed", 0), eid=eid, identity=identity, personal_name=resolved_name)))
+        segments.append(_appearance_segment(". "))
+
+    eye_phrase = f"{profile.get('eye_color')} eyes" if _text(profile.get("eye_color")) else ""
+    complexion = _text(profile.get("complexion_phrase"))
+    feature_bits = []
+    if eye_phrase:
+        feature_bits.append(eye_phrase)
+    if complexion:
+        feature_bits.append(complexion)
+    if feature_bits:
+        verb = "stand" if len(feature_bits) > 1 or (len(feature_bits) == 1 and "eyes" in feature_bits[0]) else "stands"
+        segments.append(_appearance_segment(f"{possessive} {_join_with_and(feature_bits)} {verb} out. "))
+
+    extra_sentences = []
+    skin = _skin_mark_sentence(loadout, subject=subject, possessive_adj=possessive_lower, have=have, first_person=False)
+    makeup = _makeup_sentence_for_subject(loadout, subject=subject, have=have)
+    outfit = _outfit_sentence_for_subject(sim, eid, subject=subject, be=be)
+    adornment = _adornment_sentence_for_subject(sim, eid, subject=subject, have=have)
+    for sentence in (skin, makeup, outfit, adornment):
+        if sentence:
+            extra_sentences.append(sentence)
+    outfit_color = appearance_color_key(sim, eid)
+    for sentence in extra_sentences:
+        color = outfit_color if sentence == outfit else None
+        segments.append(_appearance_segment(sentence + " ", color=color))
+    text = _appearance_text(segments).strip()
+    return {"text": text, "segments": [segment for segment in segments if str(segment.get("text", ""))]}
+
+
+def _skin_mark_compact_bits(loadout):
+    bits = []
+    marks = dict(getattr(loadout, "skin_marks", {}) or {}) if loadout is not None else {}
+    for slot in SKIN_MARK_SLOTS:
+        mark = marks.get(slot)
+        if not isinstance(mark, dict) or not mark:
+            continue
+        kind = _key(mark.get("kind"))
+        design = _text(mark.get("design"))
+        if kind == "tattoo" and design:
+            bits.append(f"{design} tattoo")
+        else:
+            bits.append(_text(mark.get("description")) or _skin_mark_phrase(mark, first_person=False))
+    return tuple(bit for bit in bits if bit)
+
+
+def _makeup_compact_bits(loadout):
+    overrides = dict(getattr(loadout, "body_overrides", {}) or {}) if loadout is not None else {}
+    makeup_regions = dict(getattr(loadout, "makeup_regions", {}) or {}) if loadout is not None else {}
+    bits = []
+    makeup = _text(overrides.get("makeup"))
+    if makeup and _key(makeup) != "none":
+        bits.append(f"{makeup} makeup")
+    labels = {"eyes": "eye makeup", "lips": "lip makeup", "cheeks": "cheek makeup"}
+    for region in ("eyes", "lips", "cheeks"):
+        value = _text(makeup_regions.get(region))
+        if value and _key(value) != "none":
+            bits.append(f"{value} {labels.get(region, region)}")
+    return tuple(bits)
+
+
+def human_live_look_description_clause(sim, eid, *, identity=None, personal_name=None):
+    if sim is None or eid is None:
+        return ""
+    if identity is None:
+        identity = sim.ecs.get(CreatureIdentity).get(eid)
+    resolved_name = personal_name or getattr(identity, "personal_name", "")
+    profile = build_human_description_profile(
+        getattr(sim, "seed", 0),
+        eid=eid,
+        identity=identity,
+        personal_name=resolved_name,
+    )
+    if not isinstance(profile, dict):
+        return ""
+    loadout = appearance_loadout_for(sim, eid, create=False)
+    bits = []
+    for value in (
+        _text(profile.get("stature_compact")),
+        _live_hair_phrase(loadout, profile),
+        _text(profile.get("standout_compact")),
+    ):
+        if value:
+            bits.append(value)
+    bits.extend(_skin_mark_compact_bits(loadout)[:2])
+    bits.extend(_makeup_compact_bits(loadout)[:2])
+    outfit = _outfit_parts(sim, eid)
+    if outfit:
+        bits.append("wearing " + _join_with_and(outfit[:4]))
+    adornment = _adornment_parts(sim, eid)
+    if adornment:
+        bits.append("with " + _join_with_and(adornment[:3]))
+    demeanor = _text(profile.get("demeanor_compact"))
+    if demeanor:
+        bits.append(demeanor)
+    return ", ".join(bit for bit in bits if bit)
 
 
 def player_appearance_summary(sim, player_eid):

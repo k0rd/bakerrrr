@@ -24,7 +24,7 @@ from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
 from game.flora_runtime import flora_at, flora_look_text
 from game.hunting_runtime import hunting_carcass_look_text, hunting_carcasses_at
-from game.human_description import human_look_description_clause
+from game.appearance_loadout import human_live_look_description_clause
 from game.human_identity import is_human_identity
 from game.local_situations import local_situation_look_text_for_property
 from game.organization_presence import format_actor_org_presence, format_property_org_presence
@@ -316,9 +316,9 @@ class PlayerLookRuntime:
                     if condition:
                         detail_bits.append(f"condition:{condition}")
                     if is_human_identity(identity):
-                        appearance = human_look_description_clause(
-                            getattr(self.sim, "seed", 0),
-                            eid=target_eid,
+                        appearance = human_live_look_description_clause(
+                            self.sim,
+                            target_eid,
                             identity=identity,
                             personal_name=getattr(identity, "personal_name", ""),
                         )

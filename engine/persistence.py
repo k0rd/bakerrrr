@@ -32,7 +32,7 @@ def _inventory_item_instance_ids_from_sim(sim):
                     ids.append(entry.get("instance_id"))
     return ids
 
-SAVE_VERSION = 1
+SAVE_VERSION = 2
 
 
 def _default_save_dir():

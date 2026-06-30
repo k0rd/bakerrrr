@@ -1,5 +1,7 @@
 """Extracted systems from ``game.systems``: EventLogSystem."""
 
+import random
+
 from engine.sites import layout_chunk_site, site_gameplay_profile
 from engine.systems import System
 from game.components import (
@@ -50,6 +52,7 @@ from game.components import (
     WeaponLoadout,
     WeaponUseProfile,
 )
+from game.cult_runtime import CULT_SERVICE_IDS
 from game.economy import (
     chunk_economy_profile,
     item_market_bias,
@@ -455,6 +458,20 @@ class EventLogSystem(System):
         self.sim.events.subscribe("contact_learned", self.on_contact_learned)
         self.sim.events.subscribe("site_service_used", self.on_site_service_used)
         self.sim.events.subscribe("site_service_blocked", self.on_site_service_blocked)
+        self.sim.events.subscribe("bodyguard_warning", self.on_bodyguard_warning)
+        self.sim.events.subscribe("bodyguard_threat_response", self.on_bodyguard_threat_response)
+        self.sim.events.subscribe("bodyguard_fired", self.on_bodyguard_fired)
+        self.sim.events.subscribe("bodyguard_contract_ended", self.on_bodyguard_contract_ended)
+        self.sim.events.subscribe("cult_joined", self.on_cult_joined)
+        self.sim.events.subscribe("cult_recruited_npc", self.on_cult_recruited_npc)
+        self.sim.events.subscribe("cult_shunned", self.on_cult_shunned)
+        self.sim.events.subscribe("cult_meeting_started", self.on_cult_meeting_started)
+        self.sim.events.subscribe("cult_official_promoted", self.on_cult_official_promoted)
+        self.sim.events.subscribe("cult_official_arrived", self.on_cult_official_arrived)
+        self.sim.events.subscribe("cult_service_site_absorbed", self.on_cult_service_site_absorbed)
+        self.sim.events.subscribe("cult_devotion_warning", self.on_cult_devotion_warning)
+        self.sim.events.subscribe("cult_crisis_started", self.on_cult_crisis_started)
+        self.sim.events.subscribe("cult_disbanded", self.on_cult_disbanded)
         self.sim.events.subscribe("hunting_carcass_harvested", self.on_hunting_carcass_harvested)
         self.sim.events.subscribe("hunting_carcass_blocked", self.on_hunting_carcass_blocked)
         self.sim.events.subscribe("flora_harvested", self.on_flora_harvested)
@@ -2720,6 +2737,382 @@ class EventLogSystem(System):
         animal = str(event.data.get("animal_name") or "wildlife").strip() or "wildlife"
         self.sim.log.add(f"Hunters dress {animal} near their game rack.", channel="world", priority="normal")
 
+    def _bodyguard_pick_line(self, event, lines):
+        if not lines:
+            return ""
+        seed = ":".join(
+            str(part)
+            for part in (
+                getattr(self.sim, "seed", 0),
+                getattr(self.sim, "tick", 0),
+                event.data.get("guard_eid"),
+                event.data.get("subject_eid") or event.data.get("threat_eid"),
+                event.data.get("team_id"),
+                event.data.get("protection_channel_id"),
+                event.data.get("protection_ring"),
+                event.type,
+            )
+        )
+        return random.Random(seed).choice(tuple(lines))
+
+    def on_bodyguard_warning(self, event):
+        guard_eid = event.data.get("guard_eid")
+        subject_eid = event.data.get("subject_eid")
+        subject = self._npc_label(subject_eid, fallback="there")
+        property_target = bool(event.data.get("property_target"))
+        if property_target:
+            lines = (
+                f"Hold there. This entrance is covered.",
+                f"Back off the door, {subject}.",
+                "Stop at the line and state your business.",
+                "That is close enough for this post.",
+                "Hands visible. Keep moving or step back.",
+                "Do not crowd the ingress.",
+                "Perimeter is active. Give it room.",
+                "You can wait outside the line.",
+            )
+        else:
+            lines = (
+                f"That is close enough, {subject}.",
+                "Step back from the principal.",
+                "Hands visible. Keep your distance.",
+                "You have business here, say it from there.",
+                "Do not close on them.",
+                "Hold your line.",
+                "Back up two steps.",
+                "No sudden reach. Stay where I can see you.",
+            )
+        quote = self._bodyguard_pick_line(event, lines)
+        self._log_npc_bark(
+            guard_eid,
+            quote,
+            "A bodyguard warns someone off nearby.",
+            "A bodyguard warns someone off from another floor.",
+            channel="alerts",
+            priority="high",
+            dedupe_key=f"bodyguard_warning:{guard_eid}:{subject_eid}",
+        )
+
+    def on_bodyguard_threat_response(self, event):
+        guard_eid = event.data.get("guard_eid")
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        property_id = event.data.get("property_id")
+        try:
+            ring = int(event.data.get("protection_ring", 1) or 1)
+        except (TypeError, ValueError):
+            ring = 1
+        place = self._property_name(property_id, "the post") if property_id else "the principal"
+        if ring >= 2:
+            if reason == "attack_observed":
+                lines = (
+                    "Outer line has contact.",
+                    "Perimeter responding. Keep clear.",
+                    "Contact carried. Moving to intercept.",
+                    "Outer detail is collapsing on the threat.",
+                    "Threat call received. Closing from the perimeter.",
+                )
+            else:
+                lines = (
+                    "Perimeter line is moving.",
+                    "Outer post has a live contact.",
+                    "Contact crossed the call. Intercepting.",
+                    "Second line is closing.",
+                    "Keep the street clear. Detail moving.",
+                )
+        elif reason == "attack_observed":
+            lines = (
+                "Contact. Cover now.",
+                "Taking fire. Move behind cover.",
+                "We have an active threat.",
+                "Stay down. We are handling it.",
+                "Threat is live. Hold back.",
+            )
+        elif property_id:
+            lines = (
+                f"Threat on {place}. Moving.",
+                "Ingress is compromised. Responding.",
+                "They crossed the line. Engage.",
+                "Post is hot. Clear the door.",
+                "Contact at the entrance.",
+            )
+        else:
+            lines = (
+                "They pressed the line. Moving.",
+                "Principal, get inside.",
+                "Clear back. We have this.",
+                "Threat is closing. Intercepting.",
+                "Stay behind us.",
+            )
+        quote = self._bodyguard_pick_line(event, lines)
+        self._log_npc_bark(
+            guard_eid,
+            quote,
+            "A bodyguard calls a contact nearby.",
+            "A bodyguard calls a contact from another floor.",
+            channel="alerts",
+            priority="high",
+            dedupe_key=f"bodyguard_response:{guard_eid}:{event.data.get('threat_eid')}",
+        )
+
+    def on_bodyguard_fired(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        # The hiring desk emits a site_service_used transaction immediately
+        # afterward; avoid repeating the same release line in the HUD log.
+        return
+
+    def on_bodyguard_contract_ended(self, event):
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        if reason not in {"killed", "jailed"}:
+            return
+        guard_eid = event.data.get("guard_eid")
+        guard = self._npc_label(guard_eid, fallback="A bodyguard")
+        self._log(
+            f"{guard}'s bodyguard contract ends: {reason}.",
+            channel="alerts",
+            priority="normal",
+            dedupe_window=6,
+            dedupe_key=f"bodyguard_end:{guard_eid}:{reason}",
+        )
+
+    def _cult_pick_line(self, event, lines):
+        options = tuple(str(line).strip() for line in tuple(lines or ()) if str(line).strip())
+        if not options:
+            return ""
+        rng = random.Random(
+            f"{getattr(self.sim, 'seed', 0)}:cult-log:{event.type}:"
+            f"{event.data.get('cult_id', '')}:{event.data.get('witness_eid', '')}:"
+            f"{event.data.get('offender_eid', '')}:{event.data.get('actor_eid', '')}:"
+            f"{event.data.get('official_eid', '')}:"
+            f"{int(getattr(self.sim, 'tick', 0)) // 12}"
+        )
+        return options[rng.randrange(len(options))]
+
+    def on_cult_joined(self, event):
+        actor_eid = event.data.get("eid")
+        cult_name = str(event.data.get("cult_name", "the circle") or "the circle").strip()
+        if actor_eid == self.player_eid:
+            issued = tuple(event.data.get("issued_items", ()) or ())
+            missing = tuple(event.data.get("missing_items", ()) or ())
+            item_note = ""
+            if issued:
+                item_note = f" Uniform issued: {len(issued)} piece{'s' if len(issued) != 1 else ''}."
+            if missing:
+                item_note += " Your bag was too full for part of it."
+            _log_player_feedback(
+                self.sim,
+                f"You joined {cult_name}. Members will expect the dress code after the grace period.{item_note}",
+                kind="social",
+            )
+            return
+        if self._player_can_perceive_entity(actor_eid):
+            name = self._npc_label(actor_eid, fallback="Someone")
+            self._log_npc_message(
+                actor_eid,
+                f"{name} is counted into {cult_name}.",
+                channel="social",
+                priority="low",
+                dedupe_window=8,
+                dedupe_key=f"cult-join:{actor_eid}:{event.data.get('cult_id')}",
+            )
+
+    def on_cult_recruited_npc(self, event):
+        recruiter_eid = event.data.get("recruiter_eid")
+        recruit_eid = event.data.get("recruit_eid")
+        if not (self._player_can_perceive_entity(recruiter_eid) or self._player_can_perceive_entity(recruit_eid)):
+            return
+        recruit_name = self._npc_label(recruit_eid, fallback="someone")
+        line = self._cult_pick_line(event, (
+            f"{recruit_name} accepts the circle's clothing and keeps their head down.",
+            f"{recruit_name} lets the official count them in.",
+            f"{recruit_name} takes the offered colors without making a show of it.",
+            f"{recruit_name} steps closer to the matching clothes and does not step back.",
+        ))
+        self._log_npc_message(
+            recruiter_eid,
+            line,
+            channel="social",
+            priority="low",
+            dedupe_window=10,
+            dedupe_key=f"cult-recruit:{recruiter_eid}:{recruit_eid}",
+        )
+
+    def on_cult_shunned(self, event):
+        actor_eid = event.data.get("actor_eid")
+        cult_name = str(event.data.get("cult_name", "the circle") or "the circle").strip()
+        if actor_eid == self.player_eid:
+            _log_player_feedback(
+                self.sim,
+                f"{cult_name} has shut its doors to you. This is private grievance, not law.",
+                kind="social",
+            )
+            return
+        if self._player_can_perceive_entity(actor_eid):
+            actor_name = self._npc_label(actor_eid, fallback="Someone")
+            self._log(
+                f"{actor_name} is being cut out of {cult_name}.",
+                channel="social",
+                priority="low",
+                dedupe_window=10,
+                dedupe_key=f"cult-shunned:{actor_eid}:{event.data.get('cult_id')}",
+            )
+
+    def on_cult_meeting_started(self, event):
+        prop = self.sim.properties.get(str(event.data.get("property_id", "") or "").strip())
+        if not self._player_is_near_property(prop, radius=16):
+            return
+        prop_name = str(event.data.get("property_name", "") or "").strip() or self._property_name(event.data.get("property_id"), "a meeting place")
+        self._log(
+            f"Matching clothes gather around {prop_name}. The pattern is visible if you know what to watch.",
+            channel="social",
+            priority="low",
+            dedupe_window=20,
+            dedupe_key=f"cult-meeting:{event.data.get('cult_id')}:{event.data.get('property_id')}",
+        )
+
+    def on_cult_official_promoted(self, event):
+        official_eid = event.data.get("official_eid")
+        leader_eid = event.data.get("leader_eid")
+        prop = self.sim.properties.get(str(event.data.get("property_id", "") or "").strip())
+        if not (
+            self._player_can_perceive_entity(official_eid)
+            or self._player_can_perceive_entity(leader_eid)
+            or self._player_is_near_property(prop, radius=14)
+        ):
+            return
+        name = self._npc_label(official_eid, fallback="Someone")
+        title = str(event.data.get("official_title", "keeper") or "keeper").strip()
+        prop_name = str(event.data.get("property_name", "") or "").strip() or self._property_name(event.data.get("property_id"), "another door")
+        lines = (
+            f"{name} is named {title} and sent toward {prop_name}.",
+            f"The meeting gives {name} a quieter authority and a door to watch: {prop_name}.",
+            f"{name} receives the {title}'s work. The next place on their route is {prop_name}.",
+            f"A circle member steps forward; {name} leaves the meeting with {prop_name} on their hands.",
+            f"{name} is counted higher and directed toward {prop_name}.",
+        )
+        self._log(
+            self._cult_pick_line(event, lines),
+            channel="social",
+            priority="low",
+            dedupe_window=20,
+            dedupe_key=f"cult-promote:{event.data.get('cult_id')}:{official_eid}:{event.data.get('property_id')}",
+        )
+
+    def on_cult_official_arrived(self, event):
+        official_eid = event.data.get("official_eid")
+        prop = self.sim.properties.get(str(event.data.get("property_id", "") or "").strip())
+        if not (self._player_can_perceive_entity(official_eid) or self._player_is_near_property(prop, radius=12)):
+            return
+        name = self._npc_label(official_eid, fallback="Someone")
+        prop_name = str(event.data.get("property_name", "") or "").strip() or self._property_name(event.data.get("property_id"), "a host door")
+        line = self._cult_pick_line(event, (
+            f"{name} settles in at {prop_name} and starts watching the local counters.",
+            f"{name} takes a hosted room at {prop_name}. People in matching clothes know where to knock.",
+            f"{name} arrives at {prop_name} with a small list and a patient face.",
+            f"The hosted door at {prop_name} gets a new circle contact: {name}.",
+        ))
+        self._log(
+            line,
+            channel="social",
+            priority="low",
+            dedupe_window=16,
+            dedupe_key=f"cult-official-arrive:{event.data.get('cult_id')}:{official_eid}:{event.data.get('property_id')}",
+        )
+
+    def on_cult_service_site_absorbed(self, event):
+        official_eid = event.data.get("official_eid")
+        recruit_eid = event.data.get("recruit_eid")
+        prop = self.sim.properties.get(str(event.data.get("property_id", "") or "").strip())
+        if not (
+            self._player_can_perceive_entity(official_eid)
+            or self._player_can_perceive_entity(recruit_eid)
+            or self._player_is_near_property(prop, radius=14)
+        ):
+            return
+        official = self._npc_label(official_eid, fallback="The official")
+        recruit = self._npc_label(recruit_eid, fallback="the counter worker")
+        prop_name = str(event.data.get("property_name", "") or "").strip() or self._property_name(event.data.get("property_id"), "the counter")
+        line = self._cult_pick_line(event, (
+            f"{official} and {recruit} make {prop_name} read a little more like circle business.",
+            f"{prop_name} keeps its old services, but {official}'s colors are behind the counter now.",
+            f"{recruit} lets {official} fold {prop_name} into the circle's work.",
+            f"The counter at {prop_name} still opens; outsiders just feel the new terms.",
+            f"{prop_name} keeps the sign. The people behind it change the price of belonging.",
+        ))
+        self._log(
+            line,
+            channel="social",
+            priority="normal",
+            dedupe_window=24,
+            dedupe_key=f"cult-service-absorbed:{event.data.get('cult_id')}:{event.data.get('property_id')}",
+        )
+
+    def on_cult_devotion_warning(self, event):
+        witness_eid = event.data.get("witness_eid")
+        offender_eid = event.data.get("offender_eid")
+        if offender_eid != self.player_eid and not (
+            self._player_can_perceive_entity(witness_eid) or self._player_can_perceive_entity(offender_eid)
+        ):
+            return
+        response = str(event.data.get("response", "warning") or "warning").strip().lower()
+        reason = str(event.data.get("reason", "devotion") or "devotion").strip().lower()
+        if response == "force":
+            lines = (
+                "You touched what the circle protects. Move.",
+                "No more warning. Back away from it.",
+                "That was not yours to break.",
+                "The circle sees that. Now I answer.",
+            )
+            priority = "high"
+        elif reason == "sacred_flora":
+            lines = (
+                "Leave the green where it stands.",
+                "Hands off that plant. You do not know what you are cutting.",
+                "That bloom is under our care. Step back.",
+                "You can walk past it. You cannot take from it.",
+            )
+            priority = "normal"
+        else:
+            lines = (
+                "Leave that creature alone.",
+                "Back away. That one is watched.",
+                "You do not get to hurt what we keep safe.",
+                "Enough. Let it go.",
+            )
+            priority = "normal"
+        self._log_npc_message(
+            witness_eid,
+            self._cult_pick_line(event, lines),
+            channel="social",
+            priority=priority,
+            dedupe_window=5,
+            dedupe_key=f"cult-devotion:{event.data.get('cult_id')}:{witness_eid}:{offender_eid}:{reason}",
+        )
+
+    def on_cult_crisis_started(self, event):
+        leader_eid = event.data.get("leader_eid")
+        if not self._player_can_perceive_entity(leader_eid):
+            return
+        cult_name = str(event.data.get("cult_name", "the circle") or "the circle").strip()
+        self._log(
+            f"{cult_name} goes tight and strange around its missing center.",
+            channel="social",
+            priority="normal",
+            dedupe_window=20,
+            dedupe_key=f"cult-crisis:{event.data.get('cult_id')}",
+        )
+
+    def on_cult_disbanded(self, event):
+        cult_name = str(event.data.get("cult_name", "the circle") or "the circle").strip()
+        reason = str(event.data.get("reason", "ended") or "ended").strip().replace("_", " ")
+        self._log(
+            f"{cult_name} loses its center and starts coming apart ({reason}).",
+            channel="social",
+            priority="normal",
+            dedupe_window=30,
+            dedupe_key=f"cult-disbanded:{event.data.get('cult_id')}",
+        )
+
     def on_site_service_used(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -2818,6 +3211,34 @@ class EventLogSystem(System):
                 f"You paid {prop_name} {credits_spent} cr to prepare {input_units} meat into {output_units} {item_name}.",
                 kind="commerce",
             )
+            return
+        if service == "bodyguard_contract":
+            action = str(event.data.get("bodyguard_action", "hire") or "hire").strip().lower()
+            if action == "fire":
+                count = int(event.data.get("guard_count", 0) or 0)
+                _log_player_feedback(
+                    self.sim,
+                    f"You released {count} bodyguard{'s' if count != 1 else ''} from contract.",
+                    kind="service",
+                )
+                return
+            count = int(event.data.get("guard_count", 0) or 0)
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            active_count = int(event.data.get("active_guard_count", count) or count)
+            target_name = str(event.data.get("target_name", "the assignment")).strip() or "the assignment"
+            tier_label = str(event.data.get("tier_label", "bodyguard detail")).strip() or "bodyguard detail"
+            _log_player_feedback(
+                self.sim,
+                f"You hired a {tier_label} for {target_name}: {count} guard{'s' if count != 1 else ''}, {credits_spent} cr. Detail strength {active_count}/20.",
+                kind="service",
+            )
+            return
+        if service in CULT_SERVICE_IDS:
+            cult_name = str(event.data.get("cult_name", "") or "").strip()
+            lines = tuple(str(line).strip() for line in tuple(event.data.get("lines", ()) or ()) if str(line).strip())
+            headline = lines[0] if lines else f"{prop_name} handles the circle request."
+            suffix = f" ({cult_name})" if cult_name else ""
+            _log_player_feedback(self.sim, f"{_site_service_label(service).title()}{suffix}: {headline}", kind="social")
             return
         if service in TRANSIT_SERVICE_IDS:
             profile = _transit_service_profile(service) or {}
@@ -2962,6 +3383,25 @@ class EventLogSystem(System):
         if reason == "cooldown":
             ready_in = int(event.data.get("ready_in", 0))
             self.sim.log.add(f"{prop_name} cannot help with {_site_service_label(service)} again yet ({ready_in}t).")
+            return
+        if service in CULT_SERVICE_IDS:
+            cult_name = str(event.data.get("cult_name", "") or "").strip()
+            lines = tuple(str(line).strip() for line in tuple(event.data.get("lines", ()) or ()) if str(line).strip())
+            if lines:
+                self.sim.log.add(f"{_site_service_label(service).title()}: {lines[0]}")
+                return
+            if reason == "shunned":
+                self.sim.log.add(f"{cult_name or prop_name} will not do circle business with you.")
+                return
+            if reason == "not_member":
+                self.sim.log.add(f"{cult_name or prop_name} keeps that service for members.")
+                return
+            if reason == "no_credits":
+                cost = int(event.data.get("cost", 0) or 0)
+                credits = int(event.data.get("credits", 0) or 0)
+                self.sim.log.add(f"{cult_name or prop_name} asks {cost}c; you only have {credits}c.")
+                return
+            self.sim.log.add(f"{cult_name or prop_name} will not open that circle service right now.")
             return
         if service in TRANSIT_SERVICE_IDS and reason == "no_destinations":
             profile = _transit_service_profile(service) or {}
@@ -6803,6 +7243,16 @@ class EventLogSystem(System):
         forfeited_labels = [str(label).strip() for label in list(event.data.get("forfeited_labels", ()) or ()) if str(label).strip()]
         held_reason_labels = [str(label).strip() for label in list(event.data.get("held_reason_labels", ()) or ()) if str(label).strip()]
         forfeited_reason_labels = [str(label).strip() for label in list(event.data.get("forfeited_reason_labels", ()) or ()) if str(label).strip()]
+        booking_jumpsuit_issued = bool(event.data.get("booking_jumpsuit_issued"))
+        booking_jumpsuit_name = str(event.data.get("booking_jumpsuit_item_name", "") or "").strip() or "orange jumpsuit"
+        booking_jumpsuit_phrase = booking_jumpsuit_name[:1].lower() + booking_jumpsuit_name[1:] if booking_jumpsuit_name else "orange jumpsuit"
+        if not booking_jumpsuit_phrase.lower().startswith(("a ", "an ")):
+            booking_jumpsuit_phrase = f"an {booking_jumpsuit_phrase}"
+        evidence_worn_clothing_labels = [
+            str(label).strip()
+            for label in list(event.data.get("evidence_worn_clothing_labels", ()) or ())
+            if str(label).strip()
+        ]
         ignored_count = int(event.data.get("ignored_item_count", 0) or 0)
         ignored_labels = [str(label).strip() for label in list(event.data.get("ignored_labels", ()) or ()) if str(label).strip()]
         ignored_reason_labels = [str(label).strip() for label in list(event.data.get("ignored_reason_labels", ()) or ()) if str(label).strip()]
@@ -6882,6 +7332,11 @@ class EventLogSystem(System):
                 summary += f" ({', '.join(forfeited_labels[:3])})"
             if forfeited_reason_labels:
                 summary += f" because {', '.join(forfeited_reason_labels[:3])}"
+            summary += "."
+        if booking_jumpsuit_issued:
+            summary += f" Discharged in {booking_jumpsuit_phrase}"
+            if evidence_worn_clothing_labels:
+                summary += f" after evidence clothing was held ({', '.join(evidence_worn_clothing_labels[:2])})"
             summary += "."
         if ignored_count > 0:
             summary += f" Left with you after search: {ignored_count} item(s)"
