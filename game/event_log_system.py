@@ -4639,6 +4639,28 @@ class EventLogSystem(System):
             return
         else:
             prop_label = str(event.data.get("property_name", "") or "").strip() or "the place"
+        maintenance_kind = str(event.data.get("maintenance_kind", "") or "").strip().lower()
+        visible_cue = str(event.data.get("visible_cue", "") or "").strip()
+        summary = str(event.data.get("summary", "") or "").strip()
+        if maintenance_kind == "plant_tending":
+            text = summary or f"Someone tends the plants at {prop_label}."
+        elif maintenance_kind == "counter_reset":
+            text = summary or f"Someone wipes down the counter at {prop_label}."
+        elif maintenance_kind == "shelf_reset":
+            text = summary or f"Someone squares up the shelves at {prop_label}."
+        elif maintenance_kind == "frontage_reset":
+            text = summary or f"Someone resets the visible edge at {prop_label}."
+        else:
+            text = ""
+        if text:
+            self._log(
+                text.rstrip(".") + ".",
+                channel="general",
+                priority="low",
+                dedupe_window=50,
+                dedupe_key=f"quiet-maintenance:{property_id}:{maintenance_kind}:{visible_cue}",
+            )
+            return
         restored_count = max(1, int(event.data.get("restored_count", 1) or 1))
         kinds = {
             str(kind or "").strip().lower()

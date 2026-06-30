@@ -12,6 +12,7 @@ from engine.systems import System
 from game import systems as _systems
 from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
+from game.system_support.player_feedback import _log_player_feedback
 
 AI = _systems.AI
 AnimalBehaviorContext = _systems.AnimalBehaviorContext
@@ -82,6 +83,18 @@ _DEFENSIVE_HUMAN_AGGRESSION_SPECIES = {
     "wolf",
 }
 
+_WILDLIFE_DAMAGE_REACTION_TTL = 8
+_WILDLIFE_DAMAGE_NOISE_BLOCK_TICKS = 3
+_WILDLIFE_PANIC_DAMAGE_KINDS = frozenset({
+    "blast",
+    "burn",
+    "explosion",
+    "explosive",
+    "fire",
+    "vehicle",
+    "vehicle_crash",
+})
+
 _VENOMOUS_CREATURE_PROFILES = {
     "water_moccasin": {
         "status": "venom",
@@ -145,6 +158,148 @@ def _species_key(identity, ecology=None):
             return species
         return str(getattr(identity, "taxonomy_class", "other") or "other").strip().lower() or "other"
     return "other"
+
+
+def _wildlife_damage_reaction_state(sim):
+    state = getattr(sim, "wildlife_damage_reactions", None)
+    if not isinstance(state, dict):
+        state = {}
+        sim.wildlife_damage_reactions = state
+    if not isinstance(state.get("records"), dict):
+        state["records"] = {}
+    if not isinstance(state.get("feedback"), dict):
+        state["feedback"] = {}
+    return state
+
+
+def _wildlife_prune_damage_reactions(sim, *, tick=None):
+    state = _wildlife_damage_reaction_state(sim)
+    current_tick = int(getattr(sim, "tick", 0) if tick is None else tick)
+    records = state.get("records", {})
+    for eid, record in list(records.items()):
+        try:
+            age = current_tick - int(record.get("tick", 0) or 0)
+        except (TypeError, ValueError):
+            age = _WILDLIFE_DAMAGE_REACTION_TTL + 1
+        if age > _WILDLIFE_DAMAGE_REACTION_TTL:
+            records.pop(eid, None)
+    feedback = state.get("feedback", {})
+    for key, last_tick in list(feedback.items()):
+        try:
+            age = current_tick - int(last_tick or 0)
+        except (TypeError, ValueError):
+            age = 40
+        if age > 36:
+            feedback.pop(key, None)
+
+
+def _wildlife_recent_damage_reaction(sim, eid, *, max_age=_WILDLIFE_DAMAGE_REACTION_TTL):
+    _wildlife_prune_damage_reactions(sim)
+    state = _wildlife_damage_reaction_state(sim)
+    try:
+        eid = int(eid)
+    except (TypeError, ValueError):
+        return None
+    record = state.get("records", {}).get(eid)
+    if not isinstance(record, dict):
+        return None
+    try:
+        age = int(getattr(sim, "tick", 0)) - int(record.get("tick", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if age < 0 or age > int(max_age):
+        state.get("records", {}).pop(eid, None)
+        return None
+    target_eid = record.get("target_eid")
+    if target_eid is not None and _entity_is_downed(sim, target_eid):
+        state.get("records", {}).pop(eid, None)
+        return None
+    return record
+
+
+def _wildlife_damage_reaction_blocks_noise(sim, eid, source_eid=None, cause=""):
+    record = _wildlife_recent_damage_reaction(sim, eid, max_age=_WILDLIFE_DAMAGE_NOISE_BLOCK_TICKS)
+    if not record:
+        return False
+    if str(record.get("intent", "") or "").strip().lower() == "seeking_safety":
+        return False
+    damage_kind = str(record.get("damage_kind", "") or "").strip().lower()
+    if damage_kind in _WILDLIFE_PANIC_DAMAGE_KINDS:
+        return False
+    noise_cause = str(cause or "").strip().lower()
+    if noise_cause not in {"fire_weapon", "gunshot", "weapon_fire", "impact"}:
+        return False
+    if source_eid is not None and record.get("source_eid") is not None:
+        try:
+            return int(source_eid) == int(record.get("source_eid"))
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _wildlife_visible_to_player(sim, pos):
+    player_eid = getattr(sim, "player_eid", None)
+    if player_eid is None or pos is None:
+        return False
+    player_pos = sim.ecs.get(Position).get(player_eid)
+    if player_pos is None or int(player_pos.z) != int(pos.z):
+        return False
+    if _manhattan(player_pos.x, player_pos.y, pos.x, pos.y) > 10:
+        return False
+    return _has_line_of_sight(
+        sim,
+        int(player_pos.x),
+        int(player_pos.y),
+        int(player_pos.z),
+        int(pos.x),
+        int(pos.y),
+        int(pos.z),
+    )
+
+
+def _wildlife_damage_reaction_feedback(sim, eid, identity, intent, reason, pos):
+    if not _wildlife_visible_to_player(sim, pos):
+        return
+    state = _wildlife_damage_reaction_state(sim)
+    key = f"{int(eid)}:{intent}:{reason}"
+    tick = int(getattr(sim, "tick", 0))
+    try:
+        last_tick = int(state.get("feedback", {}).get(key, -9999) or -9999)
+    except (TypeError, ValueError):
+        last_tick = -9999
+    if tick - last_tick < 10:
+        return
+    animal = str(getattr(identity, "common_name", "") or getattr(identity, "species", "") or "animal").replace("_", " ").strip().lower()
+    if not animal:
+        animal = "animal"
+    rng = random.Random(f"{getattr(sim, 'seed', 0)}:{eid}:{tick}:wildlife_damage_feedback:{intent}:{reason}")
+    if str(intent) == "seeking_safety":
+        options = (
+            f"The {animal} breaks away from the pain.",
+            f"The {animal} bolts instead of pressing the fight.",
+            f"The {animal} gives ground and runs.",
+        )
+    elif str(intent) == "holding":
+        options = (
+            f"The {animal} digs in instead of breaking.",
+            f"The {animal} holds its ground.",
+            f"The {animal} stiffens and stays put.",
+        )
+    else:
+        options = (
+            f"The {animal} keeps coming.",
+            f"The {animal} turns the hit into a charge.",
+            f"The {animal} does not break from the hit.",
+        )
+    state["feedback"][key] = tick
+    _log_player_feedback(
+        sim,
+        options[rng.randrange(len(options))],
+        kind="interaction",
+        priority="normal",
+        dedupe_window=6,
+        dedupe_key=f"wildlife_damage_reaction:{eid}:{intent}",
+    )
 
 
 class AnimalSocialSystem(System):
@@ -234,6 +389,31 @@ class AnimalSocialSystem(System):
                 via="damaged",
             )
             self._remember_impression(target_eid, source_eid, regard=-0.72, strength=impact, via="damaged")
+
+        if _actor_is_animal_or_wildlife(self.sim, target_eid):
+            reaction = _wildlife_damage_reaction_intent(
+                self.sim,
+                target_eid,
+                source_eid,
+                damage=damage,
+                damage_kind=event.data.get("damage_kind", "harm"),
+            )
+            if reaction:
+                state = _wildlife_damage_reaction_state(self.sim)
+                try:
+                    state["records"][int(target_eid)] = reaction
+                except (TypeError, ValueError):
+                    pass
+                identity = self.sim.ecs.get(CreatureIdentity).get(target_eid)
+                pos = positions.get(target_eid)
+                _wildlife_damage_reaction_feedback(
+                    self.sim,
+                    target_eid,
+                    identity,
+                    reaction.get("intent", ""),
+                    reaction.get("reason", ""),
+                    pos,
+                )
 
         for eid, social in socials.items():
             if not _actor_is_animal_or_wildlife(self.sim, eid):
@@ -1027,6 +1207,161 @@ def _actor_has_ranged_weapon(sim, eid):
         return False
     weapon = weapon_by_id(weapon_id)
     return bool(isinstance(weapon, dict) and not _weapon_is_melee(weapon))
+
+
+def _wildlife_damage_reaction_intent(sim, eid, source_eid, *, damage, damage_kind="harm"):
+    try:
+        eid = int(eid)
+        source_eid = int(source_eid)
+        damage = int(damage or 0)
+    except (TypeError, ValueError):
+        return None
+    if damage <= 0 or eid == source_eid:
+        return None
+
+    positions = sim.ecs.get(Position)
+    pos = positions.get(eid)
+    source_pos = positions.get(source_eid)
+    if pos is None or source_pos is None or int(pos.z) != int(source_pos.z):
+        return None
+
+    ai = sim.ecs.get(AI).get(eid)
+    identity = sim.ecs.get(CreatureIdentity).get(eid)
+    if str(getattr(ai, "role", "") or "").strip().lower() != "wildlife":
+        return None
+    if not _actor_is_animal_or_wildlife(sim, eid):
+        return None
+    if _entity_is_downed(sim, eid):
+        return None
+
+    ecology = _animal_ecology_profile_for_actor(sim, eid)
+    physical = _animal_physical_profile_for_actor(sim, eid)
+    context = _animal_behavior_context_for_actor(sim, eid)
+    behavior = sim.ecs.get(_systems.WildlifeBehavior).get(eid)
+    routine = sim.ecs.get(_systems.NPCRoutine).get(eid)
+    if ecology is None or physical is None or behavior is None:
+        return None
+
+    vitality = sim.ecs.get(Vitality).get(eid)
+    max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1)) if vitality is not None else max(1, int(float(getattr(physical, "size_score", 10.0) or 10.0) * 0.5))
+    hp = max(0, min(max_hp, int(getattr(vitality, "hp", max_hp) or max_hp))) if vitality is not None else max_hp
+    damage_ratio = max(0.0, min(1.0, float(damage) / float(max_hp)))
+    hp_ratio = max(0.0, min(1.0, float(hp) / float(max_hp)))
+    injury = _actor_injury_score(sim, eid, physical)
+    distance = _grid_distance(pos.x, pos.y, source_pos.x, source_pos.y)
+    guardian_bonus = _wildlife_guardian_bonus(sim, eid, pos, identity, ecology, behavior)
+    pack_support = _wildlife_pack_support(sim, eid, pos, identity, ecology, behavior)
+    hunger = max(0.0, min(100.0, float(getattr(context, "hunger", 50.0) or 50.0)))
+    damage_kind_key = str(damage_kind or "harm").strip().lower()
+    panic_damage = damage_kind_key in _WILDLIFE_PANIC_DAMAGE_KINDS
+    previous_state = str(getattr(ai, "state", "") or "").strip().lower()
+    previous_target_eid = getattr(ai, "target_eid", None)
+    try:
+        previous_target_eid = int(previous_target_eid) if previous_target_eid is not None else None
+    except (TypeError, ValueError):
+        previous_target_eid = None
+
+    already_aggressive = previous_state in {"protecting", "chasing"} and previous_target_eid == source_eid
+    already_aggressive = already_aggressive or (
+        previous_state == "holding"
+        and (
+            bool(getattr(context, "territorial_context", False))
+            or bool(getattr(context, "cornered", False))
+            or guardian_bonus > 0.0
+        )
+        and distance <= max(3, int(getattr(behavior, "flee_radius", 5) or 5))
+    )
+    large_or_dangerous = (
+        float(getattr(physical, "size_score", 0.0) or 0.0) >= 64.0
+        or float(getattr(ecology, "predator_score", 0.0) or 0.0) >= 54.0
+        or float(getattr(ecology, "territorial_score", 0.0) or 0.0) >= 58.0
+    )
+
+    press_drive = (
+        float(getattr(ecology, "predator_score", 0.0) or 0.0) * 0.42
+        + float(getattr(ecology, "territorial_score", 0.0) or 0.0) * 0.38
+        + float(getattr(ecology, "chase_bias", 0.0) or 0.0) * 0.24
+        + float(getattr(physical, "size_score", 0.0) or 0.0) * 0.26
+        + hunger * 0.12
+        + guardian_bonus
+        + pack_support * 4.5
+    )
+    if already_aggressive:
+        press_drive += 34.0
+    if bool(getattr(context, "cornered", False)):
+        press_drive += 30.0
+    if bool(getattr(context, "territorial_context", False)) and distance <= 3:
+        press_drive += 16.0
+    if distance <= 1:
+        press_drive += 10.0
+    if hp_ratio <= 0.24:
+        press_drive -= 28.0
+    elif hp_ratio <= 0.38:
+        press_drive -= 14.0
+    if bool(getattr(physical, "juvenile", False)):
+        press_drive -= 28.0
+    press_drive -= float(getattr(ecology, "flee_bias", 0.0) or 0.0) * 0.12
+    press_drive -= injury * 0.26
+    press_drive -= damage_ratio * 42.0
+    if panic_damage:
+        press_drive -= 24.0
+
+    flee_drive = (
+        float(getattr(ecology, "flee_bias", 0.0) or 0.0) * 0.46
+        + float(getattr(ecology, "prey_score", 0.0) or 0.0) * 0.18
+        + damage_ratio * 118.0
+        + injury * 0.72
+    )
+    if hp_ratio <= 0.24:
+        flee_drive += 34.0
+    elif hp_ratio <= 0.38:
+        flee_drive += 18.0
+    if bool(getattr(physical, "juvenile", False)):
+        flee_drive += 28.0
+    if panic_damage:
+        flee_drive += 36.0
+    if already_aggressive:
+        flee_drive -= 14.0
+    if bool(getattr(context, "cornered", False)):
+        flee_drive -= 18.0
+    if guardian_bonus > 0.0:
+        flee_drive -= min(28.0, guardian_bonus * 0.55)
+
+    should_press = large_or_dangerous and press_drive >= max(46.0, flee_drive + 2.0)
+    if should_press:
+        if previous_state == "chasing":
+            intent = "chasing"
+        elif previous_state == "holding" and previous_target_eid is None:
+            intent = "holding"
+        else:
+            intent = "protecting"
+        target = (int(source_pos.x), int(source_pos.y), int(source_pos.z)) if intent != "holding" else (int(pos.x), int(pos.y), int(pos.z))
+        target_eid = source_eid if intent != "holding" else None
+        reason = "pressing"
+        score = min(98.0, max(58.0, press_drive))
+    else:
+        escape_target = _pick_wildlife_escape_target(sim, pos, (source_pos.x, source_pos.y, source_pos.z), routine, behavior)
+        intent = "seeking_safety"
+        target = escape_target or _wildlife_home_position(pos, routine) or (int(pos.x), int(pos.y), int(pos.z))
+        target_eid = None
+        reason = "breaking"
+        score = min(98.0, max(48.0, flee_drive))
+
+    return {
+        "tick": int(getattr(sim, "tick", 0)),
+        "intent": intent,
+        "score": score,
+        "target": target,
+        "target_eid": target_eid,
+        "source_eid": source_eid,
+        "damage": damage,
+        "damage_kind": damage_kind_key,
+        "reason": reason,
+        "press_drive": round(float(press_drive), 3),
+        "flee_drive": round(float(flee_drive), 3),
+        "hp_ratio": round(float(hp_ratio), 3),
+        "damage_ratio": round(float(damage_ratio), 3),
+    }
 
 
 def _wildlife_can_observe(sim, observer_pos, target_pos, *, radius):

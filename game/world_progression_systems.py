@@ -890,6 +890,11 @@ class WorldStreamingSystem(System):
                     "floors": int(plan.get("floors", 1) or 1),
                     "rooms": list(plan.get("rooms", ())),
                     "common_area_room_kinds": sorted(COMMON_AREA_ROOM_KINDS),
+                    "room_access_overrides": {
+                        str(room).strip().lower(): "public"
+                        for room in tuple(plan.get("rooms", ()) or ())
+                        if str(room).strip()
+                    },
                     "footprint": dict(footprint),
                     "footprint_excluded_cells": [
                         dict(cell)

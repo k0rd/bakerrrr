@@ -12,6 +12,7 @@ import random
 from game.economy import strongest_local_trade_pressure_for_property
 from game.organizations import local_protective_pressure_snapshot
 from game.property_runtime import property_display_position, property_focus_position, property_metadata
+from game.quiet_maintenance_runtime import quiet_maintenance_status
 from game.systems_business_reputation import property_business_reputation_snapshot, property_supports_business_reputation
 
 
@@ -237,6 +238,48 @@ def place_mood_snapshot(sim, prop, *, scene=None, pulse=None):
             0.73,
             tags=("maintenance", "strained"),
             bias=0.13,
+        ))
+    maintenance = quiet_maintenance_status(sim, prop) if sim is not None else {}
+    if isinstance(maintenance, dict) and maintenance.get("recent"):
+        last_kind = _slug(maintenance.get("last_kind"))
+        cue = _text(maintenance.get("visible_cue")) or "small practical care is visible"
+        if last_kind == "minor_repair":
+            candidates.append(_mood_candidate(
+                "repairing",
+                "mending",
+                f"{prop_name} has fresh small maintenance work in view",
+                cue,
+                0.78,
+                tags=("maintenance", "work"),
+                bias=0.12,
+            ))
+        else:
+            candidates.append(_mood_candidate(
+                "kept",
+                "kept",
+                f"{prop_name} is showing recent care",
+                cue,
+                0.7,
+                tags=("maintenance", "care", "calm"),
+                bias=0.08,
+            ))
+    elif isinstance(maintenance, dict) and maintenance.get("neglected"):
+        counts = maintenance.get("cultivation_counts") if isinstance(maintenance.get("cultivation_counts"), dict) else {}
+        damage_count = int(maintenance.get("visible_damage_count", 0) or 0)
+        if damage_count > 0:
+            cue = "visible damage is still waiting for the stronger repair path"
+        elif int(counts.get("failed", 0) or 0) > 0:
+            cue = "some planted care has withered instead of recovering"
+        else:
+            cue = "the cared-for edge is starting to slip"
+        candidates.append(_mood_candidate(
+            "neglected",
+            "neglected",
+            f"{prop_name} has upkeep cues nobody has settled yet",
+            cue,
+            0.6 + min(0.16, float(max(damage_count, int(counts.get("failed", 0) or 0))) * 0.03),
+            tags=("maintenance", "strained"),
+            bias=0.09,
         ))
     if phase in {"candle_vigil", "street_triage", "clinic_outreach"}:
         candidates.append(_mood_candidate(
@@ -483,6 +526,34 @@ def local_texture_snapshot(sim, prop, *, mood=None, scene=None, pulse=None):
             light_profile="storefront_warm" if category in {"retail", "hospitality", "residential"} else "clinic_soft",
             tags=("social", "calm"),
         ))
+    if mood_kind == "kept" or tags.intersection({"maintenance", "care"}) and mood_kind in {"kept", "softened"}:
+        candidates.append(_texture_candidate(
+            "kept",
+            "kept",
+            f"{prop_name} reads cared-for because someone is actually touching the details",
+            _text(mood.get("visible_cue")) or "the visible edge has been reset with small competent hands",
+            0.68,
+            rumor_kind="generous",
+            rumor_label="generous",
+            rumor_summary="people here seem more willing to give the place a chance",
+            dialogue_bias="soft",
+            light_profile="storefront_warm" if category not in {"secure", "industrial"} else "security_cool",
+            tags=("maintenance", "care"),
+        ))
+    if mood_kind == "neglected":
+        candidates.append(_texture_candidate(
+            "neglected",
+            "neglected",
+            f"{prop_name} is showing upkeep debt through concrete visible cues",
+            _text(mood.get("visible_cue")) or "the place has visible care work waiting on it",
+            0.72,
+            rumor_kind="tired",
+            rumor_label="tired",
+            rumor_summary="people here notice what has not been put right yet",
+            dialogue_bias="weary",
+            light_profile="street_warm",
+            tags=("maintenance", "strained"),
+        ))
     if mood_kind in {"strained", "brittle", "edged"} or "strained" in tags:
         candidates.append(_texture_candidate(
             "strained",
@@ -525,7 +596,7 @@ def local_texture_snapshot(sim, prop, *, mood=None, scene=None, pulse=None):
             light_profile="headlight_white" if category == "transit" else "storefront_warm",
             tags=("work", "motion"),
         ))
-    if mood_kind == "repairing" or "maintenance" in tags or phase in {"maintenance_loop", "repair_lookover"}:
+    if mood_kind != "kept" and (mood_kind == "repairing" or "maintenance" in tags or phase in {"maintenance_loop", "repair_lookover"}):
         candidates.append(_texture_candidate(
             "mending",
             "mending",

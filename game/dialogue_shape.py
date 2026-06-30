@@ -276,18 +276,23 @@ def build_dialogue_shape(sim, npc_eid, *, context=None):
             shape["concern_line"] = line
             shape["debug_tags"].append("urgent_incident")
         elif social >= 0.34:
-            if firsthand:
-                line = f"I saw enough of that {label} to keep my voice down."
-            elif depth > 0 or source_kind in {"social_rumor", "rumor"}:
-                line = f"People are talking about some {label} {where}. Could be bent by now, but they keep repeating it."
-            elif confidence < 0.48:
-                line = f"Something about {label} is going around, but I would not put my name under it."
+            if source_kind == "participant":
+                shape["debug_tags"].append("participant_incident_suppressed")
             else:
-                line = f"Word is there was {label} {where}, and the quiet after it feels worked-over."
-            shape["local_line"] = line
-            if tone in {"friendly", "open", "neutral"}:
-                shape["opening_lines"].append(line)
-            shape["debug_tags"].append("social_incident")
+                if source_kind == "victim":
+                    line = f"That {label} was done to me. I am not making it smaller just because the room went quiet."
+                elif firsthand:
+                    line = f"I saw enough of that {label} to keep my voice down."
+                elif depth > 0 or source_kind in {"social_rumor", "rumor"}:
+                    line = f"People are talking about some {label} {where}. Could be bent by now, but they keep repeating it."
+                elif confidence < 0.48:
+                    line = f"Something about {label} is going around, but I would not put my name under it."
+                else:
+                    line = f"Word is there was {label} {where}, and the quiet after it feels worked-over."
+                shape["local_line"] = line
+                if tone in {"friendly", "open", "neutral"}:
+                    shape["opening_lines"].append(line)
+                shape["debug_tags"].append("social_incident")
 
     if not shape["opening_lines"]:
         if role in _SERVICE_ROLES and pressure == "high":

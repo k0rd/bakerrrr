@@ -1460,6 +1460,7 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
             + _look_org_text(row)
             + _look_effect_text(row)
             + _look_place_mood_text(row)
+            + _look_place_texture_text(row)
             + _look_ambient_ritual_text(row)
             + _look_owner_text(row)
         )
@@ -1470,6 +1471,7 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
             f"{fixture_name} is the visible handle; {row['action']}"
             + _look_effect_text(row)
             + _look_place_mood_text(row)
+            + _look_place_texture_text(row)
             + _look_ambient_ritual_text(row)
             + _look_owner_text(row)
         )

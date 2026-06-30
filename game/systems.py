@@ -3844,6 +3844,7 @@ class ItemSystem(System):
                     y,
                     z,
                     exclude_eid=eid,
+                    exclude_eids=(payload.get("victim_eid"), payload.get("excluded_observer_eids")),
                     offender_eid=eid,
                     observation_channels=("actor_witness",),
                 )
@@ -4015,6 +4016,7 @@ from game.systems_wildlife import (
     _wildlife_bond_score,
     _wildlife_can_observe,
     _wildlife_chase_drive,
+    _wildlife_damage_reaction_blocks_noise,
     _wildlife_ecology_intent,
     _wildlife_flock_anchor,
     _wildlife_group_alarm_target,
@@ -4022,6 +4024,7 @@ from game.systems_wildlife import (
     _wildlife_home_position,
     _wildlife_is_active,
     _wildlife_pack_support,
+    _wildlife_recent_damage_reaction,
     _wildlife_social_intent,
     _wildlife_social_state_for_actor,
     _wildlife_social_target_score,

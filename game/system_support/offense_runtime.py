@@ -246,6 +246,7 @@ def _emit_action_offense_event(sim, eid, action, x, y, z, context="ordinary", sc
                 y,
                 z,
                 exclude_eid=eid,
+                exclude_eids=(payload.get("victim_eid"), payload.get("excluded_observer_eids")),
                 offender_eid=eid,
                 observation_channels=("actor_witness",),
             )

@@ -25,6 +25,13 @@ def _normalize_observer_eids(values):
     observers = []
     seen = set()
     for raw in values:
+        if isinstance(raw, (list, tuple, set, frozenset)):
+            for eid in _normalize_observer_eids(raw):
+                if eid in seen:
+                    continue
+                seen.add(eid)
+                observers.append(eid)
+            continue
         try:
             eid = int(raw)
         except (TypeError, ValueError):
@@ -34,6 +41,32 @@ def _normalize_observer_eids(values):
         seen.add(eid)
         observers.append(eid)
     return tuple(observers)
+
+
+def _combined_excluded_observer_eids(*values):
+    excluded = []
+    for value in values:
+        excluded.extend(_normalize_observer_eids(value))
+    return frozenset(excluded)
+
+
+def _filter_excluded_observers(observer_eids, excluded_eids=()):
+    observers = _normalize_observer_eids(observer_eids)
+    excluded = _combined_excluded_observer_eids(excluded_eids)
+    if not excluded:
+        return observers
+    return tuple(observer_eid for observer_eid in observers if observer_eid not in excluded)
+
+
+def _event_excluded_observer_eids(data, *, event_type=""):
+    if not isinstance(data, dict):
+        return ()
+    excluded = list(_normalize_observer_eids(data.get("excluded_observer_eids")))
+    # Victims remember what happened to them, but they are not an independent
+    # public witness to their own assault for immediate heat/justice pressure.
+    if str(event_type or "").strip().lower() in {"action_offense", "npc_killed"}:
+        excluded.extend(_normalize_observer_eids(data.get("victim_eid")))
+    return tuple(dict.fromkeys(excluded))
 
 
 def _normalize_observation_channels(values):
@@ -78,11 +111,12 @@ def observation_payload_from_observers(
     observer_eids,
     *,
     offender_eid=None,
+    exclude_eids=(),
     observation_channels=("actor_witness",),
     allow_player_accountable=False,
     max_legacy_witnesses=4,
 ):
-    observers = _normalize_observer_eids(observer_eids)
+    observers = _filter_excluded_observers(observer_eids, exclude_eids)
     accountable = tuple(
         observer_eid
         for observer_eid in observers
@@ -115,16 +149,19 @@ def observation_payload_for_position(
     z,
     *,
     exclude_eid=None,
+    exclude_eids=(),
     offender_eid=None,
     observation_channels=("actor_witness",),
     allow_player_accountable=False,
     max_legacy_witnesses=4,
 ):
+    excluded = _combined_excluded_observer_eids(exclude_eid, exclude_eids)
     if x is None or y is None or z is None:
         return observation_payload_from_observers(
             sim,
             (),
             offender_eid=offender_eid,
+            exclude_eids=excluded,
             observation_channels=observation_channels,
             allow_player_accountable=allow_player_accountable,
             max_legacy_witnesses=max_legacy_witnesses,
@@ -134,13 +171,14 @@ def observation_payload_for_position(
         x,
         y,
         z,
-        exclude_eid=exclude_eid,
+        exclude_eids=excluded,
         offender_eid=offender_eid,
     )
     return observation_payload_from_observers(
         sim,
         observers,
         offender_eid=offender_eid,
+        exclude_eids=excluded,
         observation_channels=observation_channels,
         allow_player_accountable=allow_player_accountable,
         max_legacy_witnesses=max_legacy_witnesses,
@@ -157,21 +195,24 @@ def event_observation_accountability(
     allow_position_backfill=True,
 ):
     data = getattr(event_or_data, "data", event_or_data)
+    event_type = str(getattr(event_or_data, "type", "") or "").strip().lower()
     if not isinstance(data, dict):
         data = {}
 
     has_explicit_observers = "observer_eids" in data
     has_explicit_accountable = "accountable_observer_eids" in data
+    excluded_eids = _event_excluded_observer_eids(data, event_type=event_type)
 
-    observers = _normalize_observer_eids(
-        data.get("observer_eids") if has_explicit_observers else data.get("witnesses")
+    observers = _filter_excluded_observers(
+        data.get("observer_eids") if has_explicit_observers else data.get("witnesses"),
+        excluded_eids,
     )
     channels = _normalize_observation_channels(data.get("observation_channels"))
     if not channels and observers:
         channels = _normalize_observation_channels(default_channels) or ("actor_witness",)
 
     if has_explicit_accountable:
-        accountable = _normalize_observer_eids(data.get("accountable_observer_eids"))
+        accountable = _filter_excluded_observers(data.get("accountable_observer_eids"), excluded_eids)
     else:
         accountable = tuple(
             observer_eid
@@ -190,7 +231,7 @@ def event_observation_accountability(
         and not accountable
     ):
         channels = channels or (_normalize_observation_channels(default_channels) or ("actor_witness",))
-        accountable = _normalize_observer_eids(data.get("witnesses"))
+        accountable = _filter_excluded_observers(data.get("witnesses"), excluded_eids)
         legacy_fallback = True
     elif (
         allow_position_backfill
@@ -205,6 +246,7 @@ def event_observation_accountability(
             data.get("y"),
             data.get("z", 0),
             exclude_eid=offender_eid,
+            exclude_eids=excluded_eids,
             offender_eid=offender_eid,
             observation_channels=default_channels,
         )
@@ -234,13 +276,14 @@ def event_observation_accountability(
     }
 
 
-def _watchers_for_position(sim, x, y, z, exclude_eid=None, offender_eid=None):
+def _watchers_for_position(sim, x, y, z, exclude_eid=None, exclude_eids=(), offender_eid=None):
     positions = sim.ecs.get(Position)
     support = _observer_support()
+    excluded = _combined_excluded_observer_eids(exclude_eid, exclude_eids)
 
     watchers = []
     for observer_eid, observer_pos in positions.items():
-        if observer_eid == exclude_eid:
+        if observer_eid in excluded:
             continue
         if offender_eid is not None and support._observer_is_active_contractor_ally(sim, observer_eid, offender_eid):
             continue

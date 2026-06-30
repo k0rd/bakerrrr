@@ -3000,6 +3000,7 @@ class TradeSystem(System):
             pos.y,
             pos.z,
             exclude_eid=buyer_eid,
+            exclude_eids=(seller_eid,),
             offender_eid=buyer_eid,
             observation_channels=("actor_witness",),
         )
@@ -3692,6 +3693,7 @@ class TradeSystem(System):
                     pos.z,
                     context="contraband_use",
                     score=score,
+                    excluded_observer_eids=(contact_eid,),
                 )
 
         item_id = str(removed.get("item_id", choice.get("item_id", "")) or "").strip().lower()

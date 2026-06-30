@@ -47,7 +47,12 @@ from game.system_support.business_event_state import (
     _business_event_actor_state,
     _business_event_seed_state,
 )
-from game.system_support.building_repair_runtime import quiet_maintenance_cleanup
+from game.quiet_maintenance_runtime import (
+    quiet_maintenance_actor_line,
+    quiet_maintenance_detail_line,
+    quiet_maintenance_worker_careers,
+    run_quiet_maintenance,
+)
 from game.system_support.entity_naming import _entity_display_name
 from game.world_event_presentation import world_event_business_scene_context
 from game import systems as _systems
@@ -6881,15 +6886,58 @@ class BusinessPulseSceneSystem(System):
                 maintenance_phase == "maintenance_loop"
                 or ritual_kind in {"repair_lookover", "plant_tending", "counter_wipe", "shelf_straightening"}
             ):
-                result = quiet_maintenance_cleanup(
+                result = run_quiet_maintenance(
                     self.sim,
                     prop,
-                    max_records=1,
                     source_kind=maintenance_phase or ritual_kind or "ambient_ritual",
                     emit_event=True,
                 )
                 if bool(result.get("ok")):
                     scene["quiet_maintenance_result"] = dict(result)
+                    scene["quiet_maintenance_kind"] = str(result.get("maintenance_kind", "") or "").strip().lower()
+                    scene["quiet_maintenance_visible_cue"] = str(result.get("visible_cue", "") or "").strip()
+                    for key in PLACE_MOOD_FIELD_KEYS + PLACE_TEXTURE_FIELD_KEYS:
+                        scene.pop(key, None)
+                    refreshed = annotate_place_mood_and_ritual(self.sim, prop, scene=scene)
+                    for key in PLACE_MOOD_FIELD_KEYS + PLACE_TEXTURE_FIELD_KEYS:
+                        value = refreshed.get(key)
+                        if value not in (None, "", (), []):
+                            scene[key] = value
+                    self._apply_quiet_maintenance_actor_flavor(scene, result)
+
+    def _apply_quiet_maintenance_actor_flavor(self, scene, result):
+        actor_ids = tuple((scene or {}).get("spawned_entity_ids", ()) or ())
+        if not actor_ids:
+            return
+        category = str((scene or {}).get("category", "") or "").strip().lower()
+        careers = tuple(quiet_maintenance_worker_careers(result, category=category))
+        if not careers:
+            return
+        local_line = quiet_maintenance_actor_line(result)
+        detail_line = quiet_maintenance_detail_line(result)
+        actor_state = _business_event_actor_state(self.sim)
+        event_phase = str((scene or {}).get("event_phase", "") or "").strip().lower()
+        for index, eid in enumerate(actor_ids):
+            note = actor_state.get(eid)
+            if not isinstance(note, dict):
+                try:
+                    note = actor_state.get(int(eid))
+                except (TypeError, ValueError):
+                    note = None
+            if not isinstance(note, dict):
+                continue
+            role = str(note.get("role", "") or "").strip().lower()
+            if role and role != "worker":
+                continue
+            current_career = str(note.get("career", "") or "").strip().lower()
+            career = str(careers[index % len(careers)] or "").strip().lower()
+            if career and (event_phase == "maintenance_loop" or current_career in {"", "worker", "shift_worker", "maintenance_tech"}):
+                note["career"] = career
+            if local_line and not str(note.get("local_line", "") or "").strip():
+                note["local_line"] = local_line
+            if detail_line and not str(note.get("detail_line", "") or "").strip():
+                note["detail_line"] = detail_line
+            note["quiet_maintenance_kind"] = str((result or {}).get("maintenance_kind", "") or "").strip().lower()
 
     def _release_scene_actor(self, scene, eid):
         source = (

@@ -847,6 +847,32 @@ class IncidentKnowledgeSystem(System):
                 propagation_depth=0,
             )
 
+    def _learn_victim_survivor_memory(self, incident, event):
+        incident_id = int(incident.get("id", 0) or 0)
+        offender_eid = event.data.get("offender_eid", event.data.get("eid"))
+        victim_eid = event.data.get("victim_eid")
+        if victim_eid is None:
+            return
+        try:
+            victim_eid = int(victim_eid)
+        except (TypeError, ValueError):
+            return
+        try:
+            if offender_eid is not None and victim_eid == int(offender_eid):
+                return
+        except (TypeError, ValueError):
+            pass
+        self._learn_incident(
+            victim_eid,
+            incident_id,
+            source_kind="victim",
+            source_eid=offender_eid,
+            firsthand=True,
+            confidence=1.0,
+            propagation_depth=0,
+            queue=False,
+        )
+
     def on_action_offense(self, event):
         if event_is_vision_only(event):
             return
@@ -880,6 +906,8 @@ class IncidentKnowledgeSystem(System):
             self._record_player_witnessed_area_warmth(incident, event, reason="witnessed_event", score_delta=0.85)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
+        if context in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge"}:
+            self._learn_victim_survivor_memory(incident, event)
 
     def on_npc_killed(self, event):
         if event_is_vision_only(event):
@@ -954,9 +982,9 @@ class IncidentKnowledgeSystem(System):
             self._learn_incident(
                 seller_eid,
                 int(incident.get("id", 0) or 0),
-                source_kind="self",
+                source_kind="participant",
                 source_eid=seller_eid,
-                firsthand=True,
+                firsthand=False,
                 confidence=1.0,
                 propagation_depth=0,
                 queue=False,

@@ -387,6 +387,10 @@ def _flora_record_from_cultivation(record):
         "chemistry_class": _key(record.get("chemistry_class")),
         "parent_chemistry_classes": list(record.get("parent_chemistry_classes", ()) or ()),
         "container_kind": _key(record.get("container_kind"), "ground"),
+        "tended_tick": record.get("tended_tick"),
+        "tend_count": max(0, _safe_int(record.get("tend_count"), 0)),
+        "maintenance_tended": bool(record.get("maintenance_tended")),
+        "maintenance_quality_bonus": max(0, _safe_int(record.get("maintenance_quality_bonus"), 0)),
     })
 
 

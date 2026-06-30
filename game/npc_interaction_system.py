@@ -2109,7 +2109,16 @@ class NPCInteractionSystem(System):
         entry = entry if isinstance(entry, dict) else self._player_person_contact_entry(person_eid)
         if not isinstance(entry, dict):
             return None
-        return _relationship_anchor_episode(entry, tone=tone)
+        anchor = _relationship_anchor_episode(entry, tone=tone)
+        if not isinstance(anchor, dict):
+            return None
+        if (
+            str(anchor.get("kind", "") or "").strip().lower() == "warned_me_off"
+            and str(anchor.get("source_topic", "") or "").strip().lower() == "warn_property"
+            and not bool(entry.get("met_directly"))
+        ):
+            return None
+        return anchor
 
     def _player_relationship_history(self, person_eid, *, entry=None, include_trivial=False, limit=None):
         if person_eid is None:
@@ -8467,13 +8476,14 @@ class NPCInteractionSystem(System):
 
     def _relationship_anchor_opening_line(self, context):
         anchor = self._relationship_anchor_episode_for_context(context)
+        try:
+            opened_count = max(0, int(context.get("opened_count", 0) or 0))
+        except (TypeError, ValueError):
+            opened_count = 0
+        has_direct_history = opened_count > 0 and bool(context.get("met_directly"))
         if not anchor:
             band = str(context.get("dialogue_relationship_band", "") or "").strip().lower()
-            try:
-                opened_count = max(0, int(context.get("opened_count", 0) or 0))
-            except (TypeError, ValueError):
-                opened_count = 0
-            if opened_count > 0 and bool(context.get("met_directly")):
+            if has_direct_history:
                 if band in {"family", "partner", "friend"}:
                     return "Good to see you again. What are we picking up today?"
                 if band == "trusted_coworker":
@@ -8483,6 +8493,8 @@ class NPCInteractionSystem(System):
             return ""
         kind = str(anchor.get("kind", "") or "").strip().lower()
         tone = str(context.get("tone", "neutral") or "neutral").strip().lower() or "neutral"
+        if kind in {"warned_me_off", "i_pushed_too_far", "i_insulted_them"} and not has_direct_history:
+            return ""
         if kind == "warned_me_off":
             return "We have had this talk before. Keep it cleaner this time."
         if kind == "i_pushed_too_far":
@@ -14343,7 +14355,10 @@ class NPCInteractionSystem(System):
         prop = self.sim.properties.get(str(event.data.get("property_id", "") or "").strip())
         property_id = str((prop or {}).get("id", "") or "").strip() if isinstance(prop, dict) else ""
         property_name = str((prop or {}).get("name", property_id or "the place")).strip() if isinstance(prop, dict) else "the place"
-        standing = max(0.08, float(self._contact_standing(bond, 0.0) or 0.0) * 0.4)
+        # A property warning is enforcement context, not rapport. It should not
+        # make a first-contact NPC read as if the player has a social foothold
+        # with them.
+        standing = 0.0
         self._remember_player_relationship_episode(
             npc_eid,
             kind="warned_me_off",

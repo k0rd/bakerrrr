@@ -64,6 +64,7 @@ class Simulation:
         self.camera_disabled = {}
         self.contractors = {}
         self.fire_state = {}
+        self.wildlife_damage_reactions = {}
         self.disguise_state = None
         self.structure_cells = {}
         self.next_property_id = 1
@@ -142,6 +143,8 @@ class Simulation:
             self.contractors = {}
         if not isinstance(getattr(self, "fire_state", None), dict):
             self.fire_state = {}
+        if not isinstance(getattr(self, "wildlife_damage_reactions", None), dict):
+            self.wildlife_damage_reactions = {}
         if not isinstance(getattr(self, "live_timeskip", None), dict):
             self.live_timeskip = {}
         if not isinstance(getattr(self, "active_ejections", None), dict):

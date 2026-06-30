@@ -178,6 +178,12 @@ PUBLIC_HOURS_BY_ARCHETYPE = {
 NEUTRAL_STANDING_REASONS = {"", "none", "open_business", "public_space"}
 AUTO_CONTROLLER_OWNER_TAGS = {"", "public", "city", "community", "neutral", "none", "unowned"}
 ALWAYS_PUBLIC_ARCHETYPES = {"metro_exchange"}
+PUBLIC_UNDERGROUND_PASSAGE_ARCHETYPES = {
+    "metro_underpass",
+    "service_basement",
+    "storm_drain",
+    "utility_corridor",
+}
 COMMON_AREA_ROOM_KINDS = frozenset({
     "aisle",
     "entry",
@@ -1010,6 +1016,15 @@ def _room_access_level_for_kind(room_kind, *, common_area_kind="", metadata=None
     configured, reason = _configured_room_access_level(metadata, room_kind)
     if configured:
         return configured, reason
+    public_underground_passage = bool(
+        isinstance(metadata, dict)
+        and metadata.get("public")
+        and _clean_key(metadata.get("archetype")) in PUBLIC_UNDERGROUND_PASSAGE_ARCHETYPES
+        and room_kind
+        and room_kind in _normalize_key_set(metadata.get("rooms"))
+    )
+    if public_underground_passage:
+        return "public", "underground_passage"
     public_span_parent_common = bool(
         isinstance(metadata, dict)
         and metadata.get("public")

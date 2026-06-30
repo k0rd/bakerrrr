@@ -56,6 +56,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "property_anchor_index",
     "property_cover_index",
     "actor_attention_state",
+    "wildlife_damage_reactions",
     "vision_scene",
     "dream_residue",
     "npc_self_protection_state",

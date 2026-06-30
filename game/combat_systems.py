@@ -168,6 +168,7 @@ class WeaponSystem(System):
                     y,
                     z,
                     exclude_eid=eid,
+                    exclude_eids=(payload.get("victim_eid"), payload.get("excluded_observer_eids")),
                     offender_eid=eid,
                     observation_channels=("actor_witness",),
                 )
@@ -1747,6 +1748,8 @@ class NPCWeaponSystem(System):
             profile = profiles.get(eid)
             vitality = vitalities.get(eid)
             if not ai or not pos:
+                continue
+            if str(getattr(ai, "role", "") or "").strip().lower() == "wildlife":
                 continue
             if vitality and vitality.downed:
                 _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)

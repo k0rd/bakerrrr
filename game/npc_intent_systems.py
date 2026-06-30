@@ -90,7 +90,10 @@ from game.npc_relationships import (
     should_block_solo_vehicle_for_partner as _should_block_solo_vehicle_for_partner,
 )
 from game.named_scars_runtime import maybe_record_named_scar_from_damage
-from game.npc_self_protection_runtime import apply_self_protection_quirk
+from game.npc_self_protection_runtime import (
+    active_self_protection_action,
+    apply_self_protection_quirk,
+)
 from game.property_access import (
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
@@ -402,6 +405,18 @@ def _routine_will_hold_ticks(state):
     return int(max(0, _WILL_COASTING_TICKS.get(str(state or "").strip().lower(), 0)))
 
 
+def _actor_is_active_street_trade_contact(sim, eid):
+    state = getattr(sim, "trade_ui", None)
+    if not isinstance(state, dict) or not bool(state.get("open")):
+        return False
+    if str(state.get("source_kind", "") or "").strip().lower() != "street_vendor":
+        return False
+    try:
+        return int(state.get("contact_eid")) == int(eid)
+    except (TypeError, ValueError):
+        return False
+
+
 def _should_skip_live_will_update(sim, eid, ai, will, needs, pos, *, player_pos=None, suppression=None):
     if ai is None or will is None or needs is None or pos is None:
         return False
@@ -520,6 +535,14 @@ def _sync_wildlife_bond_pair(*args, **kwargs):
 
 def _wildlife_ecology_intent(*args, **kwargs):
     return _wildlife_module()._wildlife_ecology_intent(*args, **kwargs)
+
+
+def _wildlife_recent_damage_reaction(*args, **kwargs):
+    return _wildlife_module()._wildlife_recent_damage_reaction(*args, **kwargs)
+
+
+def _wildlife_damage_reaction_blocks_noise(*args, **kwargs):
+    return _wildlife_module()._wildlife_damage_reaction_blocks_noise(*args, **kwargs)
 
 
 def _wildlife_home_position(*args, **kwargs):
@@ -1735,18 +1758,20 @@ class NPCWillSystem(System):
         retreat_target = (threat_context or {}).get("retreat_target") if isinstance(threat_context, dict) else None
         retreat_bias = float((metrics or {}).get("retreat_bias", 0.0) or 0.0)
         assault_bias = float((metrics or {}).get("assault_bias", 0.0) or 0.0)
+        source_target = (int(source_pos.x), int(source_pos.y), int(source_pos.z))
 
         if retreat_target and retreat_bias >= max(0.42, assault_bias + 0.08):
+            safety_score = min(96.0, 68.0 + (retreat_bias * 26.0) + min(12.0, float(damage)))
             self._set_intent(
                 target_eid,
                 ai,
                 will,
                 "seeking_safety",
-                min(96.0, 68.0 + (retreat_bias * 26.0) + min(12.0, float(damage))),
+                safety_score,
                 target=retreat_target,
                 target_eid=source_eid,
             )
-            apply_self_protection_quirk(
+            quirk_row = apply_self_protection_quirk(
                 self.sim,
                 target_eid,
                 ai=ai,
@@ -1754,26 +1779,67 @@ class NPCWillSystem(System):
                 reason="seeking_safety",
                 target=retreat_target,
                 threat_eid=source_eid,
+                threat_pos=source_target,
+                damage=damage,
             )
+            action = quirk_row.get("action") if isinstance(quirk_row, dict) else {}
+            quirk = str(quirk_row.get("quirk", "") or "").strip().lower() if isinstance(quirk_row, dict) else ""
+            action_target = action.get("target") if isinstance(action, dict) else None
+            if quirk == "stand_ground" and retreat_bias < 0.78 and float(damage) < 18.0:
+                self._set_intent(
+                    target_eid,
+                    ai,
+                    will,
+                    "protecting",
+                    max(safety_score, min(96.0, 70.0 + (assault_bias * 20.0))),
+                    target=source_target,
+                    target_eid=source_eid,
+                )
+            elif quirk in {"hide_behind_counter", "slip_out_back", "shelter_with_crowd", "freeze", "look_busy"} and isinstance(action_target, (tuple, list)) and len(action_target) >= 3:
+                self._set_intent(
+                    target_eid,
+                    ai,
+                    will,
+                    "seeking_safety",
+                    safety_score,
+                    target=(int(action_target[0]), int(action_target[1]), int(action_target[2])),
+                    target_eid=source_eid,
+                )
         else:
+            protect_score = min(96.0, 66.0 + (assault_bias * 24.0) + min(14.0, float(damage)))
             self._set_intent(
                 target_eid,
                 ai,
                 will,
                 "protecting",
-                min(96.0, 66.0 + (assault_bias * 24.0) + min(14.0, float(damage))),
-                target=(int(source_pos.x), int(source_pos.y), int(source_pos.z)),
+                protect_score,
+                target=source_target,
                 target_eid=source_eid,
             )
-            apply_self_protection_quirk(
+            quirk_row = apply_self_protection_quirk(
                 self.sim,
                 target_eid,
                 ai=ai,
                 pos=target_pos,
                 reason="standing_ground",
-                target=(int(source_pos.x), int(source_pos.y), int(source_pos.z)),
+                target=source_target,
                 threat_eid=source_eid,
+                threat_pos=source_target,
+                damage=damage,
             )
+            action = quirk_row.get("action") if isinstance(quirk_row, dict) else {}
+            quirk = str(quirk_row.get("quirk", "") or "").strip().lower() if isinstance(quirk_row, dict) else ""
+            action_target = action.get("target") if isinstance(action, dict) else None
+            if quirk in {"hide_behind_counter", "slip_out_back", "shelter_with_crowd", "freeze", "look_busy", "stand_ground"} and isinstance(action_target, (tuple, list)) and len(action_target) >= 3:
+                self._set_intent(
+                    target_eid,
+                    ai,
+                    will,
+                    "protecting",
+                    protect_score,
+                    target=(int(action_target[0]), int(action_target[1]), int(action_target[2])),
+                    target_eid=source_eid,
+                )
         _schedule_will_rethink(self.sim, target_eid, current_tick=getattr(self.sim, "tick", 0), delay_ticks=0)
         _mark_actor_urgent(self.sim, target_eid, family="will", reason="direct_damage", ttl_ticks=18)
         _mark_actor_urgent(self.sim, target_eid, family="move", reason="direct_damage", ttl_ticks=18)
@@ -2188,6 +2254,32 @@ class NPCWillSystem(System):
             if str(getattr(ai, "role", "") or "").strip().lower() == "wildlife" and wildlife:
                 _relocate_indoor_wildlife_outdoors(self.sim, eid, pos, routine)
                 home = _wildlife_home_position(pos, routine)
+                damage_reaction = _wildlife_recent_damage_reaction(self.sim, eid)
+                if damage_reaction:
+                    reaction_intent = str(damage_reaction.get("intent", "") or "").strip().lower()
+                    reaction_target = damage_reaction.get("target")
+                    reaction_target_eid = damage_reaction.get("target_eid")
+                    if reaction_target_eid is not None:
+                        live_target_pos = positions.get(reaction_target_eid)
+                        if live_target_pos is not None and int(live_target_pos.z) == int(pos.z):
+                            reaction_target = (
+                                int(live_target_pos.x),
+                                int(live_target_pos.y),
+                                int(live_target_pos.z),
+                            )
+                        elif reaction_intent != "holding":
+                            reaction_target_eid = None
+                    if reaction_intent in {"protecting", "chasing", "holding", "seeking_safety"} and reaction_target:
+                        self._set_intent(
+                            eid,
+                            ai,
+                            will,
+                            reaction_intent,
+                            float(damage_reaction.get("score", 78.0) or 78.0),
+                            reaction_target,
+                            reaction_target_eid,
+                        )
+                        continue
                 if ai.state == "seeking_safety" and ai.target:
                     try:
                         safety_age = int(self.sim.tick) - int(getattr(will, "last_tick", -1) or -1)
@@ -3999,6 +4091,8 @@ class NPCInvestigateSystem(System):
                 behavior = wildlife_behaviors.get(eid)
                 if not behavior or str(cause or "").strip().lower() in QUIET_NOISE_CAUSES:
                     continue
+                if _wildlife_damage_reaction_blocks_noise(self.sim, eid, source_eid=source_eid, cause=cause):
+                    continue
                 escape_target = _pick_wildlife_escape_target(
                     self.sim,
                     pos,
@@ -4925,6 +5019,16 @@ class NPCInvestigateSystem(System):
                 if live_timeskip_active:
                     self._unschedule_move_due(eid)
                 continue
+            if _actor_is_active_street_trade_contact(self.sim, eid):
+                throttle = move_throttles.get(eid)
+                next_tick = int(self.sim.tick) + 1
+                if throttle:
+                    throttle.next_move_tick = max(int(getattr(throttle, "next_move_tick", 0) or 0), next_tick)
+                else:
+                    self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), next_tick)
+                if live_timeskip_active:
+                    self._schedule_move_due(eid, next_tick)
+                continue
             invalid_vehicle_reason = self._invalid_vehicle_occupancy_reason(eid, ai, pos)
             if invalid_vehicle_reason:
                 self._abandon_npc_vehicle_commute(eid, ai, pos, reason=invalid_vehicle_reason)
@@ -4987,6 +5091,32 @@ class NPCInvestigateSystem(System):
 
             tx, ty, tz = target
             threat_focus = None
+            quirk_target_override = False
+            quirk_action = active_self_protection_action(self.sim, eid, current_tick=self.sim.tick)
+            if isinstance(quirk_action, dict) and quirk_action:
+                action_name = str(quirk_action.get("action", "") or "").strip().lower()
+                try:
+                    action_until = int(quirk_action.get("until_tick", 0) or 0)
+                except (TypeError, ValueError):
+                    action_until = 0
+                if action_name in {"freeze", "look_busy"} and action_until > int(self.sim.tick):
+                    next_tick = min(action_until, int(self.sim.tick) + 1)
+                    if throttle:
+                        throttle.next_move_tick = max(int(getattr(throttle, "next_move_tick", 0) or 0), next_tick)
+                    else:
+                        self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), next_tick)
+                    if live_timeskip_active:
+                        self._schedule_move_due(eid, next_tick)
+                    continue
+                action_target = quirk_action.get("target")
+                if action_name in {"hide_behind_counter", "slip_out_back", "shelter_with_crowd", "stand_ground"} and isinstance(action_target, (tuple, list)) and len(action_target) >= 3:
+                    try:
+                        ax, ay, az = int(action_target[0]), int(action_target[1]), int(action_target[2])
+                    except (TypeError, ValueError):
+                        ax = ay = az = None
+                    if ax is not None and int(az) == int(pos.z):
+                        tx, ty, tz = ax, ay, az
+                        quirk_target_override = True
             if ai.state == "protecting" and ai.target_eid is not None:
                 threat_focus = _known_threat_position_for_npc(
                     self.sim,
@@ -5006,20 +5136,21 @@ class NPCInvestigateSystem(System):
                         weapon=held_weapon,
                         **_npc_status_metric_args(self.sim, eid),
                     )
-                    tactical_target = _pick_npc_combat_position(
-                        self.sim,
-                        eid,
-                        pos,
-                        Position(threat_focus[0], threat_focus[1], threat_focus[2]),
-                        weapon=held_weapon,
-                        profile=weapon_profiles.get(eid),
-                        metrics=metrics,
-                        target_eid=ai.target_eid,
-                    )
-                    if tactical_target:
-                        tx = int(tactical_target["x"])
-                        ty = int(tactical_target["y"])
-                        tz = int(tactical_target["z"])
+                    if not quirk_target_override:
+                        tactical_target = _pick_npc_combat_position(
+                            self.sim,
+                            eid,
+                            pos,
+                            Position(threat_focus[0], threat_focus[1], threat_focus[2]),
+                            weapon=held_weapon,
+                            profile=weapon_profiles.get(eid),
+                            metrics=metrics,
+                            target_eid=ai.target_eid,
+                        )
+                        if tactical_target:
+                            tx = int(tactical_target["x"])
+                            ty = int(tactical_target["y"])
+                            tz = int(tactical_target["z"])
 
             if pos.z != tz:
                 ai.state = "idle"
