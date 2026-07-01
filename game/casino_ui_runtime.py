@@ -18,6 +18,8 @@ CASINO_TABLE_SERVICE_IDS = (
     "three_card_poker",
     "casino_holdem",
     "twenty_one",
+    "three_bones",
+    "bloom_cards",
 )
 
 
@@ -37,6 +39,7 @@ def default_casino_ui_state():
         "title": "Casino",
         "subtitle": "",
         "body_lines": [],
+        "body_focus_line": -1,
         "rail_lines": [],
         "rows": [],
         "selected_index": 0,
@@ -63,6 +66,7 @@ def ensure_casino_ui_state(sim):
     state.setdefault("title", "Casino")
     state.setdefault("subtitle", "")
     state.setdefault("body_lines", [])
+    state.setdefault("body_focus_line", -1)
     state.setdefault("rail_lines", [])
     state.setdefault("rows", [])
     state.setdefault("selected_index", 0)

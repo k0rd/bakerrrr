@@ -12,6 +12,7 @@ from collections import Counter
 from engine.buildings import layout_chunk_building, world_building_id
 from engine.sites import layout_chunk_site
 from game.components import AI, NPCNeeds, Occupation, PlayerAssets, Position
+from game.flora_runtime import load_flora_catalog
 from game.organizations import occupation_targets_property, property_org_members
 from game.population import work_shift_active
 from game.property_runtime import (
@@ -1634,8 +1635,446 @@ CASINO_GAME_PROFILES = {
         "note": "Hit, stand, and hope the house runs cold.",
         "social_gain": (2, 4),
     },
+    "three_bright": {
+        "title": "Three Bright",
+        "service_label": "three bright",
+        "menu_label": "Play Three Bright",
+        "bet_options": (25, 100, 250),
+        "prompt": "Choose a chip for the color dice.",
+        "note": "Three colored dice pay singles by matching face, doubles on two or more, and triples when all three land together.",
+        "social_gain": (2, 5),
+    },
+    "three_bones": {
+        "title": "Three Bones",
+        "service_label": "three bones",
+        "menu_label": "Play Three Bones",
+        "bet_options": (5, 15, 30),
+        "prompt": "Choose a chip for the covered dice.",
+        "note": "Three dice under a cup take small, big, exact total, double, triple, and any-triple action on one shared slip.",
+        "social_gain": (2, 4),
+    },
+    "bloom_cards": {
+        "title": "Bloom Cards",
+        "service_label": "bloom cards",
+        "menu_label": "Play Bloom Cards",
+        "bet_options": (10, 25, 50),
+        "prompt": "Choose a stake for a small flower-card garden.",
+        "note": "Cash out for a safe return, or let the garden grow and risk withering before the better blooms pay.",
+        "social_gain": (2, 5),
+    },
 }
 CASINO_GAME_SERVICE_IDS = frozenset(CASINO_GAME_PROFILES)
+CASINO_GAME_CAPABILITY_DEFAULTS = {
+    "supports_table_context": False,
+    "supports_custom_stakes": False,
+    "supports_visual_accents": False,
+    "supports_sponsor_read": False,
+    "supports_backroom_access": True,
+    "supports_multiplayer_seats": False,
+    "supports_offscreen_resolution": False,
+    "supports_social_heat": True,
+    "supports_debt": False,
+    "supports_house_play": True,
+    "supports_player_vs_player": False,
+    "available_for_public": True,
+    "available_for_gang_favorite": True,
+    "risk_band": "medium",
+    "pace": "steady",
+    "social_texture": "table",
+    "style_tags": (),
+}
+CASINO_GAME_CAPABILITY_OVERRIDES = {
+    "slots": {
+        "supports_backroom_access": False,
+        "risk_band": "medium",
+        "pace": "fast",
+        "social_texture": "machine",
+        "style_tags": ("machine", "luck", "neon", "solitary"),
+    },
+    "video_poker": {
+        "supports_backroom_access": False,
+        "risk_band": "medium",
+        "pace": "steady",
+        "social_texture": "machine",
+        "style_tags": ("cards", "machine", "quiet", "precision"),
+    },
+    "keno": {
+        "supports_backroom_access": False,
+        "risk_band": "low",
+        "pace": "slow",
+        "social_texture": "ticket",
+        "style_tags": ("numbers", "ticket", "wait", "corner"),
+    },
+    "roulette": {
+        "supports_table_context": False,
+        "supports_custom_stakes": False,
+        "supports_visual_accents": False,
+        "risk_band": "high",
+        "pace": "steady",
+        "social_texture": "wheel",
+        "style_tags": ("wheel", "color", "crowd", "ceremony"),
+    },
+    "craps": {
+        "supports_table_context": False,
+        "supports_custom_stakes": False,
+        "supports_visual_accents": False,
+        "risk_band": "high",
+        "pace": "fast",
+        "social_texture": "crowd",
+        "style_tags": ("dice", "noise", "crowd", "street"),
+    },
+    "baccarat": {
+        "supports_table_context": False,
+        "supports_custom_stakes": False,
+        "supports_visual_accents": False,
+        "risk_band": "medium",
+        "pace": "quiet",
+        "social_texture": "formal",
+        "style_tags": ("cards", "quiet", "formal", "high_limit"),
+    },
+    "three_card_poker": {
+        "supports_table_context": False,
+        "supports_custom_stakes": False,
+        "supports_visual_accents": False,
+        "risk_band": "medium",
+        "pace": "steady",
+        "social_texture": "cards",
+        "style_tags": ("cards", "quick", "showdown"),
+    },
+    "casino_holdem": {
+        "supports_table_context": False,
+        "supports_custom_stakes": False,
+        "supports_visual_accents": False,
+        "supports_multiplayer_seats": True,
+        "supports_player_vs_player": False,
+        "supports_debt": True,
+        "risk_band": "high",
+        "pace": "tense",
+        "social_texture": "poker",
+        "style_tags": ("cards", "holdem", "showdown", "status"),
+    },
+    "plinko": {
+        "supports_backroom_access": False,
+        "risk_band": "medium",
+        "pace": "fast",
+        "social_texture": "machine",
+        "style_tags": ("machine", "pegs", "spectacle"),
+    },
+    "crash": {
+        "supports_backroom_access": True,
+        "risk_band": "high",
+        "pace": "fast",
+        "social_texture": "screen",
+        "style_tags": ("graph", "risk", "pressure", "quick"),
+    },
+    "twenty_one": {
+        "supports_multiplayer_seats": True,
+        "supports_debt": True,
+        "risk_band": "medium",
+        "pace": "steady",
+        "social_texture": "cards",
+        "style_tags": ("cards", "dealer", "counting", "steady"),
+    },
+    "three_bright": {
+        "supports_table_context": True,
+        "supports_custom_stakes": True,
+        "supports_visual_accents": True,
+        "supports_sponsor_read": True,
+        "supports_debt": True,
+        "available_for_public": False,
+        "available_for_gang_favorite": True,
+        "risk_band": "high",
+        "pace": "fast",
+        "social_texture": "house_dice",
+        "style_tags": ("color", "dice", "gang", "backroom", "street"),
+    },
+    "three_bones": {
+        "supports_table_context": True,
+        "supports_custom_stakes": True,
+        "supports_visual_accents": True,
+        "supports_sponsor_read": True,
+        "supports_debt": True,
+        "risk_band": "high",
+        "pace": "fast",
+        "social_texture": "dice",
+        "style_tags": ("dice", "cup", "street", "noise"),
+    },
+    "bloom_cards": {
+        "supports_table_context": True,
+        "supports_custom_stakes": True,
+        "supports_visual_accents": True,
+        "supports_sponsor_read": True,
+        "risk_band": "medium",
+        "pace": "press_your_luck",
+        "social_texture": "cards",
+        "style_tags": ("cards", "flora", "quiet", "ritual", "color"),
+    },
+}
+CASINO_TABLE_STAKE_PROFILES = {
+    "street": (1, 5, 10),
+    "standard": (10, 25, 50),
+    "gang_street": (5, 15, 30),
+    "gang_house": (25, 100, 250),
+    "gang_high": (100, 500, 1000),
+}
+CASINO_THREE_BRIGHT_DEFAULT_COLORS = ("red", "green", "blue", "gold", "black", "white")
+CASINO_THREE_BRIGHT_BRIGHT_COLORS = frozenset({"red", "green", "blue", "gold", "pink", "violet", "white", "coral"})
+CASINO_THREE_BRIGHT_DARK_COLORS = frozenset({"black", "charcoal", "navy", "purple", "olive", "brown"})
+CASINO_THREE_BONES_EXACT_TOTAL_GROSS_MULTIPLIERS = {
+    4: 61,
+    5: 31,
+    6: 19,
+    7: 13,
+    8: 9,
+    9: 8,
+    10: 7,
+    11: 7,
+    12: 8,
+    13: 9,
+    14: 13,
+    15: 19,
+    16: 31,
+    17: 61,
+}
+CASINO_BLOOM_CARD_MAX_GROW_STEPS = 3
+CASINO_BLOOM_CARD_STARTING_HAND_SIZE = 3
+
+
+def _casino_color_word(value):
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "yellow": "gold",
+        "silver": "white",
+        "cream": "white",
+        "bright_red": "red",
+        "bright_green": "green",
+        "bright_blue": "blue",
+        "dark": "black",
+        "grey": "charcoal",
+        "gray": "charcoal",
+    }
+    text = aliases.get(text, text)
+    allowed = (
+        "red", "green", "blue", "gold", "black", "white",
+        "pink", "violet", "coral", "charcoal", "navy", "purple",
+        "olive", "brown",
+    )
+    return text if text in allowed else ""
+
+
+def _casino_color_words_from_hint(raw):
+    values = []
+    if isinstance(raw, str):
+        raw = raw.replace(";", ",").split(",")
+    if isinstance(raw, dict):
+        raw = raw.values()
+    if not isinstance(raw, (list, tuple, set)):
+        return ()
+    for value in raw:
+        color = _casino_color_word(value)
+        if color and color not in values:
+            values.append(color)
+    return tuple(values)
+
+
+def _casino_stake_profile_ladder(profile_name, fallback=()):
+    profile_name = str(profile_name or "standard").strip().lower()
+    ladder = CASINO_TABLE_STAKE_PROFILES.get(profile_name)
+    if not ladder:
+        ladder = CASINO_TABLE_STAKE_PROFILES["standard"]
+    fallback_values = tuple(int(value) for value in tuple(fallback or ()) if int(value) > 0)
+    if profile_name == "standard" and fallback_values:
+        ladder = fallback_values
+    return tuple(sorted(set(int(value) for value in ladder if int(value) > 0)))
+
+
+def _casino_table_context(
+    sim=None,
+    prop=None,
+    *,
+    game="",
+    stake_profile="",
+    features=None,
+    sponsor_kind="",
+    sponsor_id=None,
+    access_style="",
+    table_tone="",
+    presentation_accents=None,
+):
+    game = str(game or "").strip().lower()
+    profile = _casino_game_profile(game) or {}
+    metadata = prop.get("metadata") if isinstance(prop, dict) and isinstance(prop.get("metadata"), dict) else {}
+    prop_context = metadata.get("casino_table_context") if isinstance(metadata, dict) else None
+    if not isinstance(prop_context, dict):
+        prop_context = {}
+    game_contexts = metadata.get("casino_table_contexts") if isinstance(metadata, dict) else None
+    if isinstance(game_contexts, dict) and isinstance(game_contexts.get(game), dict):
+        prop_context = {**prop_context, **dict(game_contexts.get(game))}
+
+    raw_features = {}
+    ignored_features = []
+    for source in (prop_context.get("features"), features):
+        if isinstance(source, dict):
+            raw_features.update(source)
+    accepted_feature_keys = {
+        "accent", "accent_colors", "accents", "allow_public",
+        "colors", "debug_table", "house_edge", "math_profile",
+        "palette", "stake_profile", "table_tone", "variance",
+    }
+    for key in sorted(raw_features):
+        if str(key).strip().lower() not in accepted_feature_keys:
+            ignored_features.append(str(key))
+
+    gang_data = metadata.get("gang_enterprise") if isinstance(metadata, dict) else None
+    if not isinstance(gang_data, dict):
+        gang_data = {}
+    resolved_sponsor_kind = str(
+        sponsor_kind
+        or prop_context.get("sponsor_kind")
+        or ("gang" if gang_data.get("organization_eid") is not None else "")
+        or ""
+    ).strip().lower()
+    resolved_sponsor_id = sponsor_id
+    if resolved_sponsor_id is None:
+        resolved_sponsor_id = prop_context.get("sponsor_id")
+    if resolved_sponsor_id is None and gang_data.get("organization_eid") is not None:
+        resolved_sponsor_id = gang_data.get("organization_eid")
+    if not resolved_sponsor_kind:
+        resolved_sponsor_kind = "house"
+
+    resolved_access = str(
+        access_style
+        or prop_context.get("access_style")
+        or ("gang_linked" if resolved_sponsor_kind == "gang" else "public")
+    ).strip().lower() or "public"
+    resolved_tone = str(
+        table_tone
+        or raw_features.get("table_tone")
+        or prop_context.get("table_tone")
+        or ("watched" if resolved_sponsor_kind == "gang" else "open")
+    ).strip().lower() or "open"
+    resolved_stake_profile = str(
+        stake_profile
+        or raw_features.get("stake_profile")
+        or prop_context.get("stake_profile")
+        or ("gang_house" if resolved_sponsor_kind == "gang" else "standard")
+    ).strip().lower() or "standard"
+
+    allowed = True
+    access_reason = ""
+    if game == "three_bright" and resolved_sponsor_kind != "gang":
+        allow_public = bool(raw_features.get("allow_public") or raw_features.get("debug_table"))
+        if not allow_public:
+            allowed = False
+            access_reason = "gang_link_required"
+
+    fallback_bets = tuple(profile.get("bet_options", ()) or ())
+    stake_ladder = _casino_stake_profile_ladder(resolved_stake_profile, fallback=fallback_bets)
+
+    accents = []
+    for source in (
+        presentation_accents,
+        prop_context.get("presentation_accents"),
+        raw_features.get("colors"),
+        raw_features.get("palette"),
+        raw_features.get("accent_colors"),
+        raw_features.get("accents"),
+        raw_features.get("accent"),
+    ):
+        for color in _casino_color_words_from_hint(source):
+            if color not in accents:
+                accents.append(color)
+    for color in CASINO_THREE_BRIGHT_DEFAULT_COLORS:
+        if color not in accents:
+            accents.append(color)
+    accents = tuple(accents[:6])
+
+    variance = raw_features.get("variance", prop_context.get("variance", 0.5))
+    try:
+        variance = max(0.0, min(1.0, float(variance)))
+    except (TypeError, ValueError):
+        variance = 0.5
+    math_profile = str(raw_features.get("math_profile", prop_context.get("math_profile", "bounded")) or "bounded").strip().lower()
+    if math_profile not in {"bounded", "swingy", "soft", "street"}:
+        ignored_features.append(f"math_profile:{math_profile}")
+        math_profile = "bounded"
+
+    sponsor_label = "gang house" if resolved_sponsor_kind == "gang" else "house"
+    color_read = "/".join(accents[:2]) if accents else "standard"
+    table_read = (
+        f"Table read: {sponsor_label}, {resolved_tone}, {color_read} table colors, "
+        f"{resolved_stake_profile.replace('_', ' ')} stakes."
+    )
+    context_id_parts = [
+        game or "table",
+        resolved_sponsor_kind,
+        str(resolved_sponsor_id or "none"),
+        resolved_stake_profile,
+        resolved_tone,
+    ]
+    return {
+        "game": game,
+        "allowed": bool(allowed),
+        "access_reason": access_reason,
+        "stake_profile": resolved_stake_profile,
+        "stake_ladder": tuple(int(value) for value in stake_ladder),
+        "math_profile": math_profile,
+        "variance": float(variance),
+        "sponsor_kind": resolved_sponsor_kind,
+        "sponsor_id": resolved_sponsor_id,
+        "sponsor_summary": sponsor_label,
+        "access_style": resolved_access,
+        "table_tone": resolved_tone,
+        "accent_colors": accents,
+        "presentation_tags": tuple(tag for tag in (resolved_sponsor_kind, resolved_access, resolved_tone, math_profile) if tag),
+        "table_read": table_read,
+        "ignored_features": tuple(sorted(set(ignored_features))),
+        "context_id": ":".join(context_id_parts),
+    }
+
+
+def _casino_table_context_summary(context):
+    if not isinstance(context, dict):
+        return {}
+    return {
+        "game": str(context.get("game", "")).strip().lower(),
+        "stake_profile": str(context.get("stake_profile", "")).strip().lower(),
+        "math_profile": str(context.get("math_profile", "")).strip().lower(),
+        "sponsor_kind": str(context.get("sponsor_kind", "")).strip().lower(),
+        "sponsor_id": context.get("sponsor_id"),
+        "access_style": str(context.get("access_style", "")).strip().lower(),
+        "table_tone": str(context.get("table_tone", "")).strip().lower(),
+        "accent_colors": tuple(str(color) for color in tuple(context.get("accent_colors", ()) or ())),
+        "presentation_tags": tuple(str(tag) for tag in tuple(context.get("presentation_tags", ()) or ())),
+        "table_read": str(context.get("table_read", "")).strip(),
+        "ignored_features": tuple(str(key) for key in tuple(context.get("ignored_features", ()) or ())),
+    }
+
+
+def casino_game_capabilities():
+    """Return public casino-game capability metadata for other systems."""
+
+    rows = {}
+    for game_id, profile in sorted(CASINO_GAME_PROFILES.items()):
+        row = dict(CASINO_GAME_CAPABILITY_DEFAULTS)
+        row.update(dict(CASINO_GAME_CAPABILITY_OVERRIDES.get(game_id, {}) or {}))
+        row["game_id"] = str(game_id)
+        row["public_label"] = str(profile.get("title") or game_id).strip() or str(game_id)
+        row["service_label"] = str(profile.get("service_label") or profile.get("title") or game_id).strip() or str(game_id)
+        row["menu_label"] = str(profile.get("menu_label") or profile.get("title") or game_id).strip() or str(game_id)
+        row["default_stake_profiles"] = tuple(
+            str(profile_name)
+            for profile_name in ("street", "standard", "gang_street", "gang_house", "gang_high")
+            if profile_name in CASINO_TABLE_STAKE_PROFILES
+        )
+        row["default_bet_options"] = tuple(int(value) for value in tuple(profile.get("bet_options", ()) or ()) if int(value) > 0)
+        row["style_tags"] = tuple(
+            str(tag).strip().lower()
+            for tag in tuple(row.get("style_tags", ()) or ())
+            if str(tag).strip()
+        )
+        rows[str(game_id)] = row
+    return rows
 
 
 def _site_service_state(sim):
@@ -3343,6 +3782,839 @@ def _casino_craps_resolve(session):
     return current, round_result
 
 
+def _casino_three_bright_color_words(context=None):
+    colors = []
+    if isinstance(context, dict):
+        for color in _casino_color_words_from_hint(context.get("accent_colors")):
+            if color not in colors:
+                colors.append(color)
+    for color in CASINO_THREE_BRIGHT_DEFAULT_COLORS:
+        if color not in colors:
+            colors.append(color)
+    return tuple(colors[:6])
+
+
+def _casino_three_bright_rainbow_targets(colors):
+    colors = tuple(str(color) for color in tuple(colors or ()) if str(color).strip())
+    preferred = tuple(color for color in ("red", "green", "blue") if color in colors)
+    if len(preferred) == 3:
+        return preferred
+    return tuple(colors[:3])
+
+
+def _casino_three_bright_market_order(context=None):
+    colors = _casino_three_bright_color_words(context)
+    order = []
+    for color in colors:
+        order.extend((f"single:{color}", f"double:{color}", f"triple:{color}"))
+    order.extend(("special:rainbow", "special:all_bright", "special:all_dark"))
+    return tuple(order)
+
+
+def _casino_three_bright_bet_label(bet_kind, bet_value=None, context=None):
+    kind = str(bet_kind or "").strip().lower()
+    value = _casino_color_word(bet_value)
+    if kind == "single" and value:
+        return f"Single {value}"
+    if kind == "double" and value:
+        return f"Double {value}"
+    if kind == "triple" and value:
+        return f"Triple {value}"
+    if kind == "special":
+        special = str(bet_value or "").strip().lower()
+        if special == "rainbow":
+            targets = _casino_three_bright_rainbow_targets(_casino_three_bright_color_words(context))
+            return "Rainbow trio " + "/".join(targets)
+        if special == "all_bright":
+            return "All bright"
+        if special == "all_dark":
+            return "All dark"
+    return str(bet_value or bet_kind or "market").replace("_", " ").title()
+
+
+def _casino_three_bright_market_from_key(market_key, context=None):
+    key = str(market_key or "").strip().lower()
+    if not key:
+        return None
+    kind, _sep, raw_value = key.partition(":")
+    colors = set(_casino_three_bright_color_words(context))
+    if kind in {"single", "double", "triple"}:
+        value = _casino_color_word(raw_value)
+        if not value or value not in colors:
+            return None
+        normalized_key = f"{kind}:{value}"
+        return {
+            "key": normalized_key,
+            "kind": kind,
+            "value": value,
+            "label": _casino_three_bright_bet_label(kind, value, context=context),
+        }
+    if kind == "special":
+        value = str(raw_value or "").strip().lower()
+        if value not in {"rainbow", "all_bright", "all_dark"}:
+            return None
+        normalized_key = f"special:{value}"
+        return {
+            "key": normalized_key,
+            "kind": "special",
+            "value": value,
+            "label": _casino_three_bright_bet_label("special", value, context=context),
+        }
+    return None
+
+
+def _casino_three_bright_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    context = session.get("table_context") if isinstance(session.get("table_context"), dict) else {}
+    normalized_context = dict(context)
+    if not normalized_context.get("game"):
+        normalized_context["game"] = "three_bright"
+    colors = _casino_three_bright_color_words(normalized_context)
+    bets = {}
+    for key, units in dict(session.get("bets", {}) or {}).items():
+        market = _casino_three_bright_market_from_key(key, normalized_context)
+        if not market:
+            continue
+        try:
+            unit_count = max(0, int(units))
+        except (TypeError, ValueError):
+            unit_count = 0
+        if unit_count > 0:
+            bets[market["key"]] = unit_count
+    cursor_key = str(session.get("cursor_key", "") or "").strip().lower()
+    if not _casino_three_bright_market_from_key(cursor_key, normalized_context):
+        cursor_key = _casino_three_bright_market_order(normalized_context)[0]
+    wager = max(0, int(session.get("wager", 0) or 0))
+    return {
+        "service": "three_bright",
+        "seed_token": str(session.get("seed_token", "")).strip(),
+        "wager": int(wager),
+        "stake": int(sum(int(units) for units in bets.values()) * wager),
+        "bets": bets,
+        "cursor_key": cursor_key,
+        "roll_index": int(session.get("roll_index", 0) or 0),
+        "dice_colors": tuple(_casino_color_word(color) or str(color) for color in tuple(session.get("dice_colors", ()) or ())[:3]),
+        "table_context": normalized_context,
+        "color_words": colors,
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+    }
+
+
+def _casino_three_bright_start(seed_token, wager, table_context=None):
+    context = dict(table_context) if isinstance(table_context, dict) else {}
+    context["game"] = "three_bright"
+    color_words = _casino_three_bright_color_words(context)
+    return {
+        "service": "three_bright",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": 0,
+        "bets": {},
+        "cursor_key": _casino_three_bright_market_order(context)[0],
+        "roll_index": 0,
+        "dice_colors": (),
+        "table_context": context,
+        "color_words": color_words,
+    }
+
+
+def _casino_three_bright_stage_bet(session, market_key):
+    current = _casino_three_bright_normalize_session(session)
+    if not current:
+        return None
+    market = _casino_three_bright_market_from_key(market_key, current.get("table_context"))
+    if not market:
+        return None
+    bets = dict(current.get("bets", {}) or {})
+    bets[market["key"]] = int(bets.get(market["key"], 0) or 0) + 1
+    current["bets"] = bets
+    current["cursor_key"] = market["key"]
+    current["stake"] = int(sum(int(units) for units in bets.values()) * int(current.get("wager", 0)))
+    return current
+
+
+def _casino_three_bright_remove_bet(session, market_key):
+    current = _casino_three_bright_normalize_session(session)
+    if not current:
+        return None
+    market = _casino_three_bright_market_from_key(market_key, current.get("table_context"))
+    if not market:
+        return None
+    bets = dict(current.get("bets", {}) or {})
+    units = int(bets.get(market["key"], 0) or 0)
+    if units <= 1:
+        bets.pop(market["key"], None)
+    else:
+        bets[market["key"]] = units - 1
+    current["bets"] = bets
+    current["cursor_key"] = market["key"]
+    current["stake"] = int(sum(int(raw_units) for raw_units in bets.values()) * int(current.get("wager", 0)))
+    return current
+
+
+def _casino_three_bright_resolve(session):
+    current = _casino_three_bright_normalize_session(session)
+    if not current:
+        return None
+    bets = dict(current.get("bets", {}) or {})
+    if not bets:
+        return None
+    context = dict(current.get("table_context", {}) or {})
+    colors = _casino_three_bright_color_words(context)
+    roll_rng = random.Random(f"{current['seed_token']}:three_bright:{int(current.get('roll_index', 0))}")
+    dice_colors = tuple(roll_rng.choice(colors) for _idx in range(3))
+    counts = Counter(dice_colors)
+    current["roll_index"] = int(current.get("roll_index", 0)) + 1
+    current["dice_colors"] = dice_colors
+
+    payout = 0
+    resolved_stake = 0
+    messages = []
+    bet_outcomes = []
+    rainbow_targets = set(_casino_three_bright_rainbow_targets(colors))
+    bright_set = CASINO_THREE_BRIGHT_BRIGHT_COLORS
+    dark_set = CASINO_THREE_BRIGHT_DARK_COLORS
+
+    for key, units in sorted(bets.items()):
+        market = _casino_three_bright_market_from_key(key, context)
+        if not market:
+            continue
+        unit_count = max(0, int(units))
+        if unit_count <= 0:
+            continue
+        stake = int(unit_count * int(current.get("wager", 0)))
+        resolved_stake += stake
+        kind = market["kind"]
+        value = market["value"]
+        hit = False
+        gross_multiplier = 0
+        if kind == "single":
+            match_count = int(counts.get(value, 0))
+            hit = match_count > 0
+            gross_multiplier = match_count
+        elif kind == "double":
+            hit = int(counts.get(value, 0)) >= 2
+            gross_multiplier = 9 if hit else 0
+        elif kind == "triple":
+            hit = int(counts.get(value, 0)) == 3
+            gross_multiplier = 150 if hit else 0
+        elif kind == "special" and value == "rainbow":
+            hit = len(rainbow_targets) == 3 and set(dice_colors) == rainbow_targets
+            gross_multiplier = 24 if hit else 0
+        elif kind == "special" and value == "all_bright":
+            hit = all(color in bright_set for color in dice_colors)
+            gross_multiplier = 6 if hit else 0
+        elif kind == "special" and value == "all_dark":
+            hit = all(color in dark_set for color in dice_colors)
+            gross_multiplier = 6 if hit else 0
+        market_payout = int(stake * gross_multiplier)
+        payout += max(0, market_payout)
+        if hit:
+            messages.append(f"{market['label']} catches.")
+        else:
+            messages.append(f"{market['label']} misses.")
+        bet_outcomes.append({
+            "key": market["key"],
+            "label": market["label"],
+            "units": int(unit_count),
+            "stake": int(stake),
+            "hit": bool(hit),
+            "payout": int(max(0, market_payout)),
+            "profit": int(max(0, market_payout) - stake),
+            "outcome_key": f"{kind}_{value}_{'hit' if hit else 'miss'}",
+        })
+
+    if payout > resolved_stake:
+        headline = "The color dice pay."
+        outcome_key = "win"
+    elif payout == resolved_stake and payout > 0:
+        headline = "The table pushes back."
+        outcome_key = "push"
+    else:
+        headline = "The colors run cold."
+        outcome_key = "lose"
+    dice_text = ", ".join(str(color).replace("_", " ") for color in dice_colors)
+    result_lines = [
+        str(context.get("table_read", "Table read: color dice.")).strip() or "Table read: color dice.",
+        f"Dice: {dice_text}.",
+    ]
+    result_lines.extend(messages[:10])
+    if len(messages) > 10:
+        result_lines.append(f"...and {len(messages) - 10} more slip rows settle.")
+    result_lines.append(f"Payout returned: {_credit_amount_label(payout)}." if payout > 0 else "Payout returned: no credits.")
+    return {
+        "service": "three_bright",
+        "wager": int(current.get("wager", 0)),
+        "stake": int(resolved_stake),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": "Three colored dice tumble across the rail and every posted color market resolves at once.",
+        "summary": f"Three Bright rolls {dice_text}. {headline}",
+        "result_lines": result_lines,
+        "dice_colors": dice_colors,
+        "color_words": colors,
+        "bet_slip": tuple({
+            "key": key,
+            "label": (_casino_three_bright_market_from_key(key, context) or {"label": key})["label"],
+            "units": int(units),
+            "stake": int(int(units) * int(current.get("wager", 0))),
+        } for key, units in sorted(bets.items())),
+        "bet_outcomes": tuple(bet_outcomes),
+        "table_context": _casino_table_context_summary(context),
+        "table_context_summary": _casino_table_context_summary(context),
+        "social_gain": _casino_social_gain("three_bright", f"{current['seed_token']}:{current['roll_index']}:{outcome_key}:{len(bet_outcomes)}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_three_bones_market_order(_context=None):
+    return tuple([
+        "small",
+        "big",
+        *(f"exact:{total}" for total in range(4, 18)),
+        *(f"double:{face}" for face in range(1, 7)),
+        *(f"triple:{face}" for face in range(1, 7)),
+        "any_triple",
+    ])
+
+
+def _casino_three_bones_bet_label(bet_kind, bet_value=None):
+    kind = str(bet_kind or "").strip().lower()
+    if kind == "small":
+        return "Small 4-10"
+    if kind == "big":
+        return "Big 11-17"
+    if kind == "exact":
+        return f"Total {int(bet_value)}"
+    if kind == "double":
+        return f"Double {int(bet_value)}"
+    if kind == "triple":
+        return f"Triple {int(bet_value)}"
+    if kind == "any_triple":
+        return "Any triple"
+    return str(bet_value or bet_kind or "market").replace("_", " ").title()
+
+
+def _casino_three_bones_market_from_key(market_key, _context=None):
+    key = str(market_key or "").strip().lower()
+    if key in {"small", "big", "any_triple"}:
+        return {
+            "key": key,
+            "kind": key,
+            "value": None,
+            "label": _casino_three_bones_bet_label(key),
+        }
+    kind, _sep, raw_value = key.partition(":")
+    if kind == "exact":
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if value < 4 or value > 17:
+            return None
+        return {
+            "key": f"exact:{value}",
+            "kind": "exact",
+            "value": int(value),
+            "label": _casino_three_bones_bet_label("exact", value),
+        }
+    if kind in {"double", "triple"}:
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if value < 1 or value > 6:
+            return None
+        return {
+            "key": f"{kind}:{value}",
+            "kind": kind,
+            "value": int(value),
+            "label": _casino_three_bones_bet_label(kind, value),
+        }
+    return None
+
+
+def _casino_three_bones_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    context = session.get("table_context") if isinstance(session.get("table_context"), dict) else {}
+    normalized_context = dict(context)
+    if not normalized_context.get("game"):
+        normalized_context["game"] = "three_bones"
+    bets = {}
+    for key, units in dict(session.get("bets", {}) or {}).items():
+        market = _casino_three_bones_market_from_key(key, normalized_context)
+        if not market:
+            continue
+        try:
+            unit_count = max(0, int(units))
+        except (TypeError, ValueError):
+            unit_count = 0
+        if unit_count > 0:
+            bets[market["key"]] = unit_count
+    cursor_key = str(session.get("cursor_key", "") or "").strip().lower()
+    if not _casino_three_bones_market_from_key(cursor_key, normalized_context):
+        cursor_key = "small"
+    wager = max(0, int(session.get("wager", 0) or 0))
+    dice = tuple(max(1, min(6, int(value))) for value in tuple(session.get("dice", ()) or ())[:3] if str(value).strip())
+    return {
+        "service": "three_bones",
+        "seed_token": str(session.get("seed_token", "")).strip(),
+        "wager": int(wager),
+        "stake": int(sum(int(units) for units in bets.values()) * wager),
+        "bets": bets,
+        "cursor_key": cursor_key,
+        "roll_index": int(session.get("roll_index", 0) or 0),
+        "dice": dice,
+        "table_context": normalized_context,
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+    }
+
+
+def _casino_three_bones_start(seed_token, wager, table_context=None):
+    context = dict(table_context) if isinstance(table_context, dict) else {}
+    context["game"] = "three_bones"
+    return {
+        "service": "three_bones",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": 0,
+        "bets": {},
+        "cursor_key": "small",
+        "roll_index": 0,
+        "dice": (),
+        "table_context": context,
+    }
+
+
+def _casino_three_bones_stage_bet(session, market_key):
+    current = _casino_three_bones_normalize_session(session)
+    if not current:
+        return None
+    market = _casino_three_bones_market_from_key(market_key, current.get("table_context"))
+    if not market:
+        return None
+    bets = dict(current.get("bets", {}) or {})
+    bets[market["key"]] = int(bets.get(market["key"], 0) or 0) + 1
+    current["bets"] = bets
+    current["cursor_key"] = market["key"]
+    current["stake"] = int(sum(int(units) for units in bets.values()) * int(current.get("wager", 0)))
+    return current
+
+
+def _casino_three_bones_remove_bet(session, market_key):
+    current = _casino_three_bones_normalize_session(session)
+    if not current:
+        return None
+    market = _casino_three_bones_market_from_key(market_key, current.get("table_context"))
+    if not market:
+        return None
+    bets = dict(current.get("bets", {}) or {})
+    units = int(bets.get(market["key"], 0) or 0)
+    if units <= 1:
+        bets.pop(market["key"], None)
+    else:
+        bets[market["key"]] = units - 1
+    current["bets"] = bets
+    current["cursor_key"] = market["key"]
+    current["stake"] = int(sum(int(raw_units) for raw_units in bets.values()) * int(current.get("wager", 0)))
+    return current
+
+
+def _casino_three_bones_resolve(session):
+    current = _casino_three_bones_normalize_session(session)
+    if not current:
+        return None
+    bets = dict(current.get("bets", {}) or {})
+    if not bets:
+        return None
+    context = dict(current.get("table_context", {}) or {})
+    roll_rng = random.Random(f"{current['seed_token']}:three_bones:{int(current.get('roll_index', 0))}")
+    dice = tuple(roll_rng.randint(1, 6) for _idx in range(3))
+    counts = Counter(dice)
+    total = int(sum(dice))
+    is_triple = any(count >= 3 for count in counts.values())
+    current["roll_index"] = int(current.get("roll_index", 0)) + 1
+    current["dice"] = dice
+
+    payout = 0
+    resolved_stake = 0
+    messages = []
+    bet_outcomes = []
+    for key, units in sorted(bets.items()):
+        market = _casino_three_bones_market_from_key(key, context)
+        if not market:
+            continue
+        unit_count = max(0, int(units))
+        if unit_count <= 0:
+            continue
+        stake = int(unit_count * int(current.get("wager", 0)))
+        resolved_stake += stake
+        kind = market["kind"]
+        value = market["value"]
+        hit = False
+        gross_multiplier = 0
+        if kind == "small":
+            hit = (4 <= total <= 10) and not is_triple
+            gross_multiplier = 2 if hit else 0
+        elif kind == "big":
+            hit = (11 <= total <= 17) and not is_triple
+            gross_multiplier = 2 if hit else 0
+        elif kind == "exact":
+            hit = total == int(value)
+            gross_multiplier = int(CASINO_THREE_BONES_EXACT_TOTAL_GROSS_MULTIPLIERS.get(int(value), 0)) if hit else 0
+        elif kind == "double":
+            hit = int(counts.get(int(value), 0)) >= 2
+            gross_multiplier = 12 if hit else 0
+        elif kind == "triple":
+            hit = int(counts.get(int(value), 0)) == 3
+            gross_multiplier = 181 if hit else 0
+        elif kind == "any_triple":
+            hit = bool(is_triple)
+            gross_multiplier = 31 if hit else 0
+        market_payout = int(stake * gross_multiplier)
+        payout += max(0, market_payout)
+        messages.append(f"{market['label']} {'hits' if hit else 'misses'}.")
+        bet_outcomes.append({
+            "key": market["key"],
+            "label": market["label"],
+            "units": int(unit_count),
+            "stake": int(stake),
+            "hit": bool(hit),
+            "payout": int(max(0, market_payout)),
+            "profit": int(max(0, market_payout) - stake),
+            "outcome_key": f"{kind}_{value if value is not None else 'table'}_{'hit' if hit else 'miss'}",
+        })
+
+    if payout > resolved_stake:
+        headline = "The bones pay."
+        outcome_key = "win"
+    elif payout == resolved_stake and payout > 0:
+        headline = "The cup gives it back."
+        outcome_key = "push"
+    else:
+        headline = "The bones go quiet."
+        outcome_key = "lose"
+    dice_text = "-".join(str(value) for value in dice)
+    result_lines = [
+        str(context.get("table_read", "Table read: public dice table.")).strip() or "Table read: public dice table.",
+        f"Dice: {dice_text} (total {total}).",
+    ]
+    result_lines.extend(messages[:10])
+    if len(messages) > 10:
+        result_lines.append(f"...and {len(messages) - 10} more slip rows settle.")
+    result_lines.append(f"Payout returned: {_credit_amount_label(payout)}." if payout > 0 else "Payout returned: no credits.")
+    return {
+        "service": "three_bones",
+        "wager": int(current.get("wager", 0)),
+        "stake": int(resolved_stake),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": "The cup lifts and three dice settle the whole slip.",
+        "summary": f"Three Bones rolls {dice_text} for {total}. {headline}",
+        "result_lines": result_lines,
+        "dice": dice,
+        "dice_total": int(total),
+        "is_triple": bool(is_triple),
+        "bet_slip": tuple({
+            "key": key,
+            "label": (_casino_three_bones_market_from_key(key, context) or {"label": key})["label"],
+            "units": int(units),
+            "stake": int(int(units) * int(current.get("wager", 0))),
+        } for key, units in sorted(bets.items())),
+        "bet_outcomes": tuple(bet_outcomes),
+        "table_context": _casino_table_context_summary(context),
+        "table_context_summary": _casino_table_context_summary(context),
+        "social_gain": _casino_social_gain("three_bones", f"{current['seed_token']}:{current['roll_index']}:{outcome_key}:{len(bet_outcomes)}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_bloom_card_hue_from_row(row):
+    genetics = row.get("genetics") if isinstance(row, dict) else {}
+    hue = str((genetics or {}).get("hue_family", "") or "").strip().lower()
+    if hue:
+        return hue
+    colors = row.get("colors") if isinstance(row, dict) else ()
+    for color in tuple(colors or ()):
+        text = str(color or "").strip().lower()
+        for prefix in ("flora_flower_", "flora_"):
+            if text.startswith(prefix):
+                return text[len(prefix):]
+        if text:
+            return text
+    return "green"
+
+
+def _casino_bloom_card_from_catalog_row(plant_id, row):
+    if not isinstance(row, dict):
+        row = {}
+    plant_id = str(plant_id or "").strip().lower()
+    name = str(row.get("name", plant_id.replace("_", " "))).strip() or plant_id.replace("_", " ")
+    growth_form = str(row.get("growth_form", "flower") or "flower").strip().lower() or "flower"
+    rarity = str(row.get("rarity", "common") or "common").strip().lower() or "common"
+    return {
+        "plant_id": plant_id,
+        "name": name,
+        "family": growth_form,
+        "hue": _casino_bloom_card_hue_from_row(row),
+        "rarity": rarity,
+        "glyph": str(row.get("glyph", "'") or "'")[:1] or "'",
+    }
+
+
+def _casino_bloom_cards_deck(seed_token):
+    catalog = load_flora_catalog()
+    cards = []
+    for plant_id, row in sorted(catalog.items()):
+        if not isinstance(row, dict):
+            continue
+        cards.append(_casino_bloom_card_from_catalog_row(plant_id, row))
+    if not cards:
+        fallback = {
+            "name": "blush aster",
+            "growth_form": "flower",
+            "rarity": "common",
+            "glyph": "'",
+            "genetics": {"hue_family": "pink"},
+        }
+        cards.append(_casino_bloom_card_from_catalog_row("blush_aster", fallback))
+    rng = random.Random(f"{seed_token}:bloom_cards:deck")
+    rng.shuffle(cards)
+    return cards
+
+
+def _casino_bloom_card_label(card):
+    if not isinstance(card, dict):
+        return str(card or "unknown bloom").strip() or "unknown bloom"
+    name = str(card.get("name", "") or "").strip()
+    if name:
+        return name
+    plant_id = str(card.get("plant_id", "") or "").strip()
+    return plant_id.replace("_", " ") if plant_id else "unknown bloom"
+
+
+def _casino_bloom_cards_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    context = session.get("table_context") if isinstance(session.get("table_context"), dict) else {}
+    normalized_context = dict(context)
+    if not normalized_context.get("game"):
+        normalized_context["game"] = "bloom_cards"
+    deck = [dict(card) for card in list(session.get("deck", ()) or ()) if isinstance(card, dict)]
+    player_cards = [dict(card) for card in list(session.get("player_cards", session.get("garden_cards", ())) or ()) if isinstance(card, dict)]
+    house_cards = [dict(card) for card in list(session.get("house_cards", ()) or ())[:2] if isinstance(card, dict)]
+    return {
+        "service": "bloom_cards",
+        "seed_token": str(session.get("seed_token", "")).strip(),
+        "wager": int(session.get("wager", 0)),
+        "stake": int(session.get("stake", session.get("wager", 0))),
+        "deck": deck,
+        "deck_index": int(session.get("deck_index", 0) or 0),
+        "player_cards": player_cards,
+        "garden_cards": player_cards,
+        "house_cards": house_cards,
+        "growth_steps": max(0, int(session.get("growth_steps", 0) or 0)),
+        "withered": bool(session.get("withered", False)),
+        "table_context": normalized_context,
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+    }
+
+
+def _casino_bloom_cards_score(cards, growth_steps=0):
+    cards = [dict(card) for card in list(cards or ()) if isinstance(card, dict)]
+    family_counts = Counter(str(card.get("family", "flower")) for card in cards)
+    hue_counts = Counter(str(card.get("hue", "green")) for card in cards)
+    rarity_counts = Counter(str(card.get("rarity", "common")) for card in cards)
+    points = 1.0
+    reasons = []
+    for family, count in sorted(family_counts.items()):
+        if count >= 2:
+            bonus = 0.45 * (count - 1)
+            points += bonus
+            reasons.append(f"{count} {family} cards")
+    for hue, count in sorted(hue_counts.items()):
+        if count >= 2:
+            bonus = 0.30 * (count - 1)
+            points += bonus
+            reasons.append(f"{count} {hue} hues")
+    if rarity_counts.get("uncommon", 0):
+        points += 0.12 * int(rarity_counts["uncommon"])
+    if rarity_counts.get("rare", 0):
+        points += 0.32 * int(rarity_counts["rare"])
+        reasons.append("rare bloom")
+    families = set(family_counts)
+    if {"flower", "vine"} <= families:
+        points += 0.35
+        reasons.append("garland match")
+    if families.intersection({"moss", "lichen"}) and families.intersection({"shrub", "fern"}):
+        points += 0.25
+        reasons.append("ground cover")
+    growth_steps = max(0, int(growth_steps))
+    if growth_steps <= 0:
+        multiplier = 1.0
+    else:
+        multiplier = max(1.0, min(8.0, round(points + (0.15 * growth_steps), 2)))
+    if not reasons:
+        reasons.append("ordinary garden")
+    return {
+        "multiplier": float(multiplier),
+        "points": round(float(points), 2),
+        "reasons": tuple(reasons[:4]),
+        "family_counts": dict(family_counts),
+        "hue_counts": dict(hue_counts),
+        "rarity_counts": dict(rarity_counts),
+    }
+
+
+def _casino_bloom_cards_start(seed_token, wager, table_context=None):
+    context = dict(table_context) if isinstance(table_context, dict) else {}
+    context["game"] = "bloom_cards"
+    deck = _casino_bloom_cards_deck(seed_token)
+    house_cards = list(deck[:2])
+    player_cards = list(deck[2:2 + CASINO_BLOOM_CARD_STARTING_HAND_SIZE])
+    deck_index = 2 + len(player_cards)
+    return {
+        "service": "bloom_cards",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": int(wager),
+        "deck": list(deck),
+        "deck_index": int(deck_index),
+        "player_cards": player_cards,
+        "garden_cards": player_cards,
+        "house_cards": house_cards,
+        "growth_steps": 0,
+        "withered": False,
+        "table_context": context,
+    }
+
+
+def _casino_bloom_cards_wither_chance(current, next_card):
+    player_cards = list(current.get("player_cards", ()) or ())
+    house_cards = list(current.get("house_cards", ()) or ())
+    growth_steps = max(0, int(current.get("growth_steps", 0) or 0))
+    family_counts = Counter(str(card.get("family", "")) for card in player_cards if isinstance(card, dict))
+    hue_counts = Counter(str(card.get("hue", "")) for card in player_cards if isinstance(card, dict))
+    house_families = {str(card.get("family", "")) for card in house_cards if isinstance(card, dict)}
+    house_hues = {str(card.get("hue", "")) for card in house_cards if isinstance(card, dict)}
+    family = str(next_card.get("family", "")) if isinstance(next_card, dict) else ""
+    hue = str(next_card.get("hue", "")) if isinstance(next_card, dict) else ""
+    chance = 0.08 + (0.08 * growth_steps)
+    if family and family_counts.get(family, 0) > 0:
+        chance -= 0.04
+    if hue and hue_counts.get(hue, 0) > 0:
+        chance -= 0.03
+    if family and family in house_families:
+        chance += 0.07
+    if hue and hue in house_hues:
+        chance += 0.05
+    if str(next_card.get("rarity", "")) == "rare":
+        chance += 0.02
+    return max(0.04, min(0.36, float(chance)))
+
+
+def _casino_bloom_cards_cashout(session):
+    current = _casino_bloom_cards_normalize_session(session)
+    if not current:
+        return None
+    score = _casino_bloom_cards_score(current.get("player_cards", ()), current.get("growth_steps", 0))
+    multiplier = float(score.get("multiplier", 1.0))
+    payout = int(round(int(current.get("wager", 0)) * multiplier))
+    growth_steps = max(0, int(current.get("growth_steps", 0) or 0))
+    headline = "You press the blooms." if payout > int(current.get("stake", 0)) else "You keep the stake alive."
+    if growth_steps <= 0:
+        headline = "You take the safe push."
+    result_lines = [
+        str(current.get("table_context", {}).get("table_read", "Table read: flower-card garden.")).strip() or "Table read: flower-card garden.",
+        "Garden: " + ", ".join(_casino_bloom_card_label(card) for card in current.get("player_cards", ())[:8]),
+        "House weather: " + ", ".join(_casino_bloom_card_label(card) for card in current.get("house_cards", ())[:2]),
+        "Bloom read: " + ", ".join(score.get("reasons", ()) or ("ordinary garden",)),
+        f"Cash-out multiplier: x{multiplier:.2f}.",
+        f"Payout returned: {_credit_amount_label(payout)}.",
+    ]
+    return {
+        "service": "bloom_cards",
+        "wager": int(current.get("wager", 0)),
+        "stake": int(current.get("stake", current.get("wager", 0))),
+        "payout": int(max(0, payout)),
+        "outcome_key": "cashout",
+        "headline": headline,
+        "detail": "You stop before the garden withers and the dealer counts out the bloom-card return.",
+        "summary": f"Bloom Cards cashes at x{multiplier:.2f}.",
+        "result_lines": result_lines,
+        "player_cards": tuple(dict(card) for card in current.get("player_cards", ()) or ()),
+        "garden_cards": tuple(dict(card) for card in current.get("player_cards", ()) or ()),
+        "house_cards": tuple(dict(card) for card in current.get("house_cards", ()) or ()),
+        "growth_steps": int(growth_steps),
+        "cashout_multiplier": float(multiplier),
+        "score_reasons": tuple(score.get("reasons", ()) or ()),
+        "table_context": _casino_table_context_summary(current.get("table_context")),
+        "table_context_summary": _casino_table_context_summary(current.get("table_context")),
+        "social_gain": _casino_social_gain("bloom_cards", f"{current['seed_token']}:{growth_steps}:cashout:{multiplier:.2f}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_bloom_cards_grow(session):
+    current = _casino_bloom_cards_normalize_session(session)
+    if not current:
+        return None, None
+    growth_steps = max(0, int(current.get("growth_steps", 0) or 0))
+    if growth_steps >= CASINO_BLOOM_CARD_MAX_GROW_STEPS:
+        return current, _casino_bloom_cards_cashout(current)
+    deck = list(current.get("deck", ()) or ())
+    deck_index = max(0, int(current.get("deck_index", 0) or 0))
+    if deck_index >= len(deck):
+        return current, _casino_bloom_cards_cashout(current)
+    next_card = dict(deck[deck_index])
+    chance = _casino_bloom_cards_wither_chance(current, next_card)
+    risk_rng = random.Random(f"{current['seed_token']}:bloom_cards:wither:{growth_steps}:{next_card.get('plant_id', deck_index)}")
+    if risk_rng.random() < chance:
+        current["withered"] = True
+        result_lines = [
+            str(current.get("table_context", {}).get("table_read", "Table read: flower-card garden.")).strip() or "Table read: flower-card garden.",
+            f"Next card: {_casino_bloom_card_label(next_card)}.",
+            "The garden withers before the new bloom takes.",
+            "Payout returned: no credits.",
+        ]
+        return None, {
+            "service": "bloom_cards",
+            "wager": int(current.get("wager", 0)),
+            "stake": int(current.get("stake", current.get("wager", 0))),
+            "payout": 0,
+            "outcome_key": "wither",
+            "headline": "The garden withers.",
+            "detail": "You let the cards grow one step too far and the house takes the posted stake.",
+            "summary": f"Bloom Cards withers on {_casino_bloom_card_label(next_card)}.",
+            "result_lines": result_lines,
+            "player_cards": tuple(dict(card) for card in current.get("player_cards", ()) or ()),
+            "garden_cards": tuple(dict(card) for card in current.get("player_cards", ()) or ()),
+            "house_cards": tuple(dict(card) for card in current.get("house_cards", ()) or ()),
+            "drawn_card": dict(next_card),
+            "growth_steps": int(growth_steps),
+            "wither_chance": float(chance),
+            "table_context": _casino_table_context_summary(current.get("table_context")),
+            "table_context_summary": _casino_table_context_summary(current.get("table_context")),
+            "social_gain": 0,
+            "stake_already_paid": True,
+        }
+    player_cards = list(current.get("player_cards", ()) or ())
+    player_cards.append(next_card)
+    current["player_cards"] = player_cards
+    current["garden_cards"] = player_cards
+    current["deck_index"] = int(deck_index + 1)
+    current["growth_steps"] = int(growth_steps + 1)
+    current["withered"] = False
+    return current, None
+
+
 def _casino_baccarat_normalize_session(session):
     if not isinstance(session, dict):
         return None
@@ -4878,6 +6150,7 @@ __all__ = [
     "_casino_baccarat_start",
     "_casino_blackjack_line",
     "_casino_blackjack_total",
+    "casino_game_capabilities",
     "_casino_cards_text",
     "_casino_craps_normalize_session",
     "_casino_craps_resolve",
@@ -4902,6 +6175,27 @@ __all__ = [
     "_casino_roulette_start",
     "_casino_round_seed",
     "_casino_slots_resolve",
+    "_casino_table_context",
+    "_casino_table_context_summary",
+    "_casino_three_bones_market_from_key",
+    "_casino_three_bones_market_order",
+    "_casino_three_bones_normalize_session",
+    "_casino_three_bones_remove_bet",
+    "_casino_three_bones_resolve",
+    "_casino_three_bones_stage_bet",
+    "_casino_three_bones_start",
+    "_casino_three_bright_market_from_key",
+    "_casino_three_bright_market_order",
+    "_casino_three_bright_normalize_session",
+    "_casino_three_bright_remove_bet",
+    "_casino_three_bright_resolve",
+    "_casino_three_bright_stage_bet",
+    "_casino_three_bright_start",
+    "_casino_bloom_cards_cashout",
+    "_casino_bloom_cards_grow",
+    "_casino_bloom_cards_normalize_session",
+    "_casino_bloom_cards_score",
+    "_casino_bloom_cards_start",
     "_casino_three_card_poker_normalize_session",
     "_casino_three_card_poker_resolve",
     "_casino_three_card_poker_start",

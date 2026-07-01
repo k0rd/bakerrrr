@@ -5944,6 +5944,90 @@ class PygameView:
                     return int(raw[0] or 1), int(raw[1] or 1)
             return 3, 4
 
+        def _casino_color_rgb(color_word):
+            key = str(color_word or "").strip().lower().replace(" ", "_").replace("-", "_")
+            mapping = {
+                "red": (222, 42, 65),
+                "green": (44, 180, 98),
+                "blue": (68, 138, 230),
+                "gold": (234, 188, 62),
+                "black": (28, 31, 36),
+                "white": (232, 229, 214),
+                "pink": (238, 112, 176),
+                "violet": (165, 104, 222),
+                "coral": (240, 104, 85),
+                "charcoal": (70, 76, 84),
+                "navy": (42, 70, 126),
+                "purple": (109, 65, 148),
+                "olive": (116, 135, 70),
+                "brown": (126, 82, 52),
+            }
+            return mapping.get(key, cursor)
+
+        def _draw_color_die(die_rect, color_word, label=""):
+            die_rect = self.pygame.Rect(die_rect)
+            base = _casino_color_rgb(color_word)
+            border = (246, 236, 186) if sum(base) < 180 else (55, 48, 42)
+            pip = (248, 244, 228) if sum(base) < 260 else (31, 35, 39)
+            self.pygame.draw.rect(self.surface, base, die_rect, border_radius=max(2, self.cell_px // 5))
+            self.pygame.draw.rect(self.surface, border, die_rect, 2, border_radius=max(2, self.cell_px // 5))
+            shine = die_rect.inflate(-max(4, die_rect.w // 5), -max(4, die_rect.h // 5))
+            shine.h = max(2, shine.h // 3)
+            highlight = tuple(min(255, int(channel) + 48) for channel in base)
+            self.pygame.draw.ellipse(self.surface, highlight, shine)
+            cx = die_rect.centerx
+            cy = die_rect.centery
+            offset = max(3, min(die_rect.w, die_rect.h) // 5)
+            radius = max(2, min(die_rect.w, die_rect.h) // 12)
+            for spot in ((cx - offset, cy - offset), (cx, cy), (cx + offset, cy + offset)):
+                self.pygame.draw.circle(self.surface, pip, spot, radius)
+            if label:
+                _center_text(str(label)[:1].upper(), die_rect.inflate(-4, -4), pip, self._ui_bold_font)
+
+        def _bloom_card_rgb(card):
+            if not isinstance(card, dict):
+                return (214, 174, 214)
+            hue = str(card.get("hue", "") or "").strip().lower()
+            return {
+                "pink": (235, 130, 178),
+                "violet": (168, 112, 224),
+                "purple": (142, 89, 184),
+                "blue": (90, 148, 224),
+                "white": (238, 234, 214),
+                "gold": (224, 183, 72),
+                "yellow": (224, 183, 72),
+                "coral": (235, 110, 88),
+                "red": (212, 62, 84),
+                "green": (90, 168, 96),
+                "mint": (118, 204, 156),
+                "copper": (185, 113, 72),
+                "amber": (216, 145, 58),
+            }.get(hue, (116, 176, 116))
+
+        def _draw_bloom_card(card_rect, card, *, hidden=False):
+            card_rect = self.pygame.Rect(card_rect)
+            base = (245, 240, 222) if not hidden else (68, 86, 78)
+            self.pygame.draw.rect(self.surface, base, card_rect, border_radius=max(2, self.cell_px // 6))
+            self.pygame.draw.rect(self.surface, (83, 76, 58), card_rect, 1, border_radius=max(2, self.cell_px // 6))
+            if hidden:
+                inset = max(3, self.cell_px // 5)
+                inner = card_rect.inflate(-inset, -inset)
+                self.pygame.draw.rect(self.surface, (38, 63, 54), inner, border_radius=max(1, self.cell_px // 8))
+                self.pygame.draw.line(self.surface, (156, 196, 164), inner.midtop, inner.midbottom, 1)
+                self.pygame.draw.line(self.surface, (156, 196, 164), inner.midleft, inner.midright, 1)
+                return
+            bloom = _bloom_card_rgb(card)
+            stem = (54, 113, 70)
+            cx = card_rect.centerx
+            cy = card_rect.centery
+            radius = max(3, min(card_rect.w, card_rect.h) // 8)
+            self.pygame.draw.line(self.surface, stem, (cx, cy + radius * 2), (cx, cy - radius), max(1, radius // 2))
+            for dx, dy in ((0, -radius), (radius, 0), (0, radius), (-radius, 0)):
+                self.pygame.draw.ellipse(self.surface, bloom, self.pygame.Rect(cx + dx - radius, cy + dy - radius, radius * 2, radius * 2))
+            self.pygame.draw.circle(self.surface, (236, 207, 86), (cx, cy), max(2, radius // 2))
+            glyph = str(card.get("glyph", "'") if isinstance(card, dict) else "'")[:1] or "'"
+            _text(glyph, card_rect.left + 3, card_rect.top + 1, bloom, self._ui_bold_font)
+
         def _draw_roulette():
             wheel = self.pygame.Rect(rect.left + 12, rect.top + 10, min(rect.h - 20, rect.w // 3), min(rect.h - 20, rect.w // 3))
             wheel.center = (rect.left + max(wheel.w // 2 + 12, rect.w // 4), rect.centery)
@@ -6030,6 +6114,61 @@ class PygameView:
             _draw_die(self.pygame.Rect(start_x, top, size, size), die_one)
             _draw_die(self.pygame.Rect(start_x + size + 12, top, size, size), die_two)
             _center_text("CRAPS", self.pygame.Rect(rect.left + 8, rect.top + 4, rect.w - 16, self.cell_px), gold, self._ui_bold_font)
+        elif service == "three_bright":
+            context = payload.get("table_context") if isinstance(payload.get("table_context"), dict) else {}
+            colors = list(payload.get("dice_colors", ()) or ())
+            if len(colors) < 3:
+                palette = list(payload.get("color_words", ()) or context.get("accent_colors", ()) or ("red", "green", "blue"))
+                while len(palette) < 3:
+                    palette.append(("red", "green", "blue")[len(palette) % 3])
+                colors = palette[:3]
+            accent = _casino_color_rgb((context.get("accent_colors") or colors or ("gold",))[0] if isinstance(context, dict) else colors[0])
+            self.pygame.draw.line(self.surface, accent, (rect.left + 8, rect.bottom - 5), (rect.right - 8, rect.bottom - 5), max(2, self.cell_px // 8))
+            size = min(rect.h - 26, max(self.cell_px * 2, rect.w // 7))
+            size = max(self.cell_px * 2, size)
+            gap = max(8, self.cell_px // 2)
+            total_w = (size * 3) + (gap * 2)
+            start_x = rect.centerx - total_w // 2
+            top = rect.top + max(self.cell_px + 4, (rect.h - size) // 2)
+            for idx, color_word in enumerate(colors[:3]):
+                die = self.pygame.Rect(start_x + idx * (size + gap), top, size, size)
+                _draw_color_die(die, color_word, label=color_word)
+            _center_text("THREE BRIGHT", self.pygame.Rect(rect.left + 8, rect.top + 4, rect.w - 16, self.cell_px), gold, self._ui_bold_font)
+        elif service == "three_bones":
+            dice = list(payload.get("dice", ()) or (3, 4, 5))
+            while len(dice) < 3:
+                dice.append(len(dice) + 2)
+            cup = self.pygame.Rect(rect.left + rect.w // 2 - rect.w // 7, rect.top + self.cell_px, max(self.cell_px * 5, rect.w // 4), max(self.cell_px * 2, rect.h // 3))
+            self.pygame.draw.ellipse(self.surface, (92, 58, 36), cup.inflate(0, max(4, self.cell_px // 2)))
+            self.pygame.draw.rect(self.surface, (126, 77, 44), cup, border_radius=max(3, self.cell_px // 5))
+            self.pygame.draw.arc(self.surface, gold, cup.inflate(-4, -4), 0, math.pi, max(2, self.cell_px // 8))
+            size = max(self.cell_px * 2, min(rect.h - cup.h - self.cell_px, rect.w // 8))
+            gap = max(5, self.cell_px // 3)
+            start_x = rect.centerx - ((size * 3) + (gap * 2)) // 2
+            top = max(cup.bottom - self.cell_px // 4, rect.bottom - size - 8)
+            for idx, value in enumerate(dice[:3]):
+                _draw_die(self.pygame.Rect(start_x + idx * (size + gap), top, size, size), value)
+            _center_text("THREE BONES", self.pygame.Rect(rect.left + 8, rect.top + 4, rect.w - 16, self.cell_px), gold, self._ui_bold_font)
+        elif service == "bloom_cards":
+            cards = list(payload.get("player_cards", payload.get("garden_cards", ())) or ())
+            house = list(payload.get("house_cards", ()) or ())
+            top = rect.top + self.cell_px + 4
+            card_count = max(3, min(6, len(cards) if cards else 3))
+            card_w = max(self.cell_px * 2, min(self.cell_px * 4, (rect.w - self.cell_px * 2) // card_count))
+            card_h = max(self.cell_px * 3, min(rect.h - self.cell_px * 2, card_w + self.cell_px))
+            gap = max(3, min(self.cell_px // 2, (rect.w - (card_w * card_count) - self.cell_px) // max(1, card_count - 1)))
+            start_x = rect.centerx - ((card_w * card_count) + (gap * (card_count - 1))) // 2
+            display_cards = cards[:card_count] if cards else ({}, {}, {})
+            for idx, card in enumerate(display_cards):
+                _draw_bloom_card(self.pygame.Rect(start_x + idx * (card_w + gap), top, card_w, card_h), card)
+            if house:
+                hidden_w = max(self.cell_px * 2, card_w - self.cell_px // 2)
+                hidden_h = max(self.cell_px * 2, card_h - self.cell_px)
+                hx = rect.right - hidden_w * 2 - gap - 8
+                hy = rect.top + 6
+                _draw_bloom_card(self.pygame.Rect(hx, hy, hidden_w, hidden_h), house[0], hidden=True)
+                _draw_bloom_card(self.pygame.Rect(hx + hidden_w + gap, hy, hidden_w, hidden_h), house[-1], hidden=True)
+            _center_text("BLOOM CARDS", self.pygame.Rect(rect.left + 8, rect.bottom - self.cell_px - 3, rect.w - 16, self.cell_px), gold, self._ui_bold_font)
         elif service == "crash":
             _draw_crash()
         elif service == "plinko":

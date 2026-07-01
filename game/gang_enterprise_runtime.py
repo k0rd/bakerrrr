@@ -32,6 +32,7 @@ from game.organizations import (
     record_organization_vocabulary,
 )
 from game.player_businesses import property_supports_player_business
+from game.service_runtime import casino_game_capabilities
 
 
 GANG_ENTERPRISE_INTERVAL = 540
@@ -112,6 +113,8 @@ GANG_MOTIFS = (
     "crooked star",
     "salt hook",
 )
+GANG_HOUSE_GAME_STAKE_CULTURES = ("nickel_corner", "street", "house", "danger_room")
+GANG_HOUSE_GAME_TONES = ("loud", "watched", "ritual", "swagger", "quiet", "hungry")
 
 
 def _text(value):
@@ -163,7 +166,7 @@ def _gang_state(sim):
     if not isinstance(state, dict):
         state = {}
         traits["gang_enterprise"] = state
-    for key in ("claims", "actions", "roles", "cooldowns"):
+    for key in ("claims", "actions", "roles", "house_games", "cooldowns"):
         if not isinstance(state.get(key), dict):
             state[key] = {}
     state["next_action_id"] = max(1, _safe_int(state.get("next_action_id"), default=1))
@@ -285,6 +288,245 @@ def gang_style_profile(sim, gang_org_eid):
     }
     state["roles"][key] = dict(row)
     return row
+
+
+def _game_capability_score(sim, gang_org_eid, game_id, capability, style, profile, rng):
+    tags = set(tuple(capability.get("style_tags", ()) or ()))
+    org_tags = set(tuple(profile.get("tags", ()) or ()))
+    posture = _key(profile.get("posture"))
+    aggression = _safe_float(profile.get("aggression"), default=0.35)
+    profit = _safe_float(profile.get("profit_focus"), default=0.45)
+    motif = _key(style.get("motif"))
+    color = _key(style.get("color"))
+    accent = _key(style.get("accent_color"))
+    score = 8.0 + rng.uniform(0.0, 4.0)
+    if game_id == "three_bright":
+        score += 4.0
+    if "interest:weapons" in org_tags or "criminal" in org_tags:
+        if tags & {"backroom", "risk", "pressure", "street"}:
+            score += 2.5
+    if "interest:territory" in org_tags and tags & {"street", "crowd", "dice"}:
+        score += 2.25
+    if "interest:supply" in org_tags and tags & {"ticket", "machine", "numbers"}:
+        score += 1.4
+    if posture in {"predatory", "raider", "hardline"} and capability.get("risk_band") == "high":
+        score += 2.0
+    if posture in {"vigilante", "protective"} and capability.get("risk_band") in {"low", "medium"}:
+        score += 1.1
+    if aggression > 0.55 and capability.get("risk_band") == "high":
+        score += 1.8
+    if profit > 0.55 and bool(capability.get("supports_debt")):
+        score += 1.2
+    if "three" in motif and tags & {"dice", "cards"}:
+        score += 1.5
+    if "coin" in motif and tags & {"machine", "ticket", "numbers"}:
+        score += 1.2
+    if "flame" in motif and tags & {"risk", "pressure", "quick"}:
+        score += 1.2
+    if "ribbon" in motif and tags & {"cards", "ritual", "quiet"}:
+        score += 1.0
+    if color in {"red", "green", "blue", "gold", "black", "white", "violet"} and bool(capability.get("supports_visual_accents")):
+        score += 0.8
+    if accent in {"red", "green", "blue", "gold", "black", "white", "violet"} and bool(capability.get("supports_visual_accents")):
+        score += 0.6
+    return max(0.5, float(score))
+
+
+def gang_house_game_profile(sim, gang_org_eid):
+    """Return deterministic favored-game culture for a gang."""
+
+    state = ensure_gang_enterprise_state(sim)
+    key = f"gang_house_game:{gang_org_eid}"
+    stored = state.get("house_games", {}).get(key)
+    if isinstance(stored, dict):
+        return dict(stored)
+    if not _is_gang_organization(sim, gang_org_eid):
+        return {}
+    capabilities = {
+        game_id: dict(row)
+        for game_id, row in casino_game_capabilities().items()
+        if bool(row.get("available_for_gang_favorite", True))
+    }
+    if not capabilities:
+        return {}
+    style = gang_style_profile(sim, gang_org_eid)
+    profile = gang_enterprise_profile(sim, gang_org_eid)
+    org_profile = organization_profile(sim, gang_org_eid)
+    seed = f"gang-house-game:{getattr(sim, 'seed', 0)}:{gang_org_eid}:{_text(getattr(org_profile, 'key', ''))}"
+    rng = random.Random(seed)
+    weighted = []
+    for game_id, capability in sorted(capabilities.items()):
+        weighted.append((game_id, _game_capability_score(sim, gang_org_eid, game_id, capability, style, profile, rng)))
+    total = sum(weight for _game_id, weight in weighted)
+    pick = rng.uniform(0.0, max(0.1, total))
+    favored_game = weighted[-1][0]
+    running = 0.0
+    for game_id, weight in weighted:
+        running += weight
+        if pick <= running:
+            favored_game = game_id
+            break
+    capability = dict(capabilities.get(favored_game) or {})
+    stake_culture = rng.choice(GANG_HOUSE_GAME_STAKE_CULTURES)
+    if capability.get("risk_band") == "low" and stake_culture == "danger_room":
+        stake_culture = "house"
+    if capability.get("risk_band") == "high" and rng.random() < 0.24:
+        stake_culture = "danger_room"
+    stake_profile = {
+        "nickel_corner": "street",
+        "street": "gang_street",
+        "house": "gang_house",
+        "danger_room": "gang_high",
+    }.get(stake_culture, "gang_house")
+    tone = rng.choice(GANG_HOUSE_GAME_TONES)
+    colors = []
+    for color in (style.get("color"), style.get("accent_color")):
+        clean = _key(color)
+        if clean and clean not in colors:
+            colors.append(clean)
+    for fallback in ("red", "green", "blue", "gold", "black", "white", "violet"):
+        if len(colors) >= 3:
+            break
+        if fallback not in colors:
+            colors.append(fallback)
+    label = _text(capability.get("public_label")) or favored_game.replace("_", " ").title()
+    motif = _text(style.get("motif")) or "table mark"
+    row = {
+        "organization_eid": int(gang_org_eid),
+        "favored_game": favored_game,
+        "favored_game_label": label,
+        "game_colors": tuple(colors[:3]),
+        "table_motif": motif,
+        "stake_culture": stake_culture,
+        "stake_profile": stake_profile,
+        "table_tone": tone,
+        "risk_band": _text(capability.get("risk_band")) or "medium",
+        "social_texture": _text(capability.get("social_texture")) or "table",
+        "supports_table_context": bool(capability.get("supports_table_context")),
+        "supports_custom_stakes": bool(capability.get("supports_custom_stakes")),
+        "supports_visual_accents": bool(capability.get("supports_visual_accents")),
+        "supports_multiplayer_seats": bool(capability.get("supports_multiplayer_seats")),
+        "supports_offscreen_resolution": bool(capability.get("supports_offscreen_resolution")),
+        "table_read": (
+            f"{label} has become the crew's house game: "
+            f"{stake_culture.replace('_', ' ')} stakes, {tone} posture, {motif} colors."
+        ),
+        "feature_tags": tuple(sorted(set(tuple(capability.get("style_tags", ()) or ())))),
+    }
+    state["house_games"][key] = dict(row)
+    return dict(row)
+
+
+def _gang_house_game_visible_cue(profile):
+    label = _text(profile.get("favored_game_label")) or "a table game"
+    colors = tuple(_text(color).replace("_", " ") for color in tuple(profile.get("game_colors", ()) or ()) if _text(color))
+    color_text = "/".join(colors[:2]) if colors else "crew-colored"
+    texture = _text(profile.get("social_texture")) or "table"
+    if texture == "machine":
+        return f"people keep drifting toward {color_text} machines and talking about {label} payouts"
+    if texture in {"dice", "house_dice", "crowd"}:
+        return f"{color_text} dice chatter and {label} calls keep leaking from the back of the place"
+    if texture in {"cards", "poker", "formal"}:
+        return f"{color_text} card talk and guarded {label} glances make the table culture visible"
+    if texture == "ticket":
+        return f"{color_text} tickets and repeated number talk make {label} feel like the local habit"
+    return f"{color_text} table talk makes {label} feel like more than a house game"
+
+
+def apply_gang_house_game_to_property(sim, gang_org_eid, prop, *, exposure="front", visible=True):
+    """Expose a gang's favored game at a concrete service host/front."""
+
+    if not isinstance(prop, dict) or not _is_gang_organization(sim, gang_org_eid):
+        return {"ok": False, "reason": "invalid_target"}
+    profile = gang_house_game_profile(sim, gang_org_eid)
+    game_id = _key(profile.get("favored_game"))
+    if not game_id:
+        return {"ok": False, "reason": "missing_house_game"}
+    capabilities = casino_game_capabilities()
+    capability = dict(capabilities.get(game_id) or {})
+    metadata = _metadata(prop)
+    services = list(metadata.get("site_services", ()) or ())
+    if isinstance(metadata.get("site_services"), str):
+        services = [metadata.get("site_services")]
+    normalized_services = []
+    for service in services:
+        clean = _key(service)
+        if clean and clean not in normalized_services:
+            normalized_services.append(clean)
+    if game_id not in normalized_services:
+        normalized_services.append(game_id)
+    metadata["site_services"] = normalized_services
+    metadata["site_services_extend_defaults"] = True
+    metadata["gang_house_game"] = {
+        "organization_eid": int(gang_org_eid),
+        "favored_game": game_id,
+        "favored_game_label": _text(profile.get("favored_game_label")),
+        "game_colors": tuple(profile.get("game_colors", ()) or ()),
+        "table_motif": _text(profile.get("table_motif")),
+        "stake_culture": _text(profile.get("stake_culture")),
+        "table_tone": _text(profile.get("table_tone")),
+        "exposure": _key(exposure) or "front",
+        "last_update_tick": _tick(sim),
+    }
+    contexts = metadata.get("casino_table_contexts")
+    if not isinstance(contexts, dict):
+        contexts = {}
+    contexts[game_id] = {
+        "sponsor_kind": "gang",
+        "sponsor_id": int(gang_org_eid),
+        "access_style": "gang_backroom" if profile.get("stake_culture") == "danger_room" else "gang_linked",
+        "stake_profile": _text(profile.get("stake_profile")) or "gang_house",
+        "table_tone": _text(profile.get("table_tone")) or "watched",
+        "presentation_accents": tuple(profile.get("game_colors", ()) or ()),
+        "features": {
+            "colors": tuple(profile.get("game_colors", ()) or ()),
+            "stake_profile": _text(profile.get("stake_profile")) or "gang_house",
+            "table_tone": _text(profile.get("table_tone")) or "watched",
+            "variance": 0.74 if profile.get("stake_culture") == "danger_room" else 0.55,
+        },
+    }
+    metadata["casino_table_contexts"] = contexts
+    if game_id == "three_bright":
+        metadata["casino_table_context"] = {
+            **dict(metadata.get("casino_table_context") or {}),
+            **dict(contexts[game_id]),
+        }
+    cue = _gang_house_game_visible_cue(profile)
+    metadata["gang_house_game"]["visible_cue"] = cue
+    pressure = record_organization_pressure(
+        sim,
+        organization_eid=gang_org_eid,
+        pressure_kind="gang_house_game",
+        stance="transactional",
+        reason_tags=("gang_enterprise", "house_game", game_id, _text(profile.get("stake_culture")), *tuple(capability.get("style_tags", ()) or ())),
+        anchor_property_id=_property_id(prop),
+        visible=bool(visible),
+        visible_cue=cue,
+        confidence=0.71,
+        source_event="gang_house_game",
+        pressure_key=f"gang_house_game:{gang_org_eid}:{_property_id(prop)}:{game_id}",
+    )
+    record_organization_vocabulary(
+        sim,
+        organization_eid=gang_org_eid,
+        vocabulary_kind="directive",
+        entry_key=f"gang_house_game:{_property_id(prop)}:{game_id}",
+        topic_key="gang_house_game",
+        label=f"{_text(profile.get('favored_game_label')) or game_id} house game",
+        summary=cue,
+        source_kind="gang_enterprise",
+        subject_property_id=_property_id(prop),
+        target_property_id=_property_id(prop),
+        tags=("gang_enterprise", "house_game", game_id),
+        priority=61,
+    )
+    return {
+        "ok": True,
+        "profile": dict(profile),
+        "pressure": pressure,
+        "visible_cue": cue,
+        "service_id": game_id,
+    }
 
 
 def _property_invalid_for_gang(prop):
@@ -530,7 +772,10 @@ def claim_gang_territory(sim, gang_org_eid, prop, *, claim_kind=None, visible=Tr
         priority=58,
     )
     _record_gang_practice(sim, gang_org_eid, prop, action_kind=f"{claim_kind}_claim", claim_kind=claim_kind)
-    return {"ok": True, "claim": dict(row), "link": link, "target": target, "visible_cue": cue}
+    house_game = None
+    if claim_kind in {"front", "fence_contact", "vendor_route"}:
+        house_game = apply_gang_house_game_to_property(sim, gang_org_eid, prop, exposure=claim_kind, visible=visible)
+    return {"ok": True, "claim": dict(row), "link": link, "target": target, "visible_cue": cue, "house_game": house_game}
 
 
 def _member_eids(sim, gang_org_eid):

@@ -66,7 +66,6 @@ from game.service_runtime import (
     TRANSIT_SERVICE_IDS,
     _casino_apply_round_result,
     _casino_ascii_card_block,
-    _casino_ascii_craps_layout,
     _casino_ascii_keno_board,
     _casino_ascii_plinko_board,
     _casino_baccarat_normalize_session,
@@ -85,6 +84,11 @@ from game.service_runtime import (
     _casino_crash_normalize_session,
     _casino_crash_resolve,
     _casino_crash_start,
+    _casino_bloom_cards_cashout,
+    _casino_bloom_cards_grow,
+    _casino_bloom_cards_normalize_session,
+    _casino_bloom_cards_score,
+    _casino_bloom_cards_start,
     _casino_game_profile,
     _casino_game_title,
     _casino_keno_draw,
@@ -104,6 +108,21 @@ from game.service_runtime import (
     _casino_roulette_start,
     _casino_round_seed,
     _casino_slots_resolve,
+    _casino_table_context,
+    _casino_three_bones_market_from_key,
+    _casino_three_bones_market_order,
+    _casino_three_bones_normalize_session,
+    _casino_three_bones_remove_bet,
+    _casino_three_bones_resolve,
+    _casino_three_bones_stage_bet,
+    _casino_three_bones_start,
+    _casino_three_bright_market_from_key,
+    _casino_three_bright_market_order,
+    _casino_three_bright_normalize_session,
+    _casino_three_bright_remove_bet,
+    _casino_three_bright_resolve,
+    _casino_three_bright_stage_bet,
+    _casino_three_bright_start,
     _casino_three_card_poker_normalize_session,
     _casino_three_card_poker_resolve,
     _casino_three_card_poker_start,
@@ -429,6 +448,7 @@ class ServiceMenuSystem(System):
         title,
         subtitle="",
         body_lines=None,
+        body_focus_line=-1,
         rail_lines=None,
         rows=None,
         hint="",
@@ -456,6 +476,7 @@ class ServiceMenuSystem(System):
             "title": str(title or "Casino").strip() or "Casino",
             "subtitle": str(subtitle or "").strip(),
             "body_lines": list(body_lines or ()),
+            "body_focus_line": int(body_focus_line) if str(body_focus_line).strip().lstrip("-").isdigit() else -1,
             "rail_lines": list(rail_lines or ()),
             "rows": list(rows or ()),
             "hint": str(hint or "").strip(),
@@ -628,8 +649,22 @@ class ServiceMenuSystem(System):
             return
         host_style = str(host_style or casino_host_style(prop)).strip().lower() or "floor"
         prop_name = self._casino_prop_name(prop)
-        base_bets = tuple(int(amount) for amount in tuple(profile.get("bet_options", ()) or ()) if int(amount) > 0)
+        table_context = _casino_table_context(self.sim, prop, game=service)
+        if not bool(table_context.get("allowed", True)):
+            self._present_service_result(
+                _casino_game_title(service),
+                [
+                    "That table is not open here.",
+                    "Three Bright is a house game for gang-linked hosts, not a public casino listing.",
+                ],
+                property_id=prop.get("id"),
+            )
+            return
+        context_ladder = tuple(int(amount) for amount in tuple(table_context.get("stake_ladder", ()) or ()) if int(amount) > 0)
+        base_bets = context_ladder or tuple(int(amount) for amount in tuple(profile.get("bet_options", ()) or ()) if int(amount) > 0)
         owner_limit = self._player_owns_property(prop) and bool(base_bets)
+        if service == "three_bright":
+            owner_limit = False
         wager_values = list(base_bets)
         if owner_limit:
             high_limit = int(max(base_bets)) * 2
@@ -651,6 +686,9 @@ class ServiceMenuSystem(System):
             str(profile.get("prompt", "Choose a wager.")).strip() or "Choose a wager.",
             str(profile.get("note", "")).strip() or "Pick a stake and play a round.",
         ]
+        table_read = str(table_context.get("table_read", "")).strip()
+        if table_read:
+            body_lines.append(table_read)
         if owner_limit:
             body_lines.append("Owner perk: this floor will book one higher posted stake for you.")
         rail_lines = self._casino_common_rail_lines(prop, service=service)
@@ -659,6 +697,12 @@ class ServiceMenuSystem(System):
             "Choose",
             "one stake",
         ])
+        if table_context.get("stake_profile"):
+            rail_lines.extend([
+                "",
+                "Stakes",
+                str(table_context.get("stake_profile", "standard")).replace("_", " "),
+            ])
         if not rows:
             body_lines.append("No posted wager sizes are available right now.")
         self._clear_pending_service_result()
@@ -731,6 +775,44 @@ class ServiceMenuSystem(System):
             "prop:any_craps",
             "prop:any_seven",
         ]
+
+    def _three_bright_market_order(self, session=None):
+        context = session.get("table_context") if isinstance(session, dict) and isinstance(session.get("table_context"), dict) else None
+        return list(_casino_three_bright_market_order(context))
+
+    def _three_bones_market_order(self, session=None):
+        context = session.get("table_context") if isinstance(session, dict) and isinstance(session.get("table_context"), dict) else None
+        return list(_casino_three_bones_market_order(context))
+
+    def _move_three_bright_cursor(self, session, dx, dy):
+        current = _casino_three_bright_normalize_session(session)
+        if not current:
+            return None
+        order = list(self._three_bright_market_order(current))
+        if not order:
+            return current
+        try:
+            index = order.index(str(current.get("cursor_key", "single:red")).strip().lower())
+        except ValueError:
+            index = 0
+        index = max(0, min(len(order) - 1, index + int(dx) + (int(dy) * 3)))
+        current["cursor_key"] = order[index]
+        return current
+
+    def _move_three_bones_cursor(self, session, dx, dy):
+        current = _casino_three_bones_normalize_session(session)
+        if not current:
+            return None
+        order = list(self._three_bones_market_order(current))
+        if not order:
+            return current
+        try:
+            index = order.index(str(current.get("cursor_key", "small")).strip().lower())
+        except ValueError:
+            index = 0
+        index = max(0, min(len(order) - 1, index + int(dx) + (int(dy) * 4)))
+        current["cursor_key"] = order[index]
+        return current
 
     def _move_casino_row_selection(self, delta):
         state = self._casino_ui_state()
@@ -1243,15 +1325,12 @@ class ServiceMenuSystem(System):
         notice = str(notice or "").strip()
         if notice:
             body_lines.append(notice)
-        body_lines.append(f"Posted {_credit_amount_label(session.get('stake', session.get('wager', 0)))} across the felt.")
-        body_lines.extend(_casino_ascii_craps_layout("layout"))
-        body_lines.extend([
-            f"Phase: {'Point' if phase == 'point' else 'Come-out'}",
-            f"Point: {point_number if point_number > 0 else '--'}",
-            "Space adds one chip to the focused market. Backspace removes one chip. Enter rolls one throw.",
-            "",
-            "Main",
-        ])
+        body_lines.append(
+            f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} | "
+            f"{'Point' if phase == 'point' else 'Come-out'} | "
+            f"Point {point_number if point_number > 0 else '--'}"
+        )
+        body_lines.append("Markets")
 
         def _market_cell(key, width=12):
             market = _casino_craps_market_from_key(key) or {"label": key}
@@ -1264,7 +1343,8 @@ class ServiceMenuSystem(System):
                 return f"[{label}]"
             return f" {label} "
 
-        for group in (
+        focus_line = -1
+        market_groups = (
             ("pass", "dont_pass", "field"),
             ("pass_odds", "dont_pass_odds"),
             ("place:4", "place:5", "place:6"),
@@ -1272,8 +1352,12 @@ class ServiceMenuSystem(System):
             ("hardway:4", "hardway:6", "hardway:8", "hardway:10"),
             ("prop:2", "prop:3", "prop:11"),
             ("prop:12", "prop:any_craps", "prop:any_seven"),
-        ):
+        )
+        for group in market_groups:
+            line_index = len(body_lines)
             body_lines.append(" ".join(_market_cell(key) for key in group))
+            if cursor_key in group:
+                focus_line = line_index
 
         rail_lines = self._casino_common_rail_lines(prop, service="craps", session=session)
         rail_lines.extend([
@@ -1300,6 +1384,7 @@ class ServiceMenuSystem(System):
             title=f"Craps: {self._casino_prop_name(prop)}",
             subtitle="Shooter live",
             body_lines=body_lines,
+            body_focus_line=focus_line,
             rail_lines=rail_lines,
             rows=[],
             hint="Move focus, Space adds chips, Backspace removes chips, Enter rolls, Esc forfeits posted chips.",
@@ -1309,6 +1394,234 @@ class ServiceMenuSystem(System):
             session=session,
             return_to=str(self._casino_ui_state().get("return_to", "floor")).strip().lower(),
             return_option_id="craps",
+        )
+
+    def _open_three_bright_table(self, prop, session, *, notice=""):
+        session = _casino_three_bright_normalize_session(session)
+        if not session:
+            self._present_service_result("Three Bright", ["That color dice table lost the slip.", "Start a fresh round."], property_id=prop.get("id") if isinstance(prop, dict) else None)
+            return
+        cursor_key = str(session.get("cursor_key", "single:red") or "single:red").strip().lower()
+        bets = dict(session.get("bets", {}) or {})
+        context = session.get("table_context") if isinstance(session.get("table_context"), dict) else {}
+        colors = tuple(session.get("color_words", ()) or ())
+        body_lines = []
+        notice = str(notice or "").strip()
+        if notice:
+            body_lines.append(notice)
+        table_read = str(context.get("table_read", "")).strip()
+        if table_read:
+            body_lines.append(table_read)
+        body_lines.extend([
+            f"Posted {_credit_amount_label(session.get('stake', 0))} across the color slip.",
+            "Space adds one chip to the focused color market. Backspace pulls one chip back. Enter rolls.",
+            "Singles return one chip per matching die. Doubles need two or more. Triples need all three.",
+            "",
+            "Color markets",
+        ])
+
+        def _market_cell(key, width=14):
+            market = _casino_three_bright_market_from_key(key, context) or {"label": key}
+            label = str(market.get("label", key)).replace("Single ", "S ").replace("Double ", "D ").replace("Triple ", "T ")
+            units = int(bets.get(key, 0) or 0)
+            if units > 0:
+                label = f"{label} x{units}"
+            label = label[:width].center(width)
+            if key == cursor_key:
+                return f"[{label}]"
+            return f" {label} "
+
+        focus_line = -1
+        for color in colors:
+            group = (f"single:{color}", f"double:{color}", f"triple:{color}")
+            line_index = len(body_lines)
+            body_lines.append(" ".join(_market_cell(key) for key in group))
+            if cursor_key in group:
+                focus_line = line_index
+        special_group = ("special:rainbow", "special:all_bright", "special:all_dark")
+        line_index = len(body_lines)
+        body_lines.append(" ".join(_market_cell(key) for key in special_group))
+        if cursor_key in special_group:
+            focus_line = line_index
+
+        rail_lines = self._casino_common_rail_lines(prop, service="three_bright", session=session)
+        rail_lines.extend([
+            "",
+            "Slip",
+            f"{sum(int(units) for units in bets.values())} chip(s)",
+        ])
+        for key, units in list(sorted(bets.items()))[:8]:
+            market = _casino_three_bright_market_from_key(key, context)
+            if not market:
+                continue
+            rail_lines.append(f"{market['label']} x{int(units)}")
+        focus_market = _casino_three_bright_market_from_key(cursor_key, context)
+        if focus_market:
+            rail_lines.extend([
+                "",
+                "Focus",
+                str(focus_market.get("label", cursor_key)),
+            ])
+        rail_lines.extend([
+            "",
+            "Dice",
+            " ".join(str(color).replace("_", " ") for color in colors[:6]),
+        ])
+        self._open_casino_ui(
+            mode="live",
+            prop=prop,
+            host_style=str(self._casino_ui_state().get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop),
+            title=f"Three Bright: {self._casino_prop_name(prop)}",
+            subtitle="Build a color slip",
+            body_lines=body_lines,
+            body_focus_line=focus_line,
+            rail_lines=rail_lines,
+            rows=[],
+            hint="Move focus, Space adds chips, Backspace removes chips, Enter rolls, Esc forfeits posted chips.",
+            close_pending=False,
+            floor_page=self._casino_ui_state().get("floor_page", "games"),
+            service="three_bright",
+            session=session,
+            art=session,
+            return_to=str(self._casino_ui_state().get("return_to", "floor")).strip().lower(),
+            return_option_id="three_bright",
+        )
+
+    def _open_three_bones_table(self, prop, session, *, notice=""):
+        session = _casino_three_bones_normalize_session(session)
+        if not session:
+            self._present_service_result("Three Bones", ["That dice cup lost the slip.", "Start a fresh round."], property_id=prop.get("id") if isinstance(prop, dict) else None)
+            return
+        cursor_key = str(session.get("cursor_key", "small") or "small").strip().lower()
+        bets = dict(session.get("bets", {}) or {})
+        context = session.get("table_context") if isinstance(session.get("table_context"), dict) else {}
+        body_lines = []
+        notice = str(notice or "").strip()
+        if notice:
+            body_lines.append(notice)
+        table_read = str(context.get("table_read", "")).strip()
+        if table_read:
+            body_lines.append(table_read)
+        body_lines.extend([
+            f"Posted {_credit_amount_label(session.get('stake', 0))} across the bones slip.",
+            "Space adds one chip to the focused market. Backspace pulls one chip back. Enter lifts the cup.",
+            "Small and big lose on triples. Exact totals and triples are rare, loud hits.",
+            "",
+            "Main board",
+        ])
+
+        def _market_cell(key, width=13):
+            market = _casino_three_bones_market_from_key(key, context) or {"label": key}
+            label = str(market.get("label", key)).replace("Total ", "T ").replace("Double ", "D ").replace("Triple ", "Tri ")
+            units = int(bets.get(key, 0) or 0)
+            if units > 0:
+                label = f"{label} x{units}"
+            label = label[:width].center(width)
+            if key == cursor_key:
+                return f"[{label}]"
+            return f" {label} "
+
+        focus_line = -1
+        market_groups = (
+            ("small", "big", "any_triple"),
+            ("exact:4", "exact:5", "exact:6", "exact:7"),
+            ("exact:8", "exact:9", "exact:10", "exact:11"),
+            ("exact:12", "exact:13", "exact:14", "exact:15"),
+            ("exact:16", "exact:17"),
+            ("double:1", "double:2", "double:3"),
+            ("double:4", "double:5", "double:6"),
+            ("triple:1", "triple:2", "triple:3"),
+            ("triple:4", "triple:5", "triple:6"),
+        )
+        for group in market_groups:
+            line_index = len(body_lines)
+            body_lines.append(" ".join(_market_cell(key) for key in group))
+            if cursor_key in group:
+                focus_line = line_index
+
+        rail_lines = self._casino_common_rail_lines(prop, service="three_bones", session=session)
+        rail_lines.extend([
+            "",
+            "Slip",
+            f"{sum(int(units) for units in bets.values())} chip(s)",
+        ])
+        for key, units in list(sorted(bets.items()))[:8]:
+            market = _casino_three_bones_market_from_key(key, context)
+            if not market:
+                continue
+            rail_lines.append(f"{market['label']} x{int(units)}")
+        focus_market = _casino_three_bones_market_from_key(cursor_key, context)
+        if focus_market:
+            rail_lines.extend([
+                "",
+                "Focus",
+                str(focus_market.get("label", cursor_key)),
+            ])
+        self._open_casino_ui(
+            mode="live",
+            prop=prop,
+            host_style=str(self._casino_ui_state().get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop),
+            title=f"Three Bones: {self._casino_prop_name(prop)}",
+            subtitle="Build a dice slip",
+            body_lines=body_lines,
+            body_focus_line=focus_line,
+            rail_lines=rail_lines,
+            rows=[],
+            hint="Move focus, Space adds chips, Backspace removes chips, Enter rolls, Esc forfeits posted chips.",
+            close_pending=False,
+            floor_page=self._casino_ui_state().get("floor_page", "games"),
+            service="three_bones",
+            session=session,
+            art=session,
+            return_to=str(self._casino_ui_state().get("return_to", "floor")).strip().lower(),
+            return_option_id="three_bones",
+        )
+
+    def _open_bloom_cards_table(self, prop, session, *, notice=""):
+        session = _casino_bloom_cards_normalize_session(session)
+        if not session:
+            self._present_service_result("Bloom Cards", ["That flower-card garden lost the table.", "Start a fresh round."], property_id=prop.get("id") if isinstance(prop, dict) else None)
+            return
+        context = session.get("table_context") if isinstance(session.get("table_context"), dict) else {}
+        player_cards = list(session.get("player_cards", ()) or ())
+        house_cards = list(session.get("house_cards", ()) or ())
+        growth_steps = int(session.get("growth_steps", 0) or 0)
+        score = _casino_bloom_cards_score(player_cards, growth_steps)
+        multiplier = float(score.get("multiplier", 1.0) or 1.0)
+        body_lines = []
+        notice = str(notice or "").strip()
+        if notice:
+            body_lines.append(notice)
+        table_read = str(context.get("table_read", "")).strip()
+        if table_read:
+            body_lines.append(table_read)
+        body_lines.extend([
+            f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.",
+            "Garden: " + ", ".join(str(card.get("name", "bloom")) for card in player_cards[:8]),
+            "House weather: two closed bloom cards.",
+            "Bloom read: " + ", ".join(score.get("reasons", ()) or ("ordinary garden",)),
+            f"Cash-out now: x{multiplier:.2f}.",
+        ])
+        if growth_steps <= 0:
+            body_lines.append("The first cash-out is a safe push; profit means letting the garden grow at least once.")
+        if growth_steps >= 3:
+            body_lines.append("The garden is fully grown. Cash out before the table sweeps it.")
+        else:
+            body_lines.append(f"Growth {growth_steps}/3. Letting it grow reveals one more plant and can wither the whole stake.")
+        topics = []
+        if growth_steps < 3:
+            topics.append({"id": "bloom_cards:grow", "label": "Let it grow"})
+        topics.append({"id": "bloom_cards:cashout", "label": f"Cash out x{multiplier:.2f}"})
+        self._open_casino_modal(
+            prop,
+            "bloom_cards",
+            subtitle="Flower-card garden",
+            transcript=body_lines,
+            topics=topics,
+            hint="Grow or cash out. Esc walks away and forfeits the posted stake.",
+            mode="casino:bloom_cards:live",
+            session=session,
+            art=session,
         )
 
     def _open_baccarat_table(self, prop, session, *, notice=""):
@@ -1414,7 +1727,11 @@ class ServiceMenuSystem(System):
         wager = int(wager)
         prop_name = self._casino_prop_name(prop)
         profile = _casino_game_profile(service)
-        valid_wagers = {int(amount) for amount in profile.get("bet_options", ())} if profile else set()
+        table_context = _casino_table_context(self.sim, prop, game=service)
+        if not bool(table_context.get("allowed", True)):
+            self._emit_casino_blocked(prop, service, str(table_context.get("access_reason", "blocked") or "blocked"), wager=wager)
+            return
+        valid_wagers = {int(amount) for amount in tuple(table_context.get("stake_ladder", ()) or ())} if profile else set()
         if wager <= 0 or (valid_wagers and wager not in valid_wagers):
             self._emit_casino_blocked(prop, service, "invalid_wager", wager=wager)
             return
@@ -1487,6 +1804,37 @@ class ServiceMenuSystem(System):
                 "property_name": prop_name,
             })
             self._open_craps_table(prop, session)
+            return
+
+        if service == "three_bright":
+            session = _casino_three_bright_start(self._casino_round_seed(prop, service, wager), wager, table_context=table_context)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_three_bright_table(prop, session)
+            return
+
+        if service == "three_bones":
+            session = _casino_three_bones_start(self._casino_round_seed(prop, service, wager), wager, table_context=table_context)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_three_bones_table(prop, session)
+            return
+
+        if service == "bloom_cards":
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            session = _casino_bloom_cards_start(self._casino_round_seed(prop, service, wager), wager, table_context=table_context)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_bloom_cards_table(prop, session)
             return
 
         if service == "baccarat":
@@ -1589,6 +1937,30 @@ class ServiceMenuSystem(System):
                 self._open_crash_table(prop, next_session)
                 return True
             self._present_service_result("Crash", ["That live graph lost sync.", "Start a fresh round."], property_id=prop.get("id"))
+            return True
+
+        if service == "bloom_cards" and option_id in {"bloom_cards:grow", "bloom_cards:cashout"}:
+            current = _casino_bloom_cards_normalize_session(session)
+            if not current:
+                self._present_service_result("Bloom Cards", ["That flower-card garden lost sync.", "Start a fresh round."], property_id=prop.get("id"))
+                return True
+            if option_id.endswith(":cashout"):
+                round_result = _casino_bloom_cards_cashout(current)
+                if not round_result:
+                    self._present_service_result("Bloom Cards", ["That cash-out could not be read.", "Start a fresh round."], property_id=prop.get("id"))
+                    return True
+                self._settle_casino_round(prop, service, round_result)
+                return True
+            next_session, round_result = _casino_bloom_cards_grow(current)
+            if round_result:
+                self._settle_casino_round(prop, service, round_result)
+                return True
+            if next_session:
+                drawn = list(next_session.get("player_cards", ()) or [])[-1] if list(next_session.get("player_cards", ()) or []) else {}
+                drawn_name = str(drawn.get("name", "new bloom")) if isinstance(drawn, dict) else "new bloom"
+                self._open_bloom_cards_table(prop, next_session, notice=f"{drawn_name} joins the garden.")
+                return True
+            self._present_service_result("Bloom Cards", ["That grow choice lost sync.", "Start a fresh round."], property_id=prop.get("id"))
             return True
 
         if service == "video_poker" and option_id.startswith("video_poker:toggle:"):
@@ -1747,7 +2119,7 @@ class ServiceMenuSystem(System):
         if not isinstance(session, dict):
             return
         service = str(session.get("service", "")).strip().lower()
-        if service not in {"plinko", "crash", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", "twenty_one", "casino_holdem"}:
+        if service not in {"plinko", "crash", "video_poker", "keno", "roulette", "craps", "three_bright", "three_bones", "bloom_cards", "baccarat", "three_card_poker", "twenty_one", "casino_holdem"}:
             self._clear_casino_session()
             return
         prop = self.sim.properties.get(session.get("property_id"))
@@ -1894,6 +2266,82 @@ class ServiceMenuSystem(System):
                     f"Chip posted: {_credit_amount_label(stake)}.",
                     "You leave before choosing pass line, don't pass, or field.",
                 ],
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "three_bright":
+            current = _casino_three_bright_normalize_session(session)
+            context = current.get("table_context", {}) if isinstance(current, dict) else {}
+            bets = dict(current.get("bets", {}) or {}) if isinstance(current, dict) else {}
+            slip_lines = []
+            for key, units in list(sorted(bets.items()))[:6]:
+                market = _casino_three_bright_market_from_key(key, context)
+                if market:
+                    slip_lines.append(f"{market['label']} x{int(units)}")
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You leave the color dice cold.",
+                "detail": "The posted Three Bright chips are gone when you step away before the roll.",
+                "summary": f"You abandon Three Bright and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    f"Chip posted: {_credit_amount_label(stake)}.",
+                    *(slip_lines or ["Slip: no readable color markets."]),
+                    "You leave before the dice tumble, so the house keeps the staged chips.",
+                ],
+                "table_context": dict(context) if isinstance(context, dict) else {},
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "three_bones":
+            current = _casino_three_bones_normalize_session(session)
+            context = current.get("table_context", {}) if isinstance(current, dict) else {}
+            bets = dict(current.get("bets", {}) or {}) if isinstance(current, dict) else {}
+            slip_lines = []
+            for key, units in list(sorted(bets.items()))[:6]:
+                market = _casino_three_bones_market_from_key(key, context)
+                if market:
+                    slip_lines.append(f"{market['label']} x{int(units)}")
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You leave the cup untouched.",
+                "detail": "The posted Three Bones chips are gone when you step away before the cup lifts.",
+                "summary": f"You abandon Three Bones and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    f"Chip posted: {_credit_amount_label(stake)}.",
+                    *(slip_lines or ["Slip: no readable dice markets."]),
+                    "You leave before the bones settle, so the house keeps the staged chips.",
+                ],
+                "table_context": dict(context) if isinstance(context, dict) else {},
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "bloom_cards":
+            current = _casino_bloom_cards_normalize_session(session)
+            garden = list(current.get("player_cards", ()) or []) if isinstance(current, dict) else []
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You leave the garden on the table.",
+                "detail": "The posted Bloom Cards stake is gone when you step away without cashing out.",
+                "summary": f"You abandon Bloom Cards and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    "Garden: " + (", ".join(str(card.get("name", "bloom")) for card in garden[:6]) if garden else "--"),
+                    "You leave before cashing out, so the table sweeps the garden.",
+                ],
+                "player_cards": tuple(dict(card) for card in garden if isinstance(card, dict)),
+                "garden_cards": tuple(dict(card) for card in garden if isinstance(card, dict)),
+                "table_context": dict(current.get("table_context", {}) if isinstance(current, dict) else {}),
                 "social_gain": 0,
                 "stake_already_paid": True,
             }
@@ -4604,6 +5052,16 @@ class ServiceMenuSystem(System):
                 if moved:
                     self._open_craps_table(prop, moved)
                 return
+            if service == "three_bright":
+                moved = self._move_three_bright_cursor(session, dx, dy)
+                if moved:
+                    self._open_three_bright_table(prop, moved)
+                return
+            if service == "three_bones":
+                moved = self._move_three_bones_cursor(session, dx, dy)
+                if moved:
+                    self._open_three_bones_table(prop, moved)
+                return
             return
 
         if action == "confirm":
@@ -4644,6 +5102,22 @@ class ServiceMenuSystem(System):
                     self._open_craps_table(prop, current or session, notice="Post at least one chip before the roll.")
                     return
                 self._settle_casino_round(prop, service, round_result, next_session=next_session, continue_notice=round_result.get("headline", ""))
+                return
+            if service == "three_bright":
+                current = _casino_three_bright_normalize_session(session)
+                round_result = _casino_three_bright_resolve(current)
+                if not round_result:
+                    self._open_three_bright_table(prop, current or session, notice="Post at least one chip before the roll.")
+                    return
+                self._settle_casino_round(prop, service, round_result)
+                return
+            if service == "three_bones":
+                current = _casino_three_bones_normalize_session(session)
+                round_result = _casino_three_bones_resolve(current)
+                if not round_result:
+                    self._open_three_bones_table(prop, current or session, notice="Post at least one chip before lifting the cup.")
+                    return
+                self._settle_casino_round(prop, service, round_result)
                 return
             return
 
@@ -4698,6 +5172,42 @@ class ServiceMenuSystem(System):
                     return
                 self._open_craps_table(prop, next_session)
                 return
+            if service == "three_bright":
+                current = _casino_three_bright_normalize_session(session)
+                if not current:
+                    return
+                chip_value = int(current.get("wager", 0) or 0)
+                ok, credits = self._casino_commit_stake(chip_value)
+                if not ok:
+                    self._open_three_bright_table(prop, current, notice=f"You need {_credit_amount_label(chip_value)} for another chip. Wallet {_credit_amount_label(credits)}.")
+                    return
+                next_session = _casino_three_bright_stage_bet(current, current.get("cursor_key"))
+                if not next_session:
+                    assets = self._assets_for(self.player_eid)
+                    if assets:
+                        assets.credits += chip_value
+                    self._open_three_bright_table(prop, current, notice="That color market is not taking action right now.")
+                    return
+                self._open_three_bright_table(prop, next_session)
+                return
+            if service == "three_bones":
+                current = _casino_three_bones_normalize_session(session)
+                if not current:
+                    return
+                chip_value = int(current.get("wager", 0) or 0)
+                ok, credits = self._casino_commit_stake(chip_value)
+                if not ok:
+                    self._open_three_bones_table(prop, current, notice=f"You need {_credit_amount_label(chip_value)} for another chip. Wallet {_credit_amount_label(credits)}.")
+                    return
+                next_session = _casino_three_bones_stage_bet(current, current.get("cursor_key"))
+                if not next_session:
+                    assets = self._assets_for(self.player_eid)
+                    if assets:
+                        assets.credits += chip_value
+                    self._open_three_bones_table(prop, current, notice="That bones market is not working right now.")
+                    return
+                self._open_three_bones_table(prop, next_session)
+                return
             return
 
         if action == "secondary":
@@ -4741,6 +5251,34 @@ class ServiceMenuSystem(System):
                 if assets:
                     assets.credits += int(current.get("wager", 0) or 0)
                 self._open_craps_table(prop, next_session or current)
+                return
+            if service == "three_bright":
+                current = _casino_three_bright_normalize_session(session)
+                if not current:
+                    return
+                key = str(current.get("cursor_key", "")).strip().lower()
+                if int(dict(current.get("bets", {}) or {}).get(key, 0) or 0) <= 0:
+                    self._open_three_bright_table(prop, current, notice="No chip is staged on that color market.")
+                    return
+                next_session = _casino_three_bright_remove_bet(current, key)
+                assets = self._assets_for(self.player_eid)
+                if assets:
+                    assets.credits += int(current.get("wager", 0) or 0)
+                self._open_three_bright_table(prop, next_session or current)
+                return
+            if service == "three_bones":
+                current = _casino_three_bones_normalize_session(session)
+                if not current:
+                    return
+                key = str(current.get("cursor_key", "")).strip().lower()
+                if int(dict(current.get("bets", {}) or {}).get(key, 0) or 0) <= 0:
+                    self._open_three_bones_table(prop, current, notice="No chip is staged on that bones market.")
+                    return
+                next_session = _casino_three_bones_remove_bet(current, key)
+                assets = self._assets_for(self.player_eid)
+                if assets:
+                    assets.credits += int(current.get("wager", 0) or 0)
+                self._open_three_bones_table(prop, next_session or current)
                 return
 
     def on_dialog_close_request(self, event):

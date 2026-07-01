@@ -4215,12 +4215,32 @@ class RenderSystem(System):
                     text_body_top = min(divider_y - 1, body_top + art_h + 1)
                     text_body_h = max(1, divider_y - text_body_top)
 
+            raw_body_lines = list(casino_ui.get("body_lines", ()) or ()) or ["The floor is quiet."]
             wrapped_body = []
-            for raw in list(casino_ui.get("body_lines", ()) or ()) or ["The floor is quiet."]:
+            body_line_anchors = []
+            for raw_index, raw in enumerate(raw_body_lines):
+                body_line_anchors.append(len(wrapped_body))
                 wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
                 wrapped_body.extend(wrapped)
-            for idx, line in enumerate(wrapped_body[:text_body_h]):
+            body_start = 0
+            if len(wrapped_body) > text_body_h:
+                try:
+                    focus_line = int(casino_ui.get("body_focus_line", -1))
+                except (TypeError, ValueError):
+                    focus_line = -1
+                if 0 <= focus_line < len(body_line_anchors):
+                    focus_wrapped = body_line_anchors[focus_line]
+                    body_start = focus_wrapped - max(0, (text_body_h - 2) // 2)
+                body_start = max(0, min(body_start, max(0, len(wrapped_body) - text_body_h)))
+            visible_body = wrapped_body[body_start: body_start + text_body_h]
+            for idx, line in enumerate(visible_body):
                 self._draw_display_line(body_x, text_body_top + idx, _clip_display_line(line, body_w), body_w)
+            if len(wrapped_body) > text_body_h and body_w >= 8:
+                marker_x = body_x + max(0, body_w - 6)
+                if body_start > 0:
+                    self.view.draw_text(marker_x, text_body_top, "^ more")
+                if body_start + text_body_h < len(wrapped_body):
+                    self.view.draw_text(marker_x, text_body_top + text_body_h - 1, "v more")
 
             self.view.draw_text(rail_x - 1, body_top, "|")
             for offset in range(1, rail_h):
