@@ -595,6 +595,8 @@ def pickup_item_backed_fixture(sim: Any, inventory: Any, property_id: str, *, it
     item_metadata = copy.deepcopy(dict(metadata.get("source_item_metadata") or {}))
     if "object_profile" not in item_metadata and isinstance(metadata.get("object_profile"), Mapping):
         item_metadata["object_profile"] = copy.deepcopy(dict(metadata.get("object_profile")))
+    if "visual_signature" not in item_metadata and isinstance(metadata.get("visual_signature"), Mapping):
+        item_metadata["visual_signature"] = copy.deepcopy(dict(metadata.get("visual_signature")))
     if "object_context" not in item_metadata and isinstance(metadata.get("object_context"), Mapping):
         item_metadata["object_context"] = copy.deepcopy(dict(metadata.get("object_context")))
     if not str(item_metadata.get("display_name", "") or "").strip():

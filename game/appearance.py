@@ -25,6 +25,8 @@ from game.property_runtime import (
 from game.semantic_catalog import get_runtime_semantic_catalog
 from game.object_profile_runtime import (
     object_profile_effects,
+    object_profile_for_item,
+    object_visual_signature,
     property_is_item_backed_fixture,
 )
 
@@ -1169,8 +1171,25 @@ def ground_item_color(item_def):
     return "item_ground"
 
 
-def item_render_snapshot(item_def, *, catalog=None):
+def item_render_snapshot(item_def, *, metadata=None, catalog=None):
     catalog = catalog or get_runtime_semantic_catalog()
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    profile = object_profile_for_item(item_def, metadata) if metadata else {}
+    if profile and isinstance(metadata.get("object_profile"), Mapping):
+        signature = metadata.get("visual_signature") if isinstance(metadata.get("visual_signature"), Mapping) else {}
+        if not signature:
+            signature = object_visual_signature(str(item_def.get("id", "") or ""), profile, metadata)
+        glyph = str(signature.get("glyph", profile.get("display_glyph", "o")) or "o")[:1] or "o"
+        color = str(signature.get("color", profile.get("display_color", "world_object_home")) or "world_object_home")
+        semantic_id = str(signature.get("semantic_id", f"world_object_{profile.get('family', 'personal_home')}") or "")
+        return _semantic_snapshot(
+            glyph,
+            color=color,
+            semantic_id=semantic_id,
+            catalog=catalog,
+            preferred_categories=("world_objects", "items"),
+            effects=object_profile_effects(profile, signature),
+        )
     glyph = item_display_glyph(item_def)
     color = ground_item_color(item_def)
     return _semantic_snapshot(
@@ -1362,8 +1381,8 @@ class AppearanceManager:
             catalog=self.catalog,
         )
 
-    def item(self, item_def):
-        return item_render_snapshot(item_def, catalog=self.catalog)
+    def item(self, item_def, *, metadata=None):
+        return item_render_snapshot(item_def, metadata=metadata, catalog=self.catalog)
 
     def snapshot(
         self,

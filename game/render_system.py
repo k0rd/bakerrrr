@@ -2893,7 +2893,7 @@ class RenderSystem(System):
                     continue
 
                 item_def = ITEM_CATALOG.get(ground["item_id"], {})
-                appearance = self.sim.appearance.item(item_def)
+                appearance = self.sim.appearance.item(item_def, metadata=ground.get("metadata"))
                 attrs = A_BOLD | _ambient_attr(ground["x"], ground["y"], active_z)
                 self._draw_appearance(
                     screen_x,
