@@ -92,6 +92,7 @@ from ui.text_attrs import A_BOLD, A_DIM, A_REVERSE, A_UNDERLINE
 from game.item_semantics import (
     appraise_item_for_actor,
     item_display_name_for_actor,
+    item_entry_is_critical_quest_item,
     item_is_identified_for_actor,
     item_unknown_inspect_text_for_actor,
 )
@@ -742,7 +743,7 @@ def _character_sheet_control_line(text):
 
     for match in _HELP_COMMAND_TOKEN_RE.finditer(text):
         apply_range(match.start(), match.end(), "objective", bold)
-    for match in re.finditer(r"\b(?:Summary|Skills|Loadout|Appearance|pages|jump|close|ops|notebooks|log|debug|help)\b", text):
+    for match in re.finditer(r"\b(?:Summary|Skills|Loadout|Recipes|Appearance|pages|jump|close|ops|notebooks|log|debug|help)\b", text):
         apply_range(match.start(), match.end(), "player", 0)
 
     segments = []
@@ -803,19 +804,7 @@ def _inventory_entry_is_key_item(entry, item_def=None):
 
 
 def _inventory_entry_is_critical_quest_item(entry):
-    if not isinstance(entry, dict):
-        return False
-    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-    owner_tag = str(entry.get("owner_tag", "") or "").strip().lower()
-    if owner_tag == "quest":
-        return True
-    quest_kind = str(metadata.get("quest_kind", "") or "").strip()
-    if quest_kind:
-        return True
-    try:
-        return int(metadata.get("quest_opportunity_id", 0) or 0) > 0
-    except (TypeError, ValueError):
-        return False
+    return item_entry_is_critical_quest_item(entry)
 
 
 def _character_sheet_display_lines(raw_lines):
@@ -4488,7 +4477,8 @@ class RenderSystem(System):
             if scroll + body_h < len(display_lines):
                 footer_bits.append("more below")
             footer = " | ".join(footer_bits) if footer_bits else ""
-            action_tail = "Tab/Left/Right pages | 1-4 jump | + close | O ops | Y notebooks | L log | D debug | Up/Down scroll | ? help"
+            jump_max = min(9, max(1, len(pages) or 1))
+            action_tail = f"Tab/Left/Right pages | 1-{jump_max} jump | + close | O ops | Y notebooks | L log | D debug | Up/Down scroll | ? help"
             if footer:
                 footer = f"{footer} | {action_tail}"
             else:

@@ -533,6 +533,17 @@ class ServiceMenuSystem(System):
                     "Posted",
                     _credit_amount_label(stake),
                 ])
+            context = session.get("table_context") if isinstance(session.get("table_context"), dict) else {}
+            sponsor = str(context.get("sponsor_summary") or context.get("sponsor_kind") or "").strip()
+            stake_profile = str(context.get("stake_profile", "")).strip().replace("_", " ")
+            tone = str(context.get("table_tone", "")).strip().replace("_", " ")
+            if sponsor or stake_profile or tone:
+                table_bits = [bit for bit in (sponsor, tone, stake_profile) if bit]
+                lines.extend([
+                    "",
+                    "Table",
+                    " / ".join(table_bits[:3]),
+                ])
         return lines
 
     def _casino_partition_rows(self, prop):
@@ -879,6 +890,11 @@ class ServiceMenuSystem(System):
         prop_name = self._casino_prop_name(prop)
         host_style = str(self._casino_ui_state().get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
         return_to = str(self._casino_ui_state().get("return_to", "floor" if host_style == "floor" else "service_menu")).strip().lower()
+        body_lines = list(transcript or ())
+        context = session.get("table_context") if isinstance(session, dict) and isinstance(session.get("table_context"), dict) else {}
+        table_read = str(context.get("table_read", "")).strip()
+        if table_read and table_read.lower() not in {str(line).strip().lower() for line in body_lines}:
+            body_lines.insert(0, table_read)
         rows = []
         for row in list(topics or ()):
             if not isinstance(row, dict):
@@ -899,7 +915,7 @@ class ServiceMenuSystem(System):
             host_style=host_style,
             title=f"{_casino_game_title(service)}: {prop_name}",
             subtitle=str(subtitle or "").strip(),
-            body_lines=list(transcript or ()),
+            body_lines=body_lines,
             rail_lines=rail_lines,
             rows=rows,
             hint=str(hint or "").strip(),
@@ -1007,7 +1023,7 @@ class ServiceMenuSystem(System):
         self._open_casino_result(prop, service, title, lines, art=round_result if isinstance(round_result, dict) else None)
         return True
 
-    def _open_plinko_lane_menu(self, prop, service, wager):
+    def _open_plinko_lane_menu(self, prop, service, wager, *, table_context=None):
         session = {
             "service": service,
             "property_id": prop.get("id"),
@@ -1015,6 +1031,7 @@ class ServiceMenuSystem(System):
             "wager": int(wager),
             "stake": int(wager),
             "seed_token": self._casino_round_seed(prop, service, wager),
+            "table_context": dict(table_context) if isinstance(table_context, dict) else {},
         }
         topics = [
             {"id": f"plinko:lane:{lane}", "label": f"Drop lane {lane + 1}"}
@@ -1161,6 +1178,10 @@ class ServiceMenuSystem(System):
         notice = str(notice or "").strip()
         if notice:
             body_lines.append(notice)
+        context = session.get("table_context") if isinstance(session, dict) and isinstance(session.get("table_context"), dict) else {}
+        table_read = str(context.get("table_read", "")).strip()
+        if table_read:
+            body_lines.append(table_read)
         body_lines.extend([
             f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.",
             "Board: cursor () | ticket []",
@@ -1231,6 +1252,10 @@ class ServiceMenuSystem(System):
         notice = str(notice or "").strip()
         if notice:
             body_lines.append(notice)
+        context = session.get("table_context") if isinstance(session, dict) and isinstance(session.get("table_context"), dict) else {}
+        table_read = str(context.get("table_read", "")).strip()
+        if table_read:
+            body_lines.append(table_read)
         body_lines.extend([
             f"Posted {_credit_amount_label(session.get('stake', session.get('wager', 0)))} across the slip.",
             "Space adds one chip to the focused market. Backspace pulls one chip back. Enter spins once.",
@@ -1325,6 +1350,10 @@ class ServiceMenuSystem(System):
         notice = str(notice or "").strip()
         if notice:
             body_lines.append(notice)
+        context = session.get("table_context") if isinstance(session, dict) and isinstance(session.get("table_context"), dict) else {}
+        table_read = str(context.get("table_read", "")).strip()
+        if table_read:
+            body_lines.append(table_read)
         body_lines.append(
             f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} | "
             f"{'Point' if phase == 'point' else 'Come-out'} | "
@@ -1736,6 +1765,11 @@ class ServiceMenuSystem(System):
             self._emit_casino_blocked(prop, service, "invalid_wager", wager=wager)
             return
 
+        def _contextual_session(session):
+            if isinstance(session, dict):
+                session["table_context"] = dict(table_context)
+            return session
+
         if service == "slots":
             seed_token = self._casino_round_seed(prop, service, wager)
             self._settle_casino_round(prop, service, _casino_slots_resolve(seed_token, wager))
@@ -1746,7 +1780,7 @@ class ServiceMenuSystem(System):
             if not ok:
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
-            self._open_plinko_lane_menu(prop, service, wager)
+            self._open_plinko_lane_menu(prop, service, wager, table_context=table_context)
             return
 
         if service == "crash":
@@ -1754,7 +1788,7 @@ class ServiceMenuSystem(System):
             if not ok:
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
-            session = _casino_crash_start(self._casino_round_seed(prop, service, wager), wager)
+            session = _contextual_session(_casino_crash_start(self._casino_round_seed(prop, service, wager), wager))
             session.update({
                 "property_id": prop.get("id"),
                 "property_name": prop_name,
@@ -1767,7 +1801,7 @@ class ServiceMenuSystem(System):
             if not ok:
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
-            session = _casino_video_poker_start(self._casino_round_seed(prop, service, wager), wager)
+            session = _contextual_session(_casino_video_poker_start(self._casino_round_seed(prop, service, wager), wager))
             session.update({
                 "property_id": prop.get("id"),
                 "property_name": prop_name,
@@ -1780,7 +1814,7 @@ class ServiceMenuSystem(System):
             if not ok:
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
-            session = _casino_keno_start(self._casino_round_seed(prop, service, wager), wager)
+            session = _contextual_session(_casino_keno_start(self._casino_round_seed(prop, service, wager), wager))
             session.update({
                 "property_id": prop.get("id"),
                 "property_name": prop_name,
@@ -1789,7 +1823,7 @@ class ServiceMenuSystem(System):
             return
 
         if service == "roulette":
-            session = _casino_roulette_start(self._casino_round_seed(prop, service, wager), wager)
+            session = _contextual_session(_casino_roulette_start(self._casino_round_seed(prop, service, wager), wager))
             session.update({
                 "property_id": prop.get("id"),
                 "property_name": prop_name,
@@ -1798,7 +1832,7 @@ class ServiceMenuSystem(System):
             return
 
         if service == "craps":
-            session = _casino_craps_start(self._casino_round_seed(prop, service, wager), wager)
+            session = _contextual_session(_casino_craps_start(self._casino_round_seed(prop, service, wager), wager))
             session.update({
                 "property_id": prop.get("id"),
                 "property_name": prop_name,
@@ -1842,7 +1876,7 @@ class ServiceMenuSystem(System):
             if not ok:
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
-            session = _casino_baccarat_start(self._casino_round_seed(prop, service, wager), wager)
+            session = _contextual_session(_casino_baccarat_start(self._casino_round_seed(prop, service, wager), wager))
             session.update({
                 "property_id": prop.get("id"),
                 "property_name": prop_name,
@@ -1859,7 +1893,7 @@ class ServiceMenuSystem(System):
             if not ok:
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
-            session = _casino_three_card_poker_start(self._casino_round_seed(prop, service, wager), wager)
+            session = _contextual_session(_casino_three_card_poker_start(self._casino_round_seed(prop, service, wager), wager))
             session.update({
                 "property_id": prop.get("id"),
                 "property_name": prop_name,
@@ -1872,7 +1906,7 @@ class ServiceMenuSystem(System):
             if not ok:
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
-            session = _casino_twenty_one_start(self._casino_round_seed(prop, service, wager), wager)
+            session = _contextual_session(_casino_twenty_one_start(self._casino_round_seed(prop, service, wager), wager))
             session.update({
                 "property_id": prop.get("id"),
                 "property_name": prop_name,
@@ -1893,7 +1927,7 @@ class ServiceMenuSystem(System):
             if not ok:
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
-            session = _casino_holdem_start(self._casino_round_seed(prop, service, wager), wager)
+            session = _contextual_session(_casino_holdem_start(self._casino_round_seed(prop, service, wager), wager))
             session.update({
                 "property_id": prop.get("id"),
                 "property_name": prop_name,
@@ -3945,6 +3979,12 @@ class ServiceMenuSystem(System):
                 for line in list(event.data.get("result_lines", ()) or ())
                 if str(line).strip()
             ]
+            context = event.data.get("table_context_summary")
+            if not isinstance(context, dict):
+                context = event.data.get("table_context")
+            table_read = str((context or {}).get("table_read", "") if isinstance(context, dict) else "").strip()
+            if table_read and table_read.lower() not in {line.lower() for line in lines}:
+                lines.insert(0, table_read)
             if not lines:
                 lines = [detail or headline]
             lines.append(

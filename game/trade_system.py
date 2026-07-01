@@ -15,7 +15,7 @@ from game.appearance_loadout import (
 from game.components import Inventory, NPCSocial, PlayerAssets, Position, VehicleState
 from game.cultivation_runtime import seed_packet_metadata
 from game.economy import item_market_bias, item_trade_pressure_bias, store_supply_profile
-from game.item_semantics import identify_item_for_actor, item_display_name_for_actor
+from game.item_semantics import identify_item_for_actor, item_display_name_for_actor, item_entry_is_critical_quest_item
 from game.items import ITEM_CATALOG
 from game.organization_reputation import organization_instability_profile
 from game.organization_response import property_vigilante_denial
@@ -76,6 +76,8 @@ from game.system_support.street_vendor_trade_runtime import (
 )
 from game.system_support.throwable_runtime import throwable_summary_text
 from ui.text_attrs import A_BOLD
+
+TRADE_CRITICAL_QUEST_ITEM_COLOR = "inventory_critical_quest"
 
 
 def _default_trade_contact_terms(_sim, _viewer_eid, _prop):
@@ -2676,7 +2678,7 @@ class TradeSystem(System):
                 "interest_known": bool(interest.get("interest_known", True)),
                 "interest_actual": interest.get("interest_actual"),
                 "actual_label": interest.get("actual_label"),
-                "row_color": interest.get("row_color"),
+                "row_color": TRADE_CRITICAL_QUEST_ITEM_COLOR if item_entry_is_critical_quest_item(entry) else interest.get("row_color"),
                 "interest_reason": interest.get("reason", ""),
                 "interest_profile_summary": interest.get("profile_summary", ""),
                 "interest_price_mult": float(max(0.0, interest.get("price_mult", 1.0) or 1.0)),

@@ -15,7 +15,10 @@ from game.components import (
     WeaponLoadout,
 )
 from game.appearance_loadout import appearance_slot_rows, player_appearance_summary
+from game.flora_runtime import load_flora_catalog
 from game.human_identity import normalize_gender_identity, pronoun_display_text
+from game.herbal_chemistry_runtime import known_plant_traits_for_actor, known_recipes_for_actor, load_herbal_recipe_catalog
+from game.items import item_display_name
 from game.run_pressure import pressure_snapshot
 from game.skill_ui import skill_birth_debug_line, skill_change_reason_label
 from game.skills import ALL_SKILL_IDS, actor_skill, profile_neglect_pressure, profile_recent_skill_changes, skill_label
@@ -138,6 +141,86 @@ def _run_nonce_text(sim):
     if value is None or str(value).strip() == "":
         return "-"
     return str(value).strip()
+
+
+def _sheet_text_label(value, *, fallback="-"):
+    text = str(value or "").replace("_", " ").strip()
+    return text if text else str(fallback)
+
+
+def _sheet_title_label(value, *, fallback="-"):
+    text = _sheet_text_label(value, fallback=fallback)
+    return text.title() if text and text != "-" else text
+
+
+def _sheet_source_label(value):
+    text = _sheet_text_label(value, fallback="")
+    return text or "learned"
+
+
+def _known_recipe_lines(sim, player_eid):
+    known_recipes = known_recipes_for_actor(sim, player_eid)
+    known_traits = known_plant_traits_for_actor(sim, player_eid)
+    catalog = load_herbal_recipe_catalog()
+    flora_catalog = load_flora_catalog()
+
+    lines = [
+        "RECIPES",
+        f"Known recipes {len(known_recipes)} | Plant affinities {len(known_traits)}",
+        "",
+        "HERBAL MEDICINE",
+    ]
+
+    if known_recipes:
+        recipe_rows = []
+        for recipe_id, knowledge in known_recipes.items():
+            recipe = catalog.get(str(recipe_id or "").strip().lower())
+            learned_tick = 0
+            source_kind = "learned"
+            if isinstance(knowledge, dict):
+                try:
+                    learned_tick = int(knowledge.get("learned_tick", 0) or 0)
+                except (TypeError, ValueError):
+                    learned_tick = 0
+                source_kind = _sheet_source_label(knowledge.get("source_kind"))
+            name = str((recipe or {}).get("name") or recipe_id).replace("_", " ").strip()
+            recipe_rows.append((learned_tick, name.lower(), str(recipe_id), recipe, source_kind))
+        for _learned_tick, _name_key, recipe_id, recipe, source_kind in sorted(recipe_rows):
+            if isinstance(recipe, dict):
+                name = _sheet_title_label(recipe.get("name") or recipe_id)
+                required = " + ".join(_sheet_text_label(token) for token in tuple(recipe.get("required_classes", ()) or ()))
+                output = item_display_name(str(recipe.get("output_item_id") or recipe_id).strip().lower())
+                lines.append(f"{name}: {required} -> {output} | {source_kind}")
+            else:
+                lines.append(f"{_sheet_title_label(recipe_id)}: recipe data missing | {source_kind}")
+    else:
+        lines.append("No herbal recipes learned yet.")
+
+    lines.extend(["", "PLANT AFFINITIES"])
+    if known_traits:
+        trait_rows = []
+        for plant_id, knowledge in known_traits.items():
+            key = str(plant_id or "").strip().lower()
+            row = flora_catalog.get(key, {}) if isinstance(flora_catalog, dict) else {}
+            plant_name = str(row.get("name") or key.replace("_", " ")).strip()
+            class_id = ""
+            source_kind = "learned"
+            learned_tick = 0
+            if isinstance(knowledge, dict):
+                class_id = str(knowledge.get("chemistry_class", "") or "").strip().lower()
+                source_kind = _sheet_source_label(knowledge.get("source_kind"))
+                try:
+                    learned_tick = int(knowledge.get("learned_tick", 0) or 0)
+                except (TypeError, ValueError):
+                    learned_tick = 0
+            trait_rows.append((plant_name.lower(), learned_tick, plant_name, class_id, source_kind))
+        for _name_key, _learned_tick, plant_name, class_id, source_kind in sorted(trait_rows):
+            affinity = _sheet_text_label(class_id, fallback="unknown")
+            lines.append(f"{_sheet_title_label(plant_name)}: {affinity} | {source_kind}")
+    else:
+        lines.append("No plant affinities learned yet.")
+
+    return lines
 
 
 def _sheet_biological_sex_label(identity):
@@ -291,6 +374,7 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
         "SLOTS",
     ]
     appearance_lines.extend(appearance_slot_rows(sim, player_eid))
+    recipe_lines = _known_recipe_lines(sim, player_eid)
 
     skills_lines = ["SKILLS"]
     birth_line = skill_birth_debug_line(profile)
@@ -365,6 +449,11 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
             "id": "loadout",
             "label": "Loadout",
             "lines": loadout_lines,
+        },
+        {
+            "id": "recipes",
+            "label": "Recipes",
+            "lines": recipe_lines,
         },
         {
             "id": "appearance",

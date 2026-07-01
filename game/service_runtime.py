@@ -1810,6 +1810,13 @@ CASINO_GAME_CAPABILITY_OVERRIDES = {
         "style_tags": ("cards", "flora", "quiet", "ritual", "color"),
     },
 }
+for _casino_context_game_id in tuple(CASINO_GAME_PROFILES):
+    CASINO_GAME_CAPABILITY_OVERRIDES.setdefault(_casino_context_game_id, {}).update({
+        "supports_table_context": True,
+        "supports_custom_stakes": True,
+        "supports_visual_accents": True,
+        "supports_sponsor_read": True,
+    })
 CASINO_TABLE_STAKE_PROFILES = {
     "street": (1, 5, 10),
     "standard": (10, 25, 50),
@@ -2049,6 +2056,12 @@ def _casino_table_context_summary(context):
         "table_read": str(context.get("table_read", "")).strip(),
         "ignored_features": tuple(str(key) for key in tuple(context.get("ignored_features", ()) or ())),
     }
+
+
+def _casino_preserved_table_context(session):
+    if isinstance(session, dict) and isinstance(session.get("table_context"), dict):
+        return dict(session.get("table_context") or {})
+    return {}
 
 
 def casino_game_capabilities():
@@ -2608,6 +2621,7 @@ def _casino_video_poker_normalize_session(session):
         "holds": holds,
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
+        "table_context": _casino_preserved_table_context(session),
     }
 
 
@@ -2791,6 +2805,7 @@ def _casino_keno_normalize_session(session):
         "cursor": max(1, min(int(session.get("cursor", 1) or 1), CASINO_KENO_NUMBER_COUNT)),
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
+        "table_context": _casino_preserved_table_context(session),
     }
 
 
@@ -2968,6 +2983,7 @@ def _casino_roulette_normalize_session(session):
         "cursor_key": cursor_key,
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
+        "table_context": _casino_preserved_table_context(session),
     }
 
 
@@ -3312,6 +3328,7 @@ def _casino_craps_normalize_session(session):
         "cursor_key": cursor_key,
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
+        "table_context": _casino_preserved_table_context(session),
     }
 
 
@@ -4639,6 +4656,7 @@ def _casino_baccarat_normalize_session(session):
         "banker_cards": banker_cards,
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
+        "table_context": _casino_preserved_table_context(session),
     }
 
 
@@ -4942,6 +4960,7 @@ def _casino_three_card_poker_normalize_session(session):
         ],
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
+        "table_context": _casino_preserved_table_context(session),
     }
 
 
@@ -5315,6 +5334,7 @@ def _casino_crash_normalize_session(session):
         "history": tuple(history[-18:]),
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
+        "table_context": _casino_preserved_table_context(session),
     }
 
 
@@ -5416,6 +5436,7 @@ def _casino_twenty_one_normalize_session(session):
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
         "split_used": bool(session.get("split_used", False)),
+        "table_context": _casino_preserved_table_context(session),
     }
     raw_hands = list(session.get("hands", ()) or ())
     hands = []
@@ -6003,6 +6024,15 @@ def _casino_apply_round_result(sim, eid, prop, service, round_result):
         needs.social = _clamp(float(needs.social) + float(social_gain))
 
     payload = dict(round_result)
+    context = payload.get("table_context_summary")
+    if not isinstance(context, dict) or not context:
+        context = payload.get("table_context")
+    if not isinstance(context, dict) or not context:
+        context = _casino_table_context(sim, prop, game=service)
+    context_summary = _casino_table_context_summary(context)
+    if context_summary:
+        payload["table_context"] = dict(context_summary)
+        payload["table_context_summary"] = dict(context_summary)
     payload.update({
         "eid": eid,
         "property_id": prop.get("id") if isinstance(prop, dict) else None,

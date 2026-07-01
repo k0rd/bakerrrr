@@ -69,6 +69,7 @@ _STATE_DICT_KEYS = (
     "environmental_ignition_days",
     "contact_cooldowns",
     "damage_marks",
+    "spent_cells",
     "response_seed_ids",
     "environmental_candidate_cache",
 )
@@ -640,6 +641,76 @@ def _fire_damage_record_at(sim, prop, key):
     return None
 
 
+def _fire_spent_record_at(sim, key):
+    if key is None:
+        return None
+    state = getattr(sim, "fire_state", None)
+    if not isinstance(state, dict):
+        return None
+    record = (state.get("spent_cells") or {}).get(key)
+    return record if isinstance(record, dict) else None
+
+
+def _behavior_should_leave_spent_fuel(behavior):
+    if not isinstance(behavior, dict):
+        return False
+    burn_tier = _text(behavior.get("burn_tier")).lower()
+    if burn_tier in {"", "none", "spent"}:
+        return False
+    tags = {
+        _text(tag).lower()
+        for tag in tuple(behavior.get("source_tags", ()) or ())
+        if _text(tag)
+    }
+    if tags.intersection({"campfire", "open_air"}):
+        return False
+    if _text(behavior.get("structural_damage_kind")).lower() in {"door", "window", "wall"}:
+        return False
+    return bool(
+        behavior.get("building_id")
+        or behavior.get("property_id")
+        or behavior.get("room_kind")
+        or behavior.get("archetype")
+        or tags.intersection({"interior", "risky_room", "fuel", "electrical", "hazard"})
+    )
+
+
+def mark_fire_cell_spent(sim, x, y, z=0, *, cell=None, behavior=None, reason="burned_out"):
+    key = _coord_key(x, y, z)
+    if sim is None or key is None:
+        return None
+    behavior = dict(behavior or {}) if isinstance(behavior, dict) else fire_behavior_for_cell(sim, key[0], key[1], key[2])
+    if not _behavior_should_leave_spent_fuel(behavior):
+        return None
+    state = fire_state(sim)
+    existing = dict(state.get("spent_cells", {}).get(key, {}) or {})
+    cell = dict(cell or {}) if isinstance(cell, dict) else {}
+    tags = tuple(
+        _text(tag).lower()
+        for tag in tuple(behavior.get("source_tags", ()) or ())
+        if _text(tag)
+    )
+    record = {
+        "x": int(key[0]),
+        "y": int(key[1]),
+        "z": int(key[2]),
+        "property_id": _text(cell.get("property_id")) or _text(behavior.get("property_id")) or existing.get("property_id"),
+        "building_id": _text(cell.get("building_id")) or _text(behavior.get("building_id")) or existing.get("building_id"),
+        "property_name": _text(behavior.get("property_name")) or existing.get("property_name"),
+        "burn_tier": _text(cell.get("burn_tier")) or _text(behavior.get("burn_tier")) or existing.get("burn_tier"),
+        "room_kind": _text(behavior.get("room_kind")) or existing.get("room_kind"),
+        "archetype": _text(behavior.get("archetype")) or existing.get("archetype"),
+        "fixture_type": _text(behavior.get("fixture_type")) or existing.get("fixture_type"),
+        "hazard_profile": _text(behavior.get("hazard_profile")) or existing.get("hazard_profile"),
+        "aperture_kind": _text(behavior.get("aperture_kind")) or existing.get("aperture_kind"),
+        "source_tags": tags or tuple(existing.get("source_tags", ()) or ()),
+        "reason": _text(reason).lower() or "burned_out",
+        "spent_tick": _safe_int(getattr(sim, "tick", 0), 0),
+    }
+    state.get("spent_cells", {})[key] = record
+    return record
+
+
 def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
     key = _coord_key(x, y, z)
     if sim is None or key is None:
@@ -671,23 +742,26 @@ def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
         or _structure_aperture_kind(sim, structure, key[0], key[1], key[2])
     )
 
-    spent_damage_record = None if _active_fire_at(sim, key) else _fire_damage_record_at(sim, linked_prop, key)
-    if spent_damage_record is not None:
-        structural_damage_kind = _text(spent_damage_record.get("repair_kind")).lower()
+    spent_record = None
+    if not _active_fire_at(sim, key):
+        spent_record = _fire_damage_record_at(sim, linked_prop, key) or _fire_spent_record_at(sim, key)
+    if spent_record is not None:
+        structural_damage_kind = _text(spent_record.get("repair_kind")).lower()
+        spent_tags = tuple(_text(tag).lower() for tag in tuple(spent_record.get("source_tags", ()) or ()) if _text(tag))
         profile = dict(_BURN_TIER_PROFILES["spent"])
         profile.update({
             "burn_tier": "spent",
-            "property_id": property_id or None,
-            "building_id": building_id or None,
-            "property_name": _text((linked_prop or {}).get("name")) or None,
+            "property_id": property_id or _text(spent_record.get("property_id")) or None,
+            "building_id": building_id or _text(spent_record.get("building_id")) or None,
+            "property_name": _text((linked_prop or {}).get("name")) or _text(spent_record.get("property_name")) or None,
             "property_public": bool(linked_prop and (property_is_public(linked_prop) or property_is_storefront(linked_prop))),
-            "room_kind": room_kind or None,
-            "archetype": archetype or None,
-            "fixture_type": fixture_type or None,
-            "hazard_profile": hazard_profile or None,
-            "aperture_kind": aperture_kind or None,
+            "room_kind": room_kind or _text(spent_record.get("room_kind")) or None,
+            "archetype": archetype or _text(spent_record.get("archetype")) or None,
+            "fixture_type": fixture_type or _text(spent_record.get("fixture_type")) or None,
+            "hazard_profile": hazard_profile or _text(spent_record.get("hazard_profile")) or None,
+            "aperture_kind": aperture_kind or _text(spent_record.get("aperture_kind")) or None,
             "structural_damage_kind": structural_damage_kind,
-            "source_tags": ("fire_spent", "structural_damage"),
+            "source_tags": tuple(dict.fromkeys(("fire_spent",) + spent_tags + (("structural_damage",) if structural_damage_kind else ("burned_out",)))),
         })
         return profile
 
@@ -1058,6 +1132,7 @@ __all__ = [
     "fire_runtime_day",
     "fire_state",
     "mark_chunk_environmental_ignition",
+    "mark_fire_cell_spent",
     "note_frozen_fire_boundary",
     "pop_due_fire_cells",
     "property_fire_summary",

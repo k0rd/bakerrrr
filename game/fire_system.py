@@ -27,6 +27,7 @@ from game.system_support.fire_runtime import (
     fire_runtime_day,
     fire_state,
     ensure_fire_advance_due_index,
+    mark_fire_cell_spent,
     mark_chunk_environmental_ignition,
     note_frozen_fire_boundary,
     pop_due_fire_cells,
@@ -1058,6 +1059,18 @@ class FireSystem(System):
                     cell["fire_intensity"] = max(0, fire_intensity - 1)
                 else:
                     cell["fire_intensity"] = max(fire_intensity, 1)
+                if _safe_int(cell.get("fire_intensity"), 0) <= 0:
+                    spent_record = mark_fire_cell_spent(
+                        self.sim,
+                        coord[0],
+                        coord[1],
+                        coord[2],
+                        cell=cell,
+                        behavior=behavior,
+                        reason="burned_out",
+                    )
+                    if spent_record is not None and isinstance(self._fire_behavior_cache, dict):
+                        self._fire_behavior_cache.pop(coord, None)
             elif smoke_intensity > 0:
                 cell["smoke_intensity"] = max(0, smoke_intensity - 1)
 

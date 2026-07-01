@@ -661,6 +661,7 @@ class PropertyIngressRuntime:
             x=candidate["x"],
             y=candidate["y"],
             z=candidate["z"],
+            **observation,
         )
 
     def ingress_mode_matches(self, candidate, ingress_mode):
@@ -1109,6 +1110,7 @@ class PropertyIngressRuntime:
                 x=candidate["x"],
                 y=candidate["y"],
                 z=candidate["z"],
+                **observation,
             )
         elif unauthorized_entry:
             severity_score = max(
@@ -1171,6 +1173,7 @@ class PropertyIngressRuntime:
                 x=candidate["x"],
                 y=candidate["y"],
                 z=candidate["z"],
+                **observation,
             )
         else:
             name = prop.get("name", prop.get("id", "property"))

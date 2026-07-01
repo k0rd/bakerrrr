@@ -11,7 +11,7 @@ import random
 from collections.abc import Mapping
 
 from game.components import BehaviorProfile, CreatureIdentity, Inventory, Occupation, OrganizationAffiliations, Position
-from game.item_semantics import item_legal_status as _item_legal_status, item_tags as _item_tags
+from game.item_semantics import item_entry_is_critical_quest_item, item_legal_status as _item_legal_status, item_tags as _item_tags
 from game.items import ITEM_CATALOG, is_credstick_item, item_display_name
 from game.organizations import actor_org_memberships
 from game.property_runtime import property_is_vehicle as _property_is_vehicle, vehicle_label as _vehicle_label
@@ -29,6 +29,7 @@ from game.system_support.npc_behavior_runtime import (
 
 
 STREET_TRADE_SOURCE_KIND = "street_vendor"
+STREET_TRADE_CRITICAL_QUEST_ITEM_COLOR = "inventory_critical_quest"
 
 DRUG_STOCK_POOL = (
     "cocaine_bindle",
@@ -434,6 +435,10 @@ def street_vendor_sell_rows(sim, contact_eid, player_eid, profile=None):
         illegal = bool(row.get("illegal"))
         desired = bool(row.get("desired"))
         label = "premium wanted" if desired else _sell_note_for_kind((profile or {}).get("vendor_kind"))
+        row_color = "property_service" if desired else ("item_illegal" if illegal else "item_tool")
+        source_entry = row.get("entry") if isinstance(row.get("entry"), Mapping) else row
+        if item_entry_is_critical_quest_item(source_entry):
+            row_color = STREET_TRADE_CRITICAL_QUEST_ITEM_COLOR
         out.append({
             **dict(row),
             "glyph": str(ITEM_CATALOG.get(item_id, {}).get("glyph", "*") or "*")[:1],
@@ -443,7 +448,7 @@ def street_vendor_sell_rows(sim, contact_eid, player_eid, profile=None):
             "interest_known": True,
             "interest_actual": "wanted",
             "interest_actual_label": label,
-            "row_color": "property_service" if desired else ("item_illegal" if illegal else "item_tool"),
+            "row_color": row_color,
             "row_badge": "premium" if desired else ("contraband" if illegal else "wanted"),
             "risk_label": "contraband risk" if illegal else "",
             "source_kind": STREET_TRADE_SOURCE_KIND,

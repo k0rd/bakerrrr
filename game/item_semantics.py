@@ -22,6 +22,23 @@ LEGAL_STATUSES = {"legal", "restricted", "suspicious", "illegal", "stolen", "unk
 PHONE_TAGS = {"phone", "cellular", "communication", "radio", "comms"}
 PHONE_ITEM_IDS = {"mobile_phone", "burner_phone", "unregistered_mobile_phone", "cell_phone", "phone", "radio", "walkie_talkie", "two_way_radio"}
 
+
+def item_entry_is_critical_quest_item(entry) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), Mapping) else {}
+    owner_tag = str(entry.get("owner_tag", "") or "").strip().lower()
+    if owner_tag == "quest":
+        return True
+    quest_kind = str(metadata.get("quest_kind", "") or "").strip()
+    if quest_kind:
+        return True
+    try:
+        return int(metadata.get("quest_opportunity_id", 0) or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 _APPEARANCE_SLOT_VALUES = {
     "color": (
         "amber",
