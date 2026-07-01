@@ -742,6 +742,53 @@ class EventLogSystem(System):
             return property_name
         return self._event_site_name(event)
 
+    def _event_position_place_name(self, event):
+        try:
+            x = int(event.data.get("x"))
+            y = int(event.data.get("y"))
+            z = int(event.data.get("z", 0) or 0)
+        except (TypeError, ValueError):
+            return ""
+        tile = None
+        try:
+            tile = self.sim.tilemap.tile_at(x, y, z)
+        except (AttributeError, TypeError, ValueError):
+            tile = None
+        glyph = str(getattr(tile, "glyph", "") or "")[:1]
+        walkable = bool(getattr(tile, "walkable", True))
+        label = {
+            "~": "the water",
+            "=": "the road",
+            ",": "the brush",
+            "^": "the rocks",
+            "_": "the shore",
+            "#": "the barrier" if not walkable else "the rough ground",
+            '"': "a window",
+            "+": "a door",
+            "'": "an open doorway",
+        }.get(glyph)
+        if not label:
+            structure = None
+            try:
+                structure = self.sim.structure_at(x, y, z)
+            except (AttributeError, TypeError, ValueError):
+                structure = None
+            if structure is not None and not walkable:
+                label = "the building wall"
+            elif structure is not None:
+                label = "the interior floor"
+            else:
+                label = "open ground"
+        if int(z) != 0:
+            return f"{label} near {x}, {y}, floor {z}"
+        return f"{label} near {x}, {y}"
+
+    def _event_fire_place_name(self, event):
+        place = self._event_place_name(event)
+        if place and str(place).strip().lower() not in {"property", "site", "frontage", "the frontage"}:
+            return place
+        return self._event_position_place_name(event) or "the fire site"
+
     def _event_item_label(self, event, *, fallback="item"):
         item_name = str(event.data.get("item_name", "") or "").strip()
         if item_name:
@@ -2022,7 +2069,7 @@ class EventLogSystem(System):
         self._log(f"Hazard: {note}", channel="status", priority="high")
 
     def on_fire_started(self, event):
-        place = self._event_place_name(event) or self._event_property_name(event, fallback="the frontage")
+        place = self._event_fire_place_name(event)
         if event.data.get("source_eid") == self.player_eid:
             self._log(f"Fire catches at {place}.", channel="combat", priority="critical")
             return
@@ -2033,13 +2080,13 @@ class EventLogSystem(System):
     def on_fire_contained(self, event):
         if not self._player_can_perceive_event_position(event):
             return
-        place = self._event_place_name(event) or self._event_property_name(event, fallback="the frontage")
+        place = self._event_fire_place_name(event)
         self._log(f"Fire response holds at {place}.", channel="world", priority="high")
 
     def on_fire_burned_out(self, event):
         if not self._player_can_perceive_event_position(event):
             return
-        place = self._event_place_name(event) or self._event_property_name(event, fallback="the frontage")
+        place = self._event_fire_place_name(event)
         self._log(f"The fire at {place} burns down to smoke and cleanup.", channel="world", priority="normal")
 
     def on_world_condition_triggered(self, event):

@@ -597,6 +597,15 @@ def pickup_item_backed_fixture(sim: Any, inventory: Any, property_id: str, *, it
         item_metadata["object_profile"] = copy.deepcopy(dict(metadata.get("object_profile")))
     if "object_context" not in item_metadata and isinstance(metadata.get("object_context"), Mapping):
         item_metadata["object_context"] = copy.deepcopy(dict(metadata.get("object_context")))
+    if not str(item_metadata.get("display_name", "") or "").strip():
+        fixture_display_name = str(metadata.get("display_name", "") or "").strip()
+        if fixture_display_name:
+            item_metadata["display_name"] = fixture_display_name
+        elif isinstance(item_metadata.get("object_profile"), Mapping):
+            item_metadata["display_name"] = object_profile_display_text(
+                item_metadata.get("object_profile"),
+                fallback_name=item_def.get("name", "Object"),
+            )
     instance_id = str(metadata.get("source_item_instance_id", "") or "").strip() or None
     added, new_instance_id = inventory.add_item(
         item_id,

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from game.content_warnings import warn_content_fallback
 from game.json_metadata import split_object_document
-from game.object_profile_runtime import normalize_object_profile
+from game.object_profile_runtime import normalize_object_profile, object_profile_display_text
 
 
 ITEMS_PATH = Path(__file__).resolve().parent / "items.json"
@@ -1804,6 +1804,11 @@ def item_display_name(item_id, metadata=None, item_catalog=None):
         custom = str(metadata.get("display_name", "")).strip()
         if custom:
             return custom
+        profile = metadata.get("object_profile")
+        if isinstance(profile, dict) and profile:
+            profile_name = object_profile_display_text(profile, fallback_name="").strip()
+            if profile_name:
+                return profile_name
     base = str(item_def.get("name", item_id)).strip() or str(item_id or "item")
     if is_credstick_item(item_id) and isinstance(metadata, dict):
         total = credstick_total_credits(quantity=1, metadata=metadata)
