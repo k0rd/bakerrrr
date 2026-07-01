@@ -160,6 +160,7 @@ from game.opportunities import (
     stage_active_opportunities,
 )
 from game.run_echoes import strongest_active_run_echo_for_chunk
+from game.place_mood_runtime import strongest_rumor_weather_anchor
 from game.meaningful_objects_runtime import (
     meaningful_object_cooldown_ready,
     meaningful_object_dialogue_context,
@@ -7118,6 +7119,12 @@ class NPCInteractionSystem(System):
         )
         scene_local_line = str((scene_note or {}).get("local_line", "") or "").strip() if isinstance(scene_note, dict) else ""
         scene_detail_line = str((scene_note or {}).get("detail_line", "") or "").strip() if isinstance(scene_note, dict) else ""
+        rumor_weather_context = strongest_rumor_weather_anchor(
+            self.sim,
+            actor_eid=npc_eid,
+            viewer_eid=self.player_eid,
+            radius=12,
+        )
         if scene_local_line or scene_detail_line:
             local_source = "scene_event"
             detail_line = scene_detail_line or scene_local_line
@@ -7133,6 +7140,12 @@ class NPCInteractionSystem(System):
             local_source = "run_echo"
             detail_line = run_echo_line
             detail_label = "What do people remember?"
+        elif rumor_weather_context:
+            local_source = "rumor_weather"
+            detail_line = str(rumor_weather_context.get("rumor_weather_summary", "") or "").strip()
+            if not detail_line:
+                detail_line = str(rumor_weather_context.get("visible_cue", "") or "").strip()
+            detail_label = "What gives you that read?"
         elif other_name:
             local_source = "other"
             other_slots = self._human_pronoun_slots(
@@ -7373,6 +7386,13 @@ class NPCInteractionSystem(System):
             "other_name": other_name,
             "other_relation": other_relation,
             "rumor_line": rumor_line,
+            "rumor_weather_context": dict(rumor_weather_context) if isinstance(rumor_weather_context, dict) else {},
+            "rumor_weather_kind": str((rumor_weather_context or {}).get("rumor_weather_kind", "") or "").strip().lower() if isinstance(rumor_weather_context, dict) else "",
+            "rumor_weather_label": str((rumor_weather_context or {}).get("rumor_weather_label", "") or "").strip() if isinstance(rumor_weather_context, dict) else "",
+            "rumor_weather_summary": str((rumor_weather_context or {}).get("rumor_weather_summary", "") or "").strip() if isinstance(rumor_weather_context, dict) else "",
+            "rumor_weather_dialogue_bias": str((rumor_weather_context or {}).get("dialogue_bias", "") or "").strip().lower() if isinstance(rumor_weather_context, dict) else "",
+            "rumor_weather_visible_cue": str((rumor_weather_context or {}).get("visible_cue", "") or "").strip() if isinstance(rumor_weather_context, dict) else "",
+            "rumor_weather_property_name": str((rumor_weather_context or {}).get("property_name", "") or "").strip() if isinstance(rumor_weather_context, dict) else "",
             "active_run_echo": dict(active_run_echo) if isinstance(active_run_echo, dict) else {},
             "run_echo_line": run_echo_line,
             "run_echo_history_line": run_echo_history_line,
@@ -9098,6 +9118,77 @@ class NPCInteractionSystem(System):
             return ""
         index = max(0, int(ask_count) - 1) % len(cleaned)
         return cleaned[index]
+
+    def _rumor_weather_local_line(self, context, topic_id, ask_count):
+        anchor = context.get("rumor_weather_context")
+        if not isinstance(anchor, dict) or not anchor:
+            return ""
+        kind = str(anchor.get("rumor_weather_kind", "") or "").strip().lower()
+        place = str(anchor.get("property_name", "") or context.get("owner_place_name", "") or "this place").strip()
+        cue = str(anchor.get("visible_cue", "") or anchor.get("rumor_weather_summary", "") or "").strip()
+        terse = bool(
+            kind in {"spooked", "watchful", "shut_tight"}
+            and (
+                context.get("guarded")
+                or str(context.get("tone", "") or "").strip().lower() in {"guarded", "hostile", "wary"}
+                or float(context.get("social_standing", 0.0) or 0.0) < 0.22
+            )
+        )
+        lines_by_kind = {
+            "generous": (
+                f"{place} is giving people a little room today. {cue}" if cue else f"{place} is giving people a little room today.",
+                f"If you need harmless local color, {place} is softer than usual right now.",
+                f"The talk around {place} has its hands open a little. Do not waste that.",
+            ),
+            "talking": (
+                f"People are talking around {place}. The useful part is in the second answer.",
+                f"{place} has that slow-talk rhythm. Hang near the edge and you will hear the shape of it.",
+                f"Nobody is announcing anything, but {place} is not quiet.",
+            ),
+            "busy": (
+                f"{place} is busy. Ask practical and you may get practical back.",
+                f"The talk around {place} is mixed into work right now.",
+                f"If you need something there, make it quick and concrete.",
+            ),
+            "tired": (
+                f"{place} is tired. People still notice, but they are saving their words.",
+                f"The local read is worn down around {place}. {cue}" if cue else f"The local read is worn down around {place}.",
+                f"People around {place} look like they have had enough day already.",
+            ),
+            "spooked": (
+                f"{place} is spooked. Keep your hands plain and your question small.",
+                f"People are measuring movement around {place} before they measure words.",
+                f"Wrong hour to sound clever around {place}.",
+            ),
+            "watchful": (
+                f"{place} is watchful. Short answers are the polite version.",
+                f"Eyes keep coming back to the edge of {place}.",
+                f"People around {place} notice motion before they explain it.",
+            ),
+            "shut_tight": (
+                f"{place} is shut tight. First answer will be the smallest one.",
+                f"Do not expect loose talk at {place} right now.",
+                f"{place} has checks before it has conversation.",
+            ),
+        }
+        terse_lines = {
+            "spooked": (
+                f"{place} is spooked. That is all I would call public.",
+                "Small questions. Plain hands.",
+            ),
+            "watchful": (
+                f"{place} is watchful.",
+                "People are watching. That is the local news.",
+            ),
+            "shut_tight": (
+                f"{place} is shut tight.",
+                "Not a loose-answer hour.",
+            ),
+        }
+        lines = terse_lines.get(kind) if terse else None
+        if not lines:
+            lines = lines_by_kind.get(kind)
+        return self._cycled_dialogue_line(lines, ask_count)
 
     def _npc_direction_knowledge(self, context):
         """Estimate how confidently an NPC can give cardinal directions."""
@@ -13260,6 +13351,8 @@ class NPCInteractionSystem(System):
                 )
                 line = self._say("local_opportunity", context, topic_id=topic_id, count=ask_count, opportunity_summary=summary)
                 self.sim.emit(Event("dialogue_opportunity_hint", eid=self.player_eid, npc_eid=npc_eid, summary=summary, detail=detail))
+            elif context.get("local_source") == "rumor_weather":
+                line = self._rumor_weather_local_line(context, topic_id, ask_count) or self._say("local_none", context, topic_id=topic_id, count=ask_count)
             elif context.get("other_name"):
                 line = self._say(
                     "local_other_bond",

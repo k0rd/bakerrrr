@@ -202,6 +202,7 @@ class PygameView:
         self.uses_realtime_animation = True
         self._queued_draw_calls = []
         self._draw_sequence = 0
+        self._active_surface_light_tint = None
         self._semantic_catalog = None
         self._load_render_semantics()
 
@@ -884,6 +885,31 @@ class PygameView:
         key = str(color_key or "default").strip().lower()
         return key.startswith("item_") or key.startswith("vehicle_") or key == "feature_window"
 
+    def _surface_lit_rgb(self, rgb):
+        normalized = self._active_surface_light_tint
+        if normalized is None:
+            return rgb
+        try:
+            (red, green, blue), strength, _pulse = normalized
+            strength = max(0.0, min(1.0, float(strength)))
+        except (TypeError, ValueError):
+            return rgb
+        if strength <= 0.02:
+            return rgb
+
+        tint = (int(red), int(green), int(blue))
+        intensity = max(0.0, min(0.72, 0.12 + (strength * 0.66)))
+        lit = []
+        for channel, tint_channel in zip(rgb, tint):
+            tint_norm = max(0.0, min(1.0, tint_channel / 255.0))
+            # Stylized multiplicative response: preserve the source color, but let
+            # colored light cool/warm the surface enough to read at tile scale.
+            multiplied = channel * (0.58 + (tint_norm * 0.82))
+            lifted = multiplied + (tint_norm * 34.0 * intensity)
+            value = (channel * (1.0 - intensity)) + (lifted * intensity)
+            lit.append(max(0, min(255, int(round(value)))))
+        return tuple(lit)
+
     def _styled_overlay_color(self, color, attrs=0, *, bold_scale=1.15):
         frame = self._color_value(color)
         if self._has_attr(attrs, "A_DIM"):
@@ -894,6 +920,7 @@ class PygameView:
                 min(255, int(frame[1] * bold_scale)),
                 min(255, int(frame[2] * bold_scale)),
             )
+        frame = self._surface_lit_rgb(frame)
         return frame
 
     def _alpha_color(self, color, alpha):
@@ -3408,6 +3435,79 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_campfire_ring_overlay(self, x, y, color=None, attrs=0):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.04)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        px = self.cell_px
+        mid = px // 2
+        stroke_w = max(1, px // 22)
+        stone = (
+            max(45, min(190, int(frame[0] * 0.78) + 24)),
+            max(45, min(190, int(frame[1] * 0.78) + 24)),
+            max(45, min(190, int(frame[2] * 0.78) + 24)),
+            222,
+        )
+        stone_dark = (
+            max(24, int(stone[0] * 0.52)),
+            max(24, int(stone[1] * 0.52)),
+            max(24, int(stone[2] * 0.52)),
+            164,
+        )
+        ember = self._alpha_color("hazard_fire", 218)
+        ember_hot = (255, 232, 132, 214)
+        coal = (42, 31, 26, 172)
+        smoke = self._alpha_color("hazard_smoke", 78)
+
+        ring_rect = self.pygame.Rect(
+            max(2, px // 7),
+            max(3, px // 5),
+            max(8, px - max(4, px // 4)),
+            max(6, px - max(5, px // 3)),
+        )
+        self.pygame.draw.ellipse(overlay, stone_dark, ring_rect.inflate(max(1, px // 8), max(1, px // 10)), max(1, stroke_w))
+        self.pygame.draw.ellipse(overlay, stone, ring_rect, max(1, stroke_w + 1))
+        inner = ring_rect.inflate(-max(4, px // 4), -max(3, px // 5))
+        if inner.w > 2 and inner.h > 2:
+            self.pygame.draw.ellipse(overlay, coal, inner)
+
+        for ox, oy, radius in (
+            (-max(3, px // 5), -max(1, px // 12), max(1, px // 14)),
+            (max(3, px // 5), max(1, px // 16), max(1, px // 13)),
+            (-max(1, px // 10), max(2, px // 7), max(1, px // 15)),
+            (max(1, px // 12), -max(3, px // 7), max(1, px // 16)),
+        ):
+            self.pygame.draw.circle(overlay, stone, (mid + ox, mid + oy), radius)
+
+        flame = (
+            (mid, max(2, px // 5)),
+            (mid - max(3, px // 7), mid + max(2, px // 8)),
+            (mid - max(1, px // 12), mid + max(3, px // 10)),
+            (mid, px - max(3, px // 5)),
+            (mid + max(1, px // 12), mid + max(3, px // 10)),
+            (mid + max(3, px // 7), mid + max(2, px // 8)),
+        )
+        self.pygame.draw.polygon(overlay, ember, flame)
+        inner_flame = (
+            (mid, mid - max(1, px // 10)),
+            (mid - max(1, px // 9), mid + max(2, px // 9)),
+            (mid, mid + max(3, px // 10)),
+            (mid + max(1, px // 9), mid + max(2, px // 9)),
+        )
+        self.pygame.draw.polygon(overlay, ember_hot, inner_flame)
+        self.pygame.draw.arc(
+            overlay,
+            smoke,
+            (mid - max(4, px // 3), max(1, px // 10), max(8, px // 2), max(7, px // 2)),
+            4.0,
+            5.5,
+            max(1, stroke_w),
+        )
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _draw_cover_rating_overlay(self, x, y, color=None, attrs=0, *, kind="low"):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.05)
         cell_x = int(x) * self.cell_px
@@ -3564,7 +3664,27 @@ class PygameView:
         fill = (frame[0], frame[1], frame[2], 212)
         shine = self._lightened_rgba(frame, 190, amount=0.48)
 
-        if kind == "secondary":
+        if kind == "inner":
+            chest = self.pygame.Rect(
+                max(5, int(px * 0.38)),
+                max(6, int(px * 0.38)),
+                max(4, int(px * 0.24)),
+                max(4, int(px * 0.22)),
+            )
+            notch = (
+                (chest.centerx, chest.top + max(1, px // 18)),
+                (chest.left + max(1, px // 9), chest.bottom - max(1, px // 12)),
+                (chest.right - max(1, px // 9), chest.bottom - max(1, px // 12)),
+            )
+            self.pygame.draw.polygon(overlay, outline, (
+                (notch[0][0], notch[0][1] - stroke_w),
+                (notch[1][0] - stroke_w, notch[1][1] + stroke_w),
+                (notch[2][0] + stroke_w, notch[2][1] + stroke_w),
+            ))
+            self.pygame.draw.polygon(overlay, fill, notch)
+            self.pygame.draw.line(overlay, shine, notch[0], notch[1], stroke_w)
+            self.pygame.draw.line(overlay, stroke, notch[0], notch[2], stroke_w)
+        elif kind == "secondary":
             band = self.pygame.Rect(
                 max(3, px // 3),
                 max(7, int(px * 0.58)),
@@ -4551,7 +4671,7 @@ class PygameView:
         self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 210), down)
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_procedural_shape(self, x, y, ch, color=None, attrs=0, semantic_id=None, effects=None):
+    def _draw_procedural_shape(self, x, y, ch, color=None, attrs=0, semantic_id=None, effects=None, light_tint=None):
         glyph = str(ch)[:1] or " "
         color_key = str(color or "").strip().lower()
         semantic_key = str(semantic_id or "").strip().lower()
@@ -4560,7 +4680,6 @@ class PygameView:
             for effect in (effects or ())
             if str(effect).strip()
         }
-
         if semantic_key.startswith("overworld_fill_city_"):
             self._draw_overworld_fill_overlay(
                 x,
@@ -4719,6 +4838,7 @@ class PygameView:
             )
             return color_key
         outfit_overlay_kind = {
+            "ui_actor_outfit_inner": "inner",
             "ui_actor_outfit_secondary": "secondary",
             "ui_actor_outfit_footwear": "footwear",
             "ui_actor_outfit_headwear": "headwear",
@@ -4833,6 +4953,9 @@ class PygameView:
         if color_key == "property_asset" and glyph == "q":
             self._draw_service_security_fixture_overlay(x, y, color=color, attrs=attrs, kind="security_booth")
             return "security_booth"
+        if semantic_key == "prop_campfire_ring":
+            self._draw_campfire_ring_overlay(x, y, color=color, attrs=attrs)
+            return "campfire_ring"
         cover_fixture_kind = {
             "prop_cover_bench": "bench",
             "prop_cover_shelter": "shelter",
@@ -5067,6 +5190,7 @@ class PygameView:
                     semantic_id=call.get("semantic_id"),
                     effects=call.get("effects", ()),
                     overlays=call.get("overlays", ()),
+                    light_tint=call.get("light_tint"),
                 )
                 continue
             if kind == "text":
@@ -5138,7 +5262,7 @@ class PygameView:
 
         return x, y, text
 
-    def _draw_overlay_stack(self, x, y, overlays, attrs=0):
+    def _draw_overlay_stack(self, x, y, overlays, attrs=0, light_tint=None):
         for overlay in overlays or ():
             if not isinstance(overlay, dict):
                 continue
@@ -5150,7 +5274,7 @@ class PygameView:
             color = overlay.get("color")
             semantic_id = overlay.get("semantic_id")
             overlay_attrs = int(attrs or 0) | int(overlay.get("attrs", 0) or 0)
-            if self._draw_procedural_shape(x, y, glyph, color=color, attrs=overlay_attrs, semantic_id=semantic_id):
+            if self._draw_procedural_shape(x, y, glyph, color=color, attrs=overlay_attrs, semantic_id=semantic_id, light_tint=light_tint):
                 continue
             self._draw_font_char(
                 x,
@@ -5161,7 +5285,7 @@ class PygameView:
                 preserve_background=True,
             )
 
-    def _draw_char(self, x, y, ch, color=None, attrs=0, semantic_id=None, effects=None, overlays=None):
+    def _draw_char(self, x, y, ch, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, light_tint=None):
         region = self._clip_text(x, y, str(ch)[:1] or " ")
         if region is None:
             return
@@ -5169,13 +5293,18 @@ class PygameView:
             return
         attrs = self._attrs_with_effects(attrs, effects)
         x, y, text = region
-        if self._draw_procedural_shape(x, y, text[0], color=color, attrs=attrs, semantic_id=semantic_id, effects=effects):
-            self._draw_overlay_stack(x, y, overlays, attrs=attrs)
-            return
-        preserve_background = self._preserve_background_for_color(color)
+        previous_light_tint = self._active_surface_light_tint
+        self._active_surface_light_tint = self._normalize_light_tint(light_tint)
+        try:
+            if self._draw_procedural_shape(x, y, text[0], color=color, attrs=attrs, semantic_id=semantic_id, effects=effects, light_tint=light_tint):
+                self._draw_overlay_stack(x, y, overlays, attrs=attrs, light_tint=light_tint)
+                return
+            preserve_background = self._preserve_background_for_color(color)
 
-        self._draw_font_char(x, y, text[0], color=color, attrs=attrs, preserve_background=preserve_background)
-        self._draw_overlay_stack(x, y, overlays, attrs=attrs)
+            self._draw_font_char(x, y, text[0], color=color, attrs=attrs, preserve_background=preserve_background)
+            self._draw_overlay_stack(x, y, overlays, attrs=attrs, light_tint=light_tint)
+        finally:
+            self._active_surface_light_tint = previous_light_tint
 
     def _draw_font_char(self, x, y, ch, color=None, attrs=0, preserve_background=False):
         fg = self._color_value(color)
@@ -5523,7 +5652,7 @@ class PygameView:
         self.surface.blit(surface, (int(pixel_x), dest_y))
         return self.cell_px
 
-    def draw(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None):
+    def draw(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None, light_tint=None):
         if self._wants_layered_draw(layer=layer, priority=priority):
             self._queue_draw_call(
                 "glyph",
@@ -5535,6 +5664,7 @@ class PygameView:
                 semantic_id=semantic_id,
                 effects=tuple(effects or ()),
                 overlays=tuple(overlays or ()),
+                light_tint=dict(light_tint or {}) if isinstance(light_tint, dict) else light_tint,
                 layer=layer,
                 priority=0 if priority is None else int(priority),
             )
@@ -5549,6 +5679,7 @@ class PygameView:
             semantic_id=semantic_id,
             effects=effects,
             overlays=overlays,
+            light_tint=light_tint,
         )
 
     def _draw_text_now(self, x, y, text, color=None, attrs=0):

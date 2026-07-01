@@ -130,6 +130,9 @@ from game.opportunities import evaluate_opportunity_board, seed_run_opportunitie
 from game.organization_reputation import OrganizationReputationSystem
 from game.organization_response import OrganizationResponseSystem
 from game.organization_practice_evolution import OrganizationPracticeEvolutionSystem
+from game.corporate_expansion_runtime import CorporateExpansionSystem
+from game.gang_enterprise_runtime import GangEnterpriseSystem
+from game.civic_trade_posse_runtime import CivicTradePosseSystem
 from game.criminal_drive_system import CriminalDriveSystem
 from game.justice_vehicle_system import JusticeVehicleMisuseSystem
 from game.bodyguard_runtime import BodyguardSystem
@@ -686,6 +689,9 @@ def _register_runtime_systems(sim, view, player):
     objective_progress_system = ObjectiveProgressSystem(sim, player)
     run_pressure_system = RunPressureSystem(sim, player)
     organization_practice_evolution_system = OrganizationPracticeEvolutionSystem(sim)
+    corporate_expansion_system = CorporateExpansionSystem(sim)
+    gang_enterprise_system = GangEnterpriseSystem(sim)
+    civic_trade_posse_system = CivicTradePosseSystem(sim)
     organization_reputation_system = OrganizationReputationSystem(sim, player)
     organization_response_system = OrganizationResponseSystem(sim, player)
     final_operation_system = FinalOperationSystem(sim, player)
@@ -754,6 +760,9 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(objective_progress_system, 60)
     _live_timeskip_stride(run_pressure_system, 60)
     _live_timeskip_stride(organization_practice_evolution_system, 600)
+    _live_timeskip_stride(corporate_expansion_system, 600)
+    _live_timeskip_stride(gang_enterprise_system, 600)
+    _live_timeskip_stride(civic_trade_posse_system, 600)
     _live_timeskip_stride(organization_reputation_system, 60)
     _live_timeskip_stride(organization_response_system, 60)
     _live_timeskip_stride(final_operation_system, 60)
@@ -833,6 +842,9 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(objective_progress_system)
     sim.register_system(run_pressure_system)
     sim.register_system(organization_practice_evolution_system)
+    sim.register_system(corporate_expansion_system)
+    sim.register_system(gang_enterprise_system)
+    sim.register_system(civic_trade_posse_system)
     sim.register_system(organization_reputation_system)
     sim.register_system(organization_response_system)
     sim.register_system(final_operation_system)

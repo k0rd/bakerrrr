@@ -12,6 +12,7 @@ from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
 from game.location_presentation_runtime import _storefront_illegal_goods_signal
+from game.place_mood_runtime import strongest_rumor_weather_anchor
 from game.property_runtime import (
     property_focus_position as _property_focus_position,
     property_is_public as _property_is_public,
@@ -785,6 +786,74 @@ class NPCSocialDynamicsSystem(System):
             "priority": "low",
         }
 
+    def _rumor_weather_chatter_payload(self, speaker_eid, partner_eid, tone):
+        anchor = strongest_rumor_weather_anchor(
+            self.sim,
+            actor_eid=speaker_eid,
+            viewer_eid=partner_eid,
+            radius=10,
+        )
+        if not isinstance(anchor, dict) or not anchor:
+            return None
+        kind = str(anchor.get("rumor_weather_kind", "") or "").strip().lower()
+        place = str(anchor.get("property_name", "") or "the frontage").strip()
+        cue = str(anchor.get("visible_cue", "") or anchor.get("rumor_weather_summary", "") or "").strip()
+        banks = {
+            "generous": (
+                "People are softer around {place} today. I would ask now if I needed something harmless.",
+                "{place} has its hands open a little. That never lasts all day.",
+                "If the block is going to give anybody a second answer, it is near {place}.",
+            ),
+            "talking": (
+                "The talk around {place} is doing laps. Stand still and it comes back around.",
+                "Nobody is making an announcement at {place}, but everybody is adding a little piece.",
+                "{place} is not quiet. That is different from being helpful, but it is something.",
+            ),
+            "busy": (
+                "{place} is all hands and small answers right now.",
+                "Ask practical near {place}. Nobody has patience for pretty questions.",
+                "The work around {place} is carrying the talk with it.",
+            ),
+            "tired": (
+                "{place} looks tired enough that even the complaints are sitting down.",
+                "People around {place} are noticing things, just not performing them.",
+                "The edge at {place} has had a long day.",
+            ),
+            "spooked": (
+                "Keep it small around {place}. Folks are watching what moves first.",
+                "{place} is jumpy. Wrong kind of joke gets heavy fast.",
+                "Around {place}, even ordinary motion is getting measured.",
+            ),
+            "watchful": (
+                "{place} has eyes on the edge. That is the whole trick.",
+                "People near {place} notice before they explain.",
+                "Short answers around {place}. Not rude, exactly. Watchful.",
+            ),
+            "shut_tight": (
+                "{place} is shut tight. Loose talk is out of stock.",
+                "Nobody around {place} is spending words they might need later.",
+                "First answer at {place} is going to be the smallest one.",
+            ),
+        }
+        lines = banks.get(kind)
+        if not lines:
+            return None
+        rng = random.Random(f"{getattr(self.sim, 'seed', 0)}:rumor-weather-chatter:{speaker_eid}:{partner_eid}:{kind}:{int(getattr(self.sim, 'tick', 0) or 0) // 60}")
+        quote = lines[rng.randrange(len(lines))].format(place=place)
+        if cue and kind in {"kept", "generous", "talking"}:
+            quote = f"{quote} {cue}"
+        return {
+            "topic": "rumor_weather",
+            "quote": quote,
+            "summary": f"{kind.replace('_', ' ')} local texture near {place}",
+            "detail": str(anchor.get("rumor_weather_summary", "") or cue or f"People are reading {place} differently right now.").strip(),
+            "channel": "social",
+            "priority": "low",
+            "property_id": str(anchor.get("property_id", "") or "").strip(),
+            "source_domain": "rumor_weather",
+            "confidence_hint": float(anchor.get("confidence", 0.5) or 0.5),
+        }
+
     def _social_chatter_payload(self, speaker_eid, partner_eid, relation, tone):
         relation = str(relation or "friend").strip().lower() or "friend"
         opportunity_rows = self._social_opportunity_rows_for(speaker_eid, limit=5)
@@ -847,6 +916,9 @@ class NPCSocialDynamicsSystem(System):
             payload = builder(speaker_eid, partner_eid, tone)
             if payload:
                 return payload
+        payload = self._rumor_weather_chatter_payload(speaker_eid, partner_eid, tone)
+        if payload:
+            return payload
         return None
 
     def on_npc_investigate(self, event):

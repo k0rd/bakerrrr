@@ -3084,6 +3084,8 @@ class ServiceMenuSystem(System):
 
         for site_service in _site_services_for_property(prop) if access.can_use_services else ():
             options.append({"id": site_service, "label": _service_menu_option_label(site_service)})
+            if site_service == "fuel" and self._inventory_item_count("glass_bottle") > 0:
+                options.append({"id": "fuel_fill_bottle", "label": _service_menu_option_label("fuel_fill_bottle")})
         for cult_service in cult_services_for_property(self.sim, prop, actor_eid=eid) if (access.can_use_services or cult_contact_ok) else ():
             options.append({"id": cult_service, "label": _service_menu_option_label(cult_service)})
 
@@ -3378,7 +3380,8 @@ class ServiceMenuSystem(System):
 
         transcript = [
             f"{prop_name} posts protective contractors.",
-            "They group by protected person or place, hold ringed exterior lines, and choose their own force if a threat presses.",
+            "They group by protected person or place: personal details hold outside walls, while owned-site details can post inside the business.",
+            "They choose their own force if a threat presses.",
         ]
         self.sim.set_time_paused(True, reason="dialog")
         state.update({
@@ -3521,6 +3524,14 @@ class ServiceMenuSystem(System):
                 lines.append(skill_note)
             if fuel_capacity > 0:
                 lines.append(f"Tank {fuel}/{fuel_capacity}.")
+            return f"Fuel: {prop_name}", lines
+        if service == "fuel_fill_bottle":
+            credits_spent = int(event.data.get("credits_spent", 0))
+            output_name = str(event.data.get("output_item_name", "Molotov Cocktail")).strip() or "Molotov Cocktail"
+            lines = [
+                f"{prop_name} fills a glass bottle with fuel.",
+                f"You receive {output_name} for {_credit_amount_label(credits_spent)}.",
+            ]
             return f"Fuel: {prop_name}", lines
         if service == "repair":
             durability_gain = int(event.data.get("durability_gain", 0))
@@ -4110,6 +4121,8 @@ class ServiceMenuSystem(System):
             return f"Butcher Prep: {prop_name}", ["Bring raw or bagged game meat for the butcher to prepare."]
         if reason == "no_leads" and service == "intel":
             return f"Intel: {prop_name}", [f"{prop_name} has no fresh routes or leads right now."]
+        if reason == "no_bottle" and service == "fuel_fill_bottle":
+            return f"Fuel: {prop_name}", ["You need a glass bottle to fill with fuel."]
         if reason == "no_vehicle" and service == "fuel":
             return f"Fuel: {prop_name}", [f"{prop_name} can only refuel a vehicle you own or have set active."]
         if reason == "no_vehicle" and service == "repair":
@@ -4139,6 +4152,13 @@ class ServiceMenuSystem(System):
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             return f"Fuel: {prop_name}", [
                 f"{prop_name} charges {_credit_amount_label(cost)} per unit for {vehicle_name}.",
+                f"You have {_credit_amount_label(credits)} on hand.",
+            ]
+        if reason == "no_credits" and service == "fuel_fill_bottle":
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            return f"Fuel: {prop_name}", [
+                f"{prop_name} charges {_credit_amount_label(cost)} to fill a glass bottle with fuel.",
                 f"You have {_credit_amount_label(credits)} on hand.",
             ]
         if reason == "no_credits" and service == "repair":
@@ -4253,6 +4273,12 @@ class ServiceMenuSystem(System):
             return title, [
                 f"No room for the {item_name}.",
                 "Free up inventory space before handing over the meat.",
+            ]
+        if reason == "inventory_full" and service == "fuel_fill_bottle":
+            output_name = str(event.data.get("output_item_name", "the filled bottle")).strip() or "the filled bottle"
+            return title, [
+                f"No room for {output_name}.",
+                "Free up inventory space before filling the bottle.",
             ]
         if reason == "inventory_full" and service in {"herbal_prepare", "herbal_compound"}:
             return title, [
@@ -5464,6 +5490,26 @@ class ServiceMenuSystem(System):
             self._start_casino_round(prop, service, wager)
             return
         prop_name = prop.get("name", property_id) if isinstance(prop, dict) else event.data.get("property_name", "site")
+        if option_id == "fuel_fill_bottle":
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            self._begin_pending_service_result(
+                channel="site",
+                property_id=property_id,
+                property_name=prop_name,
+                service=option_id,
+            )
+            self.sim.emit(Event(
+                "site_service_request",
+                eid=self.player_eid,
+                property_id=property_id,
+                service="fuel",
+                fuel_action="fill_bottle",
+                property_name=prop_name,
+            ))
+            return
         self._begin_pending_service_result(
             channel="site",
             property_id=property_id,

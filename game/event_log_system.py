@@ -469,6 +469,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("cult_official_promoted", self.on_cult_official_promoted)
         self.sim.events.subscribe("cult_official_arrived", self.on_cult_official_arrived)
         self.sim.events.subscribe("cult_service_site_absorbed", self.on_cult_service_site_absorbed)
+        self.sim.events.subscribe("cult_host_reward_swap", self.on_cult_host_reward_swap)
+        self.sim.events.subscribe("cult_host_reward_fallback", self.on_cult_host_reward_fallback)
+        self.sim.events.subscribe("cult_bodyguard_upgraded", self.on_cult_bodyguard_upgraded)
         self.sim.events.subscribe("cult_devotion_warning", self.on_cult_devotion_warning)
         self.sim.events.subscribe("cult_crisis_started", self.on_cult_crisis_started)
         self.sim.events.subscribe("cult_disbanded", self.on_cult_disbanded)
@@ -3047,6 +3050,80 @@ class EventLogSystem(System):
             dedupe_key=f"cult-service-absorbed:{event.data.get('cult_id')}:{event.data.get('property_id')}",
         )
 
+    def on_cult_host_reward_swap(self, event):
+        official_eid = event.data.get("official_eid")
+        host_eid = event.data.get("host_eid")
+        host_prop = self.sim.properties.get(str(event.data.get("host_property_id", "") or "").strip())
+        central_prop = self.sim.properties.get(str(event.data.get("central_property_id", "") or "").strip())
+        if not (
+            self._player_can_perceive_entity(official_eid)
+            or self._player_can_perceive_entity(host_eid)
+            or self._player_is_near_property(host_prop, radius=12)
+            or self._player_is_near_property(central_prop, radius=12)
+        ):
+            return
+        host = self._npc_label(host_eid, fallback="The host")
+        central = str(event.data.get("central_property_name", "") or "").strip() or self._property_name(event.data.get("central_property_id"), "the central rooms")
+        old_host = str(event.data.get("host_property_name", "") or "").strip() or self._property_name(event.data.get("host_property_id"), "the host rooms")
+        line = self._cult_pick_line(event, (
+            f"{host} is sent closer to {central}; {old_host} keeps the circle's local light on.",
+            f"The host gets a central room, and the old door stays useful to the circle.",
+            f"{host} trades the local room for {central}. Nobody says it like a sale.",
+            f"The circle moves a loyal host inward and leaves {old_host} under steadier hands.",
+        ))
+        self._log(
+            line,
+            channel="social",
+            priority="low",
+            dedupe_window=30,
+            dedupe_key=f"cult-host-swap:{event.data.get('cult_id')}:{host_eid}:{event.data.get('host_property_id')}",
+        )
+
+    def on_cult_host_reward_fallback(self, event):
+        official_eid = event.data.get("official_eid")
+        host_eid = event.data.get("host_eid")
+        prop = self.sim.properties.get(str(event.data.get("property_id", "") or "").strip())
+        if not (
+            self._player_can_perceive_entity(official_eid)
+            or self._player_can_perceive_entity(host_eid)
+            or self._player_is_near_property(prop, radius=10)
+        ):
+            return
+        host = self._npc_label(host_eid, fallback="The host")
+        line = self._cult_pick_line(event, (
+            f"{host} is promised central lodging, but the papers do not move cleanly.",
+            "The circle makes room for a host without changing the deed.",
+            "A host is counted closer to the center; the door itself stays put.",
+        ))
+        self._log(
+            line,
+            channel="social",
+            priority="low",
+            dedupe_window=30,
+            dedupe_key=f"cult-host-fallback:{event.data.get('cult_id')}:{host_eid}",
+        )
+
+    def on_cult_bodyguard_upgraded(self, event):
+        authority_eid = event.data.get("authority_eid")
+        prop = self.sim.properties.get(str(event.data.get("provider_property_id", "") or "").strip())
+        if not (self._player_can_perceive_entity(authority_eid) or self._player_is_near_property(prop, radius=10)):
+            return
+        name = self._npc_label(authority_eid, fallback="Someone")
+        prop_name = str(event.data.get("provider_property_name", "") or "").strip() or self._property_name(event.data.get("provider_property_id"), "the contractor desk")
+        line = self._cult_pick_line(event, (
+            f"{name} leaves {prop_name} with another quiet guard on the channel.",
+            f"A contractor at {prop_name} adds one more body to {name}'s detail.",
+            f"{name} buys a little more distance between the circle and trouble.",
+            "A new earpiece joins the detail; nobody outside the channel gets the whole story.",
+        ))
+        self._log(
+            line,
+            channel="social",
+            priority="low",
+            dedupe_window=24,
+            dedupe_key=f"cult-bodyguard-upgrade:{event.data.get('cult_id')}:{authority_eid}:{event.data.get('provider_property_id')}",
+        )
+
     def on_cult_devotion_warning(self, event):
         witness_eid = event.data.get("witness_eid")
         offender_eid = event.data.get("offender_eid")
@@ -3146,6 +3223,13 @@ class EventLogSystem(System):
             if skill_note:
                 text += f" {skill_note}"
             self.sim.log.add(text)
+            return
+        if service == "fuel_fill_bottle":
+            credits_spent = int(event.data.get("credits_spent", 0))
+            output_name = str(event.data.get("output_item_name", "Molotov Cocktail")).strip() or "Molotov Cocktail"
+            self.sim.log.add(
+                f"Fuel: {prop_name} fills a glass bottle with fuel; you receive {output_name} (-{credits_spent}c)."
+            )
             return
         if service == "repair":
             durability_gain = int(event.data.get("durability_gain", 0))
@@ -3425,6 +3509,9 @@ class EventLogSystem(System):
         if reason == "no_leads" and service == "intel":
             self.sim.log.add(f"{prop_name} has no fresh routes or leads right now.")
             return
+        if reason == "no_bottle" and service == "fuel_fill_bottle":
+            self.sim.log.add(f"Fuel: {prop_name} needs a glass bottle to fill.")
+            return
         if reason == "no_vehicle" and service == "fuel":
             self.sim.log.add(f"Fuel: {prop_name} can only fuel a vehicle you own or have set active.")
             return
@@ -3458,6 +3545,11 @@ class EventLogSystem(System):
                 )
             else:
                 self.sim.log.add(f"Fuel: {prop_name} charges {cost}c per unit for {vehicle_name}; you have {credits}c.")
+            return
+        if reason == "no_credits" and service == "fuel_fill_bottle":
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            self.sim.log.add(f"Fuel: {prop_name} charges {cost}c to fill a glass bottle with fuel; you have {credits}c.")
             return
         if reason == "no_credits" and service == "repair":
             cost = int(event.data.get("cost", 0))
@@ -3506,6 +3598,10 @@ class EventLogSystem(System):
             return
         if reason == "inventory_full" and service in {"herbal_prepare", "herbal_compound"}:
             self.sim.log.add(f"{prop_name} cannot return prepared medicine until you free up inventory space.")
+            return
+        if reason == "inventory_full" and service == "fuel_fill_bottle":
+            output_name = str(event.data.get("output_item_name", "the filled bottle")).strip() or "the filled bottle"
+            self.sim.log.add(f"Fuel: no room for {output_name}. Free an inventory slot before filling the bottle.")
             return
         if reason == "no_credits" and service == "butcher_prepare":
             cost = int(event.data.get("cost", 0))

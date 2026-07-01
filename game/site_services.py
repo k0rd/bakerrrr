@@ -230,6 +230,7 @@ class SiteServiceSystem(System):
     INTEL_COOLDOWN_TICKS = 45
     INTEL_RADIUS = 2
     FUEL_UNIT_PRICE = 3
+    FUEL_BOTTLE_PRICE = 3
     REPAIR_POINT_PRICE = 18
     VENDING_BASE_COST = 6
     REST_COST = 25
@@ -1449,6 +1450,133 @@ class SiteServiceSystem(System):
             skill_note=skill_note,
         ))
 
+    def _apply_fuel_bottle_service(self, eid, prop):
+        service_id = "fuel_fill_bottle"
+        input_item_id = "glass_bottle"
+        output_item_id = "molotov_cocktail"
+        output_def = ITEM_CATALOG.get(output_item_id, {}) if isinstance(ITEM_CATALOG.get(output_item_id), dict) else {}
+        output_name = item_display_name(output_item_id, item_catalog=ITEM_CATALOG)
+        price = max(1, int(self.FUEL_BOTTLE_PRICE))
+
+        inventory = self._inventory_for(eid)
+        if inventory is None or self._inventory_item_count(eid, input_item_id) <= 0:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service_id,
+                reason="no_bottle",
+                item_id=input_item_id,
+                output_item_id=output_item_id,
+                output_item_name=output_name,
+            ))
+            return
+
+        assets = self._assets_for(eid)
+        credits = int(getattr(assets, "credits", 0)) if assets else 0
+        if credits < price:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service_id,
+                reason="no_credits",
+                cost=int(price),
+                credits=int(credits),
+                item_id=input_item_id,
+                output_item_id=output_item_id,
+                output_item_name=output_name,
+            ))
+            return
+
+        source_entry = inventory.find(item_id=input_item_id)
+        if not source_entry:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service_id,
+                reason="no_bottle",
+                item_id=input_item_id,
+                output_item_id=output_item_id,
+                output_item_name=output_name,
+            ))
+            return
+
+        metadata = {
+            "source_item_id": input_item_id,
+            "filled_at_property_id": str(prop.get("id", "") or "").strip(),
+            "filled_at_property_name": str(prop.get("name", prop.get("id", "fuel station")) or "fuel station").strip(),
+            "fill_service": "fuel",
+        }
+        removed = inventory.remove_item(instance_id=source_entry.get("instance_id"), quantity=1)
+        if not removed:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service_id,
+                reason="no_bottle",
+                item_id=input_item_id,
+                output_item_id=output_item_id,
+                output_item_name=output_name,
+            ))
+            return
+
+        added, instance_id = inventory.add_item(
+            output_item_id,
+            quantity=1,
+            stack_max=max(1, int(output_def.get("stack_max", 1) or 1)),
+            instance_factory=getattr(self.sim, "new_item_instance_id", None),
+            owner_eid=eid,
+            owner_tag="player",
+            metadata=metadata,
+        )
+        if not added:
+            inventory.add_item(
+                input_item_id,
+                quantity=1,
+                stack_max=max(1, int((ITEM_CATALOG.get(input_item_id, {}) or {}).get("stack_max", 1) or 1)),
+                instance_id=removed.get("instance_id"),
+                owner_eid=removed.get("owner_eid"),
+                owner_tag=removed.get("owner_tag"),
+                metadata=removed.get("metadata"),
+            )
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service_id,
+                reason="inventory_full",
+                item_id=input_item_id,
+                output_item_id=output_item_id,
+                output_item_name=output_name,
+            ))
+            return
+
+        if assets:
+            assets.credits = max(0, int(assets.credits) - price)
+
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service=service_id,
+            item_id=input_item_id,
+            item_name=item_display_name(input_item_id, item_catalog=ITEM_CATALOG),
+            output_item_id=output_item_id,
+            output_item_name=output_name,
+            output_instance_id=instance_id,
+            credits_spent=int(price),
+            quantity=1,
+        ))
+
     def _apply_repair_service(self, eid, prop, pos):
         vehicle_prop = self._active_vehicle_property(eid, pos=pos, radius=2)
         if not vehicle_prop:
@@ -2167,6 +2295,9 @@ class SiteServiceSystem(System):
             self._apply_vending_service(eid, prop)
             return True
         if service == "fuel":
+            if str((request or {}).get("fuel_action", "") or "").strip().lower() == "fill_bottle":
+                self._apply_fuel_bottle_service(eid, prop)
+                return True
             self._apply_fuel_service(eid, prop, pos)
             return True
         if service == "repair":

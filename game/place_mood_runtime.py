@@ -56,6 +56,16 @@ AMBIENT_RITUAL_FIELD_KEYS = (
     "ambient_ritual_scene_bias",
 )
 
+RUMOR_WEATHER_KINDS = frozenset({
+    "generous",
+    "talking",
+    "busy",
+    "tired",
+    "spooked",
+    "watchful",
+    "shut_tight",
+})
+
 
 def _text(value):
     return str(value or "").strip()
@@ -93,6 +103,66 @@ def _prop_anchor(prop):
         return (int(anchor[0]), int(anchor[1]), int(anchor[2]))
     except (TypeError, ValueError):
         return None
+
+
+def _position_tuple(sim, *, actor_eid=None, x=None, y=None, z=None):
+    if actor_eid is not None and sim is not None:
+        pos = None
+        try:
+            from game.components import Position
+
+            pos = sim.ecs.get(Position).get(actor_eid)
+        except Exception:
+            pos = None
+        if pos is not None:
+            try:
+                return (int(pos.x), int(pos.y), int(pos.z))
+            except (TypeError, ValueError):
+                return None
+    if x is None or y is None:
+        return None
+    try:
+        return (int(x), int(y), int(0 if z is None else z))
+    except (TypeError, ValueError):
+        return None
+
+
+def _chunk_for(sim, anchor):
+    if sim is None or anchor is None or not hasattr(sim, "chunk_coords"):
+        return None
+    try:
+        return sim.chunk_coords(int(anchor[0]), int(anchor[1]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _active_business_scene_store(sim):
+    state = getattr(sim, "business_event_scene_state", None)
+    if not isinstance(state, dict):
+        return {}
+    active = state.get("active", {})
+    return active if isinstance(active, dict) else {}
+
+
+def _scene_anchor(scene, prop):
+    anchor = (scene or {}).get("anchor") if isinstance(scene, dict) else None
+    if isinstance(anchor, (tuple, list)) and len(anchor) >= 3:
+        try:
+            return (int(anchor[0]), int(anchor[1]), int(anchor[2]))
+        except (TypeError, ValueError):
+            pass
+    return _prop_anchor(prop)
+
+
+def _scene_live(scene):
+    if not isinstance(scene, dict):
+        return False
+    status = _slug(scene.get("status") or scene.get("state"))
+    if status in {"ended", "expired", "complete", "completed", "cancelled", "failed", "inactive"}:
+        return False
+    if bool(scene.get("dematerialized")) or bool(scene.get("ended")):
+        return False
+    return True
 
 
 def _category_for(prop, pulse=None, scene=None):
@@ -1239,6 +1309,99 @@ def place_texture_scene_fields(texture):
         "rumor_weather_summary": _text(texture.get("rumor_weather_summary")),
         "rumor_weather_dialogue_bias": _slug(texture.get("rumor_weather_dialogue_bias")),
     }
+
+
+def strongest_rumor_weather_anchor(
+    sim,
+    *,
+    actor_eid=None,
+    viewer_eid=None,
+    x=None,
+    y=None,
+    z=None,
+    radius=12,
+    current_chunk_only=True,
+):
+    """Return the strongest concrete current-chunk rumor-weather anchor.
+
+    This helper is intentionally a consumer read over active scene/property
+    facts. It never creates social weather on its own.
+    """
+
+    if sim is None:
+        return {}
+    origin = _position_tuple(sim, actor_eid=actor_eid, x=x, y=y, z=z)
+    if origin is None and viewer_eid is not None:
+        origin = _position_tuple(sim, actor_eid=viewer_eid)
+    if origin is None:
+        return {}
+    origin_chunk = _chunk_for(sim, origin)
+    try:
+        radius_value = max(0, int(radius))
+    except (TypeError, ValueError):
+        radius_value = 12
+
+    best = None
+    best_score = float("-inf")
+    for raw_scene_id, scene in _active_business_scene_store(sim).items():
+        if not _scene_live(scene):
+            continue
+        property_id = _text(scene.get("property_id"))
+        if not property_id:
+            continue
+        prop = getattr(sim, "properties", {}).get(property_id)
+        if not isinstance(prop, dict):
+            continue
+        anchor = _scene_anchor(scene, prop)
+        if anchor is None:
+            continue
+        if int(anchor[2]) != int(origin[2]):
+            continue
+        if current_chunk_only and origin_chunk is not None and _chunk_for(sim, anchor) != origin_chunk:
+            continue
+        distance = abs(int(anchor[0]) - int(origin[0])) + abs(int(anchor[1]) - int(origin[1]))
+        if radius_value and distance > radius_value:
+            continue
+
+        fields = public_place_mood_fields(scene)
+        if not fields.get("rumor_weather_kind"):
+            fields.update(annotate_place_mood_and_ritual(sim, prop, scene=scene))
+        kind = _slug(fields.get("rumor_weather_kind"))
+        if kind not in RUMOR_WEATHER_KINDS:
+            continue
+        confidence = _float(fields.get("place_texture_confidence"), 0.48)
+        cue = (
+            _text(fields.get("place_texture_visible_cue"))
+            or _text(fields.get("place_mood_visible_cue"))
+            or _text(fields.get("rumor_weather_summary"))
+        )
+        score = (
+            confidence
+            + max(0.0, 0.24 - (float(distance) * 0.018))
+            + (0.04 if _text(scene.get("ambient_ritual_kind")) else 0.0)
+        )
+        scene_id = _text(scene.get("scene_id")) or _text(raw_scene_id)
+        row = {
+            "rumor_weather_kind": kind,
+            "rumor_weather_label": _text(fields.get("rumor_weather_label")) or kind.replace("_", " "),
+            "rumor_weather_summary": _text(fields.get("rumor_weather_summary")),
+            "dialogue_bias": _slug(fields.get("rumor_weather_dialogue_bias")) or kind,
+            "visible_cue": cue,
+            "place_texture_kind": _slug(fields.get("place_texture_kind")),
+            "place_texture_label": _text(fields.get("place_texture_label")),
+            "property_id": property_id,
+            "property_name": _prop_name(prop),
+            "scene_id": scene_id,
+            "source_kind": _slug(scene.get("source_kind")) or "business_scene",
+            "event_phase": _slug(scene.get("event_phase")),
+            "anchor": (int(anchor[0]), int(anchor[1]), int(anchor[2])),
+            "distance": int(distance),
+            "confidence": round(max(0.0, min(1.0, confidence)), 3),
+        }
+        if best is None or score > best_score:
+            best = row
+            best_score = score
+    return best or {}
 
 
 def annotate_place_mood_and_ritual(sim, prop, *, scene=None, pulse=None):

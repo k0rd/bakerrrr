@@ -60,6 +60,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "vision_scene",
     "dream_residue",
     "npc_self_protection_state",
+    "rumor_weather_posture_state",
     "action_menu_ui",
     "custom_room_curiosity_flavors",
     "custom_ui_themes",

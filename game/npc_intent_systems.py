@@ -94,6 +94,7 @@ from game.npc_self_protection_runtime import (
     active_self_protection_action,
     apply_self_protection_quirk,
 )
+from game.place_mood_runtime import strongest_rumor_weather_anchor
 from game.property_access import (
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
@@ -2087,6 +2088,91 @@ class NPCWillSystem(System):
                 z=int(target[2]) if isinstance(target, (list, tuple)) and len(target) >= 3 else None,
             ))
 
+    def _rumor_weather_posture_cooldowns(self):
+        state = getattr(self.sim, "rumor_weather_posture_state", None)
+        if not isinstance(state, dict):
+            state = {"cooldowns": {}}
+            self.sim.rumor_weather_posture_state = state
+        cooldowns = state.get("cooldowns")
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            state["cooldowns"] = cooldowns
+        return cooldowns
+
+    def _maybe_apply_rumor_weather_posture(self, eid, ai, will, pos):
+        if eid == getattr(self.sim, "player_eid", None) or ai is None or will is None or pos is None:
+            return False
+        role = str(getattr(ai, "role", "") or "").strip().lower()
+        if role == "wildlife":
+            return False
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        if state not in {
+            "idle",
+            "lounging",
+            "patrolling",
+            "resting",
+            "scavenging",
+            "seeking_companionship",
+            "seeking_social",
+            "selling_scavenged",
+            "socializing",
+            "working",
+        }:
+            return False
+        if getattr(ai, "target_eid", None) is not None:
+            return False
+        if active_self_protection_action(self.sim, eid, current_tick=self.sim.tick):
+            return False
+        cooldowns = self._rumor_weather_posture_cooldowns()
+        key = str(int(eid))
+        try:
+            until = int(cooldowns.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            until = 0
+        if until > int(self.sim.tick):
+            return False
+        anchor = strongest_rumor_weather_anchor(self.sim, actor_eid=eid, radius=8)
+        if not isinstance(anchor, dict) or not anchor:
+            return False
+        kind = str(anchor.get("rumor_weather_kind", "") or "").strip().lower()
+        forced_quirk = ""
+        if kind in {"watchful", "shut_tight"}:
+            forced_quirk = "look_busy"
+        elif kind == "spooked":
+            forced_quirk = "shelter_with_crowd"
+        else:
+            return False
+        action_target = (int(pos.x), int(pos.y), int(pos.z))
+        quirk_row = apply_self_protection_quirk(
+            self.sim,
+            eid,
+            ai=ai,
+            pos=pos,
+            reason=f"rumor_weather_{kind}",
+            target=action_target,
+            threat_eid=None,
+            threat_pos=None,
+            damage=0,
+            forced_quirk=forced_quirk,
+        )
+        if not isinstance(quirk_row, dict) or not quirk_row:
+            return False
+        cooldowns[key] = int(self.sim.tick) + 150
+        action = quirk_row.get("action") if isinstance(quirk_row.get("action"), dict) else {}
+        target = action.get("target") if isinstance(action, dict) else None
+        if forced_quirk == "shelter_with_crowd" and isinstance(target, (tuple, list)) and len(target) >= 3:
+            try:
+                target_tuple = (int(target[0]), int(target[1]), int(target[2]))
+            except (TypeError, ValueError):
+                target_tuple = action_target
+            if target_tuple != action_target:
+                self._set_intent(eid, ai, will, "seeking_safety", 36.0, target_tuple, None)
+                _mark_actor_urgent(self.sim, eid, family="move", reason="rumor_weather_posture", ttl_ticks=8)
+                _schedule_actor_due(self.sim, eid, "move", delay_ticks=0, reason="rumor_weather_posture")
+                return True
+        will.last_tick = self.sim.tick
+        return True
+
     def update(self):
         ais = self.sim.ecs.get(AI)
         positions = self.sim.ecs.get(Position)
@@ -2656,6 +2742,9 @@ class NPCWillSystem(System):
                         _schedule_actor_due(self.sim, eid, "move", delay_ticks=0, reason="service_job_claimed")
                         _schedule_actor_due(self.sim, eid, "will", delay_ticks=12, reason="service_job_claimed")
                         continue
+
+            if self._maybe_apply_rumor_weather_posture(eid, ai, will, pos):
+                continue
 
             best_intent = "idle"
             best_score = 0.0

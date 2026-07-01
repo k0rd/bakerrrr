@@ -78,19 +78,30 @@ MANAGER_ROLE_KEYWORDS = {
 }
 ORGANIZATION_KINDS = {
     "business",
+    "corporation",
     "civic",
     "institution",
     "gang",
     "crew",
     "criminal",
     "community",
+    "cult",
+    "trade_group",
+    "posse",
+    "revenge_squad",
     "other",
 }
 ORGANIZATION_KIND_ALIASES = {
     "organization": "other",
+    "corp": "corporation",
+    "corporate": "corporation",
+    "criminal_cell": "criminal",
     "criminal_org": "criminal",
     "criminal_organization": "criminal",
     "community_group": "community",
+    "trade": "trade_group",
+    "trade_org": "trade_group",
+    "revenge": "revenge_squad",
     "municipal": "civic",
 }
 MEMBERSHIP_KINDS = {"ownership", "employment", "membership", "contract"}
@@ -104,6 +115,88 @@ RELATION_KINDS = {
     "bargains_with",
     "certifies",
     "affiliates_with",
+}
+ORGANIZATION_DIPLOMACY_STANCES = {
+    "allied",
+    "transactional",
+    "neutral",
+    "competitive",
+    "hostile",
+    "sacred_conflict",
+}
+ORGANIZATION_DIPLOMACY_RELATION_STANCES = {
+    "ally": "allied",
+    "affiliates_with": "allied",
+    "oversight": "transactional",
+    "service": "transactional",
+    "represents": "transactional",
+    "bargains_with": "transactional",
+    "certifies": "transactional",
+    "rival": "competitive",
+}
+ORGANIZATION_DIPLOMACY_SENSITIVE_TAGS = {
+    "assigned_sex",
+    "biological_sex",
+    "biosex",
+    "ethnicity",
+    "race",
+    "real_world_religion",
+    "skin_color",
+    "skin_tone",
+}
+ORGANIZATION_DIPLOMACY_SENSITIVE_PREFIXES = (
+    "assigned_sex:",
+    "biological_sex:",
+    "biosex:",
+    "ethnicity:",
+    "race:",
+    "real_world_religion:",
+    "skin_color:",
+    "skin_tone:",
+)
+ORGANIZATION_DIPLOMACY_MAX_PAIRS = 256
+ORGANIZATION_DIPLOMACY_MAX_PRESSURES = 256
+ORGANIZATION_DIPLOMACY_MAX_HISTORY = 12
+ORGANIZATION_DIPLOMACY_DEFAULT_PRESSURE_TICKS = 12 * 600
+ORGANIZATION_DIPLOMACY_INTERESTS_BY_KIND = {
+    "business": {"property", "customers", "labor", "supply", "service_access", "reputation"},
+    "corporation": {"property", "customers", "labor", "supply", "service_access", "reputation", "protection"},
+    "civic": {"property", "service_access", "reputation", "relief", "enforcement_pressure", "protection"},
+    "institution": {"property", "labor", "service_access", "reputation", "enforcement_pressure"},
+    "gang": {"territory", "customers", "supply", "protection", "reputation", "revenge"},
+    "crew": {"territory", "supply", "protection", "reputation", "revenge"},
+    "criminal": {"territory", "customers", "supply", "protection", "service_access", "revenge"},
+    "community": {"property", "labor", "relief", "reputation", "service_access"},
+    "cult": {"devotion", "property", "reputation", "service_access", "protection"},
+    "trade_group": {"labor", "supply", "service_access", "reputation", "relief"},
+    "posse": {"protection", "revenge", "territory", "reputation"},
+    "revenge_squad": {"revenge", "territory", "protection", "reputation"},
+    "other": {"property", "reputation", "service_access"},
+}
+ORGANIZATION_DIPLOMACY_INTERESTS_BY_FAMILY = {
+    "corporate": {"property", "customers", "labor", "supply", "service_access", "reputation"},
+    "civic_security": {"protection", "enforcement_pressure", "reputation"},
+    "labor_union": {"labor", "relief", "reputation", "service_access"},
+    "trade_guild": {"labor", "supply", "service_access", "reputation"},
+    "street_gang": {"territory", "customers", "supply", "protection", "revenge"},
+    "criminal_network": {"territory", "customers", "supply", "service_access", "revenge"},
+    "municipal": {"service_access", "relief", "enforcement_pressure", "reputation"},
+}
+ORGANIZATION_DIPLOMACY_PRESSURE_TITLES = {
+    "allied": "Local Pact",
+    "transactional": "Working Arrangement",
+    "neutral": "Quiet Arrangement",
+    "competitive": "Org Pressure",
+    "hostile": "Org Hostility",
+    "sacred_conflict": "Sacred Conflict",
+}
+ORGANIZATION_DIPLOMACY_PRESSURE_ACTIONS = {
+    "allied": "watch the handoff, ask around, or use the calmer edge",
+    "transactional": "read the arrangement, ask who benefits, or move on",
+    "neutral": "watch the local posture or move on",
+    "competitive": "watch the pressure line, ask carefully, or avoid becoming useful to either side",
+    "hostile": "keep clear of the line, read uniforms and signs, or ask someone trusted",
+    "sacred_conflict": "treat the devotion seriously, watch who reacts, or step away from the point of friction",
 }
 PROTECTIVE_EFFECT_KEYS = {
     "watchfulness_bonus",
@@ -236,12 +329,17 @@ NON_SITE_CHUNK_ORGANIZATION_FACTIONS = {
 ORGANIZATION_STRUCTURE_MODES = {"flat", "federated", "cell"}
 ORGANIZATION_STRUCTURE_BY_KIND = {
     "business": "flat",
+    "corporation": "federated",
     "civic": "flat",
     "institution": "federated",
     "gang": "cell",
     "crew": "cell",
     "criminal": "cell",
     "community": "flat",
+    "cult": "cell",
+    "trade_group": "flat",
+    "posse": "cell",
+    "revenge_squad": "cell",
     "other": "flat",
 }
 ORGANIZATION_FAMILY_BY_TAG = {
@@ -7020,6 +7118,583 @@ def _upsert_profile_relation(profile, row):
     return row
 
 
+def _normalize_diplomacy_stance(value, default="neutral"):
+    stance = _text(value).lower().replace(" ", "_")
+    if stance in ORGANIZATION_DIPLOMACY_STANCES:
+        return stance
+    return default
+
+
+def _diplomacy_tag_is_allowed(tag):
+    tag = _text(tag).lower().replace(" ", "_")
+    if not tag:
+        return False
+    if tag in ORGANIZATION_DIPLOMACY_SENSITIVE_TAGS:
+        return False
+    if any(tag.startswith(prefix) for prefix in ORGANIZATION_DIPLOMACY_SENSITIVE_PREFIXES):
+        return False
+    return True
+
+
+def normalize_organization_diplomacy_tags(values):
+    """Normalize reason/compatibility tags while excluding harmful doctrine axes."""
+
+    if isinstance(values, str):
+        values = (values,)
+    cleaned = []
+    for value in values or ():
+        tag = _text(value).lower().replace(" ", "_")
+        if not _diplomacy_tag_is_allowed(tag):
+            continue
+        if tag not in cleaned:
+            cleaned.append(tag)
+    return tuple(sorted(cleaned))
+
+
+def _organization_diplomacy_state(sim):
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        sim.world_traits = {}
+        traits = sim.world_traits
+    state = traits.get("organization_diplomacy")
+    if not isinstance(state, dict):
+        state = {}
+        traits["organization_diplomacy"] = state
+    pairs = state.get("pairs")
+    if not isinstance(pairs, dict):
+        pairs = {}
+        state["pairs"] = pairs
+    pressures = state.get("pressures")
+    if not isinstance(pressures, dict):
+        pressures = {}
+        state["pressures"] = pressures
+    cooldowns = state.get("cooldowns")
+    if not isinstance(cooldowns, dict):
+        cooldowns = {}
+        state["cooldowns"] = cooldowns
+    state["next_pressure_id"] = max(1, _safe_int(state.get("next_pressure_id"), default=1))
+    return state
+
+
+def _organization_pair_key(org_a_eid, org_b_eid):
+    a = _safe_int(org_a_eid, default=0)
+    b = _safe_int(org_b_eid, default=0)
+    if a <= 0 or b <= 0 or a == b:
+        return ""
+    low, high = sorted((a, b))
+    return f"{low}:{high}"
+
+
+def _diplomacy_org_ref(sim, organization_eid):
+    profile = organization_profile(sim, organization_eid)
+    if profile is None:
+        return None
+    policy = organization_policy_snapshot(sim, organization_eid=organization_eid) or {}
+    return {
+        "organization_eid": int(organization_eid),
+        "organization_key": _text(getattr(profile, "key", "")),
+        "organization_name": _text(getattr(profile, "name", "")) or "Organization",
+        "organization_kind": _normalize_org_kind(getattr(profile, "kind", ""), default="other"),
+        "family": _text(policy.get("family")).lower()
+        or _family_from_tags(getattr(profile, "tags", ()) or ())
+        or _normalize_org_kind(getattr(profile, "kind", ""), default="other"),
+        "tags": tuple(sorted(getattr(profile, "tags", ()) or ())),
+    }
+
+
+def organization_interest_profile(sim, organization_eid):
+    """Return the shared interest/compatibility read for an organization."""
+
+    ref = _diplomacy_org_ref(sim, organization_eid)
+    if ref is None:
+        return {
+            "organization_eid": None,
+            "organization_key": "",
+            "organization_name": "",
+            "organization_kind": "other",
+            "family": "other",
+            "interests": (),
+            "compatibility_tags": (),
+        }
+    interests = set(ORGANIZATION_DIPLOMACY_INTERESTS_BY_KIND.get(ref["organization_kind"], ()))
+    interests.update(ORGANIZATION_DIPLOMACY_INTERESTS_BY_FAMILY.get(ref["family"], ()))
+    compatibility_tags = set()
+    for raw_tag in ref.get("tags", ()):
+        tag = _text(raw_tag).lower().replace(" ", "_")
+        if not _diplomacy_tag_is_allowed(tag):
+            continue
+        compatibility_tags.add(tag)
+        if tag.startswith("interest:"):
+            interest = tag.split(":", 1)[1]
+            if _diplomacy_tag_is_allowed(interest):
+                interests.add(interest)
+        elif tag.startswith("devotion:"):
+            interests.add("devotion")
+            compatibility_tags.add("devotion")
+        elif tag.startswith("territory:"):
+            interests.add("territory")
+        elif tag.startswith("service:"):
+            interests.add("service_access")
+        elif tag in {"corporate", "corpsec"}:
+            interests.update(ORGANIZATION_DIPLOMACY_INTERESTS_BY_FAMILY.get("corporate", ()))
+        elif tag in {"union", "labor_union"}:
+            interests.update(ORGANIZATION_DIPLOMACY_INTERESTS_BY_FAMILY.get("labor_union", ()))
+        elif tag in {"guild", "trade_guild"}:
+            interests.update(ORGANIZATION_DIPLOMACY_INTERESTS_BY_FAMILY.get("trade_guild", ()))
+        elif tag in {"street_gang", "vigilante"}:
+            interests.update(ORGANIZATION_DIPLOMACY_INTERESTS_BY_FAMILY.get("street_gang", ()))
+    return {
+        **ref,
+        "interests": tuple(sorted(normalize_organization_diplomacy_tags(interests))),
+        "compatibility_tags": tuple(sorted(normalize_organization_diplomacy_tags(compatibility_tags))),
+    }
+
+
+def organization_compatibility_read(sim, org_a_eid, org_b_eid):
+    """Return a non-moral, non-demographic compatibility read for two orgs."""
+
+    a = organization_interest_profile(sim, org_a_eid)
+    b = organization_interest_profile(sim, org_b_eid)
+    a_interests = set(a.get("interests", ()) or ())
+    b_interests = set(b.get("interests", ()) or ())
+    a_tags = set(a.get("compatibility_tags", ()) or ())
+    b_tags = set(b.get("compatibility_tags", ()) or ())
+    shared_interests = tuple(sorted(a_interests & b_interests))
+    shared_tags = tuple(sorted(normalize_organization_diplomacy_tags(a_tags & b_tags)))
+    pressure_interests = tuple(sorted((a_interests | b_interests) & {"property", "territory", "customers", "devotion", "revenge", "protection"}))
+    return {
+        "org_a": a,
+        "org_b": b,
+        "shared_interests": shared_interests,
+        "shared_tags": shared_tags,
+        "pressure_interests": pressure_interests,
+        "reason_tags": tuple(sorted(set(shared_interests) | set(shared_tags))),
+    }
+
+
+def _normalize_diplomacy_pair_row(sim, pair_key, row, *, current_tick=None, include_profiles=True):
+    if not isinstance(row, dict):
+        return None
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    org_a = _safe_int(row.get("org_a_eid"), default=0)
+    org_b = _safe_int(row.get("org_b_eid"), default=0)
+    if org_a <= 0 or org_b <= 0 or org_a == org_b:
+        return None
+    expires_tick = _safe_int(row.get("expires_tick"), default=0) or None
+    active = bool(row.get("active", True)) and not (expires_tick is not None and expires_tick <= tick)
+    history = row.get("recent_history")
+    if not isinstance(history, list):
+        history = []
+    history = [dict(entry) for entry in history if isinstance(entry, dict)][-ORGANIZATION_DIPLOMACY_MAX_HISTORY:]
+    result = {
+        "pair_key": _text(row.get("pair_key")) or pair_key or _organization_pair_key(org_a, org_b),
+        "org_a_eid": int(org_a),
+        "org_b_eid": int(org_b),
+        "stance": _normalize_diplomacy_stance(row.get("stance")),
+        "confidence": max(0.0, min(1.0, _safe_float(row.get("confidence"), default=0.0))),
+        "reason_tags": normalize_organization_diplomacy_tags(row.get("reason_tags", ())),
+        "last_update_tick": _safe_int(row.get("last_update_tick"), default=tick),
+        "expires_tick": expires_tick,
+        "active": bool(active),
+        "recent_history": tuple(history),
+    }
+    if include_profiles:
+        a_ref = _diplomacy_org_ref(sim, org_a) or {}
+        b_ref = _diplomacy_org_ref(sim, org_b) or {}
+        result.update({
+            "org_a_key": _text(a_ref.get("organization_key")),
+            "org_a_name": _text(a_ref.get("organization_name")) or f"org {org_a}",
+            "org_a_kind": _text(a_ref.get("organization_kind")) or "other",
+            "org_b_key": _text(b_ref.get("organization_key")),
+            "org_b_name": _text(b_ref.get("organization_name")) or f"org {org_b}",
+            "org_b_kind": _text(b_ref.get("organization_kind")) or "other",
+        })
+    return result
+
+
+def _normalize_pressure_row(sim, pressure_key, row, *, current_tick=None):
+    if not isinstance(row, dict):
+        return None
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    organization_eid = _safe_int(row.get("organization_eid"), default=0)
+    if organization_eid <= 0 or organization_profile(sim, organization_eid) is None:
+        return None
+    expires_tick = _safe_int(row.get("expires_tick"), default=0) or None
+    active = bool(row.get("active", True)) and not (expires_tick is not None and expires_tick <= tick)
+    related_org_eid = _safe_int(row.get("related_org_eid"), default=0) or None
+    ref = _diplomacy_org_ref(sim, organization_eid) or {}
+    related_ref = _diplomacy_org_ref(sim, related_org_eid) if related_org_eid else None
+    stance = _normalize_diplomacy_stance(row.get("stance"))
+    pressure_kind = _text(row.get("pressure_kind")).lower().replace(" ", "_") or stance
+    property_id = _text(row.get("anchor_property_id"))
+    scene_id = _text(row.get("anchor_scene_id"))
+    actor_eid = _safe_int(row.get("anchor_actor_eid"), default=0) or None
+    has_anchor = bool(property_id or scene_id or actor_eid)
+    return {
+        "pressure_key": _text(row.get("pressure_key")) or pressure_key,
+        "organization_eid": int(organization_eid),
+        "organization_key": _text(ref.get("organization_key")),
+        "organization_name": _text(ref.get("organization_name")) or "Organization",
+        "organization_kind": _text(ref.get("organization_kind")) or "other",
+        "related_org_eid": int(related_org_eid) if related_org_eid else None,
+        "related_organization_key": _text((related_ref or {}).get("organization_key")),
+        "related_organization_name": _text((related_ref or {}).get("organization_name")),
+        "related_organization_kind": _text((related_ref or {}).get("organization_kind")),
+        "stance": stance,
+        "pressure_kind": pressure_kind,
+        "confidence": max(0.0, min(1.0, _safe_float(row.get("confidence"), default=0.0))),
+        "reason_tags": normalize_organization_diplomacy_tags(row.get("reason_tags", ())),
+        "anchor_property_id": property_id,
+        "anchor_scene_id": scene_id,
+        "anchor_actor_eid": actor_eid,
+        "visible": bool(row.get("visible", False)),
+        "visible_cue": _text(row.get("visible_cue")),
+        "source_event": _text(row.get("source_event")),
+        "last_update_tick": _safe_int(row.get("last_update_tick"), default=tick),
+        "expires_tick": expires_tick,
+        "active": bool(active and has_anchor),
+    }
+
+
+def _prune_organization_diplomacy_state(sim, *, current_tick=None):
+    state = _organization_diplomacy_state(sim)
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    pairs = state.get("pairs", {})
+    for key in tuple(pairs.keys()):
+        row = _normalize_diplomacy_pair_row(sim, key, pairs.get(key), current_tick=tick, include_profiles=False)
+        if row is None or not row.get("active"):
+            pairs.pop(key, None)
+            continue
+        stored = dict(pairs.get(key) or {})
+        history = list(row.get("recent_history", ()) or ())
+        stored["recent_history"] = [dict(entry) for entry in history[-ORGANIZATION_DIPLOMACY_MAX_HISTORY:]]
+        stored["reason_tags"] = list(row.get("reason_tags", ()) or ())
+        pairs[key] = stored
+    if len(pairs) > ORGANIZATION_DIPLOMACY_MAX_PAIRS:
+        ranked = sorted(
+            pairs.items(),
+            key=lambda item: _safe_int((item[1] or {}).get("last_update_tick"), default=-10_000),
+        )
+        for key, _row in ranked[: len(pairs) - ORGANIZATION_DIPLOMACY_MAX_PAIRS]:
+            pairs.pop(key, None)
+
+    pressures = state.get("pressures", {})
+    for key in tuple(pressures.keys()):
+        row = _normalize_pressure_row(sim, key, pressures.get(key), current_tick=tick)
+        if row is None or not row.get("active"):
+            pressures.pop(key, None)
+    if len(pressures) > ORGANIZATION_DIPLOMACY_MAX_PRESSURES:
+        ranked = sorted(
+            pressures.items(),
+            key=lambda item: (
+                _safe_float((item[1] or {}).get("confidence"), default=0.0),
+                _safe_int((item[1] or {}).get("last_update_tick"), default=-10_000),
+            ),
+        )
+        for key, _row in ranked[: len(pressures) - ORGANIZATION_DIPLOMACY_MAX_PRESSURES]:
+            pressures.pop(key, None)
+
+    cooldowns = state.get("cooldowns", {})
+    for key, value in tuple(cooldowns.items()):
+        if _safe_int(value, default=0) <= tick:
+            cooldowns.pop(key, None)
+    return state
+
+
+def ensure_organization_diplomacy_state(sim):
+    return _prune_organization_diplomacy_state(sim)
+
+
+def record_organization_pressure(
+    sim,
+    *,
+    organization_eid,
+    pressure_kind,
+    stance="neutral",
+    reason_tags=(),
+    related_org_eid=None,
+    anchor_property_id=None,
+    anchor_scene_id=None,
+    anchor_actor_eid=None,
+    visible=True,
+    visible_cue="",
+    confidence=0.5,
+    source_event="",
+    expires_tick=None,
+    pressure_key=None,
+):
+    organization_eid = _safe_int(organization_eid, default=0)
+    if organization_eid <= 0 or organization_profile(sim, organization_eid) is None:
+        return None
+    property_id = _text(anchor_property_id)
+    scene_id = _text(anchor_scene_id)
+    actor_eid = _safe_int(anchor_actor_eid, default=0) or None
+    if not (property_id or scene_id or actor_eid):
+        return None
+
+    state = _prune_organization_diplomacy_state(sim)
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    stance = _normalize_diplomacy_stance(stance)
+    pressure_kind = _text(pressure_kind).lower().replace(" ", "_") or stance
+    reason_tags = normalize_organization_diplomacy_tags(reason_tags)
+    if expires_tick is None:
+        expires_tick = tick + ORGANIZATION_DIPLOMACY_DEFAULT_PRESSURE_TICKS
+    expires_tick = _safe_int(expires_tick, default=0) or None
+    related_org_eid = _safe_int(related_org_eid, default=0) or None
+    if pressure_key is None:
+        pressure_key = ":".join(
+            _text(part)
+            for part in (
+                "org_pressure",
+                organization_eid,
+                related_org_eid or 0,
+                pressure_kind,
+                property_id or "-",
+                scene_id or "-",
+                actor_eid or 0,
+            )
+        )
+    pressure_key = _text(pressure_key)
+    row = {
+        "pressure_key": pressure_key,
+        "organization_eid": int(organization_eid),
+        "related_org_eid": int(related_org_eid) if related_org_eid else None,
+        "stance": stance,
+        "pressure_kind": pressure_kind,
+        "confidence": max(0.0, min(1.0, _safe_float(confidence, default=0.5))),
+        "reason_tags": list(reason_tags),
+        "anchor_property_id": property_id,
+        "anchor_scene_id": scene_id,
+        "anchor_actor_eid": actor_eid,
+        "visible": bool(visible),
+        "visible_cue": _text(visible_cue),
+        "source_event": _text(source_event),
+        "last_update_tick": tick,
+        "expires_tick": expires_tick,
+        "active": True,
+    }
+    state["pressures"][pressure_key] = row
+    return _normalize_pressure_row(sim, pressure_key, row)
+
+
+def _pressure_visible_cue_for_stance(stance, reason_tags=()):
+    reason_tags = set(normalize_organization_diplomacy_tags(reason_tags))
+    if stance == "sacred_conflict":
+        if "flora_devotion" in reason_tags or "devotion_flora" in reason_tags:
+            return "people are watching a plant or garden like it matters more than trade"
+        if "animal_devotion" in reason_tags or "devotion_animal" in reason_tags:
+            return "people are measuring the street by how it treats a particular animal"
+        return "the visible friction feels devotional, not merely commercial"
+    if stance == "hostile":
+        return "uniforms, guards, or signage make the line feel unfriendly"
+    if stance == "competitive":
+        return "staff and regulars are reading the other side of the block carefully"
+    if stance == "transactional":
+        return "handoffs and service habits make the arrangement visible"
+    if stance == "allied":
+        return "the posture looks coordinated instead of merely neighborly"
+    return "the frontage carries a quiet organizational read"
+
+
+def record_organization_relationship(
+    sim,
+    *,
+    org_a_eid,
+    org_b_eid,
+    stance,
+    confidence=0.5,
+    reason_tags=(),
+    source_event="",
+    anchor_property_id=None,
+    anchor_scene_id=None,
+    anchor_actor_eid=None,
+    visible=False,
+    visible_cue="",
+    expires_tick=None,
+    cooldown_ticks=0,
+):
+    org_a_eid = _safe_int(org_a_eid, default=0)
+    org_b_eid = _safe_int(org_b_eid, default=0)
+    if organization_profile(sim, org_a_eid) is None or organization_profile(sim, org_b_eid) is None:
+        return None
+    pair_key = _organization_pair_key(org_a_eid, org_b_eid)
+    if not pair_key:
+        return None
+
+    state = _prune_organization_diplomacy_state(sim)
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    stance = _normalize_diplomacy_stance(stance)
+    reason_tags = normalize_organization_diplomacy_tags(reason_tags)
+    source_event = _text(source_event) or "organization_relationship"
+    cooldown_key = ""
+    cooldown_ticks = max(0, _safe_int(cooldown_ticks, default=0))
+    if cooldown_ticks:
+        cooldown_key = f"{pair_key}:{source_event}:{_text(anchor_property_id)}:{_text(anchor_scene_id)}:{','.join(reason_tags)}"
+        if _safe_int(state.get("cooldowns", {}).get(cooldown_key), default=0) > tick:
+            return organization_relationship_snapshot(sim, org_a_eid, org_b_eid)
+
+    existing = _normalize_diplomacy_pair_row(
+        sim,
+        pair_key,
+        state.get("pairs", {}).get(pair_key),
+        current_tick=tick,
+        include_profiles=False,
+    )
+    history = list((existing or {}).get("recent_history", ()) or ())
+    previous_stance = _text((existing or {}).get("stance"))
+    existing_reasons = set((existing or {}).get("reason_tags", ()) or ())
+    merged_reasons = tuple(sorted(existing_reasons | set(reason_tags)))
+    confidence = max(0.0, min(1.0, _safe_float(confidence, default=0.5)))
+    if existing and previous_stance == stance:
+        confidence = min(1.0, max(confidence, _safe_float(existing.get("confidence"), default=0.0) + 0.03))
+    history.append({
+        "tick": int(tick),
+        "source_event": source_event,
+        "stance": stance,
+        "reason_tags": tuple(reason_tags),
+        "anchor_property_id": _text(anchor_property_id),
+        "anchor_scene_id": _text(anchor_scene_id),
+        "anchor_actor_eid": _safe_int(anchor_actor_eid, default=0) or None,
+    })
+    row = {
+        "pair_key": pair_key,
+        "org_a_eid": min(int(org_a_eid), int(org_b_eid)),
+        "org_b_eid": max(int(org_a_eid), int(org_b_eid)),
+        "stance": stance,
+        "confidence": confidence,
+        "reason_tags": list(merged_reasons),
+        "recent_history": [dict(entry) for entry in history[-ORGANIZATION_DIPLOMACY_MAX_HISTORY:]],
+        "last_update_tick": int(tick),
+        "expires_tick": _safe_int(expires_tick, default=0) or None,
+        "active": True,
+    }
+    state["pairs"][pair_key] = row
+    if cooldown_key:
+        state["cooldowns"][cooldown_key] = tick + cooldown_ticks
+
+    if visible and (_text(anchor_property_id) or _text(anchor_scene_id) or _safe_int(anchor_actor_eid, default=0)):
+        cue = _text(visible_cue) or _pressure_visible_cue_for_stance(stance, reason_tags)
+        record_organization_pressure(
+            sim,
+            organization_eid=row["org_a_eid"],
+            related_org_eid=row["org_b_eid"],
+            pressure_kind=f"diplomacy_{stance}",
+            stance=stance,
+            reason_tags=reason_tags,
+            anchor_property_id=anchor_property_id,
+            anchor_scene_id=anchor_scene_id,
+            anchor_actor_eid=anchor_actor_eid,
+            visible=True,
+            visible_cue=cue,
+            confidence=confidence,
+            source_event=source_event,
+            expires_tick=expires_tick,
+            pressure_key=f"org_relationship:{pair_key}:{_text(anchor_property_id) or _text(anchor_scene_id) or _safe_int(anchor_actor_eid, default=0)}",
+        )
+    return organization_relationship_snapshot(sim, org_a_eid, org_b_eid)
+
+
+def organization_relationship_snapshot(sim, org_a_eid, org_b_eid, *, include_inactive=False):
+    state = _prune_organization_diplomacy_state(sim)
+    pair_key = _organization_pair_key(org_a_eid, org_b_eid)
+    if not pair_key:
+        return None
+    row = _normalize_diplomacy_pair_row(sim, pair_key, state.get("pairs", {}).get(pair_key))
+    if row is None:
+        return None
+    if not include_inactive and not row.get("active"):
+        return None
+    return row
+
+
+def organization_relationship_rows(sim, organization_eid=None, *, stance=None, active_only=True):
+    state = _prune_organization_diplomacy_state(sim)
+    organization_eid = _safe_int(organization_eid, default=0) or None
+    stance = _normalize_diplomacy_stance(stance, default="") if stance else ""
+    rows = []
+    for key, raw in state.get("pairs", {}).items():
+        row = _normalize_diplomacy_pair_row(sim, key, raw)
+        if row is None:
+            continue
+        if active_only and not row.get("active"):
+            continue
+        if organization_eid and organization_eid not in {row.get("org_a_eid"), row.get("org_b_eid")}:
+            continue
+        if stance and row.get("stance") != stance:
+            continue
+        rows.append(row)
+    rows.sort(
+        key=lambda row: (
+            _text(row.get("stance")),
+            -_safe_float(row.get("confidence"), default=0.0),
+            _safe_int(row.get("org_a_eid"), default=0),
+            _safe_int(row.get("org_b_eid"), default=0),
+        )
+    )
+    return tuple(rows)
+
+
+def organization_pressure_rows(sim, *, property_id=None, scene_id=None, actor_eid=None, visible_only=True, active_only=True):
+    state = _prune_organization_diplomacy_state(sim)
+    property_id = _text(property_id)
+    scene_id = _text(scene_id)
+    actor_eid = _safe_int(actor_eid, default=0) or None
+    rows = []
+    for key, raw in state.get("pressures", {}).items():
+        row = _normalize_pressure_row(sim, key, raw)
+        if row is None:
+            continue
+        if active_only and not row.get("active"):
+            continue
+        if visible_only and not row.get("visible"):
+            continue
+        if property_id and row.get("anchor_property_id") != property_id:
+            continue
+        if scene_id and row.get("anchor_scene_id") != scene_id:
+            continue
+        if actor_eid and row.get("anchor_actor_eid") != actor_eid:
+            continue
+        rows.append(row)
+    rows.sort(
+        key=lambda row: (
+            -_safe_float(row.get("confidence"), default=0.0),
+            -_safe_int(row.get("last_update_tick"), default=0),
+            _text(row.get("pressure_kind")),
+        )
+    )
+    return tuple(rows)
+
+
+def organization_pressure_for_property(sim, prop, *, min_confidence=0.2):
+    if not isinstance(prop, dict):
+        return None
+    property_id = _text(prop.get("id"))
+    if not property_id:
+        return None
+    for row in organization_pressure_rows(sim, property_id=property_id, visible_only=True, active_only=True):
+        if _safe_float(row.get("confidence"), default=0.0) >= float(min_confidence):
+            return row
+    return None
+
+
+def organization_pressure_summary(row):
+    if not isinstance(row, dict):
+        return None
+    stance = _normalize_diplomacy_stance(row.get("stance"))
+    title = ORGANIZATION_DIPLOMACY_PRESSURE_TITLES.get(stance, "Org Pressure")
+    visible_cue = _text(row.get("visible_cue")) or _pressure_visible_cue_for_stance(stance, row.get("reason_tags", ()))
+    summary = f"{visible_cue}"
+    action = ORGANIZATION_DIPLOMACY_PRESSURE_ACTIONS.get(stance, "ask around, read the posture, or move on")
+    return {
+        "title": title,
+        "summary": summary,
+        "action": action,
+        "stance": stance,
+        "pressure_kind": _text(row.get("pressure_kind")),
+        "confidence": max(0.0, min(1.0, _safe_float(row.get("confidence"), default=0.0))),
+    }
+
+
 def relate_organizations(
     sim,
     *,
@@ -7078,6 +7753,19 @@ def relate_organizations(
                 "active": bool(active),
                 "directed": False,
             },
+        )
+    stance = ORGANIZATION_DIPLOMACY_RELATION_STANCES.get(relation_kind)
+    if bool(active) and stance:
+        record_organization_relationship(
+            sim,
+            org_a_eid=source_org_eid,
+            org_b_eid=target_org_eid,
+            stance=stance,
+            confidence=0.48 if relation_kind in {"ally", "rival", "affiliates_with"} else 0.38,
+            reason_tags=(f"relation:{relation_kind}",),
+            source_event=f"relation:{relation_kind}",
+            visible=False,
+            cooldown_ticks=0,
         )
     _invalidate_organization_runtime_caches(sim)
     _hydrate_linked_branch_records_for_organization(sim, source_org_eid)

@@ -21,10 +21,12 @@ from game.appearance_loadout import (
     unequip_appearance_slot,
 )
 from game.bodyguard_runtime import (
+    BODYGUARD_SERVICE_ID,
+    BODYGUARD_TIER_PROFILES,
     active_bodyguard_contracts,
+    bodyguard_channel_summary,
     create_bodyguard_detail_for_principal,
     fire_bodyguard_contract,
-    protection_channel_id_for_assignment,
 )
 from game.components import (
     AI,
@@ -490,6 +492,319 @@ def _property_chunk_key(sim, prop):
     return sim.chunk_coords(int(x), int(y))
 
 
+def _property_is_bodyguard_provider(prop):
+    if not isinstance(prop, dict):
+        return False
+    metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+    archetype = _key(metadata.get("archetype") or prop.get("archetype"))
+    if archetype in {"contractor_office", "bounty_office"}:
+        return True
+    services = metadata.get("site_services") or metadata.get("services") or ()
+    if isinstance(services, str):
+        services = (services,)
+    return BODYGUARD_SERVICE_ID in {_key(service) for service in tuple(services or ())}
+
+
+def _nearest_bodyguard_provider(sim, prop_or_pos, *, max_distance=70):
+    if isinstance(prop_or_pos, dict):
+        x, y, z = _property_center(prop_or_pos)
+    else:
+        x = _safe_int(getattr(prop_or_pos, "x", 0), 0)
+        y = _safe_int(getattr(prop_or_pos, "y", 0), 0)
+        z = _safe_int(getattr(prop_or_pos, "z", 0), 0)
+    candidates = []
+    for prop in tuple(getattr(sim, "properties", {}).values()):
+        if not _property_is_bodyguard_provider(prop):
+            continue
+        px, py, pz = _property_center(prop)
+        if int(pz) != int(z):
+            continue
+        distance = _manhattan(int(x), int(y), int(px), int(py))
+        if distance <= int(max_distance):
+            candidates.append((distance, _clean_text(prop.get("id")), prop))
+    return sorted(candidates, key=lambda row: (row[0], row[1]))[0][2] if candidates else None
+
+
+def _current_bodyguard_provider_for_actor(sim, eid):
+    prop = _property_for_actor(sim, eid)
+    return prop if _property_is_bodyguard_provider(prop) else None
+
+
+def _record_cult_bodyguards(sim, cult, guard_eids, *, source_role="bodyguard"):
+    recorded = []
+    for guard_eid in tuple(guard_eids or ()):
+        if _safe_int(guard_eid, 0) <= 0:
+            continue
+        join_cult(
+            sim,
+            int(guard_eid),
+            cult.get("cult_id"),
+            role="bodyguard",
+            title=_clean_text(source_role) or "bodyguard",
+            issue_uniform=False,
+            auto_equip=False,
+        )
+        recorded.append(int(guard_eid))
+    if recorded:
+        guards = set(int(eid) for eid in tuple(cult.get("bodyguard_eids", ()) or ()))
+        guards.update(recorded)
+        cult["bodyguard_eids"] = tuple(sorted(guards))
+        _set_role_lists_from_members(cult)
+    return tuple(recorded)
+
+
+def _grant_cult_authority_starter_guard(sim, cult, authority_eid, row, *, reason):
+    if not isinstance(row, dict) or row.get("starter_bodyguard_granted_tick"):
+        return ()
+    result = create_bodyguard_detail_for_principal(
+        sim,
+        authority_eid,
+        _meeting_property(sim, cult),
+        count=1,
+        tier="solo",
+        hired_by_eid=authority_eid,
+        source_kind="cult_authority",
+        source_id=f"{cult.get('cult_id')}:{authority_eid}:{_key(reason)}",
+    )
+    row["starter_bodyguard_granted_tick"] = _safe_int(getattr(sim, "tick", 0), 0)
+    row["starter_bodyguard_reason"] = _key(reason)
+    row["starter_bodyguard_ok"] = bool(result.get("ok"))
+    if not result.get("ok"):
+        row["starter_bodyguard_failure"] = _clean_text(result.get("reason"))
+        return ()
+    guard_eids = _record_cult_bodyguards(sim, cult, result.get("guard_eids", ()), source_role="bodyguard")
+    row["starter_bodyguard_eids"] = tuple(guard_eids)
+    return guard_eids
+
+
+def _cult_guard_purchase_funds(sim, cult, authority_eid, cost):
+    cost = max(0, int(cost))
+    treasury = max(0, _safe_int(cult.get("treasury", cult.get("donations", 0)), 0))
+    if treasury >= cost:
+        cult["treasury"] = treasury - cost
+        cult["treasury_spent_bodyguards"] = _safe_int(cult.get("treasury_spent_bodyguards"), 0) + cost
+        return {"ok": True, "source": "cult_treasury", "credits_after": int(cult["treasury"])}
+    assets = sim.ecs.get(PlayerAssets).get(authority_eid)
+    credits = int(getattr(assets, "credits", 0) or 0) if assets else 0
+    if credits >= cost:
+        assets.credits = max(0, credits - cost)
+        return {"ok": True, "source": "personal", "credits_after": int(assets.credits)}
+    return {"ok": False, "source": "none", "credits": max(treasury, credits)}
+
+
+def _cult_authority_desired_guards(cult, row):
+    role = _key(row.get("role"))
+    if role == "leader":
+        return 4
+    if _clean_text(row.get("absorbed_service_property_id")):
+        return 2
+    return 1
+
+
+def _try_cult_authority_guard_purchase(sim, cult, authority_eid, row):
+    if not isinstance(row, dict) or _key(row.get("role")) not in {"leader", "official"}:
+        return None
+    tick = _safe_int(getattr(sim, "tick", 0), 0)
+    if _safe_int(row.get("next_bodyguard_purchase_tick"), 0) > tick:
+        return None
+    summary = bodyguard_channel_summary(sim, assignment_kind="principal", principal_eid=authority_eid)
+    active = _safe_int(summary.get("active_count"), 0)
+    desired = _cult_authority_desired_guards(cult, row)
+    if active >= desired or active >= _safe_int(summary.get("max_slots"), 0):
+        return None
+    profile = BODYGUARD_TIER_PROFILES["solo"]
+    cost = int(profile.get("cost", 180) or 180)
+    assets = sim.ecs.get(PlayerAssets).get(authority_eid)
+    personal_credits = int(getattr(assets, "credits", 0) or 0) if assets else 0
+    treasury = _safe_int(cult.get("treasury", cult.get("donations", 0)), 0)
+    if max(personal_credits, treasury) < cost:
+        row["next_bodyguard_purchase_tick"] = tick + 900
+        return None
+    provider = _current_bodyguard_provider_for_actor(sim, authority_eid)
+    if not isinstance(provider, dict):
+        pos = sim.ecs.get(Position).get(authority_eid)
+        target_provider = _nearest_bodyguard_provider(sim, pos, max_distance=70)
+        if isinstance(target_provider, dict):
+            ai = sim.ecs.get(AI).get(authority_eid)
+            will = sim.ecs.get(NPCWill).get(authority_eid)
+            if ai is not None:
+                _sync_ai_intent(ai, will, tick, "cult_bodyguard_procurement", score=46.0, target=_property_center(target_provider))
+                mark_actor_urgent(sim, authority_eid, reason="cult_bodyguard_procurement", ttl_ticks=140)
+        row["next_bodyguard_purchase_tick"] = tick + 360
+        return None
+    paid = _cult_guard_purchase_funds(sim, cult, authority_eid, cost)
+    if not paid.get("ok"):
+        row["next_bodyguard_purchase_tick"] = tick + 900
+        return None
+    result = create_bodyguard_detail_for_principal(
+        sim,
+        authority_eid,
+        provider,
+        count=1,
+        tier="solo",
+        hired_by_eid=authority_eid,
+        source_kind="cult_purchase",
+        source_id=f"{cult.get('cult_id')}:{authority_eid}:{tick}",
+    )
+    if not result.get("ok"):
+        if paid.get("source") == "cult_treasury":
+            cult["treasury"] = _safe_int(cult.get("treasury"), 0) + cost
+        elif paid.get("source") == "personal":
+            assets = sim.ecs.get(PlayerAssets).get(authority_eid)
+            if assets is not None:
+                assets.credits = int(getattr(assets, "credits", 0) or 0) + cost
+        row["next_bodyguard_purchase_tick"] = tick + 900
+        return None
+    guard_eids = _record_cult_bodyguards(sim, cult, result.get("guard_eids", ()), source_role="bodyguard")
+    row["next_bodyguard_purchase_tick"] = tick + 900
+    row["bodyguard_purchase_count"] = _safe_int(row.get("bodyguard_purchase_count"), 0) + 1
+    sim.emit(Event(
+        "cult_bodyguard_upgraded",
+        cult_id=cult.get("cult_id"),
+        cult_name=cult.get("name"),
+        authority_eid=authority_eid,
+        authority_role=_key(row.get("role")),
+        provider_property_id=provider.get("id"),
+        provider_property_name=_property_name(provider, "bodyguard desk"),
+        guard_eids=tuple(guard_eids),
+        guard_count=len(guard_eids),
+        payer_source=paid.get("source"),
+        credits_spent=cost,
+        active_guard_count=active + len(guard_eids),
+    ))
+    return tuple(guard_eids)
+
+
+def _property_transfer_safe(sim, prop):
+    if not isinstance(prop, dict):
+        return False
+    prop_id = _clean_text(prop.get("id"))
+    if not prop_id:
+        return False
+    owner = prop.get("owner_eid")
+    if owner is not None and _actor_is_player(sim, owner):
+        return False
+    owner_tag = _key(prop.get("owner_tag"))
+    if owner_tag in {"player", "justice", "public"}:
+        return False
+    metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+    archetype = _key(metadata.get("archetype") or prop.get("archetype"))
+    if archetype in {"jail", "courthouse", "police_station", "checkpoint", "armory"}:
+        return False
+    for key in ("objective", "critical", "quest_critical", "mission_critical", "no_transfer"):
+        if bool(metadata.get(key) or prop.get(key)):
+            return False
+    assets = sim.ecs.get(PlayerAssets).get(getattr(sim, "player_eid", None))
+    if assets and prop_id in getattr(assets, "owned_property_ids", set()):
+        return False
+    return True
+
+
+def _relationship_partner(sim, eid):
+    try:
+        from game.npc_relationships import relationship_partner_eid
+    except Exception:
+        return None
+    try:
+        return relationship_partner_eid(sim, eid, minimum_stage="partner")
+    except Exception:
+        return None
+
+
+def _set_home_property(sim, eid, property_id, *, housed=True):
+    settlement = sim.ecs.get(NPCSettlement).get(eid)
+    if settlement is None:
+        settlement = NPCSettlement(phase="settled", housing_status="housed" if housed else "unhoused")
+        sim.ecs.add(eid, settlement)
+    settlement.home_property_id = _clean_text(property_id)
+    settlement.housing_status = "housed" if housed and _clean_text(property_id) else "unhoused"
+    if _clean_text(property_id):
+        settlement.phase = "settled"
+    return settlement
+
+
+def _complete_official_host_reward_swap(sim, cult, official_eid, row):
+    if not isinstance(row, dict) or row.get("host_reward_resolved_tick"):
+        return False
+    tick = _safe_int(getattr(sim, "tick", 0), 0)
+    host_eid = _safe_int(row.get("coverage_host_actor_eid"), 0)
+    host_prop = _property_from_id(sim, row.get("coverage_host_property_id"))
+    central_prop = _property_from_id(sim, row.get("pre_promotion_home_property_id"))
+    meeting_chunk = _property_chunk_key(sim, _meeting_property(sim, cult))
+    central_chunk = _property_chunk_key(sim, central_prop)
+    if (
+        host_eid <= 0
+        or not _is_living_actor(sim, host_eid)
+        or not _property_transfer_safe(sim, host_prop)
+        or not _property_transfer_safe(sim, central_prop)
+        or _clean_text(host_prop.get("id")) == _clean_text(central_prop.get("id"))
+        or (meeting_chunk is not None and central_chunk is not None and central_chunk != meeting_chunk)
+    ):
+        row["host_reward_resolved_tick"] = tick
+        row["host_reward_kind"] = "central_lodging_fallback"
+        fallback = central_prop or _meeting_property(sim, cult)
+        if isinstance(fallback, dict):
+            row["host_reward_fallback_property_id"] = _clean_text(fallback.get("id"))
+            row["host_reward_fallback_property_name"] = _property_name(fallback, "central lodging")
+        sim.emit(Event(
+            "cult_host_reward_fallback",
+            cult_id=cult.get("cult_id"),
+            cult_name=cult.get("name"),
+            official_eid=official_eid,
+            host_eid=host_eid or None,
+            reason="unsafe_swap",
+            property_id=row.get("host_reward_fallback_property_id"),
+            property_name=row.get("host_reward_fallback_property_name"),
+        ))
+        return False
+    host_prop_id = _clean_text(host_prop.get("id"))
+    central_prop_id = _clean_text(central_prop.get("id"))
+    if hasattr(sim, "assign_property_owner"):
+        sim.assign_property_owner(host_prop_id, owner_eid=official_eid, owner_tag="npc")
+        sim.assign_property_owner(central_prop_id, owner_eid=host_eid, owner_tag="npc")
+    else:
+        host_prop["owner_eid"] = official_eid
+        host_prop["owner_tag"] = "npc"
+        central_prop["owner_eid"] = host_eid
+        central_prop["owner_tag"] = "npc"
+    _set_home_property(sim, host_eid, central_prop_id)
+    partner = _relationship_partner(sim, host_eid)
+    if partner is not None and _is_living_actor(sim, partner):
+        _set_home_property(sim, partner, central_prop_id)
+    displaced = []
+    for resident_eid, settlement in list(sim.ecs.get(NPCSettlement).items()):
+        if _safe_int(resident_eid, 0) in {host_eid, _safe_int(partner, -1)}:
+            continue
+        if _clean_text(getattr(settlement, "home_property_id", "")) != host_prop_id:
+            continue
+        if actor_is_cult_member(sim, resident_eid, cult.get("cult_id")):
+            continue
+        settlement.home_property_id = ""
+        settlement.housing_status = "unhoused"
+        displaced.append(int(resident_eid))
+    row["host_reward_resolved_tick"] = tick
+    row["host_reward_kind"] = "home_swap"
+    row["host_reward_host_eid"] = host_eid
+    row["host_reward_host_new_home_id"] = central_prop_id
+    row["host_reward_official_old_home_id"] = central_prop_id
+    row["host_reward_official_staging_property_id"] = host_prop_id
+    row["host_reward_displaced_eids"] = tuple(displaced)
+    sim.emit(Event(
+        "cult_host_reward_swap",
+        cult_id=cult.get("cult_id"),
+        cult_name=cult.get("name"),
+        official_eid=official_eid,
+        host_eid=host_eid,
+        host_property_id=host_prop_id,
+        host_property_name=_property_name(host_prop, "host home"),
+        central_property_id=central_prop_id,
+        central_property_name=_property_name(central_prop, "central home"),
+        partner_eid=partner,
+        displaced_eids=tuple(displaced),
+    ))
+    return True
+
+
 def _active_cult_rows(cult, *, roles=None, exclude_roles=()):
     wanted = {_key(role) for role in tuple(roles or ()) if _key(role)}
     excluded = {_key(role) for role in tuple(exclude_roles or ()) if _key(role)}
@@ -736,6 +1051,8 @@ def _create_cult(sim, *, leader_eid, officials=(), members=(), cult_id=None):
         "shunned_eids": {},
         "pending_grievances": [],
         "known_grievances": [],
+        "treasury": 0,
+        "donations": 0,
         "created_tick": _safe_int(getattr(sim, "tick", 0), 0),
         "membership_counts": {"leader": 0, "official": 0, "member": 0, "bodyguard": 0, "active": 0},
         "crisis": {},
@@ -762,9 +1079,11 @@ def _create_cult(sim, *, leader_eid, officials=(), members=(), cult_id=None):
         source_id=cult_id,
     )
     if bodyguards.get("ok"):
-        cult["bodyguard_eids"] = tuple(bodyguards.get("guard_eids", ()) or ())
-        for guard_eid in cult["bodyguard_eids"]:
-            join_cult(sim, guard_eid, cult_id, role="bodyguard", title="bodyguard", issue_uniform=False, auto_equip=False)
+        _record_cult_bodyguards(sim, cult, bodyguards.get("guard_eids", ()), source_role="bodyguard")
+    for official_eid in tuple(officials or ()):
+        row = cult.setdefault("members", {}).get(str(official_eid))
+        if isinstance(row, dict):
+            _grant_cult_authority_starter_guard(sim, cult, int(official_eid), row, reason="seeded_official")
     _set_role_lists_from_members(cult)
     sim.emit(Event(
         "cult_seeded",
@@ -1356,6 +1675,7 @@ def apply_cult_service(sim, actor_eid, prop, service, request=None):
             return {"ok": False, "reason": "no_credits", "service": service, "cult_id": cult_id, "cult_name": cult.get("name"), "cost": cost, "credits": int(getattr(assets, "credits", 0) or 0) if assets else 0}
         assets.credits = max(0, int(getattr(assets, "credits", 0) or 0) - cost)
         cult["donations"] = int(cult.get("donations", 0) or 0) + cost
+        cult["treasury"] = int(cult.get("treasury", 0) or 0) + cost
         return {"ok": True, "service": service, "cult_id": cult_id, "cult_name": cult.get("name"), "lines": (f"You give {cost}c to {cult.get('name')}.", "An official records the gift without making it feel optional."), "credits_spent": cost}
     if service == "cult_leave":
         result = leave_cult(sim, actor_eid, cult_id, reason="voluntary")
@@ -1460,6 +1780,8 @@ def _promote_cult_official(sim, cult, eid, coverage):
         return None
     tick = _safe_int(getattr(sim, "tick", 0), 0)
     title = _clean_text(cult.get("official_title")) or "keeper"
+    pre_home = _member_home_property(sim, eid)
+    pre_work = _member_work_property(sim, eid)
     prop_id = _clean_text(coverage.get("property_id")) if isinstance(coverage, dict) else ""
     prop_name = _clean_text(coverage.get("property_name")) if isinstance(coverage, dict) else ""
     prop = _property_from_id(sim, prop_id)
@@ -1473,6 +1795,12 @@ def _promote_cult_official(sim, cult, eid, coverage):
     row["title"] = title
     row["promoted_tick"] = tick
     row["promoted_by_leader_eid"] = _safe_int(cult.get("leader_eid"), 0) or None
+    if isinstance(pre_home, dict):
+        row["pre_promotion_home_property_id"] = _clean_text(pre_home.get("id"))
+        row["pre_promotion_home_property_name"] = _property_name(pre_home, "old home")
+    if isinstance(pre_work, dict):
+        row["pre_promotion_work_property_id"] = _clean_text(pre_work.get("id"))
+        row["pre_promotion_work_property_name"] = _property_name(pre_work, "old work")
     row["coverage_property_id"] = prop_id
     row["coverage_property_name"] = prop_name
     row["coverage_member_count"] = _safe_int((coverage or {}).get("member_count"), 0)
@@ -1498,6 +1826,7 @@ def _promote_cult_official(sim, cult, eid, coverage):
         site_property_id=prop_id or cult.get("meeting", {}).get("property_id"),
         active=True,
     )
+    starter_guards = _grant_cult_authority_starter_guard(sim, cult, eid, row, reason="promotion")
     if isinstance(prop, dict):
         target = _property_center(prop)
         ai = sim.ecs.get(AI).get(eid)
@@ -1521,6 +1850,7 @@ def _promote_cult_official(sim, cult, eid, coverage):
         host_property_name=row.get("coverage_host_property_name"),
         official_count=_active_official_count(cult),
         target_official_count=_official_target_count(cult),
+        starter_guard_eids=tuple(starter_guards),
     ))
     return row
 
@@ -1689,6 +2019,7 @@ def _absorb_cult_service_site(sim, cult, official_eid, target_eid, prop, candida
         official_row["coverage_kind"] = "absorbed_service"
         official_row["service_site_recruit_eid"] = int(target_eid)
         official_row["service_site_absorbed_tick"] = tick
+        _complete_official_host_reward_swap(sim, cult, official_eid, official_row)
     _set_cult_workplace_on_occupation(sim, target_eid, prop, cult, role=role)
     _set_cult_workplace_on_occupation(sim, official_eid, prop, cult, role="staff")
     for eid, assign_role, title, rank in (
@@ -1946,6 +2277,7 @@ class CultSystem(System):
         self._update_meetings()
         self._update_official_promotions()
         self._update_official_service_outreach()
+        self._update_guard_procurement()
         self._update_recruitment()
 
     def _update_meetings(self):
@@ -2040,6 +2372,19 @@ class CultSystem(System):
                 if not _is_living_actor(self.sim, official_eid):
                     continue
                 _try_official_service_outreach(self.sim, cult, official_eid, row)
+
+    def _update_guard_procurement(self):
+        for cult in _state(self.sim).get("cults", {}).values():
+            if not _cult_active(cult):
+                continue
+            leader_eid = _safe_int(cult.get("leader_eid"), 0)
+            leader_row = cult.setdefault("members", {}).get(str(leader_eid))
+            if isinstance(leader_row, dict) and _is_living_actor(self.sim, leader_eid):
+                _try_cult_authority_guard_purchase(self.sim, cult, leader_eid, leader_row)
+            for official_eid, row in _active_cult_rows(cult, roles=("official",)):
+                if not _is_living_actor(self.sim, official_eid):
+                    continue
+                _try_cult_authority_guard_purchase(self.sim, cult, official_eid, row)
 
     def _update_recruitment(self):
         for cult in _state(self.sim).get("cults", {}).values():
@@ -2151,9 +2496,12 @@ class CultSystem(System):
         cult["disbanded"] = True
         cult["disbanded_tick"] = _safe_int(getattr(self.sim, "tick", 0), 0)
         cult["disbanded_reason"] = _clean_text(reason)
-        channel_id = protection_channel_id_for_assignment("principal", principal_eid=cult.get("leader_eid"))
-        if channel_id:
-            fire_bodyguard_contract(self.sim, cult.get("leader_eid"), protection_channel_id=channel_id)
+        cult_id = _clean_text(cult.get("cult_id"))
+        cult_guard_eids = set(_safe_int(eid, 0) for eid in tuple(cult.get("bodyguard_eids", ()) or ()))
+        for guard_eid, rec in list(active_bodyguard_contracts(self.sim)):
+            source_id = _clean_text(rec.get("source_id"))
+            if source_id.startswith(cult_id) or _safe_int(guard_eid, 0) in cult_guard_eids:
+                fire_bodyguard_contract(self.sim, rec.get("hired_by_eid"), guard_eid=guard_eid)
         for raw_eid, member in dict(cult.get("members", {}) or {}).items():
             idx = _actor_index_row(self.sim, raw_eid)
             idx["active"] = [cid for cid in idx.get("active", []) if cid != cult.get("cult_id")]

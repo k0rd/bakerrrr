@@ -13,7 +13,11 @@ from game.economy import strongest_local_trade_pressure_for_property
 from game.incident_runtime import incident_record
 from game.meaningful_objects_runtime import meaningful_object_fixture_cue
 from game.organization_presence import format_visible_property_org_presence
-from game.organizations import local_protective_pressure_snapshot
+from game.organizations import (
+    local_protective_pressure_snapshot,
+    organization_pressure_for_property,
+    organization_pressure_summary,
+)
 from game.property_runtime import (
     building_id_from_property,
     property_display_position,
@@ -257,6 +261,7 @@ _ROW_PRIORITY_BY_SOURCE = {
     "crime_plan": 40,
     "protective_pressure": 50,
     "trade_pressure": 55,
+    "organization_pressure": 58,
 }
 
 _HIGH_URGENCY_PHASES = {"fire_response", "street_triage"}
@@ -450,6 +455,8 @@ def _row_urgency_priority(row):
         return 80
     if source_kind == "protective_pressure":
         return 90
+    if source_kind == "organization_pressure":
+        return 92
     return 60
 
 
@@ -468,6 +475,8 @@ def _row_dedupe_priority(row):
         return 80
     if source_kind == "protective_pressure":
         return 90
+    if source_kind == "organization_pressure":
+        return 92
     return 60
 
 
@@ -1064,6 +1073,42 @@ def _row_from_trade_pressure(sim, prop, pressure, *, player_pos=None, player_eid
     }
 
 
+def _row_from_organization_pressure(sim, prop, pressure, *, player_pos=None, player_eid=None):
+    if not isinstance(prop, dict) or not isinstance(pressure, dict):
+        return None
+    summary = organization_pressure_summary(pressure)
+    if not isinstance(summary, dict):
+        return None
+    anchor = property_focus_position(prop) or property_display_position(prop)
+    anchor = _anchor_tuple(anchor)
+    if anchor is None:
+        return None
+    property_id = _text(prop.get("id"))
+    return {
+        "scene_id": f"organization_pressure:{property_id}:{_text(pressure.get('pressure_key'))}",
+        "property_id": property_id,
+        "property_name": _property_name(prop),
+        "title": _text(summary.get("title")) or "Org Pressure",
+        "summary": _text(summary.get("summary")) or "an organization pressure line is visible here",
+        "action": _text(summary.get("action")) or "ask around, read the posture, or move on",
+        "event_phase": _text(pressure.get("stance")).lower() or "organization_pressure",
+        "scene_type": _text(pressure.get("pressure_kind")).lower() or "organization_pressure",
+        "traffic_state": "",
+        "community_tone": _text(pressure.get("stance")).lower(),
+        "source_kind": "organization_pressure",
+        "anchor": anchor,
+        "fixture_names": (),
+        "organization_presence": format_visible_property_org_presence(sim, prop),
+        "priority": _source_priority("organization_pressure"),
+        "organization_pressure_kind": _text(pressure.get("pressure_kind")),
+        "organization_pressure_stance": _text(pressure.get("stance")),
+        "organization_pressure_confidence": round(float(summary.get("confidence", 0.0) or 0.0), 3),
+        "organization_pressure_reasons": tuple(pressure.get("reason_tags", ()) or ()),
+        **_distance_fields(anchor, player_pos),
+        **_ownership_fields(sim, prop, player_eid=player_eid),
+    }
+
+
 def _row_dedupe_key(row):
     property_id = _text(row.get("property_id")).lower()
     if property_id:
@@ -1164,6 +1209,25 @@ def local_situation_rows(sim, player_eid=None, *, limit=4, current_chunk_only=Tr
             continue
         pressure = local_protective_pressure_snapshot(sim, prop)
         row = _row_from_protective_pressure(
+            sim,
+            prop,
+            pressure,
+            player_pos=player_pos,
+            player_eid=player_eid,
+        )
+        if row:
+            rows.append(row)
+
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict):
+            continue
+        anchor = property_focus_position(prop) or property_display_position(prop)
+        if anchor is None:
+            continue
+        if current_chunk_only and not _same_chunk(sim, player_pos, anchor):
+            continue
+        pressure = organization_pressure_for_property(sim, prop)
+        row = _row_from_organization_pressure(
             sim,
             prop,
             pressure,
@@ -1428,6 +1492,17 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
     )
     if pressure_row:
         candidates.append(pressure_row)
+
+    org_pressure = organization_pressure_for_property(sim, prop)
+    org_pressure_row = _row_from_organization_pressure(
+        sim,
+        prop,
+        org_pressure,
+        player_pos=player_pos,
+        player_eid=viewer_eid,
+    )
+    if org_pressure_row:
+        candidates.append(org_pressure_row)
 
     if property_is_storefront(prop):
         trade_pressure = strongest_local_trade_pressure_for_property(sim, prop, min_abs=3.0)

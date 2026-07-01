@@ -1413,7 +1413,7 @@ class RenderSystem(System):
             break
         return visible_lines
 
-    def _draw(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None):
+    def _draw(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None, light_tint=None):
         kwargs = {"attrs": int(attrs or 0)}
         if color is not None:
             kwargs["color"] = color
@@ -1427,11 +1427,20 @@ class RenderSystem(System):
             kwargs["layer"] = layer
         if priority is not None:
             kwargs["priority"] = int(priority)
+        if isinstance(light_tint, dict) and light_tint:
+            kwargs["light_tint"] = light_tint
         try:
             self.view.draw(x, y, glyph, **kwargs)
             return
         except TypeError:
-            pass
+            if "light_tint" in kwargs:
+                retry_kwargs = dict(kwargs)
+                retry_kwargs.pop("light_tint", None)
+                try:
+                    self.view.draw(x, y, glyph, **retry_kwargs)
+                    return
+                except TypeError:
+                    pass
 
         if color is None:
             try:
@@ -1446,7 +1455,7 @@ class RenderSystem(System):
         except TypeError:
             self.view.draw(x, y, glyph)
 
-    def _draw_appearance(self, x, y, appearance, attrs=0):
+    def _draw_appearance(self, x, y, appearance, attrs=0, light_tint=None):
         if not appearance or not bool(getattr(appearance, "visible", True)):
             return
         self._draw(
@@ -1460,6 +1469,7 @@ class RenderSystem(System):
             overlays=getattr(appearance, "overlays", ()),
             layer=getattr(appearance, "layer", None),
             priority=getattr(appearance, "priority", None),
+            light_tint=light_tint,
         )
 
     def _draw_vision_scene(self, scene, screen_w, screen_h):
@@ -2212,6 +2222,32 @@ class RenderSystem(System):
                 return
             light_tint_drawer(sx, sy, tint, layer="fx", priority=-900)
 
+        def _surface_light_tint(wx, wy, z):
+            sample = _ambient_sample(wx, wy, z)
+            tint = sample.get("light_tint") if isinstance(sample, dict) else None
+            if not isinstance(tint, dict):
+                return None
+            try:
+                strength = float(tint.get("strength", 0.0) or 0.0)
+                outside = float(sample.get("outside_ambient", 1.0) or 1.0)
+            except (TypeError, ValueError):
+                return None
+            if strength <= 0.0:
+                return None
+            profile = str(tint.get("profile", "") or "").strip().lower()
+            vivid_profiles = {"casino_neon", "fire_orange", "emergency_red", "headlight_white", "ritual_violet"}
+            if bool(sample.get("inside")) or profile in vivid_profiles:
+                scale = 1.18
+            else:
+                scale = max(0.42, 1.15 - (0.62 * max(0.0, min(1.0, outside))))
+            surface_strength = max(0.0, min(1.0, strength * scale))
+            if surface_strength <= 0.035:
+                return None
+            surface_tint = dict(tint)
+            surface_tint["strength"] = round(float(surface_strength), 4)
+            surface_tint["surface_light"] = True
+            return surface_tint
+
         def _draw_dream_residue_overlay():
             residue = dream_residue_state(self.sim)
             if not isinstance(residue, dict) or not callable(light_tint_drawer):
@@ -2784,7 +2820,13 @@ class RenderSystem(System):
                     effects=data.get("effects", ()),
                 )
                 attrs = _ambient_attr(wx, wy, active_z)
-                self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
+                self._draw_appearance(
+                    screen_x,
+                    screen_y,
+                    appearance,
+                    attrs=attrs,
+                    light_tint=_surface_light_tint(wx, wy, active_z),
+                )
 
             active_quest_target = active_final_operation_target_property_id(self.sim)
 
@@ -2830,7 +2872,13 @@ class RenderSystem(System):
                     attrs = _ambient_attr(display_pos[0], display_pos[1], active_z)
                 else:
                     attrs = A_DIM
-                self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
+                self._draw_appearance(
+                    screen_x,
+                    screen_y,
+                    appearance,
+                    attrs=attrs,
+                    light_tint=_surface_light_tint(display_pos[0], display_pos[1], active_z) if visible_now else None,
+                )
 
             for ground in self.sim.ground_items.values():
                 if ground["z"] != active_z:
@@ -2847,7 +2895,13 @@ class RenderSystem(System):
                 item_def = ITEM_CATALOG.get(ground["item_id"], {})
                 appearance = self.sim.appearance.item(item_def)
                 attrs = A_BOLD | _ambient_attr(ground["x"], ground["y"], active_z)
-                self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
+                self._draw_appearance(
+                    screen_x,
+                    screen_y,
+                    appearance,
+                    attrs=attrs,
+                    light_tint=_surface_light_tint(ground["x"], ground["y"], active_z),
+                )
 
             for record in tuple(getattr(self.sim, "hunting_carcasses", {}).values()):
                 if bool(record.get("harvested")):
@@ -2876,7 +2930,7 @@ class RenderSystem(System):
                     priority=40,
                 )
                 attrs = A_BOLD | _ambient_attr(wx, wy, active_z)
-                self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
+                self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs, light_tint=_surface_light_tint(wx, wy, active_z))
 
             for projectile in self.sim.projectiles.values():
                 if projectile.get("z") != active_z:
@@ -2898,6 +2952,7 @@ class RenderSystem(System):
                     screen_y,
                     appearance,
                     attrs=_ambient_attr(wx, wy, active_z),
+                    light_tint=_surface_light_tint(wx, wy, active_z),
                 )
 
             for coord, cell in tuple(fire_state(self.sim).get("cells", {}).items()):
@@ -2999,6 +3054,7 @@ class RenderSystem(System):
                     screen_y,
                     appearance,
                     attrs=attrs,
+                    light_tint=_surface_light_tint(_pos.x, _pos.y, _pos.z),
                 )
 
             radio_scan = getattr(self.sim, "world_traits", {}).get("justice_radio_scan", {})

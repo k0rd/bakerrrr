@@ -234,6 +234,7 @@ PROPERTY_FIXTURE_SEMANTICS = {
     "transformer": "prop_cover_transformer",
     "field_cache_box": "prop_cover_cache",
     "water_tank": "prop_cover_tank",
+    "campfire_ring": "prop_campfire_ring",
 }
 
 SPECIAL_TILE_RENDER_STYLES = {
@@ -728,6 +729,7 @@ def _actor_outfit_color_overlays(render_colors):
         return ()
     overlays = []
     rows = (
+        ("inner", "ui_actor_outfit_inner"),
         ("secondary", "ui_actor_outfit_secondary"),
         ("footwear", "ui_actor_outfit_footwear"),
         ("headwear", "ui_actor_outfit_headwear"),
@@ -736,6 +738,8 @@ def _actor_outfit_color_overlays(render_colors):
     for role, semantic_id in rows:
         color = str(render_colors.get(role) or "").strip()
         if not color:
+            continue
+        if role == "inner" and color == str(render_colors.get("primary") or "").strip():
             continue
         overlays.append({
             "glyph": " ",

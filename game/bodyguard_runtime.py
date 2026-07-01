@@ -20,6 +20,7 @@ from game.components import (
     Inventory,
     NPCSocial,
     NPCWill,
+    Occupation,
     PlayerAssets,
     Position,
     Vitality,
@@ -58,6 +59,17 @@ BODYGUARD_RING_DISTANCES = {
     3: 9,
 }
 BODYGUARD_MAX_CHANNEL_GUARDS = sum(BODYGUARD_RING_CAPACITY.values())
+BODYGUARD_NPC_DEMAND_INTERVAL = 211
+_BODYGUARD_REASON_TOKENS = (
+    "celebrity",
+    "politician",
+    "mayor",
+    "council",
+    "executive",
+    "vip",
+    "boss",
+    "magnate",
+)
 
 
 def _int_or_none(value):
@@ -381,7 +393,7 @@ def _expanded_property_guard_candidates(sim, prop, *, ring=1):
     return candidates
 
 
-def _property_guard_points(sim, prop, count=1, *, ring=1):
+def _property_guard_points(sim, prop, count=1, *, ring=1, inside=False):
     x, y, z = _prop_focus(prop)
     metadata = prop.get("metadata", {}) if isinstance(prop, dict) and isinstance(prop.get("metadata"), dict) else {}
     points = []
@@ -397,18 +409,38 @@ def _property_guard_points(sim, prop, count=1, *, ring=1):
             if ex is None or ey is None or ez is None:
                 continue
             for nx, ny, nz in ((ex, ey - 1, ez), (ex, ey + 1, ez), (ex - 1, ey, ez), (ex + 1, ey, ez), (ex, ey, ez)):
-                if property_covering(sim, nx, ny, nz) is prop:
+                in_prop = property_covering(sim, nx, ny, nz) is prop
+                if bool(inside) != bool(in_prop):
                     continue
                 if _walkable(sim, nx, ny, nz):
                     points.append((nx, ny, nz))
                     break
     near_points = ((x, y + 1, z), (x + 1, y, z), (x - 1, y, z), (x, y - 1, z), (x + 1, y + 1, z), (x - 1, y + 1, z))
     for nx, ny, nz in (near_points if ring == 1 else ()):
-        if property_covering(sim, nx, ny, nz) is prop:
+        in_prop = property_covering(sim, nx, ny, nz) is prop
+        if bool(inside) != bool(in_prop):
             continue
         if _walkable(sim, nx, ny, nz):
             points.append((nx, ny, nz))
+    if ring == 1 and inside:
+        cells = metadata.get("footprint_cells")
+        cell_points = []
+        if isinstance(cells, (list, tuple)):
+            for cell in cells:
+                if not isinstance(cell, dict):
+                    continue
+                cx = _int_or_none(cell.get("x"))
+                cy = _int_or_none(cell.get("y"))
+                cz = _int_or_none(cell.get("z", z))
+                if cx is None or cy is None or cz is None:
+                    continue
+                if property_covering(sim, cx, cy, cz) is prop and _walkable(sim, cx, cy, cz):
+                    cell_points.append((cx, cy, cz))
+        cell_points.sort(key=lambda point: (_manhattan(point[0], point[1], x, y), point[1], point[0]))
+        points.extend(cell_points)
     for nx, ny, nz in _expanded_property_guard_candidates(sim, prop, ring=ring):
+        if ring == 1 and inside:
+            continue
         if property_covering(sim, nx, ny, nz) is prop:
             continue
         if _walkable(sim, nx, ny, nz):
@@ -823,6 +855,54 @@ def _same_eid(a, b):
     return a == b
 
 
+def _bodyguard_runtime_state(sim):
+    state = getattr(sim, "bodyguard_runtime", None)
+    if not isinstance(state, dict):
+        state = {}
+        setattr(sim, "bodyguard_runtime", state)
+    state.setdefault("high_profile_seeded", {})
+    state.setdefault("npc_demand_cooldowns", {})
+    return state
+
+
+def _property_is_bodyguard_provider(prop):
+    if not isinstance(prop, dict):
+        return False
+    metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+    archetype = _clean_key(metadata.get("archetype") or prop.get("archetype"))
+    if archetype in {"contractor_office", "bounty_office"}:
+        return True
+    services = metadata.get("site_services") or metadata.get("services") or ()
+    if isinstance(services, str):
+        services = (services,)
+    return BODYGUARD_SERVICE_ID in {_clean_key(service) for service in tuple(services or ())}
+
+
+def _nearest_bodyguard_provider(sim, pos, *, max_distance=42):
+    if pos is None:
+        return None
+    candidates = []
+    for prop in tuple(getattr(sim, "properties", {}).values()):
+        if not _property_is_bodyguard_provider(prop):
+            continue
+        px, py, pz = _prop_focus(prop)
+        if int(pz) != int(getattr(pos, "z", 0)):
+            continue
+        distance = _manhattan(int(getattr(pos, "x", 0)), int(getattr(pos, "y", 0)), int(px), int(py))
+        if distance <= int(max_distance):
+            candidates.append((distance, _clean_text(prop.get("id")), prop))
+    return sorted(candidates, key=lambda row: (row[0], row[1]))[0][2] if candidates else None
+
+
+def _actor_bodyguard_reason(sim, eid):
+    ai = sim.ecs.get(AI).get(eid)
+    occupation = sim.ecs.get(Occupation).get(eid)
+    text = f"{getattr(ai, 'role', '')} {getattr(occupation, 'career', '')}".lower()
+    if any(token in text for token in _BODYGUARD_REASON_TOKENS):
+        return "high_profile"
+    return ""
+
+
 class BodyguardSystem(System):
     """Owns bodyguard warning, perimeter, and protective force decisions."""
 
@@ -838,6 +918,59 @@ class BodyguardSystem(System):
         if tick % BODYGUARD_UPDATE_INTERVAL != 0:
             return
         self._tick_bodyguards()
+        if tick % BODYGUARD_NPC_DEMAND_INTERVAL == 0:
+            self._tick_npc_bodyguard_demand()
+
+    def _tick_npc_bodyguard_demand(self):
+        state = _bodyguard_runtime_state(self.sim)
+        seeded = state.setdefault("high_profile_seeded", {})
+        cooldowns = state.setdefault("npc_demand_cooldowns", {})
+        tick = _safe_int(getattr(self.sim, "tick", 0), 0)
+        for eid, pos in list(self.sim.ecs.get(Position).items()):
+            if _same_eid(eid, getattr(self.sim, "player_eid", None)) or not _is_living_actor(self.sim, eid):
+                continue
+            if active_bodyguard_contracts(self.sim, assignment_kind="principal", principal_eid=eid):
+                continue
+            reason = _actor_bodyguard_reason(self.sim, eid)
+            if not reason:
+                continue
+            key = str(eid)
+            if _safe_int(cooldowns.get(key), 0) > tick:
+                continue
+            if not seeded.get(key):
+                rng = random.Random(f"{getattr(self.sim, 'seed', 0)}:bodyguard-high-profile:{eid}")
+                if rng.random() < 0.18:
+                    result = create_bodyguard_detail_for_principal(
+                        self.sim,
+                        eid,
+                        None,
+                        count=1,
+                        tier="solo",
+                        hired_by_eid=eid,
+                        source_kind="high_profile",
+                        source_id=reason,
+                    )
+                    seeded[key] = {"tick": tick, "reason": reason, "ok": bool(result.get("ok"))}
+                    cooldowns[key] = tick + 2400
+                    continue
+                seeded[key] = {"tick": tick, "reason": reason, "ok": False}
+            provider = _nearest_bodyguard_provider(self.sim, pos, max_distance=36)
+            if not isinstance(provider, dict):
+                cooldowns[key] = tick + 900
+                continue
+            current_prop = property_covering(self.sim, pos.x, pos.y, pos.z)
+            if current_prop is provider:
+                assets = self.sim.ecs.get(PlayerAssets).get(eid)
+                if assets and int(getattr(assets, "credits", 0) or 0) >= int(BODYGUARD_TIER_PROFILES["solo"]["cost"]):
+                    hire_bodyguard_contract(self.sim, eid, provider, tier="solo", assignment_kind="principal", principal_eid=eid)
+                cooldowns[key] = tick + 2400
+                continue
+            ai = self.sim.ecs.get(AI).get(eid)
+            will = self.sim.ecs.get(NPCWill).get(eid)
+            if ai is not None:
+                _sync_ai_intent(ai, will, tick, "bodyguard_procurement", score=34.0, target=_prop_focus(provider), target_eid=None)
+                mark_actor_urgent(self.sim, eid, reason="bodyguard_procurement", ttl_ticks=90)
+            cooldowns[key] = tick + 360
 
     def _tick_bodyguards(self):
         for guard_eid, rec in list(active_bodyguard_contracts(self.sim)):
@@ -869,7 +1002,7 @@ class BodyguardSystem(System):
                 return None
             principal_prop = property_covering(self.sim, principal_pos.x, principal_pos.y, principal_pos.z)
             if principal_prop is not None:
-                points = _property_guard_points(self.sim, principal_prop, count=max(1, ring_count), ring=ring)
+                points = _property_guard_points(self.sim, principal_prop, count=max(1, ring_count), ring=ring, inside=False)
                 point = points[slot % len(points)]
                 return {"kind": "principal_inside", "point": point, "principal_pos": principal_pos, "property": principal_prop, "ring": ring}
             point = _principal_guard_point(self.sim, principal_pos, ring=ring, slot=slot)
@@ -877,7 +1010,7 @@ class BodyguardSystem(System):
         prop = self.sim.properties.get(rec.get("property_id"))
         if not isinstance(prop, dict):
             return None
-        points = _property_guard_points(self.sim, prop, count=max(1, ring_count), ring=ring)
+        points = _property_guard_points(self.sim, prop, count=max(1, ring_count), ring=ring, inside=(ring == 1))
         point = points[slot % len(points)]
         rec["guard_point"] = point
         return {"kind": "property", "point": tuple(point[:3]), "property": prop, "ring": ring}
@@ -923,6 +1056,9 @@ class BodyguardSystem(System):
             if self._interior_activity_outside_contract(guard_pos, other_pos, rec, target):
                 continue
             danger = self._actor_is_overt_threat(other_eid, rec)
+            property_target = target.get("kind") == "property"
+            if property_target and not danger and not self._actor_known_hostile_to_property(other_eid, rec, target):
+                continue
             self._warn_or_escalate(guard_eid, rec, other_eid, danger=danger, property_target=target.get("kind") != "principal_outside")
 
     def _guard_can_see(self, guard_pos, other_pos):
@@ -986,6 +1122,27 @@ class BodyguardSystem(System):
         weapon = self.sim.ecs.get(WeaponLoadout).get(actor_eid)
         if weapon and getattr(weapon, "equipped_weapon_id", None):
             return True
+        return False
+
+    def _actor_known_hostile_to_property(self, actor_eid, rec, target):
+        prop = target.get("property") if isinstance(target, dict) else None
+        owner_eid = prop.get("owner_eid") if isinstance(prop, dict) else None
+        if owner_eid is None:
+            owner_eid = rec.get("hired_by_eid")
+        owner = _int_or_none(owner_eid)
+        actor = _int_or_none(actor_eid)
+        if owner is None or actor is None:
+            return False
+        for source, other in ((owner, actor), (actor, owner)):
+            social = self.sim.ecs.get(NPCSocial).get(source)
+            bond = social.bonds.get(other) if social else None
+            if not isinstance(bond, dict):
+                continue
+            kind = _clean_key(bond.get("kind"))
+            trust = float(bond.get("trust", 0.0) or 0.0)
+            closeness = float(bond.get("closeness", 0.0) or 0.0)
+            if kind in {"hostile", "enemy", "threat", "rival"} or trust < -0.15 or closeness < -0.15:
+                return True
         return False
 
     def _warn_or_escalate(self, guard_eid, rec, subject_eid, *, danger=False, property_target=False):

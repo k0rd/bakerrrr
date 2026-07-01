@@ -9,7 +9,7 @@ from game.appearance_palette import (
     choose_appearance_color_word,
     render_key_for_color_word,
 )
-from game.components import AppearanceLoadout, ArmorLoadout, CreatureIdentity, Inventory
+from game.components import AI, AppearanceLoadout, ArmorLoadout, CreatureIdentity, Inventory, Occupation
 from game.human_description import build_human_description_profile, human_self_physical_summary, human_render_color_key
 from game.human_identity import pronoun_format_slots
 from game.item_semantics import item_display_name_for_actor
@@ -363,60 +363,60 @@ NPC_DESCRIBED_OUTFIT_METADATA_KEY = "npc_described_outfit"
 NPC_DESCRIBED_OUTFIT_SOURCE = "seeded_description_outfit"
 NPC_DESCRIPTION_COLOR_BUCKETS = {
     "human_charcoal": {
-        "outer": ("charcoal", "black", "slate"),
-        "top": ("gray", "smoke", "white"),
-        "bottom": ("charcoal", "black", "slate"),
-        "shoes": ("black", "charcoal"),
-        "accessory": ("silver", "steel", "onyx"),
+        "outer": ("charcoal", "black", "slate", "smoke", "violet"),
+        "top": ("slate", "gray", "smoke", "lavender", "periwinkle", "rose", "white"),
+        "bottom": ("charcoal", "black", "slate", "plum", "navy"),
+        "shoes": ("black", "charcoal", "slate", "smoke", "purple"),
+        "accessory": ("silver", "steel", "onyx", "lavender", "cobalt"),
     },
     "human_olive": {
-        "outer": ("olive", "moss", "brown"),
-        "top": ("tan", "cream", "khaki"),
-        "bottom": ("brown", "olive", "moss"),
-        "shoes": ("brown", "black"),
-        "accessory": ("brass", "copper", "bronze"),
+        "outer": ("olive", "green", "moss", "forest", "sage", "mint"),
+        "top": ("green", "olive", "sage", "mint", "lime", "cream", "peach"),
+        "bottom": ("brown", "olive", "moss", "forest", "khaki", "sage"),
+        "shoes": ("brown", "olive", "moss", "tan", "green", "black"),
+        "accessory": ("brass", "copper", "bronze", "mint", "gold"),
     },
     "human_denim": {
-        "outer": ("denim", "slate", "blue"),
-        "top": ("gray", "ash", "white"),
-        "bottom": ("denim", "slate", "navy"),
-        "shoes": ("black", "charcoal", "brown"),
-        "accessory": ("steel", "silver", "onyx"),
+        "outer": ("denim", "blue", "cerulean", "slate"),
+        "top": ("blue", "sky", "aqua", "turquoise", "periwinkle", "ash", "white"),
+        "bottom": ("denim", "blue", "navy", "slate", "cerulean"),
+        "shoes": ("black", "denim", "navy", "blue", "aqua", "charcoal"),
+        "accessory": ("steel", "silver", "onyx", "aqua", "cobalt"),
     },
     "human_accent": {
-        "outer": ("charcoal", "black", "rust"),
-        "top": ("cream", "white", "gold"),
-        "bottom": ("black", "slate", "charcoal"),
-        "shoes": ("black", "charcoal"),
-        "accessory": ("gold", "cobalt", "coral", "brass"),
+        "outer": ("cobalt", "teal", "coral", "violet", "pink", "orange", "charcoal"),
+        "top": ("cobalt", "coral", "violet", "gold", "teal", "pink", "magenta", "white"),
+        "bottom": ("black", "slate", "charcoal", "cobalt", "purple", "magenta"),
+        "shoes": ("black", "charcoal", "cobalt", "white", "red", "pink", "orange"),
+        "accessory": ("gold", "cobalt", "coral", "violet", "pink", "brass"),
     },
     "human_monochrome": {
-        "outer": ("black", "charcoal", "gray"),
-        "top": ("white", "ivory", "gray"),
-        "bottom": ("black", "gray", "charcoal"),
-        "shoes": ("black", "gray"),
-        "accessory": ("silver", "steel", "onyx"),
+        "outer": ("black", "charcoal", "gray", "ash", "lavender"),
+        "top": ("white", "ivory", "gray", "ash", "lavender", "peach"),
+        "bottom": ("black", "gray", "charcoal", "ash"),
+        "shoes": ("black", "gray", "white", "charcoal", "silver"),
+        "accessory": ("silver", "steel", "onyx", "ivory", "lavender"),
     },
     "human_rust": {
-        "outer": ("rust", "brown", "copper"),
-        "top": ("cream", "tan", "ivory"),
-        "bottom": ("brown", "smoke", "rust"),
-        "shoes": ("brown", "black"),
-        "accessory": ("copper", "brass", "bronze"),
+        "outer": ("rust", "copper", "orange", "brown", "amber"),
+        "top": ("rust", "amber", "orange", "coral", "salmon", "peach", "cream"),
+        "bottom": ("brown", "rust", "copper", "smoke", "maroon"),
+        "shoes": ("brown", "rust", "copper", "tan", "orange", "black"),
+        "accessory": ("copper", "brass", "bronze", "coral", "amber"),
     },
     "human_slate": {
-        "outer": ("slate", "navy", "blue"),
-        "top": ("sky", "ash", "gray"),
-        "bottom": ("navy", "denim", "slate"),
-        "shoes": ("black", "charcoal"),
-        "accessory": ("steel", "silver", "blue"),
+        "outer": ("slate", "blue", "navy", "cerulean", "periwinkle"),
+        "top": ("sky", "blue", "cerulean", "periwinkle", "aqua", "lavender", "ash"),
+        "bottom": ("navy", "denim", "slate", "blue", "indigo"),
+        "shoes": ("black", "navy", "slate", "blue", "cerulean", "charcoal"),
+        "accessory": ("steel", "silver", "blue", "cobalt", "periwinkle"),
     },
     "human_wine": {
-        "outer": ("wine", "burgundy", "charcoal"),
-        "top": ("cream", "ivory", "pink"),
-        "bottom": ("black", "wine", "charcoal"),
-        "shoes": ("black", "brown"),
-        "accessory": ("brass", "gold", "copper"),
+        "outer": ("wine", "burgundy", "maroon", "plum", "charcoal"),
+        "top": ("wine", "rose", "pink", "burgundy", "lilac", "magenta", "ivory"),
+        "bottom": ("black", "wine", "burgundy", "charcoal", "plum", "purple"),
+        "shoes": ("black", "wine", "burgundy", "brown", "plum", "rose"),
+        "accessory": ("brass", "gold", "copper", "rose", "lilac"),
     },
 }
 NPC_DESCRIPTION_ATTIRE_ITEMS = {
@@ -871,7 +871,22 @@ def _starter_outfit_color(sim, eid, identity, rng):
     return rng.choice(tuple(options))
 
 
-def _description_color_for(profile, slot, rng, item_id=""):
+NPC_BODYGUARD_COLOR_BUCKETS = {
+    "outer": ("black", "charcoal", "onyx", "navy", "slate", "forest"),
+    "top": ("black", "charcoal", "smoke", "slate", "olive", "gray"),
+    "bottom": ("black", "charcoal", "navy", "slate", "forest"),
+    "shoes": ("black", "charcoal", "onyx", "navy"),
+    "accessory": ("steel", "silver", "onyx"),
+}
+
+
+def _description_color_for(profile, slot, rng, item_id="", role="", career=""):
+    role_key = _key(role)
+    career_key = _key(career)
+    if role_key == "guard" and "bodyguard" in career_key:
+        bucket_key = "accessory" if slot in {"hat", "earrings", "necklace", "bracelet", "ring_left", "ring_right"} else slot
+        options = tuple(NPC_BODYGUARD_COLOR_BUCKETS.get(bucket_key) or NPC_BODYGUARD_COLOR_BUCKETS.get("top") or ("charcoal",))
+        return rng.choice(options)
     render_key = _key((profile or {}).get("render_color_key")) or "human_charcoal"
     buckets = NPC_DESCRIPTION_COLOR_BUCKETS.get(render_key, NPC_DESCRIPTION_COLOR_BUCKETS["human_charcoal"])
     bucket_key = "accessory" if slot in {"hat", "earrings", "necklace", "bracelet", "ring_left", "ring_right"} else slot
@@ -946,6 +961,10 @@ def seed_npc_described_outfit(sim, eid, *, seed_token=""):
             item_ids.append(item_id)
 
     rng = random.Random(f"npc-described-outfit:{getattr(sim, 'seed', 0)}:{eid}:{seed_token}:{profile.get('seed_token')}")
+    ai = sim.ecs.get(AI).get(eid) if sim is not None else None
+    occupation = sim.ecs.get(Occupation).get(eid) if sim is not None else None
+    role = _key(getattr(ai, "role", ""))
+    career = _key(getattr(occupation, "career", ""))
     seeded = []
     for item_id in item_ids:
         item_id = _key(item_id)
@@ -959,7 +978,7 @@ def seed_npc_described_outfit(sim, eid, *, seed_token=""):
             continue
         if any(loadout.slots.get(conflict) for conflict in _slot_conflicts(slot)):
             continue
-        color = _description_color_for(profile, slot, rng, item_id=item_id)
+        color = _description_color_for(profile, slot, rng, item_id=item_id, role=role, career=career)
         metadata = _description_item_metadata(
             item_id,
             color=color,
@@ -1872,6 +1891,7 @@ def appearance_render_colors(sim, eid):
     result = {
         "dominant": None,
         "primary": None,
+        "inner": None,
         "secondary": None,
         "footwear": None,
         "headwear": None,
@@ -1883,6 +1903,7 @@ def appearance_render_colors(sim, eid):
         return result
     parts = {
         "primary": _first_appearance_render_color_part(sim, eid, ("outer", "full_body", "top")),
+        "inner": _first_appearance_render_color_part(sim, eid, ("full_body", "top")),
         "secondary": _first_appearance_render_color_part(sim, eid, ("bottom",)),
         "footwear": _first_appearance_render_color_part(sim, eid, ("shoes",)),
         "headwear": _first_appearance_render_color_part(sim, eid, ("hat",)),
@@ -1896,7 +1917,7 @@ def appearance_render_colors(sim, eid):
         if not part:
             continue
         result[role] = part["render_key"]
-    for role in ("primary", "secondary", "footwear", "headwear", "accessory"):
+    for role in ("primary", "inner", "secondary", "footwear", "headwear", "accessory"):
         if result.get(role):
             result["dominant"] = result[role]
             break
