@@ -22,6 +22,7 @@ from game.property_runtime import (
     property_metadata,
     site_services_for_property,
 )
+from game.property_access import property_access_controller
 from game.semantic_catalog import get_runtime_semantic_catalog
 from game.object_profile_runtime import (
     object_profile_effects,
@@ -486,6 +487,36 @@ def _property_access_badge_overlay(prop):
         return ({"glyph": "+", "color": "property_service", "semantic_id": "ui_property_public"},)
 
     return ()
+
+
+def _property_open_status_overlay(sim, prop):
+    if sim is None or not isinstance(prop, dict):
+        return ()
+
+    metadata = property_metadata(prop)
+    kind = str(prop.get("kind", "building") or "building").strip().lower() or "building"
+    if kind != "building":
+        return ()
+
+    service_facing = bool(
+        property_is_storefront(prop)
+        or finance_services_for_property(prop)
+        or site_services_for_property(prop)
+        or _truthy_metadata_flag(metadata, "is_storefront")
+    )
+    if not service_facing:
+        return ()
+
+    try:
+        controller = property_access_controller(sim, prop)
+    except (AttributeError, TypeError, ValueError):
+        return ()
+    open_now = controller.get("open_now")
+    if open_now is None:
+        return ()
+    if bool(open_now):
+        return ({"glyph": ".", "color": "property_service", "semantic_id": "ui_property_open"},)
+    return ({"glyph": ".", "color": "projectile", "semantic_id": "ui_property_closed"},)
 
 
 def _owner_appearance(owner, fallback_glyph="?"):
@@ -1021,7 +1052,7 @@ def tile_render_snapshot(sim, tile, x, y, z=0, revealed_building_id="", catalog=
     return _merge_snapshots(base, explicit)
 
 
-def property_render_snapshot(prop, active_quest_target=None, catalog=None):
+def property_render_snapshot(prop, active_quest_target=None, catalog=None, sim=None):
     catalog = catalog or get_runtime_semantic_catalog()
     if not isinstance(prop, dict):
         return _semantic_snapshot(
@@ -1057,7 +1088,11 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None):
     glyph = str(explicit_glyph or default_glyph)[:1] or "P"
     color = str(explicit_color or default_color or "property_building")
     semantic_id = None
-    overlays = tuple(_property_cover_overlays(prop)) + tuple(_property_access_badge_overlay(prop))
+    overlays = (
+        tuple(_property_cover_overlays(prop))
+        + tuple(_property_access_badge_overlay(prop))
+        + tuple(_property_open_status_overlay(sim, prop))
+    )
     if kind == "vehicle":
         quality = str(metadata.get("vehicle_quality", "used")).strip().lower()
         paint_color = str(metadata.get("vehicle_paint", "")).strip()
@@ -1379,6 +1414,7 @@ class AppearanceManager:
             prop,
             active_quest_target=active_quest_target,
             catalog=self.catalog,
+            sim=self.sim,
         )
 
     def item(self, item_def, *, metadata=None):

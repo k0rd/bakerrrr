@@ -11,6 +11,7 @@ from game.components import (
     PlayerAssets,
     SkillProfile,
     StatusEffects,
+    VehicleState,
     Vitality,
     WeaponLoadout,
 )
@@ -19,10 +20,12 @@ from game.flora_runtime import load_flora_catalog
 from game.human_identity import normalize_gender_identity, pronoun_display_text
 from game.herbal_chemistry_runtime import known_plant_traits_for_actor, known_recipes_for_actor, load_herbal_recipe_catalog
 from game.items import item_display_name
+from game.property_runtime import property_is_vehicle, vehicle_fuel_values, vehicle_label, vehicle_profile_from_property
 from game.run_pressure import pressure_snapshot
 from game.skill_ui import skill_birth_debug_line, skill_change_reason_label
 from game.skills import ALL_SKILL_IDS, actor_skill, profile_neglect_pressure, profile_recent_skill_changes, skill_label
 from game.status_ui_runtime import _survival_indicator_chunks
+from game.vehicle_motion import vehicle_heading_label, vehicle_top_speed
 from game.weapons import weapon_by_id
 
 
@@ -253,6 +256,12 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     armor = ecs.get(ArmorLoadout).get(player_eid)
     status_effects = ecs.get(StatusEffects).get(player_eid)
     identity = ecs.get(CreatureIdentity).get(player_eid)
+    vehicle_state = ecs.get(VehicleState).get(player_eid)
+    active_vehicle_prop = None
+    if vehicle_state and getattr(vehicle_state, "active_vehicle_id", None):
+        maybe_vehicle = getattr(sim, "properties", {}).get(vehicle_state.active_vehicle_id)
+        if property_is_vehicle(maybe_vehicle):
+            active_vehicle_prop = maybe_vehicle
 
     pressure = pressure_snapshot(sim)
     credits = int(getattr(assets, "credits", 0) or 0)
@@ -366,6 +375,27 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     if inventory is not None:
         loadout_lines.append(f"Inventory slots {inventory.slot_count()}/{int(getattr(inventory, 'capacity', 0) or 0)}")
     loadout_lines.append(f"Active effects {_active_status_text(status_effects, duration_label_fn=duration_label_fn, sim=sim)}")
+    if active_vehicle_prop:
+        profile = vehicle_profile_from_property(active_vehicle_prop)
+        fuel, fuel_capacity = vehicle_fuel_values(active_vehicle_prop)
+        vehicle_mode = "driving" if bool(getattr(vehicle_state, "in_vehicle", False)) else "parked"
+        vehicle_quality = str(profile.get("quality", "used")).strip() or "used"
+        vehicle_class = str(profile.get("vehicle_class", "vehicle")).replace("_", " ").strip() or "vehicle"
+        speed = int(getattr(vehicle_state, "speed", 0) or 0)
+        headlights = "on" if bool(getattr(vehicle_state, "headlights_on", True)) else "off"
+        loadout_lines.extend([
+            "",
+            "VEHICLE",
+            f"{vehicle_label(active_vehicle_prop)} | {vehicle_mode} | {vehicle_quality} {vehicle_class}",
+            (
+                f"Fuel {fuel}/{fuel_capacity} | Speed {speed}/{vehicle_top_speed(active_vehicle_prop)} | "
+                f"Heading {vehicle_heading_label(vehicle_state)} | Headlights {headlights}"
+            ),
+            (
+                f"Power {int(profile.get('power', 5))} | Durability {int(profile.get('durability', 5))} | "
+                f"Efficiency {int(profile.get('fuel_efficiency', 5))}"
+            ),
+        ])
 
     appearance_lines = [
         "APPEARANCE",

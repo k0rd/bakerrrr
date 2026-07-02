@@ -24,14 +24,12 @@ from game.components import (
     ArmorLoadout,
     Collider,
     ContactLedger,
-    CoreStats,
     CoverState,
     CreatureIdentity,
     DoorWaitState,
     EcologyProfile,
     FinancialProfile,
     HumanWildlifePresence,
-    InsightStats,
     Inventory,
     ItemUseProfile,
     JusticeProfile,
@@ -184,8 +182,6 @@ from game.property_runtime import (
     site_services_for_property as _site_services_for_property,
     storefront_service_mode as _storefront_service_mode,
     vehicle_fuel_values as _vehicle_fuel_values,
-    vehicle_label as _vehicle_label,
-    vehicle_profile_from_property as _vehicle_profile_from_property,
     viewer_property_credential_status as _viewer_property_credential_status,
     viewer_revealed_building_id as _viewer_revealed_building_id,
 )
@@ -246,6 +242,7 @@ from game.service_runtime import (
     _overworld_discovery_summary_bits,
     _overworld_legend_line,
     _overworld_travel_profile,
+    _overworld_travel_tax_text,
     _overworld_travel_summary_bits,
     _service_menu_option_label,
     _site_service_label,
@@ -263,7 +260,6 @@ from game.vehicle_motion import (
     ensure_vehicle_motion_state,
     vehicle_heading_glyph,
     vehicle_heading_label,
-    vehicle_top_speed,
 )
 
 
@@ -496,17 +492,63 @@ def _hud_line_is_read(line):
     return text.startswith("read:") or text.startswith("read ")
 
 
-_HUD_WEAPON_LABEL_WIDTH = 18
-_HUD_ARMOR_LABEL_WIDTH = 14
-_HUD_VEHICLE_LABEL_WIDTH = 20
+def _hud_weapon_role(weapon):
+    tags = {str(tag).strip().lower() for tag in (weapon or {}).get("tags", ()) if str(tag).strip()}
+    if "melee" in tags:
+        return "Melee"
+    if "launcher" in tags or "explosive" in tags:
+        return "Launcher"
+    if "shotgun" in tags:
+        return "Shotgun"
+    if "smg" in tags:
+        return "SMG"
+    if "rifle" in tags or "carbine" in tags or "precision" in tags:
+        return "Rifle"
+    if "handgun" in tags or "pistol" in tags or "revolver" in tags:
+        return "Pistol"
+    return "Ranged"
 
 
-def _hud_compact_label(text, width):
-    text = " ".join(str(text or "").strip().split())
-    if not text:
-        return ""
-    clipped = _clip_display_line(text, max(1, int(width)))
-    return _line_text(clipped)
+def _hud_weapon_damage(weapon, instance):
+    try:
+        base_damage = float((weapon or {}).get("base_damage", 1))
+    except (TypeError, ValueError):
+        base_damage = 1.0
+    try:
+        damage_mult = float((instance or {}).get("damage_mult", 1.0))
+    except (TypeError, ValueError):
+        damage_mult = 1.0
+    return int(max(1, round(base_damage * damage_mult)))
+
+
+def _hud_weapon_summary(loadout):
+    if not loadout or not loadout.current_weapon():
+        return "Weapon none"
+    weapon_id = loadout.current_weapon()
+    weapon = weapon_by_id(weapon_id)
+    instance = loadout.weapon_instance(weapon_id)
+    role = _hud_weapon_role(weapon)
+    damage = _hud_weapon_damage(weapon, instance)
+    if _weapon_uses_ammo(weapon):
+        reserve = _weapon_reserve_ammo(loadout, weapon_id)
+        if reserve is None:
+            reserve = int(loadout.reserve_ammo_value(
+                weapon_id,
+                default=_default_weapon_reserve_ammo(weapon),
+            ))
+        return f"{role} A{int(reserve)} D{damage}"
+    return f"{role} D{damage}"
+
+
+def _hud_armor_summary(armor_loadout):
+    if not armor_loadout or not getattr(armor_loadout, "equipped_instance_id", None):
+        return "Armor none"
+    try:
+        protection = float(getattr(armor_loadout, "damage_reduction", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        protection = 0.0
+    percent = int(round(max(0.0, min(0.85, protection)) * 100.0))
+    return f"Armor {percent}%"
 
 
 _HELP_SECTION_COLORS = (
@@ -883,17 +925,12 @@ def _append_help_section(lines, text):
 
 
 from game.run_objectives import evaluate_visible_run_objective
-from game.skill_ui import (
-    skill_change_reason_label as _skill_change_reason_label,
-    skill_debug_lines as _skill_debug_lines,
-    skill_hud_status_chunks as _skill_hud_status_chunks,
-)
 from game.status_ui_runtime import (
     _active_status_summary,
     _hud_primary_status_chunks,
     _survival_indicator_chunks,
 )
-from game.weapons import WEAPON_CATALOG, roll_weapon_instance, weapon_by_id
+from game.weapons import weapon_by_id
 
 def _facade():
     from game import systems as facade
@@ -1700,6 +1737,148 @@ class RenderSystem(System):
             return
         self.view.draw_text(x, y, _line_text(line), attrs=int(attrs or 0))
 
+    def _side_state_layout(self, screen_w, screen_h, configured_hud_lines, *, panels_open=False):
+        screen_w = max(1, int(screen_w))
+        screen_h = max(1, int(screen_h))
+        configured_hud_lines = max(1, int(configured_hud_lines))
+        supported = screen_w >= 58 and screen_h >= 18
+        if not supported:
+            map_h = max(1, min(self.sim.tilemap.height, screen_h - configured_hud_lines))
+            hud_lines = max(
+                1,
+                min(
+                    max(1, screen_h - 1),
+                    max(configured_hud_lines, screen_h - map_h),
+                ),
+            )
+            return {
+                "supported": False,
+                "rail_visible": False,
+                "rail_w": 0,
+                "rail_x": screen_w,
+                "map_w": min(self.sim.tilemap.width, screen_w),
+                "map_h": map_h,
+                "hud_lines": hud_lines,
+            }
+
+        target_log_rows = 6 if screen_h >= 34 else (5 if screen_h >= 28 else 4)
+        log_rows = max(3, min(target_log_rows, configured_hud_lines))
+        requested_hud_rows = min(max(1, screen_h - 1), log_rows + 1)
+        map_h = max(1, min(self.sim.tilemap.height, screen_h - requested_hud_rows))
+        hud_lines = max(1, min(max(1, screen_h - 1), screen_h - map_h))
+        if panels_open:
+            return {
+                "supported": True,
+                "rail_visible": False,
+                "rail_w": 0,
+                "rail_x": screen_w,
+                "map_w": min(self.sim.tilemap.width, screen_w),
+                "map_h": map_h,
+                "hud_lines": hud_lines,
+            }
+
+        min_map_w = 36
+        gap_w = 1
+        desired_rail_w = min(36, max(22, screen_w // 4))
+        available_rail_w = max(0, screen_w - min_map_w - gap_w)
+        rail_w = min(desired_rail_w, available_rail_w)
+        rail_visible = rail_w >= 20
+        if not rail_visible:
+            return {
+                "supported": True,
+                "rail_visible": False,
+                "rail_w": 0,
+                "rail_x": screen_w,
+                "map_w": min(self.sim.tilemap.width, screen_w),
+                "map_h": map_h,
+                "hud_lines": hud_lines,
+            }
+
+        map_w = min(self.sim.tilemap.width, max(1, screen_w - rail_w - gap_w))
+        rail_x = min(screen_w - rail_w, map_w + gap_w)
+        return {
+            "supported": True,
+            "rail_visible": True,
+            "rail_w": rail_w,
+            "rail_x": rail_x,
+            "map_w": map_w,
+            "map_h": map_h,
+            "hud_lines": hud_lines,
+        }
+
+    def _draw_state_rail(self, *, rail_x, rail_y, rail_w, rail_h, modal_theme, sections):
+        rail_x = int(rail_x)
+        rail_y = int(rail_y)
+        rail_w = int(rail_w)
+        rail_h = int(rail_h)
+        if rail_w < 20 or rail_h < 6:
+            return False
+
+        self._draw_modal_frame(rail_x, rail_y, rail_w, rail_h, modal_theme)
+        body_x = rail_x + 2
+        body_w = max(1, rail_w - 4)
+        bottom_y = rail_y + rail_h - 1
+        y = rail_y + 1
+        section_gap = 1 if rail_h >= 28 else 0
+
+        title = "STATE"
+        self.view.draw_text(
+            body_x,
+            y,
+            _clip_display_line(title, body_w),
+            color=self._theme_color(modal_theme, "title", "objective"),
+            attrs=A_BOLD,
+        )
+        y += 1
+
+        for section in sections or ():
+            if y >= bottom_y:
+                break
+            lines = list(section.get("lines", ()) or ())
+            if not lines:
+                continue
+            title = str(section.get("title", "") or "").strip()
+            if title:
+                if y >= bottom_y:
+                    break
+                self.view.draw_text(
+                    body_x,
+                    y,
+                    _clip_display_line(title.upper(), body_w),
+                    color=self._theme_color(modal_theme, "accent", "player"),
+                    attrs=A_BOLD,
+                )
+                y += 1
+            section_id = str(section.get("id", title or "state") or "state")
+            for line_index, line in enumerate(lines):
+                if y >= bottom_y:
+                    break
+                flashed = self._hud_flash_line(section_id, line_index, line)
+                self._draw_display_line(
+                    body_x,
+                    y,
+                    _clip_display_line(flashed, body_w),
+                    body_w,
+                )
+                y += 1
+            if section_gap and y < bottom_y:
+                y += section_gap
+
+        return True
+
+    def _draw_log_divider(self, y, width, modal_theme):
+        y = int(y)
+        width = max(1, int(width))
+        if y < 0:
+            return False
+        self.view.draw_text(
+            0,
+            y,
+            "-" * width,
+            color=self._theme_color(modal_theme, "divider", "building_edge"),
+        )
+        return True
+
     def _hud_token_line(self, text, *, label="", color=None):
         text = str(text or "").strip()
         if not text:
@@ -2003,18 +2182,38 @@ class RenderSystem(System):
             "scroll": 0,
         })
         debug_ui = _report_debug_ui.ensure_debug_ui_state(self.sim)
+        blocking_panel_open = any(
+            bool(state.get("open"))
+            for state in (
+                inventory_ui,
+                trade_ui,
+                casino_ui,
+                dialog_ui,
+                action_menu_ui,
+                help_ui,
+                character_ui,
+                report_ui,
+                log_ui,
+                debug_ui,
+            )
+            if isinstance(state, dict)
+        )
 
         screen_w, screen_h = self.view.size()
         configured_hud_lines = max(1, int(self.hud_lines))
-        map_h = max(1, min(self.sim.tilemap.height, screen_h - configured_hud_lines))
-        hud_lines = max(
-            1,
-            min(
-                max(1, int(screen_h) - 1),
-                max(configured_hud_lines, int(screen_h) - int(map_h)),
-            ),
+        side_layout = self._side_state_layout(
+            screen_w,
+            screen_h,
+            configured_hud_lines,
+            panels_open=blocking_panel_open,
         )
-        map_w = min(self.sim.tilemap.width, screen_w)
+        map_h = int(side_layout["map_h"])
+        hud_lines = int(side_layout["hud_lines"])
+        map_w = int(side_layout["map_w"])
+        side_layout_supported = bool(side_layout.get("supported"))
+        side_rail_visible = bool(side_layout.get("rail_visible"))
+        rail_x = int(side_layout.get("rail_x", screen_w))
+        rail_w = int(side_layout.get("rail_w", 0))
         hud_w = max(1, int(screen_w))
         hud_text_w = _view_text_wrap_width(self.view, hud_w)
         live_timeskip = getattr(self.sim, "live_timeskip", {})
@@ -2085,6 +2284,15 @@ class RenderSystem(System):
         camera_x = (player_pos.x - (map_w // 2)) if player_pos else 0
         camera_y = (player_pos.y - (map_h // 2)) if player_pos else 0
         zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
+
+        def _overworld_anchor_chunk():
+            active = _chunk_tuple(getattr(self.sim, "active_chunk_coord", None))
+            if active is not None:
+                return active
+            if player_pos:
+                return self.sim.chunk_coords(player_pos.x, player_pos.y)
+            return (0, 0)
+
         look_purpose = str(look_ui.get("purpose", "inspect")).lower()
         visibility_state = getattr(self.sim, "visibility_state", {})
         player_visible = visibility_state.get("player_visible", set()) if isinstance(visibility_state, dict) else set()
@@ -2274,10 +2482,7 @@ class RenderSystem(System):
                     light_tint_drawer(sx, sy, tint, layer="fx", priority=-650)
 
         if zoom_mode == "overworld":
-            if player_pos:
-                player_cx, player_cy = self.sim.chunk_coords(player_pos.x, player_pos.y)
-            else:
-                player_cx, player_cy = 0, 0
+            player_cx, player_cy = _overworld_anchor_chunk()
             view_only = bool(getattr(self.sim, "overworld_view_only_by_eid", {}).get(int(self.player_eid), False))
             cursor_active = bool(look_ui.get("active")) and str(look_ui.get("mode", "")).lower() == "overworld"
             cursor_chunk = None
@@ -3186,12 +3391,6 @@ class RenderSystem(System):
 
         assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
         player_needs = self.sim.ecs.get(NPCNeeds).get(self.player_eid)
-        insight = self.sim.ecs.get(SkillProfile).get(self.player_eid)
-        if not insight:
-            insight = self.sim.ecs.get(InsightStats).get(self.player_eid)
-        core_stats = self.sim.ecs.get(CoreStats).get(self.player_eid)
-        if not insight:
-            insight = core_stats
         credits = assets.credits if assets else 0
         owned = len(assets.owned_property_ids) if assets else 0
         inventory = inventories.get(self.player_eid)
@@ -3200,35 +3399,14 @@ class RenderSystem(System):
         armor_loadout = self.sim.ecs.get(ArmorLoadout).get(self.player_eid)
         vitality = vitalities.get(self.player_eid)
         carried_slots = inventory.slot_count() if inventory else 0
-        carried_units = sum(item["quantity"] for item in inventory.items) if inventory else 0
         status_effects = effects_map.get(self.player_eid)
         active_status_count = len(status_effects.active) if status_effects else 0
         active_status_summary = _active_status_summary(status_effects, max_names=1, title=True)
         player_cover = covers.get(self.player_eid)
         player_modes = modes.get(self.player_eid)
         active_disguise = getattr(self.sim, "disguise_state", None)
-        weapon_name = "none"
-        ammo_text = "-"
-        if loadout and loadout.current_weapon():
-            weapon = weapon_by_id(loadout.current_weapon())
-            instance = loadout.weapon_instance(loadout.current_weapon())
-            weapon_name = str(instance.get("custom_name") or weapon.get("name", weapon.get("id", "weapon")))
-            weapon_name = _hud_compact_label(weapon_name, _HUD_WEAPON_LABEL_WIDTH) or "weapon"
-            if _weapon_uses_ammo(weapon):
-                ammo_type = _weapon_ammo_type_label(weapon)
-                reserve = _weapon_reserve_ammo(loadout, loadout.current_weapon())
-                if reserve is None:
-                    reserve = int(loadout.reserve_ammo_value(
-                        loadout.current_weapon(),
-                        default=_default_weapon_reserve_ammo(weapon),
-                    ))
-                ammo_text = f"{int(reserve)} {ammo_type}"
-            else:
-                ammo_text = "melee"
-        armor_name = "none"
-        if armor_loadout and armor_loadout.equipped_instance_id:
-            armor_name = str(armor_loadout.equipped_name or armor_loadout.equipped_item_id or "armor")
-            armor_name = _hud_compact_label(armor_name, _HUD_ARMOR_LABEL_WIDTH) or "armor"
+        weapon_summary = _hud_weapon_summary(loadout)
+        armor_summary = _hud_armor_summary(armor_loadout)
         hp_text = "?"
         if vitality:
             hp_text = f"{vitality.hp}/{vitality.max_hp}"
@@ -3327,24 +3505,14 @@ class RenderSystem(System):
             status_chunks.append(
                 f"Combat threats {threat_label} near {nearest_text} exp {exposure}%"
             )
-        if insight:
-            status_chunks.extend(
-                _skill_hud_status_chunks(
-                    self.sim,
-                    self.player_eid,
-                    insight,
-                    duration_label_fn=_tick_duration_label,
-                )
-            )
         if active_vehicle_prop:
-            vehicle_name = _hud_compact_label(_vehicle_label(active_vehicle_prop), _HUD_VEHICLE_LABEL_WIDTH) or "vehicle"
             fuel, fuel_capacity = _vehicle_fuel_values(active_vehicle_prop)
             in_vehicle = bool(player_vehicle_state and player_vehicle_state.in_vehicle)
             mode_text = "driving" if in_vehicle else "parked"
-            vehicle_bits = [f"Vehicle {vehicle_name} {mode_text} F{fuel}/{fuel_capacity}"]
+            vehicle_bits = [f"Vehicle {mode_text} F{fuel}/{fuel_capacity}"]
             if in_vehicle:
                 vehicle_bits.append(f"H{vehicle_heading_label(player_vehicle_state)}")
-                vehicle_bits.append(f"S{int(getattr(player_vehicle_state, 'speed', 0) or 0)}/{vehicle_top_speed(active_vehicle_prop)}")
+                vehicle_bits.append(f"S{int(getattr(player_vehicle_state, 'speed', 0) or 0)}")
                 vehicle_bits.append("Lt on" if bool(getattr(player_vehicle_state, "headlights_on", True)) else "Lt off")
             if player_pos and not (player_vehicle_state and player_vehicle_state.in_vehicle):
                 vehicle_chunk = self.sim.chunk_coords(
@@ -3433,8 +3601,9 @@ class RenderSystem(System):
             f"Entities {len(self.sim.tilemap.entities_on_floor(active_z))}",
         ]
         streamed_lines = []
-        if zoom_mode == "overworld" and player_pos:
-            current_chunk = self.sim.chunk_coords(player_pos.x, player_pos.y)
+        overworld_rail_chunks = []
+        if zoom_mode == "overworld":
+            current_chunk = _overworld_anchor_chunk()
             desc = self.sim.world.overworld_descriptor(current_chunk[0], current_chunk[1])
             interest = self.sim.world.overworld_interest(current_chunk[0], current_chunk[1], descriptor=desc)
             travel = _overworld_travel_profile(self.sim, current_chunk[0], current_chunk[1], desc=desc, interest=interest)
@@ -3461,6 +3630,47 @@ class RenderSystem(System):
                 markers=markers,
                 active_vehicle_prop=active_vehicle_prop,
             )
+
+            def _title(raw):
+                text = str(raw or "").replace("_", " ").strip()
+                return text.title() if text else "-"
+
+            area = str(desc.get("area_type", "city")).strip().lower() or "city"
+            district = str(desc.get("district_type", "residential")).strip().lower() or "residential"
+            terrain = str(desc.get("terrain", "")).strip().lower()
+            path = str(desc.get("path", "")).strip().lower() or "-"
+            marker_distance = None
+            if markers:
+                try:
+                    marker_distance = min(
+                        _manhattan(
+                            int(current_chunk[0]),
+                            int(current_chunk[1]),
+                            int(marker["chunk"][0]),
+                            int(marker["chunk"][1]),
+                        )
+                        for marker in markers
+                    )
+                except (KeyError, TypeError, ValueError, IndexError):
+                    marker_distance = None
+            marker_text = (
+                f"{len(markers)} near {marker_distance if marker_distance is not None else '?'}c"
+                if markers
+                else "0"
+            )
+            overworld_rail_chunks = [
+                f"Chunk {int(current_chunk[0])},{int(current_chunk[1])}",
+                f"Area {_title(area)}",
+            ]
+            if area == "city":
+                overworld_rail_chunks.append(f"District {_title(district)}")
+            elif terrain:
+                overworld_rail_chunks.append(f"Terrain {_title(terrain)}")
+            overworld_rail_chunks.extend([
+                f"Path {_title(path) if path != '-' else '-'}",
+                f"Travel {_overworld_travel_tax_text(travel)}",
+                f"Markers {marker_text}",
+            ])
         else:
             streamed_lines = _flow_text_chunks(
                 streamed_chunks,
@@ -3468,38 +3678,37 @@ class RenderSystem(System):
                 max_lines=1,
             )
 
-        economy_chunks = [
+        resource_chunks = [
             f"Cr {credits}",
-            f"Inv {carried_slots}/{inventory.capacity if inventory else 0} u{carried_units}",
+            f"Inv {carried_slots}/{inventory.capacity if inventory else 0}",
             f"HP {hp_text}",
         ]
         if player_needs:
-            economy_chunks.extend(_survival_indicator_chunks(player_needs, rich=True))
+            resource_chunks.extend(_survival_indicator_chunks(player_needs, rich=True))
         pressure = _pressure_snapshot(self.sim)
         pressure_tier = str(pressure.get("tier", "low")).strip().lower()
         pressure_attention = int(pressure.get("attention", 0))
-        economy_chunks.append(f"Heat {pressure_tier} {pressure_attention}")
+        resource_chunks.append(f"Heat {pressure_tier} {pressure_attention}")
         if player_needs:
-            economy_chunks.append(
+            resource_chunks.append(
                 f"Needs E{player_needs.energy:.0f}/S{player_needs.safety:.0f}/So{player_needs.social:.0f}"
             )
-        economy_chunks.extend([
-            f"Status {active_status_summary if active_status_count else 0}",
-            f"Wpn {weapon_name}",
-            f"Ammo {ammo_text}",
-            f"Arm {armor_name}",
-        ])
+        if active_status_count:
+            resource_chunks.append(f"Status {active_status_summary}")
+        gear_chunks = []
         if active_vehicle_prop:
-            profile = _vehicle_profile_from_property(active_vehicle_prop)
             fuel, fuel_capacity = _vehicle_fuel_values(active_vehicle_prop)
-            vehicle_label = _hud_compact_label(_vehicle_label(active_vehicle_prop), _HUD_VEHICLE_LABEL_WIDTH) or "vehicle"
-            economy_chunks.append(f"Veh {vehicle_label} F{fuel}/{fuel_capacity}")
-            economy_chunks.append(
-                "Drive "
-                f"P{_int_or_default(profile.get('power'), 5)}/"
-                f"D{_int_or_default(profile.get('durability'), 5)}/"
-                f"E{_int_or_default(profile.get('fuel_efficiency'), 5)}"
-            )
+            gear_chunks.append(f"Vehicle F{fuel}/{fuel_capacity}")
+            if player_vehicle_state and bool(getattr(player_vehicle_state, "in_vehicle", False)):
+                gear_chunks.append(
+                    f"Drive H{vehicle_heading_label(player_vehicle_state)} "
+                    f"S{int(getattr(player_vehicle_state, 'speed', 0) or 0)} "
+                    f"{'Lt on' if bool(getattr(player_vehicle_state, 'headlights_on', True)) else 'Lt off'}"
+                )
+        gear_chunks.extend([
+            weapon_summary,
+            armor_summary,
+        ])
         if player_cover:
             if player_cover.active:
                 cover_text = f"{player_cover.cover_kind.upper()} {int(player_cover.cover_value * 100)}%"
@@ -3507,12 +3716,13 @@ class RenderSystem(System):
             else:
                 cover_text = "NONE"
                 cover_source = "-"
-            economy_chunks.extend([
+            gear_chunks.extend([
                 f"Cover {cover_text}",
                 f"Exp {int(player_cover.exposure * 100)}%",
                 f"Threats {player_cover.threat_count}",
                 f"Via {cover_source}",
             ])
+        economy_chunks = list(resource_chunks) + list(gear_chunks)
         economy_lines = _flow_display_chunks(
             (self._hud_styled_chunk(chunk) for chunk in economy_chunks),
             hud_text_w,
@@ -3625,6 +3835,79 @@ class RenderSystem(System):
             stealth_state=getattr(self.sim, "player_stealth_state", None),
             intrusion_state=getattr(self.sim, "player_intrusion_state", None),
         )
+        state_rail_sections = []
+        if side_rail_visible:
+            rail_body_w = max(1, rail_w - 4)
+            rail_text_w = _view_text_wrap_width(self.view, rail_body_w)
+
+            def _rail_chunk_lines(chunks, *, max_lines):
+                return _flow_display_chunks(
+                    (self._hud_styled_chunk(chunk) for chunk in chunks),
+                    rail_text_w,
+                    max_lines=max_lines,
+                )
+
+            rail_mode_lines = []
+            if downed_lines:
+                rail_mode_lines.extend(
+                    _wrap_display_lines(
+                        self._hud_styled_chunk(_line_text(downed_lines[0])),
+                        rail_text_w,
+                        max_lines=1,
+                    )
+                )
+            rail_mode_lines.extend(_wrap_display_lines(mode_line, rail_text_w, max_lines=2))
+
+            rail_run_lines = []
+            if look_ui.get("active"):
+                rail_run_lines.extend(_wrap_display_lines(report_hint_line, rail_text_w, max_lines=1))
+            else:
+                if tutorial_hint:
+                    rail_run_lines.extend(_wrap_display_lines(tutorial_hint, rail_text_w, max_lines=1))
+                if objective_line and len(rail_run_lines) < 3:
+                    rail_run_lines.extend(_wrap_display_lines(objective_line, rail_text_w, max_lines=1))
+                if final_operation_line and len(rail_run_lines) < 3:
+                    rail_run_lines.extend(_wrap_display_lines(final_operation_line, rail_text_w, max_lines=1))
+                if show_opportunity_line and len(rail_run_lines) < 3:
+                    rail_run_lines.extend(
+                        _wrap_display_lines(
+                            self._hud_styled_chunk(opportunity_line),
+                            rail_text_w,
+                            max_lines=1,
+                        )
+                    )
+            if read_text and len(rail_run_lines) < 4:
+                read_max_lines = min(2, max(1, 4 - len(rail_run_lines)))
+                rail_run_lines.extend(
+                    _wrap_display_lines(
+                        self._hud_styled_chunk(read_text),
+                        rail_text_w,
+                        max_lines=read_max_lines,
+                    )
+                )
+
+            scene_chunks = [
+                chunk
+                for chunk in status_chunks
+                if not str(_line_text(chunk)).strip().lower().startswith("vehicle ")
+            ]
+            state_rail_sections = [
+                {"id": "mode", "title": "Mode", "lines": rail_mode_lines},
+                {"id": "run", "title": "Run", "lines": rail_run_lines[:4]},
+                {"id": "body", "title": "Body", "lines": _rail_chunk_lines(resource_chunks, max_lines=6)},
+                {"id": "gear", "title": "Gear", "lines": _rail_chunk_lines(gear_chunks, max_lines=6)},
+                {
+                    "id": "streamed",
+                    "title": "Map",
+                    "lines": _rail_chunk_lines(overworld_rail_chunks, max_lines=5) if zoom_mode == "overworld" else [],
+                },
+                {"id": "scene", "title": "Scene", "lines": _rail_chunk_lines(scene_chunks, max_lines=7)},
+            ]
+            state_rail_sections = [
+                section
+                for section in state_rail_sections
+                if list(section.get("lines", ()) or ())
+            ]
         wrapped_sections_spec = [
             {
                 "id": "mode",
@@ -3686,40 +3969,37 @@ class RenderSystem(System):
             wrapped_sections_spec,
             max(1, hud_lines - reserved_log_rows),
         )
-        self._update_hud_flash_state(wrapped_sections)
 
         hud_y = map_h
-        for section in wrapped_sections:
-            section_id = str(section.get("id", "section"))
-            for line_index, line in enumerate(section["lines"]):
+        if side_rail_visible:
+            self._update_hud_flash_state(state_rail_sections)
+            self._draw_state_rail(
+                rail_x=rail_x,
+                rail_y=0,
+                rail_w=rail_w,
+                rail_h=map_h,
+                modal_theme=modal_theme,
+                sections=state_rail_sections,
+            )
+        elif side_layout_supported:
+            self._update_hud_flash_state(())
+        else:
+            self._update_hud_flash_state(wrapped_sections)
+            for section in wrapped_sections:
+                section_id = str(section.get("id", "section"))
+                for line_index, line in enumerate(section["lines"]):
+                    if hud_y >= screen_h:
+                        break
+                    self._draw_display_line(
+                        0,
+                        hud_y,
+                        self._hud_flash_line(section_id, line_index, line),
+                        hud_w,
+                    )
+                    hud_y += 1
                 if hud_y >= screen_h:
                     break
-                self._draw_display_line(
-                    0,
-                    hud_y,
-                    self._hud_flash_line(section_id, line_index, line),
-                    hud_w,
-                )
-                hud_y += 1
-            if hud_y >= screen_h:
-                break
 
-        blocking_panel_open = any(
-            bool(state.get("open"))
-            for state in (
-                inventory_ui,
-                trade_ui,
-                casino_ui,
-                dialog_ui,
-                action_menu_ui,
-                help_ui,
-                character_ui,
-                report_ui,
-                log_ui,
-                debug_ui,
-            )
-            if isinstance(state, dict)
-        )
         self._draw_look_focus_card(
             look_ui,
             look_purpose,
@@ -4631,6 +4911,10 @@ class RenderSystem(System):
                     _clip_display_line(footer_line, text_w),
                     body_w,
                 )
+
+        if side_layout_supported and int(hud_y) <= int(map_h) and int(map_h) < int(screen_h):
+            self._draw_log_divider(map_h, screen_w, modal_theme)
+            hud_y = int(map_h) + 1
 
         visible_hud_rows = max(0, int(screen_h) - int(hud_y))
         log_budget = max(0, min(visible_hud_rows, int(hud_lines) - (int(hud_y) - int(map_h))))

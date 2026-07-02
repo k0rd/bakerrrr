@@ -3832,6 +3832,30 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_property_open_status_overlay(self, x, y, color=None, attrs=0, *, kind="open"):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.16)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        radius = max(2, self.cell_px // 8)
+        pad = max(2, self.cell_px // 10)
+        center = (pad + radius, pad + radius)
+        fill = (
+            min(255, int(frame[0] * 1.10) + (12 if kind == "open" else 22)),
+            min(255, int(frame[1] * 1.10) + (24 if kind == "open" else 4)),
+            min(255, int(frame[2] * 1.04) + (10 if kind == "open" else 4)),
+            236,
+        )
+        stroke = (18, 22, 20, 208)
+        glow = (fill[0], fill[1], fill[2], 72)
+        self.pygame.draw.circle(overlay, glow, center, radius + max(1, self.cell_px // 18))
+        self.pygame.draw.circle(overlay, stroke, (center[0] + 1, center[1] + 1), radius)
+        self.pygame.draw.circle(overlay, fill, center, radius)
+        self.pygame.draw.circle(overlay, (246, 250, 238, 112), center, max(1, radius // 2))
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _draw_objective_marker_overlay(self, x, y, glyph, color=None, attrs=0):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
         cell_x = int(x) * self.cell_px
@@ -4868,6 +4892,19 @@ class PygameView:
                 color=color,
                 attrs=attrs,
                 kind=property_badge_kind,
+            )
+            return semantic_key
+        property_status_kind = {
+            "ui_property_open": "open",
+            "ui_property_closed": "closed",
+        }.get(semantic_key)
+        if property_status_kind:
+            self._draw_property_open_status_overlay(
+                x,
+                y,
+                color=color,
+                attrs=attrs,
+                kind=property_status_kind,
             )
             return semantic_key
         if semantic_key == "objective":
