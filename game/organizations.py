@@ -7915,7 +7915,11 @@ def ensure_property_organization(sim, prop):
 
 
 def workplace_targets_property(prop, workplace):
-    if not prop or not isinstance(workplace, dict):
+    if not prop:
+        return False
+    if isinstance(workplace, str):
+        return _text(workplace) == _text(prop.get("id"))
+    if not isinstance(workplace, dict):
         return False
 
     property_id = workplace.get("property_id")
@@ -8487,7 +8491,11 @@ def _property_org_members_impl(sim, prop):
             "title": _text(getattr(occupation, "career", "")) or None,
             "primary": False,
             "authority_rank": _default_authority_rank(role),
-            "supervisor_eid": _safe_int((workplace or {}).get("supervisor_eid"), default=0) or None,
+            "supervisor_eid": (
+                _safe_int(workplace.get("supervisor_eid"), default=0) or None
+                if isinstance(workplace, dict)
+                else None
+            ),
             "occupation": occupation,
             "organization_eid": int(organization_eid) if organization_eid is not None else None,
             "source": "workplace",

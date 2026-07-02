@@ -339,6 +339,17 @@ def _int_or_default(value, default=0):
         return int(default)
 
 
+def _occupation_workplace_property_id(occupation):
+    if occupation is None:
+        return ""
+    workplace = getattr(occupation, "workplace", None)
+    if isinstance(workplace, dict):
+        return str(workplace.get("property_id", "") or "").strip()
+    if isinstance(workplace, str):
+        return workplace.strip()
+    return ""
+
+
 def _wildlife_module():
     global _WILDLIFE_MODULE
     if _WILDLIFE_MODULE is None:
@@ -3632,8 +3643,8 @@ class NPCWillSystem(System):
             nutrition_breaks_work = hunger_value < 30.0 or thirst_value < 30.0
             if (not work_active or nutrition_breaks_work) and venue_pressure > best_score:
                 own_prop_id = None
-                if occupation and isinstance(getattr(occupation, "workplace", None), dict):
-                    own_prop_id = occupation.workplace.get("property_id")
+                if occupation:
+                    own_prop_id = _occupation_workplace_property_id(occupation) or None
                 if ai.state == "socializing" and ai.target is not None:
                     best_intent = "socializing"
                     best_score = venue_pressure
@@ -3677,8 +3688,8 @@ class NPCWillSystem(System):
                 scoring_anchor = routine.home
                 duty_anchor = routine.home
 
-            if not scoring_anchor and not roam_prop and occupation and occupation.workplace:
-                property_id = occupation.workplace.get("property_id")
+            if not scoring_anchor and not roam_prop and occupation:
+                property_id = _occupation_workplace_property_id(occupation)
                 _fb_prop = self.sim.properties.get(property_id) if property_id else None
                 if _fb_prop:
                     scoring_anchor = _property_focus_position(_fb_prop)

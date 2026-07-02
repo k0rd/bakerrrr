@@ -2155,7 +2155,10 @@ def _employment_standing(sim, actor_eid, prop):
     workplace = occupation.workplace
     if not workplace_targets_property(prop, workplace):
         return 0.0
-    property_id = workplace.get("property_id")
+    if isinstance(workplace, dict):
+        property_id = str(workplace.get("property_id", "") or "").strip()
+    else:
+        property_id = str(workplace or "").strip()
     return 0.92 if property_id and property_id == prop.get("id") else 0.86
 
 
