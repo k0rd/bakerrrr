@@ -498,6 +498,8 @@ class ServiceMenuSystem(System):
                     break
             else:
                 state["selected_index"] = 0
+        elif mode in {"floor", "services"}:
+            state["selected_index"] = 0
         self._normalize_casino_selection()
 
     def _casino_common_rail_lines(self, prop, *, service="", session=None):
@@ -5400,6 +5402,10 @@ class ServiceMenuSystem(System):
                         service="insurance",
                     ))
                 return
+            if self._business_control_prefix_and_action(option_id)[0]:
+                self._close_casino_ui()
+                if self._handle_business_control_option(prop, option_id, self._dialog_ui_state()):
+                    return
             if option_id.startswith("wager:"):
                 try:
                     wager = int(option_id.partition(":")[2] or 0)
