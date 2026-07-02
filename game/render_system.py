@@ -1816,7 +1816,7 @@ class RenderSystem(System):
 
         self._draw_modal_frame(rail_x, rail_y, rail_w, rail_h, modal_theme)
         body_x = rail_x + 2
-        body_w = max(1, rail_w - 4)
+        body_cell_w, body_text_w = _modal_body_widths(self.view, rail_w, horizontal_padding=4, min_width=1)
         bottom_y = rail_y + rail_h - 1
         y = rail_y + 1
         section_gap = 1 if rail_h >= 28 else 0
@@ -1825,7 +1825,7 @@ class RenderSystem(System):
         self.view.draw_text(
             body_x,
             y,
-            _clip_display_line(title, body_w),
+            _clip_display_line(title, body_text_w),
             color=self._theme_color(modal_theme, "title", "objective"),
             attrs=A_BOLD,
         )
@@ -1844,7 +1844,7 @@ class RenderSystem(System):
                 self.view.draw_text(
                     body_x,
                     y,
-                    _clip_display_line(title.upper(), body_w),
+                    _clip_display_line(title.upper(), body_text_w),
                     color=self._theme_color(modal_theme, "accent", "player"),
                     attrs=A_BOLD,
                 )
@@ -1857,8 +1857,8 @@ class RenderSystem(System):
                 self._draw_display_line(
                     body_x,
                     y,
-                    _clip_display_line(flashed, body_w),
-                    body_w,
+                    _clip_display_line(flashed, body_text_w),
+                    body_cell_w,
                 )
                 y += 1
             if section_gap and y < bottom_y:
@@ -3837,8 +3837,7 @@ class RenderSystem(System):
         )
         state_rail_sections = []
         if side_rail_visible:
-            rail_body_w = max(1, rail_w - 4)
-            rail_text_w = _view_text_wrap_width(self.view, rail_body_w)
+            _rail_body_cell_w, rail_text_w = _modal_body_widths(self.view, rail_w, horizontal_padding=4, min_width=1)
 
             def _rail_chunk_lines(chunks, *, max_lines):
                 return _flow_display_chunks(
