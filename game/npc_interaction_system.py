@@ -6477,16 +6477,14 @@ class NPCInteractionSystem(System):
         current_social_pull = float(social_fit.get("current_pull", 0.0) or 0.0) if poaching else 0.0
 
         attention = max(0, min(100, int(context.get("pressure_attention", 0) or 0)))
-        heat_penalty = min(0.24, (float(attention) / 100.0) * 0.24)
+        heat_penalty = min(0.025, (float(attention) / 100.0) * 0.025)
         if str(context.get("pressure_tier", "") or "").strip().lower() == "high":
-            heat_penalty += 0.04
+            heat_penalty += 0.006
 
         score_delta = commute_score + social_bonus - job_attachment_penalty - current_social_pull - heat_penalty
         threshold_delta = 0.06 if poaching else 0.0
         decline_reason = ""
-        if heat_penalty >= max(0.12, abs(commute_score), current_social_pull, job_attachment_penalty * 0.72):
-            decline_reason = "heat"
-        elif commute_score <= -0.07:
+        if commute_score <= -0.07:
             decline_reason = "commute"
         elif poaching and (job_attachment_penalty + current_social_pull) >= 0.15:
             decline_reason = "current_ties"
@@ -6545,9 +6543,9 @@ class NPCInteractionSystem(System):
         elif tone in {"wary", "guarded"}:
             score -= 0.08
         if pressure_tier == "high":
-            score -= 0.05
+            score -= 0.008
         elif pressure_tier == "medium":
-            score -= 0.02
+            score -= 0.003
         if npc_needs:
             if float(getattr(npc_needs, "safety", 100.0)) < 38.0:
                 score -= 0.06

@@ -178,9 +178,9 @@ def apply_pressure_delta(
 
 class RunPressureSystem(System):
 
-    PASSIVE_DECAY_INTERVAL = 24
-    PASSIVE_DECAY_DELAY = 44
-    WAIT_DECAY_COOLDOWN = 4
+    PASSIVE_DECAY_INTERVAL = 12
+    PASSIVE_DECAY_DELAY = 24
+    WAIT_DECAY_COOLDOWN = 3
     PRESSURE_EVENT_COOLDOWN = 2
     PRESSURE_REPEAT_WINDOW = 10
     PRESSURE_REPEAT_SCALARS = (1.0, 0.75, 0.55, 0.4)
@@ -328,12 +328,13 @@ class RunPressureSystem(System):
             self.sim.emit(Event("run_pressure_mitigated", **payload))
         return payload
 
-    def _event_accountability(self, event, *, offender_eid=None):
+    def _event_accountability(self, event, *, offender_eid=None, allow_position_backfill=True):
         return event_observation_accountability(
             self.sim,
             event,
             offender_eid=offender_eid,
             default_channels=("actor_witness",),
+            allow_position_backfill=bool(allow_position_backfill),
         )
 
     def _mark_incident_accounted(self, incident_id):
@@ -548,7 +549,11 @@ class RunPressureSystem(System):
             return
         if bool(incident.get("run_pressure_accounted")):
             return
-        report_observation = self._event_accountability(event, offender_eid=self.player_eid)
+        report_observation = self._event_accountability(
+            event,
+            offender_eid=self.player_eid,
+            allow_position_backfill=False,
+        )
         if not bool(report_observation.get("has_accountable_observation")):
             return
         kind = str(incident.get("kind", "") or "").strip().lower()
@@ -715,7 +720,7 @@ class RunPressureSystem(System):
             return
         self.last_wait_decay_tick = int(self.sim.tick)
         tier = str(snapshot.get("tier", "low")).strip().lower()
-        reduction = 1 if tier in {"low", "medium"} else 2
+        reduction = 1 if tier == "low" else 2 if tier == "medium" else 3
         self._emit_pressure(
             delta=-reduction,
             source="lay_low",
@@ -738,10 +743,8 @@ class RunPressureSystem(System):
         if tick - last_decay_tick < self.PASSIVE_DECAY_INTERVAL:
             return
 
-        reduction = 1
         tier = str(snapshot.get("tier", "low")).strip().lower()
-        if tier == "high":
-            reduction += 1
+        reduction = 1 if tier == "low" else 2 if tier == "medium" else 3
         stealth_state = getattr(self.sim, "player_stealth_state", {})
         if isinstance(stealth_state, dict) and bool(stealth_state.get("hidden")):
             reduction += 1

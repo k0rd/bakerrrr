@@ -167,7 +167,9 @@ def _pusher_pressure_gate(vendor_kind, prefs, context):
     attention = _safe_int(context.get("pressure_attention"), 0)
     tolerance = _heat_tolerance_score(prefs.get("heat_tolerance", prefs.get("street_heat_tolerance", "low")))
     trusted = _context_standing(context) >= 0.58
-    if pressure >= 2 and not (trusted and tolerance >= 2 and attention < 90):
+    extreme_attention = attention >= 94
+    tense_attention = attention >= 90
+    if extreme_attention and not (trusted and tolerance >= 2 and attention < 94):
         return {
             "blocked": True,
             "blocked_reason": "ambient_heat",
@@ -175,7 +177,7 @@ def _pusher_pressure_gate(vendor_kind, prefs, context):
             "heat_tolerance": "high",
             "pressure_attention": attention,
         }
-    if pressure == 1 and not (trusted or tolerance >= 1):
+    if tense_attention and not (trusted or tolerance >= 1):
         return {
             "blocked": True,
             "blocked_reason": "ambient_heat",

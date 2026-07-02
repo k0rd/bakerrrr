@@ -179,12 +179,13 @@ class OrganizationResponseSystem(System):
         self.sim.events.subscribe("action_offense", self.on_action_offense)
         self.sim.events.subscribe("incident_authority_reported", self.on_incident_authority_reported)
 
-    def _event_accountability(self, event, *, offender_eid=None):
+    def _event_accountability(self, event, *, offender_eid=None, allow_position_backfill=True):
         return event_observation_accountability(
             self.sim,
             event,
             offender_eid=offender_eid,
             default_channels=("actor_witness",),
+            allow_position_backfill=bool(allow_position_backfill),
         )
 
     def _mark_incident_accounted(self, incident_id):
@@ -495,7 +496,11 @@ class OrganizationResponseSystem(System):
             return
         if bool(incident.get("organization_response_accounted")):
             return
-        observation = self._event_accountability(event, offender_eid=self.player_eid)
+        observation = self._event_accountability(
+            event,
+            offender_eid=self.player_eid,
+            allow_position_backfill=False,
+        )
         if not bool(observation.get("has_accountable_observation")):
             return
         kind = _text(incident.get("kind")).lower()

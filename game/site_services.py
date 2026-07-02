@@ -634,10 +634,11 @@ class SiteServiceSystem(System):
             self._reset_live_timeskip_state()
             return True
         effects = self.sim.ecs.get(StatusEffects).get(self.player_eid)
-        if bool(state.get("completed")) and str(state.get("service", "")).strip().lower() == "rest" and effects:
+        well_rested_ticks = int(state.get("well_rested_ticks", 0) or 0)
+        if bool(state.get("completed")) and str(state.get("service", "")).strip().lower() == "rest" and effects and well_rested_ticks > 0:
             effects.add(
                 "well_rested",
-                int(state.get("well_rested_ticks", self.REST_WELL_RESTED_TICKS) or self.REST_WELL_RESTED_TICKS),
+                well_rested_ticks,
                 modifiers={
                     "perception_buff": 0.8,
                     "athletics_buff": 0.5,
@@ -2265,7 +2266,7 @@ class SiteServiceSystem(System):
             self._apply_shelter(eid, prop)
             return True
         if service == "rest":
-            self._apply_rest(eid, prop)
+            self._apply_rest(eid, prop, request=request)
             return True
         if service == "herbal_care":
             self._apply_herbal_care(eid, prop)
@@ -2570,7 +2571,7 @@ class SiteServiceSystem(System):
             social_gain=social_gain,
         )
 
-    def _apply_rest(self, eid, prop):
+    def _apply_rest(self, eid, prop, request=None):
         ready_in = self._service_ready_in(eid, prop, "rest")
         if ready_in > 0:
             self.sim.emit(Event(
@@ -2587,6 +2588,7 @@ class SiteServiceSystem(System):
         practice = self._service_practice_bundle(eid, prop, "rest")
         practice_modifiers = dict(practice.get("effect_modifiers", {}))
         practice_note = str(practice.get("note_text", "") or "").strip()
+        request = dict(request or {}) if isinstance(request, dict) else {}
         rest_cost = max(1, int(round(float(self.REST_COST) * self._service_cost_mult(practice_modifiers))))
         assets = self._assets_for(eid)
         credits = int(getattr(assets, "credits", 0)) if assets else 0
@@ -2622,7 +2624,16 @@ class SiteServiceSystem(System):
 
         cooldown_ticks = max(1, int(round(float(self.REST_COOLDOWN_TICKS) * self._service_cooldown_mult(practice_modifiers))))
         self._set_service_cooldown(eid, prop, "rest", cooldown_ticks)
-        stay_ticks = max(1, int(round(float(self._hours_to_ticks(self.REST_STAY_HOURS)) * self._service_time_mult(practice_modifiers))))
+        default_stay_ticks = max(1, int(round(float(self._hours_to_ticks(self.REST_STAY_HOURS)) * self._service_time_mult(practice_modifiers))))
+        requested_stay_ticks = _int_or_default(request.get("lodging_stay_ticks"), 0)
+        stay_ticks = max(1, int(requested_stay_ticks)) if requested_stay_ticks > 0 else default_stay_ticks
+        if requested_stay_ticks > 0:
+            recovery_scale = min(1.0, max(0.05, float(stay_ticks) / float(default_stay_ticks)))
+            hp_gain = int(round(float(hp_gain) * recovery_scale))
+            energy_gain = int(round(float(energy_gain) * recovery_scale))
+            safety_gain = int(round(float(safety_gain) * recovery_scale))
+            social_gain = int(round(float(social_gain) * recovery_scale))
+        well_rested_ticks = self.REST_WELL_RESTED_TICKS if stay_ticks >= self._hours_to_ticks(6) else 0
         self._begin_live_lodging(
             eid=eid,
             prop=prop,
@@ -2635,7 +2646,7 @@ class SiteServiceSystem(System):
             social_gain=social_gain,
             credits_spent=rest_cost,
             practice_note=practice_note,
-            well_rested_ticks=self.REST_WELL_RESTED_TICKS,
+            well_rested_ticks=well_rested_ticks,
         )
 
     def _apply_herbal_care(self, eid, prop):

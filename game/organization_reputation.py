@@ -529,12 +529,13 @@ class OrganizationReputationSystem(System):
             prop = self.sim.property_at(x, y, z)
         return prop if isinstance(prop, dict) else None
 
-    def _event_accountability(self, event, *, offender_eid=None):
+    def _event_accountability(self, event, *, offender_eid=None, allow_position_backfill=True):
         return event_observation_accountability(
             self.sim,
             event,
             offender_eid=offender_eid,
             default_channels=("actor_witness",),
+            allow_position_backfill=bool(allow_position_backfill),
         )
 
     def _mark_incident_accounted(self, incident_id):
@@ -740,7 +741,11 @@ class OrganizationReputationSystem(System):
             return
         if bool(incident.get("organization_reputation_accounted")):
             return
-        report_observation = self._event_accountability(event, offender_eid=self.player_eid)
+        report_observation = self._event_accountability(
+            event,
+            offender_eid=self.player_eid,
+            allow_position_backfill=False,
+        )
         if not bool(report_observation.get("has_accountable_observation")):
             return
         prop = self._property_from_event(incident)

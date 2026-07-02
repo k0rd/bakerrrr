@@ -69,6 +69,19 @@ def _event_excluded_observer_eids(data, *, event_type=""):
     return tuple(dict.fromkeys(excluded))
 
 
+def _event_reporter_observer_eids(data, *, event_type=""):
+    if not isinstance(data, dict):
+        return ()
+    if str(event_type or "").strip().lower() != "incident_authority_reported":
+        return ()
+    reporters = _normalize_observer_eids((
+        data.get("npc_eid"),
+        data.get("reporter_eid"),
+        data.get("reported_by_eid"),
+    ))
+    return tuple(reporter_eid for reporter_eid in reporters if int(reporter_eid) > 0)
+
+
 def _normalize_observation_channels(values):
     if values is None:
         return ()
@@ -199,17 +212,25 @@ def event_observation_accountability(
     if not isinstance(data, dict):
         data = {}
 
-    has_explicit_observers = "observer_eids" in data
+    reporter_observers = _event_reporter_observer_eids(data, event_type=event_type)
+    has_explicit_observers = "observer_eids" in data or bool(reporter_observers)
     has_explicit_accountable = "accountable_observer_eids" in data
     excluded_eids = _event_excluded_observer_eids(data, event_type=event_type)
 
     observers = _filter_excluded_observers(
-        data.get("observer_eids") if has_explicit_observers else data.get("witnesses"),
+        (
+            tuple(_normalize_observer_eids(data.get("observer_eids"))) + tuple(reporter_observers)
+            if has_explicit_observers
+            else data.get("witnesses")
+        ),
         excluded_eids,
     )
     channels = _normalize_observation_channels(data.get("observation_channels"))
     if not channels and observers:
-        channels = _normalize_observation_channels(default_channels) or ("actor_witness",)
+        if event_type == "incident_authority_reported":
+            channels = ("official_report",)
+        else:
+            channels = _normalize_observation_channels(default_channels) or ("actor_witness",)
 
     if has_explicit_accountable:
         accountable = _filter_excluded_observers(data.get("accountable_observer_eids"), excluded_eids)

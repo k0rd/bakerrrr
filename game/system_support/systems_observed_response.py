@@ -338,14 +338,19 @@ class ObservedIncidentResponseSystem(System):
             "z": _int(z, 0),
         }
         self.sim.observed_response_stats["reported"] += 1
+        reporter_eid = _int(cue.get("npc_eid"), -1)
+        reporter_observers = (reporter_eid,) if reporter_eid >= 0 else ()
         self.sim.emit(Event(
             "incident_authority_reported",
             incident_id=incident_id,
-            npc_eid=_int(cue.get("npc_eid"), -1),
+            npc_eid=reporter_eid,
             method=_text(cue.get("method")),
             x=_int(x, 0),
             y=_int(y, 0),
             z=_int(z, 0),
+            observer_eids=reporter_observers,
+            accountable_observer_eids=reporter_observers,
+            observation_channels=("official_report",),
         ))
 
     def _finish_cue(self, npc_eid, cue):

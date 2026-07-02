@@ -1,3 +1,5 @@
+import random
+
 from engine.events import Event
 from engine.systems import System
 from game.appearance_loadout import STYLE_SERVICE_OPTIONS, style_service_kinds_for_property
@@ -165,6 +167,8 @@ from game.system_support.npc_behavior_runtime import (
 
 class ServiceMenuSystem(System):
 
+    ROOM_STAY_HOUR_OPTIONS = (1, 2, 4, 6, 8)
+
     def __init__(self, sim, player_eid):
         super().__init__(sim)
         self.player_eid = player_eid
@@ -251,6 +255,54 @@ class ServiceMenuSystem(System):
     def _wallet_credits(self):
         assets = self._assets_for(self.player_eid)
         return int(getattr(assets, "credits", 0)) if assets else 0
+
+    def _ticks_per_hour(self):
+        world_traits = getattr(self.sim, "world_traits", {})
+        clock = world_traits.get("clock", {}) if isinstance(world_traits, dict) else {}
+        try:
+            ticks_per_hour = int(clock.get("ticks_per_hour", 600))
+        except (TypeError, ValueError, AttributeError):
+            ticks_per_hour = 600
+        return max(60, ticks_per_hour)
+
+    def _current_clock_hour_float(self):
+        world_traits = getattr(self.sim, "world_traits", {})
+        clock = world_traits.get("clock", {}) if isinstance(world_traits, dict) else {}
+        try:
+            start_hour = float(clock.get("start_hour", 9))
+        except (TypeError, ValueError, AttributeError):
+            start_hour = 9.0
+        return (start_hour + (float(getattr(self.sim, "tick", 0) or 0) / float(self._ticks_per_hour()))) % 24.0
+
+    def _format_clock_hour(self, hour):
+        hour = float(hour) % 24.0
+        total_minutes = int(round(hour * 60.0)) % (24 * 60)
+        clock_hour = total_minutes // 60
+        minute = total_minutes % 60
+        suffix = "AM" if clock_hour < 12 else "PM"
+        display_hour = clock_hour % 12
+        if display_hour == 0:
+            display_hour = 12
+        return f"{display_hour}:{minute:02d} {suffix}"
+
+    def _lodging_checkout_hour(self, prop):
+        metadata = (prop or {}).get("metadata", {}) if isinstance(prop, dict) else {}
+        raw_hour = metadata.get("lodging_checkout_hour") if isinstance(metadata, dict) else None
+        try:
+            hour = float(raw_hour)
+        except (TypeError, ValueError):
+            prop_id = str((prop or {}).get("id", "") if isinstance(prop, dict) else "").strip()
+            prop_name = str((prop or {}).get("name", "") if isinstance(prop, dict) else "").strip()
+            seed_text = f"{getattr(self.sim, 'seed', 0)}:lodging-checkout:{prop_id}:{prop_name}"
+            hour = 9.5 + random.Random(seed_text).random()
+        return hour % 24.0
+
+    def _ticks_until_clock_hour(self, target_hour):
+        current_hour = self._current_clock_hour_float()
+        delta_hours = (float(target_hour) - current_hour) % 24.0
+        if delta_hours <= 0.01:
+            delta_hours += 24.0
+        return max(1, int(round(delta_hours * float(self._ticks_per_hour()))))
 
     def _player_owns_property(self, prop):
         if not isinstance(prop, dict):
@@ -3727,6 +3779,53 @@ class ServiceMenuSystem(System):
             "casino_session": None,
         })
 
+    def _open_lodging_stay_menu(self, prop):
+        if not isinstance(prop, dict):
+            title, lines = self._stale_service_option_lines("rest")
+            self._present_service_result(title, lines)
+            return
+        state = self._dialog_ui_state()
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        prop_name = str(prop.get("name", prop.get("id", "Rooms"))).strip() or "Rooms"
+        checkout_hour = self._lodging_checkout_hour(prop)
+        checkout_ticks = self._ticks_until_clock_hour(checkout_hour)
+        checkout_label = self._format_clock_hour(checkout_hour)
+        transcript = [
+            f"{prop_name} asks how long you want the room.",
+            "The room rate is charged once; short naps recover less than a full sleep.",
+            f"Checkout here is {checkout_label}.",
+        ]
+        topics = [{"id": "service_menu:root", "label": "Back"}]
+        for hours in self.ROOM_STAY_HOUR_OPTIONS:
+            topics.append({
+                "id": f"rest:stay:hours:{hours}",
+                "label": f"Sleep {hours}h",
+            })
+        topics.append({
+            "id": f"rest:stay:checkout:{checkout_ticks}",
+            "label": f"Stay until checkout ({checkout_label}, {_tick_duration_label(self.sim, checkout_ticks)})",
+        })
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": prop.get("id"),
+            "title": f"Room: {prop_name}",
+            "subtitle": "Choose stay length",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 1 if len(topics) > 1 else 0,
+            "scroll": 0,
+            "hint": "Choose a room stay. Esc closes the desk.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": "lodging:rest",
+            "casino_session": None,
+        })
+
     def _open_appearance_style_menu(self, prop):
         state = self._dialog_ui_state()
         self._clear_pending_service_result()
@@ -4391,6 +4490,8 @@ class ServiceMenuSystem(System):
             return "Business employees", ["That employee wage record is no longer available through this desk."]
         if option_id == "redeem_meal_voucher":
             return "Meal Voucher", ["That meal voucher counter is no longer available here."]
+        if option_id == "rest" or option_id.startswith("rest:stay:"):
+            return "Room", ["That room desk is no longer available here."]
         if option_id == "building_repair" or option_id.startswith("building_repair:target|"):
             return "Building Repair", ["That contractor quote is no longer available here."]
         if option_id == "business_remodel" or option_id.startswith("business_remodel:"):
@@ -6074,6 +6175,47 @@ class ServiceMenuSystem(System):
             self._start_casino_round(prop, service, wager)
             return
         prop_name = prop.get("name", property_id) if isinstance(prop, dict) else event.data.get("property_name", "site")
+        if option_id == "rest":
+            if isinstance(prop, dict):
+                self._open_lodging_stay_menu(prop)
+            else:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+            return
+        if option_id.startswith("rest:stay:"):
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            parts = option_id.split(":")
+            stay_ticks = 0
+            stay_kind = str(parts[2] if len(parts) >= 3 else "").strip().lower()
+            if stay_kind == "hours" and len(parts) >= 4:
+                try:
+                    stay_ticks = int(round(float(parts[3]) * float(self._ticks_per_hour())))
+                except (TypeError, ValueError):
+                    stay_ticks = 0
+            elif stay_kind == "checkout" and len(parts) >= 4:
+                stay_ticks = _int_or_default(parts[3], 0)
+            if stay_ticks <= 0:
+                self._present_service_result("Room", ["That room stay is no longer valid."], property_id=property_id)
+                return
+            self._begin_pending_service_result(
+                channel="site",
+                property_id=property_id,
+                property_name=prop_name,
+                service="rest",
+            )
+            self.sim.emit(Event(
+                "site_service_request",
+                eid=self.player_eid,
+                property_id=property_id,
+                service="rest",
+                property_name=prop_name,
+                lodging_stay_ticks=max(1, int(stay_ticks)),
+                lodging_stay_kind=stay_kind,
+            ))
+            return
         if option_id == "fuel_fill_bottle":
             if not isinstance(prop, dict):
                 title, lines = self._stale_service_option_lines(option_id)
