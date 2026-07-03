@@ -9,6 +9,14 @@ import random
 from collections.abc import Mapping
 from typing import Any
 
+from game.color_words import (
+    approved_color_words,
+    color_word_display_name,
+    imported_color_words,
+    normalize_color_word,
+    render_key_for_color_word,
+)
+
 
 OBJECT_PROFILE_SCHEMA_VERSION = 1
 
@@ -79,27 +87,8 @@ OBJECT_PROFILE_CONDITIONS: tuple[str, ...] = (
 
 OBJECT_PROFILE_RARITIES: tuple[str, ...] = ("common", "uncommon", "rare", "unique")
 
-OBJECT_PROFILE_COLORS: tuple[str, ...] = (
-    "black",
-    "charcoal",
-    "white",
-    "cream",
-    "gray",
-    "blue",
-    "navy",
-    "green",
-    "olive",
-    "red",
-    "wine",
-    "coral",
-    "violet",
-    "purple",
-    "pink",
-    "gold",
-    "brass",
-    "silver",
-    "teal",
-    "amber",
+OBJECT_PROFILE_COLORS: tuple[str, ...] = tuple(
+    dict.fromkeys(approved_color_words(include_reserved=False) + imported_color_words())
 )
 
 OBJECT_PROFILE_ALLOWED_FIELDS: tuple[str, ...] = (
@@ -164,26 +153,8 @@ OBJECT_PROFILE_COLOR_KEYS: dict[str, str] = {
 }
 
 OBJECT_PROFILE_COLOR_WORD_KEYS: dict[str, str] = {
-    "black": "world_object_charcoal",
-    "charcoal": "world_object_charcoal",
-    "white": "world_object_white",
-    "cream": "world_object_white",
-    "gray": "world_object_silver",
-    "blue": "world_object_blue",
-    "navy": "world_object_blue",
-    "green": "world_object_green",
-    "olive": "world_object_green",
-    "red": "world_object_red",
-    "wine": "world_object_red",
-    "coral": "world_object_coral",
-    "violet": "world_object_purple",
-    "purple": "world_object_purple",
-    "pink": "world_object_pink",
-    "gold": "world_object_gold",
-    "brass": "world_object_gold",
-    "silver": "world_object_silver",
-    "teal": "world_object_blue",
-    "amber": "world_object_gold",
+    word: render_key_for_color_word(word, domain="world_object") or "world_object_home"
+    for word in OBJECT_PROFILE_COLORS
 }
 
 
@@ -265,7 +236,7 @@ def object_profile_validation_errors(value: Any, *, stack_max: int | None = None
     if material not in OBJECT_PROFILE_MATERIALS:
         errors.append(("$.object_profile.material", f"material must be one of {list(OBJECT_PROFILE_MATERIALS)}"))
     for field in ("primary_color", "accent_color"):
-        color = _text(value.get(field), "blue")
+        color = normalize_color_word(_text(value.get(field), "blue"))
         if color not in OBJECT_PROFILE_COLORS:
             errors.append((f"$.object_profile.{field}", f"{field} must be one of {list(OBJECT_PROFILE_COLORS)}"))
     motif = _text(value.get("motif"), "none")
@@ -330,7 +301,7 @@ def normalize_object_profile(value: Any, *, item_id: str = "", tags: tuple[str, 
     if profile["material"] not in OBJECT_PROFILE_MATERIALS:
         profile["material"] = default["material"]
     for field in ("primary_color", "accent_color"):
-        profile[field] = _text(value.get(field), profile[field])
+        profile[field] = normalize_color_word(_text(value.get(field), profile[field]))
         if profile[field] not in OBJECT_PROFILE_COLORS:
             profile[field] = default[field]
     profile["motif"] = _text(value.get("motif"), profile["motif"])
@@ -449,7 +420,7 @@ def object_profile_display_text(profile: Mapping[str, Any] | None, *, fallback_n
     if explicit:
         return explicit
     condition = profile.get("condition", "plain")
-    primary = profile.get("primary_color", "")
+    primary = color_word_display_name(profile.get("primary_color", ""))
     material = profile.get("material", "")
     silhouette = str(profile.get("silhouette", "object") or "object").replace("_", " ")
     motif = str(profile.get("motif", "none") or "none").replace("_", " ")

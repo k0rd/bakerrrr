@@ -183,8 +183,11 @@ def build_failed_run_bones_record(sim, player_eid, *, outcome="", reason="", obj
 
 def archive_failed_run_bones(sim, player_eid, *, outcome="", reason="", objective_title="", summary_lines=(), archive_path=None):
     from game.tutorial import tutorial_no_persistence
+    from game.custom_content import custom_content_allows_post_game_traces
 
     if tutorial_no_persistence(sim):
+        return None
+    if not custom_content_allows_post_game_traces(sim):
         return None
     record = build_failed_run_bones_record(
         sim,
@@ -299,8 +302,11 @@ def maybe_seed_bones_for_chunk(sim, chunk, *, force=False):
     if sim is None or chunk_key is None:
         return None
     from game.tutorial import tutorial_no_persistence
+    from game.custom_content import custom_content_allows_post_game_traces
 
     if tutorial_no_persistence(sim):
+        return None
+    if not custom_content_allows_post_game_traces(sim):
         return None
 
     runtime = prime_bones_runtime(sim)

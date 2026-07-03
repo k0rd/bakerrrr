@@ -13,6 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from game.content_warnings import warn_content_fallback
+from game.flora_genetics import normalize_flora_genetics
 from game.json_metadata import split_object_document
 
 
@@ -257,7 +258,7 @@ def _normalize_flora_row(plant_id, raw):
     tags.add(growth_form)
     if growth_form in {"moss", "lichen", "vine"}:
         tags.add("spreading")
-    return {
+    row = {
         "id": plant_key,
         "name": str(raw.get("name") or plant_key.replace("_", " ")).strip() or plant_key.replace("_", " "),
         "growth_form": growth_form,
@@ -275,6 +276,8 @@ def _normalize_flora_row(plant_id, raw):
         "crossbreed_tags": _normalize_string_tuple(raw.get("crossbreed_tags")),
         "spread_profile": _normalize_dict(raw.get("spread_profile")),
     }
+    row["genetics"] = normalize_flora_genetics(plant_key, row, seed=0)
+    return row
 
 
 @lru_cache(maxsize=4)
@@ -770,6 +773,7 @@ def _make_flora_record(row, *, cx, cy, x, y, z, cluster_index, tile_index, rng, 
         "cluster_id": f"flora:{int(cx)}:{int(cy)}:{int(cluster_index)}",
         "tags": list(row.get("tags", ())),
         "rarity": row.get("rarity", "common"),
+        "genetics": dict(row.get("genetics", {}) or {}),
         "harvest_potential": dict(row.get("harvest_potential", {}) or {}),
     }
     return normalize_flora_harvest_state(record)
@@ -783,6 +787,12 @@ def register_flora_patch(sim, record):
     if not record_id:
         return None
     normalized = normalize_flora_harvest_state(record)
+    genetics = normalized.get("genetics") if isinstance(normalized.get("genetics"), dict) else {}
+    if _safe_int(genetics.get("schema_version"), 0) != 1:
+        catalog_row = _catalog_row_for_record(normalized)
+        genetics_row = dict(catalog_row or normalized)
+        genetics_row["genetics"] = genetics or catalog_row.get("genetics", {}) if isinstance(catalog_row, dict) else genetics
+        normalized["genetics"] = normalize_flora_genetics(normalized.get("plant_id") or normalized.get("id"), genetics_row, seed=0)
     patches[record_id] = dict(normalized)
     chunk = record.get("chunk")
     if isinstance(chunk, (tuple, list)) and len(chunk) == 2:

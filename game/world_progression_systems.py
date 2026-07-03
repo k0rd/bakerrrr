@@ -3788,10 +3788,12 @@ class FinalOperationSystem(System):
 
     def _conclude_run(self, *, outcome, reason, objective_title, summary_lines):
         from game.tutorial import tutorial_no_persistence
+        from game.custom_content import custom_content_allows_post_game_traces, custom_content_post_game_block_lines
 
         no_persistence = tutorial_no_persistence(self.sim)
+        post_game_eligible = custom_content_allows_post_game_traces(self.sim)
         bones_record = None
-        if not no_persistence:
+        if not no_persistence and post_game_eligible:
             bones_record = archive_failed_run_bones(
                 self.sim,
                 self.player_eid,
@@ -3816,6 +3818,8 @@ class FinalOperationSystem(System):
         run_end["show_post_curses"] = True
         run_end["bones_archived"] = bool(isinstance(bones_record, dict))
         run_end["bones_record_id"] = str((bones_record or {}).get("record_id", "")).strip() if isinstance(bones_record, dict) else ""
+        run_end["post_game_content_eligible"] = bool(post_game_eligible)
+        run_end["post_game_content_block_lines"] = custom_content_post_game_block_lines(self.sim) if not post_game_eligible else []
         run_end["tutorial"] = bool(no_persistence)
         run_end["saved"] = False
 

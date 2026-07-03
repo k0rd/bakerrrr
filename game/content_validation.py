@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from game.flora_genetics import GENETICS_SCHEMA_VERSION, normalize_flora_genetics, validate_flora_genetics
 from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_document
 from game.lighting import LIGHT_COLOR_PROFILES
 from game.object_profile_runtime import object_profile_validation_errors
@@ -1139,8 +1140,24 @@ def _validate_flora(path, report):
         _validate_string_list(report, source, plant_path + ["tags"], row.get("tags"), field_name="tags", require_non_empty=True)
         if not isinstance(row.get("growth_traits"), dict):
             report.error(source, plant_path + ["growth_traits"], "growth_traits must be an object")
-        if not isinstance(row.get("genetics"), dict):
+        genetics = row.get("genetics")
+        if not isinstance(genetics, dict):
             report.error(source, plant_path + ["genetics"], "genetics must be an object")
+        else:
+            try:
+                raw_version = int(genetics.get("schema_version", 0) or 0)
+            except (TypeError, ValueError):
+                raw_version = 0
+            try:
+                genetics_for_validation = (
+                    genetics
+                    if raw_version == GENETICS_SCHEMA_VERSION
+                    else normalize_flora_genetics(plant_id, row, seed=0)
+                )
+                for error in validate_flora_genetics(genetics_for_validation):
+                    report.error(source, plant_path + ["genetics"], error)
+            except Exception as exc:  # noqa: BLE001
+                report.error(source, plant_path + ["genetics"], f"genetics could not be normalized: {exc}")
         if not isinstance(row.get("harvest_potential"), dict):
             report.error(source, plant_path + ["harvest_potential"], "harvest_potential must be an object")
         _validate_string_list(

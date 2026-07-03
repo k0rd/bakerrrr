@@ -528,6 +528,14 @@ def export_success_reward_bundle(sim, player_eid=None, event_data=None, *, expor
     outcome = _text(event_data.get("outcome")).lower()
     if outcome != "success":
         return {"exported": False, "reason": "not_success", "summary_lines": []}
+    from game.custom_content import custom_content_allows_post_game_traces, custom_content_post_game_block_lines
+
+    if not custom_content_allows_post_game_traces(sim):
+        return {
+            "exported": False,
+            "reason": "unreceipted_custom_content",
+            "summary_lines": custom_content_post_game_block_lines(sim),
+        }
     root = Path(export_root or getattr(sim, "run_reward_export_root", None) or REWARD_ROOT)
     source_payload = _source_payload(sim, player_eid, event_data)
     source_payload["outcome"] = "success"

@@ -13,7 +13,7 @@ from game.hunting_runtime import convert_meat_stack
 from game.opportunities import accept_service_job_offer, append_external_opportunity, opportunity_instruction_lines
 from game.organization_response import property_vigilante_denial
 from game.organizations import effective_org_access_posture, property_service_practice_bundle
-from game.player_interactions import CAMPFIRE_HERB_CACHE_CAPACITY, CAMPFIRE_HERB_CACHE_KIND
+from game.player_interactions import CAMPFIRE_HERB_CACHE_CAPACITY, CAMPFIRE_HERB_CACHE_KIND, campfire_herb_cache_note
 from game.player_businesses import player_business_apply_remodel as _player_business_apply_remodel
 from game.player_businesses import player_business_remodel_quote as _player_business_remodel_quote
 from game.property_access import evaluate_property_access as _evaluate_property_access
@@ -2833,7 +2833,7 @@ class SiteServiceSystem(System):
             "cache_view": "cache",
             "selected_index": 0,
             "inspect_text": "",
-            "note_text": "Campfire herbs: load 2-3 plant materials, then mix by recipe or experiment.",
+            "note_text": campfire_herb_cache_note(self.sim, prop),
         })
         self.sim.emit(Event(
             "inventory_panel_toggled",

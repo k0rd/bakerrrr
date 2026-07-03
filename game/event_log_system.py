@@ -3632,6 +3632,9 @@ class EventLogSystem(System):
                 return
             self.sim.log.add(f"Herbal prep: you need known plant materials for a learned recipe at {prop_name}.")
             return
+        if reason == "no_matching_recipe" and service == "campfire_herbal_recipe":
+            self.sim.log.add(f"Herbal prep: those cached herbs do not match a recipe you know at {prop_name}. Try free-mix to experiment.")
+            return
         if reason == "invalid_mix" and service in herbal_craft_services:
             self.sim.log.add("Herbal prep: those plant materials do not satisfy the recipe. Nothing was consumed.")
             return

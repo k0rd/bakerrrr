@@ -4721,6 +4721,8 @@ class ServiceMenuSystem(System):
             if service in {"campfire_herbal_recipe", "campfire_herbal_mix"}:
                 return title, ["The campfire herb cache needs 2-3 harvested plant materials.", "Open the herb cache and load the plants first."]
             return title, ["You do not have the known plant materials for any learned recipe.", "Harvest herbs, then learn which plants carry the needed affinities."]
+        if reason == "no_matching_recipe" and service == "campfire_herbal_recipe":
+            return title, ["Those cached herbs do not match any recipe you know.", "Use free-mix cached herbs if you want to experiment."]
         if reason == "invalid_mix" and service in herbal_craft_services:
             return title, ["Those plant materials do not satisfy the recipe.", "Nothing was consumed."]
         if reason == "no_tool" and service in {"herbal_compound", "campfire_herbal_recipe", "campfire_herbal_mix"}:

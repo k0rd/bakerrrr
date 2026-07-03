@@ -78,6 +78,20 @@ def container_capacity_for_kind(container_kind, *, default=None):
     return default
 
 
+def campfire_herb_cache_note(sim, prop):
+    property_id = str((prop or {}).get("id", "") or "").strip()
+    if not property_id:
+        return "Campfire herbs: load 2-3 plant materials here. Mortar kit required."
+    count = len(_property_runtime_container_entries(sim, property_id, container_kind=CAMPFIRE_HERB_CACHE_KIND))
+    if count <= 0:
+        return "Campfire herbs: load 2-3 plant materials here. Mortar kit required."
+    if count == 1:
+        return "Campfire herbs: 1/3 loaded. Add at least one more plant material. Mortar kit required."
+    if count <= CAMPFIRE_HERB_CACHE_CAPACITY:
+        return f"Campfire herbs: {count}/3 ready. Close, then choose recipe or free-mix. Mortar kit required."
+    return f"Campfire herbs: {count}/3 loaded. Remove extras before mixing."
+
+
 class PlayerInteractionRuntime:
     def __init__(self, action_system, *, infrastructure_target_property):
         self.action_system = action_system
@@ -834,7 +848,7 @@ class PlayerInteractionRuntime:
     def container_panel_note(self, prop, *, container_kind=None):
         container_kind = str(container_kind or "container").strip().lower() or "container"
         if container_kind == CAMPFIRE_HERB_CACHE_KIND:
-            return "Campfire herbs: load 2-3 plant materials, then mix by recipe or experiment."
+            return campfire_herb_cache_note(self.sim, prop)
         if container_kind == "cache":
             note = self.cache_panel_mission_note(prop)
             if note:

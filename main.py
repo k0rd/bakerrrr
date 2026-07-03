@@ -3044,6 +3044,20 @@ def _run_character_session(view, character_name, gender_identity=None, *, tutori
         return _run_loaded_game(view, character_name, debug_mode=debug_mode)
     custom_content_result = load_custom_content_for_new_run()
     _show_custom_content_notices(view, custom_content_result)
+    if bool(getattr(custom_content_result, "blocking", False)):
+        return {
+            "show_post_curses": False,
+            "outcome": "blocked",
+            "reason": "custom_content_rejected",
+            "objective_title": character_name,
+            "tick": 0,
+            "summary_lines": [
+                "New run did not start because custom content was rejected.",
+                "Read the custom-content notice, then remove or fix the listed files.",
+            ],
+            "saved": False,
+            "final_notice_printed": True,
+        }
     resolved_identity = (
         normalize_gender_identity(gender_identity, default="nonbinary")
         if str(gender_identity or "").strip()

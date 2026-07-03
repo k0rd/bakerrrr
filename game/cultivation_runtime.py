@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from engine.events import Event
 from engine.systems import System
 from game.components import AI, Inventory, Position
+from game.flora_genetics import normalize_flora_genetics
 from game.flora_runtime import (
     EXHAUSTED_FLORA_STAGES,
     DEFAULT_GLYPH_BY_FORM,
@@ -242,6 +243,7 @@ def seed_packet_metadata(sim, *, plant_id=None, seed_token="", source_kind="stoc
         "hybrid_generation": _safe_int((hybrid or {}).get("hybrid_generation"), 0) if isinstance(hybrid, Mapping) else 0,
         "lineage": dict((hybrid or {}).get("lineage") or {}) if isinstance(hybrid, Mapping) else {},
         "parent_plant_ids": list((hybrid or {}).get("parent_plant_ids", ()) or ()) if isinstance(hybrid, Mapping) else [],
+        "genetics": dict(row.get("genetics") or {}) if isinstance(row.get("genetics"), Mapping) else {},
     }
     if isinstance(hybrid, Mapping):
         for key in ("chemistry_class", "parent_chemistry_classes", "hybrid_signature", "genetics"):
@@ -379,6 +381,7 @@ def _flora_record_from_cultivation(record):
         "cluster_id": f"cultivation:{record.get('id')}",
         "tags": list(record.get("tags") or row.get("tags", ()) or ()),
         "rarity": _key(record.get("rarity") or row.get("rarity"), "common"),
+        "genetics": dict(record.get("genetics") or row.get("genetics") or {}) if isinstance(record.get("genetics") or row.get("genetics"), Mapping) else {},
         "harvest_potential": dict(row.get("harvest_potential", {}) or {}),
         "harvest_limit": harvest_limit,
         "harvest_count": max(0, _safe_int(record.get("harvest_count"), 0)),
@@ -768,10 +771,6 @@ def _hybrid_seed_metadata(sim, source, target):
         "rarity": _key(target.get("rarity") or source.get("rarity"), "common"),
         "crossbreed_tags": sorted((_crossbreed_tags(source) | _crossbreed_tags(target)))[:6],
         "tags": sorted(set(tuple(source.get("tags", ()) or ())) | set(tuple(target.get("tags", ()) or ())))[:10],
-        "genetics": {
-            "parents": [target_plant_id, source_plant_id],
-            "signature": signature,
-        },
         "chemistry_class": rng.choice([value for value in (source_class, target_class) if value] or ["mending"]),
         "parent_chemistry_classes": [value for value in (target_class, source_class) if value],
         "parent_plant_ids": [target_plant_id, source_plant_id],
@@ -783,6 +782,27 @@ def _hybrid_seed_metadata(sim, source, target):
             "generation": generation,
         },
     }
+    hybrid["genetics"] = normalize_flora_genetics(
+        hybrid_id,
+        {
+            "id": hybrid_id,
+            "name": hybrid["plant_name"],
+            "growth_form": hybrid["growth_form"],
+            "glyph": hybrid["glyph"],
+            "render_key": hybrid["render_key"],
+            "colors": [hybrid["color_key"]],
+            "rarity": hybrid["rarity"],
+            "tags": list(hybrid.get("tags") or ()),
+            "crossbreed_tags": list(hybrid.get("crossbreed_tags") or ()),
+            "genetics": {
+                "parents": [target_plant_id, source_plant_id],
+                "generation": generation,
+                "lineage_depth": generation,
+                "lineage_hash": signature,
+            },
+        },
+        seed=getattr(sim, "seed", 0),
+    )
     return seed_packet_metadata(sim, source_kind="hybrid_seed", hybrid=hybrid)
 
 

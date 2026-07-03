@@ -89,6 +89,7 @@ class CustomContentResult:
     world_profiles: dict = field(default_factory=dict)
     room_curiosity_flavors: dict = field(default_factory=dict)
     ui_themes: dict = field(default_factory=dict)
+    post_game_eligibility: dict = field(default_factory=dict)
     notices: list[dict] = field(default_factory=list)
     blocking: bool = False
 
@@ -874,7 +875,183 @@ def _domain_manifest(file_records):
     }
 
 
-def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT):
+def _manifest_loaded_file_records(manifest):
+    rows = []
+    domains = manifest.get("domains") if isinstance(manifest, dict) else {}
+    if not isinstance(domains, dict):
+        return rows
+    for domain in CUSTOM_CONTENT_DOMAINS:
+        domain_data = domains.get(domain)
+        files = domain_data.get("files") if isinstance(domain_data, dict) else ()
+        for record in files or ():
+            if not isinstance(record, dict):
+                continue
+            sha = str(record.get("sha256", "") or "").strip().lower()
+            path = str(record.get("path", "") or "").strip()
+            if not sha or not path:
+                continue
+            rows.append({
+                "domain": domain,
+                "path": path,
+                "sha256": sha,
+                "loaded_ids": list(record.get("loaded_ids", ()) or ()),
+            })
+    return rows
+
+
+def _verified_reward_artifact_index(*, reward_root=None):
+    from game.run_rewards import REWARD_ROOT, load_reward_ledger, verify_reward_receipt
+
+    root = Path(reward_root) if reward_root is not None else REWARD_ROOT
+    artifacts_by_key = {}
+    seen_receipts = set()
+    receipt_count = 0
+
+    def _consider_receipt(raw_receipt, *, source):
+        nonlocal receipt_count
+        if not isinstance(raw_receipt, dict):
+            return
+        receipt = copy.deepcopy(raw_receipt)
+        receipt.pop("receipt_path", None)
+        receipt.pop("readme_path", None)
+        receipt_id = str(receipt.get("reward_id", "") or source).strip()
+        if not receipt_id or receipt_id in seen_receipts:
+            return
+        if not verify_reward_receipt(receipt, export_root=root):
+            return
+        seen_receipts.add(receipt_id)
+        receipt_count += 1
+        for artifact in receipt.get("artifacts", ()) or ():
+            if not isinstance(artifact, dict):
+                continue
+            domain = str(artifact.get("domain", "") or "").strip().lower()
+            sha = str(artifact.get("sha256", "") or "").strip().lower()
+            if domain not in CUSTOM_CONTENT_DOMAINS or not sha:
+                continue
+            artifacts_by_key.setdefault((domain, sha), []).append({
+                "reward_id": receipt_id,
+                "domain": domain,
+                "sha256": sha,
+                "path": str(artifact.get("path", "") or "").strip(),
+                "loaded_ids": list(artifact.get("loaded_ids", ()) or ()),
+            })
+
+    receipts_dir = root / "receipts"
+    if receipts_dir.is_dir():
+        for path in sorted(receipts_dir.glob("*.json")):
+            try:
+                receipt = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            _consider_receipt(receipt, source=str(path))
+
+    ledger = load_reward_ledger(export_root=root)
+    for row in ledger.get("rewards", ()) or ():
+        _consider_receipt(row, source=f"ledger:{row.get('reward_id', '') if isinstance(row, dict) else ''}")
+
+    return artifacts_by_key, receipt_count
+
+
+def custom_content_post_game_eligibility(manifest, *, reward_root=None):
+    loaded_files = _manifest_loaded_file_records(manifest)
+    if not loaded_files:
+        return {
+            "eligible": True,
+            "reason": "no_custom_content",
+            "checked_receipts": 0,
+            "covered_files": [],
+            "unreceipted_files": [],
+        }
+    artifacts_by_key, receipt_count = _verified_reward_artifact_index(reward_root=reward_root)
+    covered = []
+    unreceipted = []
+    for row in loaded_files:
+        matches = artifacts_by_key.get((row["domain"], row["sha256"]), ())
+        if matches:
+            match = matches[0]
+            covered.append({
+                **row,
+                "reward_id": match.get("reward_id", ""),
+                "receipt_artifact_path": match.get("path", ""),
+            })
+        else:
+            unreceipted.append(row)
+    return {
+        "eligible": not unreceipted,
+        "reason": "all_receipted_reward_content" if not unreceipted else "unreceipted_custom_content",
+        "checked_receipts": int(receipt_count),
+        "covered_files": covered,
+        "unreceipted_files": unreceipted,
+    }
+
+
+def custom_content_post_game_notice(eligibility):
+    if not isinstance(eligibility, dict) or bool(eligibility.get("eligible", True)):
+        return None
+    unreceipted = [
+        row for row in list(eligibility.get("unreceipted_files", ()) or ())
+        if isinstance(row, dict)
+    ]
+    lines = [
+        "This run loaded custom content that is not covered by a generated reward receipt.",
+        "You can play this run, but it will not create or receive generated rewards, failed-run bones, or run echoes.",
+        "To keep those systems eligible, use unedited files copied from saves/rewards with matching receipts, or remove the unreceipted files.",
+        "Unreceipted active files:",
+    ]
+    for row in unreceipted[:8]:
+        domain = str(row.get("domain", "custom")).replace("_", " ")
+        path = str(row.get("path", "") or "").strip()
+        lines.append(f"{domain}: {path}")
+    if len(unreceipted) > 8:
+        lines.append(f"...and {len(unreceipted) - 8} more file(s).")
+    return {
+        "title": "Custom content disables post-game traces",
+        "severity": "warning",
+        "stream": "stderr",
+        "lines": lines,
+    }
+
+
+def _custom_content_block_tail(domain_label):
+    label = str(domain_label or "custom content").strip() or "custom content"
+    return (
+        "No run was started because one or more custom-content files do not match the public schema.",
+        f"Fix path: edit or remove the listed {label} file(s), then start the game again.",
+        "To run without custom content, move the listed file(s) out of config/custom_content/.",
+        "To keep post-game rewards, bones, and echoes eligible while using generated reward content, copy the unedited reward files from saves/rewards into config/custom_content and leave their receipts in saves/rewards/receipts/.",
+    )
+
+
+def custom_content_allows_post_game_traces(sim):
+    eligibility = getattr(sim, "custom_content_post_game_eligibility", None)
+    if not isinstance(eligibility, dict):
+        traits = getattr(sim, "world_traits", None)
+        eligibility = traits.get("custom_content_post_game_eligibility") if isinstance(traits, dict) else None
+    if not isinstance(eligibility, dict):
+        return True
+    return bool(eligibility.get("eligible", True))
+
+
+def custom_content_post_game_block_lines(sim):
+    eligibility = getattr(sim, "custom_content_post_game_eligibility", None)
+    if not isinstance(eligibility, dict):
+        traits = getattr(sim, "world_traits", None)
+        eligibility = traits.get("custom_content_post_game_eligibility") if isinstance(traits, dict) else None
+    if not isinstance(eligibility, dict) or bool(eligibility.get("eligible", True)):
+        return []
+    unreceipted = [
+        row for row in list(eligibility.get("unreceipted_files", ()) or ())
+        if isinstance(row, dict)
+    ]
+    file_count = len(unreceipted)
+    return [
+        "Post-game traces: skipped because unreceipted custom content was active.",
+        f"Unreceipted active custom file{'s' if file_count != 1 else ''}: {file_count}.",
+        "Use generated reward files with matching receipts to keep rewards, bones, and echoes eligible.",
+    ]
+
+
+def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT, reward_root=None):
     root = Path(root)
     discovered = discover_custom_content_files(root=root)
     manifest = _empty_manifest()
@@ -883,16 +1060,19 @@ def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT):
     world_profiles = {}
     room_curiosity_flavors = {}
     ui_themes = {}
+    blocking_issues = []
 
     item_files = discovered.get(ITEM_DOMAIN, [])
     if item_files:
         parsed_items, file_records, issues = _validate_item_domain(item_files, root=root)
         if issues:
+            blocking_issues.extend(issues)
             notices.append(_notice_from_issues(
                 "Custom item content was rejected",
                 issues,
-                severity="warning",
-                tail=("No custom item files were loaded for this run.",),
+                severity="error",
+                stream="stdout",
+                tail=_custom_content_block_tail("item"),
             ))
         else:
             item_definitions = parsed_items
@@ -902,11 +1082,13 @@ def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT):
     if profile_files:
         parsed_profiles, file_records, issues = _validate_world_profile_domain(profile_files, root=root)
         if issues:
+            blocking_issues.extend(issues)
             notices.append(_notice_from_issues(
                 "Custom world profiles were rejected",
                 issues,
-                severity="warning",
-                tail=("No custom world-profile files were loaded for this run.",),
+                severity="error",
+                stream="stdout",
+                tail=_custom_content_block_tail("world-profile"),
             ))
         else:
             world_profiles = parsed_profiles
@@ -916,11 +1098,13 @@ def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT):
     if room_curiosity_files:
         parsed_flavors, file_records, issues = _validate_room_curiosity_flavor_domain(room_curiosity_files, root=root)
         if issues:
+            blocking_issues.extend(issues)
             notices.append(_notice_from_issues(
                 "Custom room curiosity flavors were rejected",
                 issues,
-                severity="warning",
-                tail=("No custom room-curiosity flavor files were loaded for this run.",),
+                severity="error",
+                stream="stdout",
+                tail=_custom_content_block_tail("room-curiosity flavor"),
             ))
         else:
             room_curiosity_flavors = parsed_flavors
@@ -930,15 +1114,34 @@ def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT):
     if ui_theme_files:
         parsed_themes, file_records, issues = _validate_ui_theme_domain(ui_theme_files, root=root)
         if issues:
+            blocking_issues.extend(issues)
             notices.append(_notice_from_issues(
                 "Custom UI themes were rejected",
                 issues,
-                severity="warning",
-                tail=("No custom UI-theme files were loaded for this run.",),
+                severity="error",
+                stream="stdout",
+                tail=_custom_content_block_tail("UI-theme"),
             ))
         else:
             ui_themes = parsed_themes
             manifest["domains"][UI_THEME_DOMAIN] = _domain_manifest(file_records)
+
+    if blocking_issues:
+        return CustomContentResult(
+            manifest=_empty_manifest(),
+            item_definitions={},
+            world_profiles={},
+            room_curiosity_flavors={},
+            ui_themes={},
+            post_game_eligibility=custom_content_post_game_eligibility(_empty_manifest(), reward_root=reward_root),
+            notices=notices,
+            blocking=True,
+        )
+
+    eligibility = custom_content_post_game_eligibility(manifest, reward_root=reward_root)
+    eligibility_notice = custom_content_post_game_notice(eligibility)
+    if eligibility_notice:
+        notices.append(eligibility_notice)
 
     return CustomContentResult(
         manifest=manifest,
@@ -946,6 +1149,7 @@ def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT):
         world_profiles=world_profiles,
         room_curiosity_flavors=room_curiosity_flavors,
         ui_themes=ui_themes,
+        post_game_eligibility=eligibility,
         notices=notices,
         blocking=False,
     )
@@ -1015,14 +1219,15 @@ def _extra_file_notice(saved_manifest, *, root=CUSTOM_CONTENT_ROOT):
     }
 
 
-def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_ROOT):
+def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_ROOT, reward_root=None):
     root = Path(root)
     if not isinstance(saved_manifest, dict) or int(saved_manifest.get("schema_version", 0) or 0) == 0:
         notices = []
         extra_notice = _extra_file_notice(_empty_manifest(), root=root)
         if extra_notice:
             notices.append(extra_notice)
-        return CustomContentResult(manifest=_empty_manifest(), notices=notices, blocking=False)
+        eligibility = custom_content_post_game_eligibility(_empty_manifest(), reward_root=reward_root)
+        return CustomContentResult(manifest=_empty_manifest(), post_game_eligibility=eligibility, notices=notices, blocking=False)
 
     manifest = copy.deepcopy(saved_manifest)
     notices = []
@@ -1083,6 +1288,7 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
             "Saved run cannot resume until custom content matches",
             blocking_issues,
             severity="error",
+            stream="stdout",
             tail=(
                 "The save file was not deleted.",
                 "Restore the listed files exactly, or resume a save that was made without them.",
@@ -1094,6 +1300,7 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
             world_profiles={},
             room_curiosity_flavors={},
             ui_themes={},
+            post_game_eligibility=custom_content_post_game_eligibility(_empty_manifest(), reward_root=reward_root),
             notices=notices,
             blocking=True,
         )
@@ -1102,12 +1309,18 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
     if extra_notice:
         notices.append(extra_notice)
 
+    eligibility = custom_content_post_game_eligibility(manifest, reward_root=reward_root)
+    eligibility_notice = custom_content_post_game_notice(eligibility)
+    if eligibility_notice:
+        notices.append(eligibility_notice)
+
     return CustomContentResult(
         manifest=manifest,
         item_definitions=item_definitions,
         world_profiles=world_profiles,
         room_curiosity_flavors=room_curiosity_flavors,
         ui_themes=ui_themes,
+        post_game_eligibility=eligibility,
         notices=notices,
         blocking=False,
     )
@@ -1119,6 +1332,10 @@ def apply_custom_content(result, sim=None):
     refresh_item_runtime(result.item_definitions)
     if sim is not None:
         sim.custom_content_manifest = copy.deepcopy(result.manifest)
+        sim.custom_content_post_game_eligibility = copy.deepcopy(result.post_game_eligibility or custom_content_post_game_eligibility(result.manifest))
+        if not isinstance(getattr(sim, "world_traits", None), dict):
+            sim.world_traits = {}
+        sim.world_traits["custom_content_post_game_eligibility"] = copy.deepcopy(sim.custom_content_post_game_eligibility)
         world = getattr(sim, "world", None)
         if world is not None and hasattr(world, "set_custom_world_profiles"):
             world.set_custom_world_profiles(result.world_profiles)

@@ -42,17 +42,19 @@ UI themes validate through the same custom-content loader and may become generat
 
 The receipt and ledger prove that the files were earned from a BAKERRRR run. They are not required for ordinary custom-content loading, and editing a copy of a reward file just makes it normal player-authored custom content.
 
+That distinction matters for post-game traces. Valid custom content without matching generated-reward receipts can still be played, but that run cannot create or receive generated rewards, failed-run bones, or run echoes. Generated reward files keep those systems eligible only when their matching receipt still verifies against the saved reward bundle.
+
 Generated reward files are also good examples. You can inspect them to see the exact JSON shape the loader accepts.
 
 ## Load Rules
 
-- the project will keep this file up-to-date when the specification changes. the loading process is strict. 
-- Item files are checked as one domain. If any item file fails, no custom items load for that run.
-- World-profile files are checked as one domain. If any world-profile file fails, no custom world profiles load for that run.
-- Room-curiosity flavor files are checked as one domain.
-- UI-theme files are checked as one domain.
-- A bad file in one domain does not disable valid files from the other domains.
-- Problems are shown in game before play continues.
+- The project will keep this file up-to-date when the specification changes. The loading process is strict.
+- Invalid custom content blocks a new run before play starts. The game shows an in-game notice and also prints fix steps to stdout.
+- To run without custom content, move the listed file out of `config/custom_content/` and start again.
+- Valid hand-authored custom content can load, but if it does not have matching generated-reward receipts, post-game generated rewards, failed-run bones, and run echoes are disabled for that run.
+- Generated reward files stay post-game eligible when the copied files match their receipt and the original saved reward bundle is still present under `saves/rewards/`.
+- Item, world-profile, room-curiosity, and UI-theme files are all validated before play starts.
+- Problems are shown in game before play continues or before startup exits.
 - Saved runs remember the exact custom files they started with. The game stores file paths, schema versions, SHA-256 hashes, and loaded ids, not the JSON bodies.
 - When resuming a saved run, required custom files must still exist and match exactly. A missing file or hash mismatch blocks resume and leaves the save file in place.
 - Extra current custom files are ignored when resuming an older save.

@@ -1139,10 +1139,16 @@ def _build_successful_remnant_echo_record(sim, player_eid, *, outcome="", object
 def archive_run_echoes(sim, player_eid, *, outcome="", reason="", objective_title="", summary_lines=()):
     del reason, summary_lines
     from game.tutorial import tutorial_no_persistence
+    from game.custom_content import custom_content_allows_post_game_traces, custom_content_post_game_block_lines
 
     if tutorial_no_persistence(sim):
         return {
             "lines": ["Tutorial run: no run echoes were archived."],
+            "records": [],
+        }
+    if not custom_content_allows_post_game_traces(sim):
+        return {
+            "lines": custom_content_post_game_block_lines(sim),
             "records": [],
         }
     from engine.persistence import append_run_echo_record
@@ -1555,8 +1561,11 @@ def maybe_seed_run_echo_for_chunk(sim, chunk, *, force=False):
     if sim is None or chunk_key is None:
         return None
     from game.tutorial import tutorial_no_persistence
+    from game.custom_content import custom_content_allows_post_game_traces
 
     if tutorial_no_persistence(sim):
+        return None
+    if not custom_content_allows_post_game_traces(sim):
         return None
     runtime = prime_run_echoes_runtime(sim)
     attempted = runtime.setdefault("attempted_chunks", set())

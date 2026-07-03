@@ -260,17 +260,44 @@ def ensure_herbal_state(sim):
     return sim.herbal_known_plant_traits, sim.herbal_known_recipes
 
 
+def _genetics_bias_terms(data):
+    if not isinstance(data, Mapping):
+        return ()
+    # V1 genetics is a rich passive genome. Gameplay chemistry assignment keeps
+    # using only the legacy small aliases so nested future traits do not leak.
+    allowed_keys = (
+        "hue_family",
+        "petal_shape",
+        "blade_shape",
+        "stem_shape",
+        "leaf_shape",
+        "habit",
+        "texture",
+        "growth_form",
+        "glyph",
+    )
+    terms = []
+    for key in allowed_keys:
+        value = data.get(key)
+        if value is None:
+            continue
+        terms.append(str(key))
+        terms.append(str(value))
+    return tuple(terms)
+
+
 def _plant_bias_weights(row):
     text_bits = []
     for key in ("id", "name", "growth_form", "rarity"):
         text_bits.append(str(row.get(key, "")))
     for key in ("tags", "crossbreed_tags"):
         text_bits.extend(str(token) for token in row.get(key, ()) or ())
-    for key in ("growth_traits", "genetics", "harvest_potential", "spread_profile"):
+    for key in ("growth_traits", "harvest_potential", "spread_profile"):
         data = row.get(key)
         if isinstance(data, Mapping):
             text_bits.extend(str(k) for k in data.keys())
             text_bits.extend(str(v) for v in data.values())
+    text_bits.extend(_genetics_bias_terms(row.get("genetics")))
     text = " ".join(text_bits).strip().lower()
     weights = {}
     for class_id in CHEMISTRY_CLASSES:
@@ -633,6 +660,8 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         "harvested_tick": _safe_int(getattr(sim, "tick", 0), 0),
         "legal_status": "legal",
     }
+    if isinstance(record.get("genetics"), Mapping):
+        metadata["genetics"] = copy.deepcopy(dict(record.get("genetics") or {}))
     metadata["display_name"] = herbal_ingredient_display_name(item_id, metadata["source_plant_name"])
     if tool.get("item_id"):
         metadata["tool_item_id"] = tool.get("item_id")
@@ -1161,6 +1190,14 @@ def craft_herbal_medicine_from_container(
         ingredient_source_kind=container_kind,
     )
     if isinstance(result, dict):
+        if not result.get("ok"):
+            result.setdefault("ingredient_count", len(ingredient_rows))
+            if (
+                not bool(freeform)
+                and str(result.get("reason", "") or "").strip().lower() == "no_ingredients"
+                and 2 <= len(ingredient_rows) <= 3
+            ):
+                result["reason"] = "no_matching_recipe"
         result["ingredient_source"] = container_kind
     return result
 

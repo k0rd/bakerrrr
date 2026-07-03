@@ -12,6 +12,7 @@ from collections import Counter
 from engine.buildings import layout_chunk_building, world_building_id
 from engine.sites import layout_chunk_site
 from game.components import AI, NPCNeeds, Occupation, PlayerAssets, Position
+from game.color_words import casino_color_word
 from game.flora_runtime import load_flora_catalog
 from game.organizations import occupation_targets_property, property_org_members
 from game.population import work_shift_active
@@ -1858,25 +1859,7 @@ CASINO_BLOOM_CARD_STARTING_HAND_SIZE = 3
 
 
 def _casino_color_word(value):
-    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
-    aliases = {
-        "yellow": "gold",
-        "silver": "white",
-        "cream": "white",
-        "bright_red": "red",
-        "bright_green": "green",
-        "bright_blue": "blue",
-        "dark": "black",
-        "grey": "charcoal",
-        "gray": "charcoal",
-    }
-    text = aliases.get(text, text)
-    allowed = (
-        "red", "green", "blue", "gold", "black", "white",
-        "pink", "violet", "coral", "charcoal", "navy", "purple",
-        "olive", "brown",
-    )
-    return text if text in allowed else ""
+    return casino_color_word(value)
 
 
 def _casino_color_words_from_hint(raw):

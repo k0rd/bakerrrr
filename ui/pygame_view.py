@@ -8,6 +8,7 @@ from pathlib import Path
 
 from game.appearance_palette import pygame_palette_entries
 from game.action_bindings import CONTROLLER_DEADZONE, CONTROLLER_REPEAT_DELAY, CONTROLLER_REPEAT_INTERVAL
+from game.color_words import casino_color_word, color_word_rgb
 from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_semantic_catalog
 from game.symbolic_palette import pygame_symbolic_palette_entries
 from game.world_palette import pygame_world_palette_entries
@@ -5983,24 +5984,10 @@ class PygameView:
             return 3, 4
 
         def _casino_color_rgb(color_word):
-            key = str(color_word or "").strip().lower().replace(" ", "_").replace("-", "_")
-            mapping = {
-                "red": (222, 42, 65),
-                "green": (44, 180, 98),
-                "blue": (68, 138, 230),
-                "gold": (234, 188, 62),
-                "black": (28, 31, 36),
-                "white": (232, 229, 214),
-                "pink": (238, 112, 176),
-                "violet": (165, 104, 222),
-                "coral": (240, 104, 85),
-                "charcoal": (70, 76, 84),
-                "navy": (42, 70, 126),
-                "purple": (109, 65, 148),
-                "olive": (116, 135, 70),
-                "brown": (126, 82, 52),
-            }
-            return mapping.get(key, cursor)
+            normalized = casino_color_word(color_word)
+            if normalized == "black":
+                return color_word_rgb("total_black", fallback=cursor) or cursor
+            return color_word_rgb(normalized, fallback=cursor) or cursor
 
         def _draw_color_die(die_rect, color_word, label=""):
             die_rect = self.pygame.Rect(die_rect)

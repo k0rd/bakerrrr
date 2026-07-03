@@ -76,6 +76,7 @@ from game.player_action_system import PlayerActionSystem
 from game.player_interactions import (
     CAMPFIRE_HERB_CACHE_CAPACITY,
     CAMPFIRE_HERB_CACHE_KIND,
+    campfire_herb_cache_note,
     entry_allowed_in_container,
 )
 from game.character_sheet import (
@@ -3828,7 +3829,7 @@ class InputSystem(System):
         if container_kind == "cache":
             return self._cache_panel_mission_note(prop)
         if container_kind == CAMPFIRE_HERB_CACHE_KIND:
-            return "Campfire herbs: load 2-3 plant materials, then mix by recipe or experiment."
+            return campfire_herb_cache_note(self.sim, prop)
         if container_kind == "bones":
             metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
             note = str(metadata.get("bones_note", "") or "").strip()
