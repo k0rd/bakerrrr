@@ -678,7 +678,9 @@
       "services": [
         "rest",
         "campfire_cook",
-        "herbal_compound"
+        "campfire_herb_cache",
+        "campfire_herbal_recipe",
+        "campfire_herbal_mix"
       ],
       "light": {
         "enabled": true,

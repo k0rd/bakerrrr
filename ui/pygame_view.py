@@ -5584,11 +5584,12 @@ class PygameView:
         stroke_w = 1
         overlay = self.pygame.Surface((width_px, self.cell_px), self.pygame.SRCALPHA)
 
+        fill_alpha = 180 if kind in {"box_cap", "box_mid"} else 112
         fill = (
             min(255, 10 + (frame[0] // 8)),
             min(255, 12 + (frame[1] // 8)),
             min(255, 16 + (frame[2] // 8)),
-            112,
+            fill_alpha,
         )
         accent = (
             min(255, int(frame[0] * 1.08)),

@@ -929,11 +929,13 @@ def player_business_state(prop, create=False):
         return None
     metadata = _property_metadata(prop)
     state = metadata.get("player_business")
+    created_new = False
     if not isinstance(state, dict):
         if not create:
             return None
         state = {}
         metadata["player_business"] = state
+        created_new = True
 
     state["account_balance"] = max(0, _int_or(state.get("account_balance"), default=0))
     raw_last_cycle = state.get("last_cycle_hour")
@@ -969,6 +971,10 @@ def player_business_state(prop, create=False):
                 role = "staff"
             roles[str(clean_eid)] = role
     state["staff_roles"] = roles
+    if "incumbent_staff_retained" not in state:
+        state["incumbent_staff_retained"] = not bool(created_new)
+    else:
+        state["incumbent_staff_retained"] = bool(state.get("incumbent_staff_retained", False))
 
     raw_wage_levels = state.get("employee_wage_levels")
     wage_levels = {}
@@ -2378,7 +2384,7 @@ def _active_business_scene_market_pressure(sim, prop):
     return result
 
 
-def _sync_staff_roster(sim, prop, state):
+def _sync_staff_roster(sim, prop, state, *, retain_incumbents=False):
     roles = dict(state.get("staff_roles", {})) if isinstance(state.get("staff_roles"), dict) else {}
     owner_eid = prop.get("owner_eid")
     player_eid = getattr(sim, "player_eid", None)
@@ -2390,18 +2396,24 @@ def _sync_staff_roster(sim, prop, state):
         if (assets and prop_id in getattr(assets, "owned_property_ids", set())) or owner_tag == "player":
             social_owner_eid = player_eid
 
-    for member in property_org_members(sim, prop):
-        actor_eid = _int_or(member.get("eid"), default=0)
-        if actor_eid <= 0 or actor_eid == _int_or(player_eid, default=-1):
-            continue
-        role = str(member.get("role", "staff") or "staff").strip().lower()
-        if role == "owner":
-            role = "manager" if actor_eid != _int_or(owner_eid, default=-1) else "manager"
-        if role not in {"manager", "staff"}:
-            role = "staff"
-        roles[str(actor_eid)] = role
-        if social_owner_eid is not None and player_eid is not None and _int_or(social_owner_eid, default=-1) == _int_or(player_eid, default=-2):
-            _ensure_player_business_staff_bond(sim, social_owner_eid, actor_eid, role=role)
+    if bool(retain_incumbents):
+        for member in property_org_members(sim, prop):
+            actor_eid = _int_or(member.get("eid"), default=0)
+            if actor_eid <= 0 or actor_eid == _int_or(player_eid, default=-1):
+                continue
+            role = str(member.get("role", "staff") or "staff").strip().lower()
+            if role == "owner":
+                role = "manager" if actor_eid != _int_or(owner_eid, default=-1) else "manager"
+            if role not in {"manager", "staff"}:
+                role = "staff"
+            roles[str(actor_eid)] = role
+
+    if social_owner_eid is not None and player_eid is not None and _int_or(social_owner_eid, default=-1) == _int_or(player_eid, default=-2):
+        for raw_actor_eid, raw_role in tuple(roles.items()):
+            actor_eid = _int_or(raw_actor_eid, default=0)
+            if actor_eid <= 0 or actor_eid == _int_or(player_eid, default=-1):
+                continue
+            _ensure_player_business_staff_bond(sim, social_owner_eid, actor_eid, role=_normalized_role(raw_role))
 
     roster = sorted(
         _int_or(raw_eid, default=0)
@@ -3269,7 +3281,10 @@ class PlayerBusinessSystem(System):
         state["required_staff"] = _required_staff_for(prop)
         if state.get("last_cycle_hour") is None:
             state["last_cycle_hour"] = _absolute_hour(self.sim)
-        staffing = _sync_staff_roster(self.sim, prop, state)
+        retain_incumbents = not bool(state.get("incumbent_staff_retained", False))
+        staffing = _sync_staff_roster(self.sim, prop, state, retain_incumbents=retain_incumbents)
+        if retain_incumbents:
+            state["incumbent_staff_retained"] = True
         if announce:
             self.sim.emit(Event(
                 "player_business_acquired",

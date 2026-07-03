@@ -434,11 +434,14 @@ def street_vendor_sell_rows(sim, contact_eid, player_eid, profile=None):
         item_id = _key(row.get("item_id"))
         if not item_id:
             continue
+        source_entry = row.get("entry") if isinstance(row.get("entry"), Mapping) else row
+        tags = _item_tags(source_entry, item_catalog=ITEM_CATALOG)
+        if "experimental" in tags or "aerosol_trap" in tags:
+            continue
         illegal = bool(row.get("illegal"))
         desired = bool(row.get("desired"))
         label = "premium wanted" if desired else _sell_note_for_kind((profile or {}).get("vendor_kind"))
         row_color = "property_service" if desired else ("item_illegal" if illegal else "item_tool")
-        source_entry = row.get("entry") if isinstance(row.get("entry"), Mapping) else row
         if item_entry_is_critical_quest_item(source_entry):
             row_color = STREET_TRADE_CRITICAL_QUEST_ITEM_COLOR
         out.append({

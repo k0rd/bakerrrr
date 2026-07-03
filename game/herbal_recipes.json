@@ -2,7 +2,7 @@
   "_meta": {
     "schema_version": 1
   },
-  "_comment": "Small-batch herbal medicine recipes. Component classes are satisfied by run-randomized flora chemistry, not fixed plant ids.",
+  "_comment": "Small-batch herbal chemistry recipes. Component classes are satisfied by run-randomized flora chemistry, not fixed plant ids.",
   "herbal_poultice": {
     "name": "herbal poultice",
     "output_item_id": "herbal_poultice",
@@ -56,5 +56,94 @@
     "service_fee": 12,
     "recipe_price": 28,
     "tags": ["calming", "steady", "legal"]
+  },
+  "focus_inhaler_blend": {
+    "name": "focus inhaler blend",
+    "output_item_id": "focus_inhaler",
+    "component_count": 3,
+    "required_classes": ["energizing", "cleansing", "volatile"],
+    "service_fee": 14,
+    "recipe_price": 34,
+    "tags": ["focus", "restricted", "inhaler"]
+  },
+  "irritant_aerosol_mix": {
+    "name": "irritant aerosol mix",
+    "output_item_id": "tear_gas_canister",
+    "component_count": 3,
+    "required_classes": ["irritant", "volatile", "binding"],
+    "service_fee": 16,
+    "recipe_price": 38,
+    "tags": ["aerosol", "tactical", "restricted"]
+  },
+  "toxic_aerosol_slurry": {
+    "name": "toxic aerosol slurry",
+    "output_item_id": "toxic_aerosol_canister",
+    "component_count": 3,
+    "required_classes": ["toxic", "irritant", "volatile"],
+    "service_fee": 20,
+    "recipe_price": 46,
+    "tags": ["aerosol", "toxin", "illegal"]
+  },
+  "dissociative_aerosol_brew": {
+    "name": "dissociative aerosol brew",
+    "output_item_id": "dissociative_aerosol",
+    "component_count": 3,
+    "required_classes": ["deliriant", "numbing", "volatile"],
+    "service_fee": 19,
+    "recipe_price": 44,
+    "tags": ["aerosol", "drug", "illegal"]
+  },
+  "hallucinogen_aerosol_bloom": {
+    "name": "hallucinogen aerosol bloom",
+    "output_item_id": "hallucinogen_aerosol",
+    "component_count": 3,
+    "required_classes": ["deliriant", "toxic", "catalyst"],
+    "service_fee": 19,
+    "recipe_price": 44,
+    "tags": ["aerosol", "hallucinogen", "illegal"]
+  },
+  "irritant_floor_trap": {
+    "name": "irritant floor trap",
+    "output_item_id": "tear_gas_floor_trap",
+    "component_count": 3,
+    "required_classes": ["irritant", "volatile", "catalyst"],
+    "service_fee": 0,
+    "recipe_price": 1,
+    "self_only": true,
+    "campfire_only": true,
+    "tags": ["trap", "aerosol", "tactical", "restricted", "homemade"]
+  },
+  "toxic_aerosol_floor_trap": {
+    "name": "toxic aerosol floor trap",
+    "output_item_id": "toxic_aerosol_floor_trap",
+    "component_count": 3,
+    "required_classes": ["toxic", "irritant", "binding"],
+    "service_fee": 0,
+    "recipe_price": 1,
+    "self_only": true,
+    "campfire_only": true,
+    "tags": ["trap", "aerosol", "toxin", "illegal", "homemade"]
+  },
+  "dissociative_aerosol_floor_trap": {
+    "name": "dissociative aerosol floor trap",
+    "output_item_id": "dissociative_aerosol_floor_trap",
+    "component_count": 3,
+    "required_classes": ["deliriant", "numbing", "binding"],
+    "service_fee": 0,
+    "recipe_price": 1,
+    "self_only": true,
+    "campfire_only": true,
+    "tags": ["trap", "aerosol", "drug", "illegal", "homemade"]
+  },
+  "hallucinogen_aerosol_floor_trap": {
+    "name": "hallucinogen aerosol floor trap",
+    "output_item_id": "hallucinogen_aerosol_floor_trap",
+    "component_count": 3,
+    "required_classes": ["deliriant", "toxic", "binding"],
+    "service_fee": 0,
+    "recipe_price": 1,
+    "self_only": true,
+    "campfire_only": true,
+    "tags": ["trap", "aerosol", "hallucinogen", "illegal", "homemade"]
   }
 }

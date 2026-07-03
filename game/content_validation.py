@@ -29,7 +29,7 @@ HERBAL_RECIPES_PATH = GAME_DIR / "herbal_recipes.json"
 
 ALLOWED_ITEM_EFFECTS = {"modify_need", "restore_hp", "status", "credits", "add_ammo"}
 ALLOWED_ITEM_NEEDS = {"energy", "safety", "social", "hunger", "thirst"}
-ALLOWED_LEGAL_STATUS = {"legal", "restricted", "illegal"}
+ALLOWED_LEGAL_STATUS = {"legal", "restricted", "suspicious", "illegal"}
 ALLOWED_WEAPON_TRAJECTORIES = {"ballistic", "lobbed", "beam"}
 ALLOWED_FIXTURE_KINDS = {"fixture", "asset"}
 ALLOWED_FIXTURE_COVER = {"none", "low", "full"}
@@ -49,6 +49,10 @@ ALLOWED_HERBAL_CHEMISTRY_CLASSES = {
     "numbing",
     "binding",
     "catalyst",
+    "irritant",
+    "toxic",
+    "deliriant",
+    "volatile",
 }
 IDENTIFIER_RE = re.compile(r"^[a-z0-9_]+$")
 RESERVED_GLYPH_POLICIES = {

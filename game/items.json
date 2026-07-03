@@ -322,6 +322,304 @@
       }
     ]
   },
+  "diluted_herbal_poultice": {
+    "name": "Diluted Herbal Poultice",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "herbal_medicine",
+      "experimental",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": [
+      {
+        "type": "restore_hp",
+        "delta": 4
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 4
+      }
+    ]
+  },
+  "diluted_hydrating_tonic": {
+    "name": "Diluted Hydrating Tonic",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "drink",
+      "medical",
+      "herbal_medicine",
+      "experimental",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 12
+      },
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 2
+      }
+    ]
+  },
+  "diluted_calming_tincture": {
+    "name": "Diluted Calming Tincture",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "herbal_medicine",
+      "experimental",
+      "safety",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 9
+      },
+      {
+        "type": "status",
+        "status": "thin_calm",
+        "duration": 9,
+        "modifiers": {
+          "safety_tick_delta": 0.02,
+          "suppression_resist_mult": 0.08,
+          "ranged_accuracy_mult": 0.02
+        }
+      }
+    ]
+  },
+  "diluted_strong_herbal_poultice": {
+    "name": "Diluted Strong Herbal Poultice",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "herbal_medicine",
+      "experimental",
+      "safety",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": [
+      {
+        "type": "restore_hp",
+        "delta": 8
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 6
+      }
+    ]
+  },
+  "diluted_field_restorative": {
+    "name": "Diluted Field Restorative",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "drink",
+      "herbal_medicine",
+      "experimental",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": [
+      {
+        "type": "restore_hp",
+        "delta": 5
+      },
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 8
+      },
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 5
+      }
+    ]
+  },
+  "diluted_steadying_draught": {
+    "name": "Diluted Steadying Draught",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "herbal_medicine",
+      "experimental",
+      "safety",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 8
+      },
+      {
+        "type": "status",
+        "status": "thin_steady",
+        "duration": 10,
+        "modifiers": {
+          "suppression_resist_mult": 0.1,
+          "incoming_damage_mult": -0.01,
+          "movement_misdirect_chance": -0.01
+        }
+      }
+    ]
+  },
+  "diluted_focus_inhaler": {
+    "name": "Diluted Focus Inhaler",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "discipline",
+      "experimental",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": [
+      {
+        "type": "status",
+        "status": "thin_focus",
+        "duration": 12,
+        "modifiers": {
+          "energy_tick_delta": 0.02,
+          "social_tick_delta": -0.03,
+          "ranged_accuracy_mult": 0.06,
+          "weapon_cooldown_mult": -0.1,
+          "suppression_resist_mult": 0.08
+        }
+      }
+    ]
+  },
+  "experimental_herbal_concoction": {
+    "name": "Odd Herbal Concoction",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "herbal_medicine",
+      "experimental",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": -4
+      },
+      {
+        "type": "status",
+        "status": "unsettled",
+        "duration": 12,
+        "modifiers": {
+          "safety_tick_delta": -0.03,
+          "ranged_accuracy_mult": -0.06,
+          "retreat_bias_delta": 0.04
+        }
+      }
+    ]
+  },
+  "weak_toxic_concoction": {
+    "name": "Weak Toxic Concoction",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "herbal_medicine",
+      "experimental",
+      "toxin",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": -6
+      },
+      {
+        "type": "status",
+        "status": "mild_toxin",
+        "duration": 10,
+        "modifiers": {
+          "toxicity_tick_delta": 0.035,
+          "move_speed_mult": -0.04,
+          "ranged_accuracy_mult": -0.05,
+          "retreat_bias_delta": 0.05
+        }
+      }
+    ]
+  },
   "focus_inhaler": {
     "name": "Focus Inhaler",
     "glyph": "!",
@@ -4302,6 +4600,107 @@
       "aerosol_label": "hallucinogen aerosol",
       "consume_on_throw": true,
       "shatter": false
+    }
+  },
+  "tear_gas_floor_trap": {
+    "name": "Tear Gas Floor Trap",
+    "glyph": "^",
+    "stack_max": 1,
+    "tags": [
+      "trap",
+      "aerosol_trap",
+      "homemade",
+      "contraband",
+      "placeable",
+      "restricted",
+      "aerosol",
+      "tactical"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "trap_profile": {
+      "payload_item_id": "tear_gas_canister",
+      "trigger_kind": "step",
+      "armed_glyph": "^",
+      "armed_color": "item_restricted",
+      "noise_radius": 4,
+      "homemade": true
+    }
+  },
+  "toxic_aerosol_floor_trap": {
+    "name": "Toxic Aerosol Floor Trap",
+    "glyph": "^",
+    "stack_max": 1,
+    "tags": [
+      "trap",
+      "aerosol_trap",
+      "homemade",
+      "contraband",
+      "placeable",
+      "illegal",
+      "aerosol",
+      "toxin"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "trap_profile": {
+      "payload_item_id": "toxic_aerosol_canister",
+      "trigger_kind": "step",
+      "armed_glyph": "^",
+      "armed_color": "item_illegal",
+      "noise_radius": 5,
+      "homemade": true
+    }
+  },
+  "dissociative_aerosol_floor_trap": {
+    "name": "Dissociative Aerosol Floor Trap",
+    "glyph": "^",
+    "stack_max": 1,
+    "tags": [
+      "trap",
+      "aerosol_trap",
+      "homemade",
+      "contraband",
+      "placeable",
+      "illegal",
+      "aerosol",
+      "drug"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "trap_profile": {
+      "payload_item_id": "dissociative_aerosol",
+      "trigger_kind": "step",
+      "armed_glyph": "^",
+      "armed_color": "item_illegal",
+      "noise_radius": 5,
+      "homemade": true
+    }
+  },
+  "hallucinogen_aerosol_floor_trap": {
+    "name": "Hallucinogen Aerosol Floor Trap",
+    "glyph": "^",
+    "stack_max": 1,
+    "tags": [
+      "trap",
+      "aerosol_trap",
+      "homemade",
+      "contraband",
+      "placeable",
+      "illegal",
+      "aerosol",
+      "drug",
+      "hallucinogen"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "trap_profile": {
+      "payload_item_id": "hallucinogen_aerosol",
+      "trigger_kind": "step",
+      "armed_glyph": "^",
+      "armed_color": "item_illegal",
+      "noise_radius": 5,
+      "homemade": true
     }
   }
 }

@@ -407,6 +407,22 @@ def _normalize_condition_profile(value, *, tool_profiles=None, weapon_id=None, a
     }
 
 
+def _normalize_trap_profile(value):
+    if not isinstance(value, dict):
+        return {}
+    payload_item_id = str(value.get("payload_item_id", "") or "").strip().lower()
+    if not payload_item_id:
+        return {}
+    return {
+        "payload_item_id": payload_item_id,
+        "trigger_kind": str(value.get("trigger_kind", "step") or "step").strip().lower() or "step",
+        "armed_glyph": str(value.get("armed_glyph", "^") or "^")[:1] or "^",
+        "armed_color": str(value.get("armed_color", "item_illegal") or "item_illegal").strip() or "item_illegal",
+        "noise_radius": max(0, _int_or_default(value.get("noise_radius"), 4)),
+        "homemade": bool(value.get("homemade", True)),
+    }
+
+
 def _normalize_substance_profile(value):
     raw = value if isinstance(value, dict) else {}
     substance_id = str(raw.get("substance_id", "") or "").strip().lower()
@@ -1195,6 +1211,7 @@ def _normalize_item_catalog_source(source):
             "disguise": _normalize_disguise_profile(item.get("disguise")),
             "container": _normalize_container_profile(item.get("container")),
             "throw_profile": _normalize_throw_profile(item.get("throw_profile")),
+            "trap_profile": _normalize_trap_profile(item.get("trap_profile")),
             "substance_profile": _normalize_substance_profile(item.get("substance_profile")),
             "lead_profile": _normalize_lead_profile(item.get("lead_profile")),
             "object_profile": normalize_object_profile(

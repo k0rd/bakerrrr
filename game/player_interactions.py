@@ -42,11 +42,40 @@ from game.justice_dispatch_runtime import request_player_justice_dispatch
 from game.system_support.player_feedback import _log_player_feedback
 
 
+CAMPFIRE_HERB_CACHE_KIND = "campfire_herb_cache"
+CAMPFIRE_HERB_CACHE_CAPACITY = 3
+HERBAL_CACHE_ITEM_TAGS = {"herbal_ingredient", "plant_material"}
+
+
 def _int_or_default(value, default):
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _item_tags_for_entry(entry, *, item_catalog=ITEM_CATALOG):
+    item_id = str((entry or {}).get("item_id", "") or "").strip().lower()
+    item_def = item_catalog.get(item_id, {}) if isinstance(item_catalog, dict) else {}
+    return {
+        str(tag or "").strip().lower()
+        for tag in tuple(item_def.get("tags", ()) or ())
+        if str(tag or "").strip()
+    }
+
+
+def entry_allowed_in_container(entry, *, container_kind="container", item_catalog=ITEM_CATALOG):
+    container_kind = str(container_kind or "container").strip().lower() or "container"
+    if container_kind == CAMPFIRE_HERB_CACHE_KIND:
+        return bool(_item_tags_for_entry(entry, item_catalog=item_catalog).intersection(HERBAL_CACHE_ITEM_TAGS))
+    return True
+
+
+def container_capacity_for_kind(container_kind, *, default=None):
+    container_kind = str(container_kind or "container").strip().lower() or "container"
+    if container_kind == CAMPFIRE_HERB_CACHE_KIND:
+        return CAMPFIRE_HERB_CACHE_CAPACITY
+    return default
 
 
 class PlayerInteractionRuntime:
@@ -804,6 +833,8 @@ class PlayerInteractionRuntime:
 
     def container_panel_note(self, prop, *, container_kind=None):
         container_kind = str(container_kind or "container").strip().lower() or "container"
+        if container_kind == CAMPFIRE_HERB_CACHE_KIND:
+            return "Campfire herbs: load 2-3 plant materials, then mix by recipe or experiment."
         if container_kind == "cache":
             note = self.cache_panel_mission_note(prop)
             if note:
@@ -827,6 +858,8 @@ class PlayerInteractionRuntime:
             return "Cargo"
         if container_kind == "bones":
             return "Stash"
+        if container_kind == CAMPFIRE_HERB_CACHE_KIND:
+            return "Herbs"
         return "Container"
 
     def nearest_cache_fixture(self, eid, pos, *, preferred_dir=None, exact_direction=False):
@@ -865,7 +898,11 @@ class PlayerInteractionRuntime:
             inventory_ui = self.sim.inventory_ui
         container_kind = str(container_kind or "container").strip().lower() or "container"
         container_label = str(container_label or self.container_label(container_kind)).strip() or self.container_label(container_kind)
-        container_capacity = self.action_system.CACHE_MAX_STACKS if container_kind in {"cache", "bones"} else None
+        container_capacity = (
+            self.action_system.CACHE_MAX_STACKS
+            if container_kind in {"cache", "bones"}
+            else container_capacity_for_kind(container_kind, default=None)
+        )
         self.container_inventory_entries(prop.get("id"), container_kind=container_kind)
         inventory_ui.update({
             "panel_kind": "container",
@@ -1156,11 +1193,9 @@ class PlayerInteractionRuntime:
                 message = f"You can't stash anything in the {container_name}."
             _log_player_feedback(self.sim, message, kind="interaction")
             return False
-        max_stacks = (
-            self.action_system.CACHE_MAX_STACKS
-            if container_kind in {"cache", "bones"}
-            else max(8, len(container_items) + 1)
-        )
+        capacity_default = self.action_system.CACHE_MAX_STACKS if container_kind in {"cache", "bones"} else None
+        fixed_capacity = container_capacity_for_kind(container_kind, default=capacity_default)
+        max_stacks = fixed_capacity if fixed_capacity is not None else max(8, len(container_items) + 1)
         if len(container_items) >= max_stacks:
             _log_player_feedback(self.sim, f"The {container_name} is full.", kind="interaction")
             return False
@@ -1182,6 +1217,12 @@ class PlayerInteractionRuntime:
             return False
         if is_entry_worn(target_entry):
             _log_player_feedback(self.sim, "Remove the worn item before stashing it.", kind="interaction")
+            return False
+        if not entry_allowed_in_container(target_entry, container_kind=container_kind, item_catalog=ITEM_CATALOG):
+            if container_kind == CAMPFIRE_HERB_CACHE_KIND:
+                _log_player_feedback(self.sim, "The herb cache only takes harvested plant materials.", kind="interaction")
+            else:
+                _log_player_feedback(self.sim, f"The {container_name} will not take that.", kind="interaction")
             return False
         removed = inventory.remove_item(instance_id=target_entry["instance_id"], quantity=target_entry["quantity"])
         if not removed:

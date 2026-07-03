@@ -513,6 +513,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("item_drop_blocked", self.on_item_drop_blocked)
         self.sim.events.subscribe("item_used", self.on_item_used)
         self.sim.events.subscribe("item_use_blocked", self.on_item_use_blocked)
+        self.sim.events.subscribe("aerosol_trap_placed", self.on_aerosol_trap_placed)
+        self.sim.events.subscribe("aerosol_trap_triggered", self.on_aerosol_trap_triggered)
         self.sim.events.subscribe("report_device_used", self.on_report_device_used)
         self.sim.events.subscribe("justice_vehicle_misuse_barked", self.on_justice_vehicle_misuse_barked)
         self.sim.events.subscribe("meaningful_object_owner_reaction", self.on_meaningful_object_owner_reaction)
@@ -2762,7 +2764,7 @@ class EventLogSystem(System):
         suffix = ""
         if revealed:
             names = []
-            for row in revealed[:2]:
+            for row in revealed[:3]:
                 if isinstance(row, dict):
                     name = str(row.get("plant_name") or "").strip()
                     class_id = str(row.get("chemistry_class") or "").replace("_", " ").strip()
@@ -3300,10 +3302,12 @@ class EventLogSystem(System):
             credits_spent = int(event.data.get("credits_spent", 0))
             _log_player_feedback(self.sim, f"You bought {item_name} from {prop_name} for {credits_spent} cr.", kind="commerce")
             return
-        if service in {"herbal_prepare", "herbal_compound"}:
+        herbal_craft_services = {"herbal_prepare", "herbal_compound", "campfire_herbal_recipe", "campfire_herbal_mix"}
+        if service in herbal_craft_services:
             item_name = str(event.data.get("output_item_name", "herbal medicine")).strip() or "herbal medicine"
             count = int(event.data.get("ingredient_count", 0) or 0)
             credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            experiment_result = str(event.data.get("experiment_result", "") or "").strip().lower()
             if service == "herbal_prepare":
                 _log_player_feedback(
                     self.sim,
@@ -3311,9 +3315,13 @@ class EventLogSystem(System):
                     kind="commerce",
                 )
             else:
+                detail = ""
+                if experiment_result in {"diluted", "weak_toxic", "odd"}:
+                    detail = f" ({experiment_result.replace('_', ' ')})"
+                source_word = "cached " if service in {"campfire_herbal_recipe", "campfire_herbal_mix"} else ""
                 _log_player_feedback(
                     self.sim,
-                    f"You compounded {count} plant material{'s' if count != 1 else ''} into {item_name} at {prop_name}.",
+                    f"You compounded {count} {source_word}plant material{'s' if count != 1 else ''} into {item_name} at {prop_name}{detail}.",
                     kind="craft",
                 )
             return
@@ -3614,16 +3622,20 @@ class EventLogSystem(System):
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             self.sim.log.add(f"Vending: {item_name} costs {cost}c at {prop_name}; you only have {credits}c.")
             return
-        if reason == "no_recipe" and service in {"herbal_prepare", "herbal_compound"}:
+        herbal_craft_services = {"herbal_prepare", "herbal_compound", "campfire_herbal_recipe", "campfire_herbal_mix"}
+        if reason == "no_recipe" and service in herbal_craft_services:
             self.sim.log.add(f"Herbal prep: learn a recipe before using {prop_name}.")
             return
-        if reason == "no_ingredients" and service in {"herbal_prepare", "herbal_compound"}:
+        if reason == "no_ingredients" and service in herbal_craft_services:
+            if service in {"campfire_herbal_recipe", "campfire_herbal_mix"}:
+                self.sim.log.add(f"Herbal prep: load 2-3 plant materials into {prop_name}'s herb cache first.")
+                return
             self.sim.log.add(f"Herbal prep: you need known plant materials for a learned recipe at {prop_name}.")
             return
-        if reason == "invalid_mix" and service in {"herbal_prepare", "herbal_compound"}:
+        if reason == "invalid_mix" and service in herbal_craft_services:
             self.sim.log.add("Herbal prep: those plant materials do not satisfy the recipe. Nothing was consumed.")
             return
-        if reason == "no_tool" and service == "herbal_compound":
+        if reason == "no_tool" and service in {"herbal_compound", "campfire_herbal_recipe", "campfire_herbal_mix"}:
             self.sim.log.add(f"Herbal prep: you need a mortar kit to compound herbs at {prop_name}.")
             return
         if reason == "all_known" and service == "herbal_recipe_sales":
@@ -3643,7 +3655,7 @@ class EventLogSystem(System):
         if reason == "inventory_full" and service in {"campfire_cook", "butcher_prepare"}:
             self.sim.log.add(f"{prop_name} cannot return prepared meat until you free up inventory space.")
             return
-        if reason == "inventory_full" and service in {"herbal_prepare", "herbal_compound"}:
+        if reason == "inventory_full" and service in herbal_craft_services:
             self.sim.log.add(f"{prop_name} cannot return prepared medicine until you free up inventory space.")
             return
         if reason == "inventory_full" and service == "fuel_fill_bottle":
@@ -4368,6 +4380,9 @@ class EventLogSystem(System):
         item_name = event.data.get("item_name", event.data.get("item_id", "item"))
         if eid == self.player_eid:
             item_id = str(event.data.get("item_id", "") or "").strip().lower()
+            reason = str(event.data.get("reason", "") or "").strip().lower()
+            if reason == "place_trap":
+                return
             usage_kind = str(event.data.get("usage_kind", "") or "").strip().lower()
             if usage_kind == "throw":
                 target_x = event.data.get("target_x")
@@ -4650,6 +4665,16 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{item_name} has no effect right now.", kind="interaction")
         elif reason == "consume_failed":
             _log_player_feedback(self.sim, f"{item_name} failed before it took effect.", kind="interaction")
+        elif str(reason or "").startswith("trap_"):
+            trap_reason = str(reason or "").removeprefix("trap_")
+            if trap_reason == "blocked_tile":
+                _log_player_feedback(self.sim, f"{item_name} needs open floor.", kind="interaction")
+            elif trap_reason == "trap_present":
+                _log_player_feedback(self.sim, "There is already an armed trap here.", kind="interaction")
+            elif trap_reason == "ground_item_present":
+                _log_player_feedback(self.sim, "Clear the loose item here before setting a trap.", kind="interaction")
+            else:
+                _log_player_feedback(self.sim, f"{item_name} will not arm here.", kind="interaction")
         elif reason == "appearance_pack_full":
             _log_player_feedback(self.sim, f"Your pack is too full to stow {item_name}.", kind="interaction")
         elif reason == "appearance_armor_outer_active":
@@ -4660,6 +4685,25 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{item_name} conflicts with what you are already wearing.", kind="interaction")
         else:
             _log_player_feedback(self.sim, f"You cannot use {item_name} right now.", kind="interaction")
+
+    def on_aerosol_trap_placed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", "aerosol trap") or "aerosol trap").strip()
+        x = _int_or_default(event.data.get("x"), 0)
+        y = _int_or_default(event.data.get("y"), 0)
+        _log_player_feedback(self.sim, f"You set {item_name} on the floor at {x},{y}.", kind="craft")
+
+    def on_aerosol_trap_triggered(self, event):
+        source_eid = event.data.get("source_eid")
+        target_eid = event.data.get("target_eid")
+        item_name = str(event.data.get("item_name", "aerosol trap") or "aerosol trap").strip()
+        target_name = str(event.data.get("target_name", "someone") or "someone").strip()
+        if source_eid == self.player_eid or target_eid == self.player_eid:
+            if target_eid == self.player_eid:
+                _log_player_feedback(self.sim, f"{item_name} triggers under you.", kind="danger")
+            else:
+                _log_player_feedback(self.sim, f"{item_name} triggers under {target_name}.", kind="danger")
 
     def on_report_device_used(self, event):
         npc_eid = event.data.get("npc_eid")

@@ -8,11 +8,12 @@ from game.bodyguard_runtime import BODYGUARD_SERVICE_ID, fire_bodyguard_contract
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, PropertyKnowledge, StatusEffects, VehicleState, Vitality
 from game.cult_runtime import CULT_SERVICE_IDS, apply_cult_service
 from game.items import ITEM_CATALOG, item_display_name
-from game.herbal_chemistry_runtime import craft_herbal_medicine, purchase_herbal_recipe
+from game.herbal_chemistry_runtime import craft_herbal_medicine, craft_herbal_medicine_from_container, purchase_herbal_recipe
 from game.hunting_runtime import convert_meat_stack
 from game.opportunities import accept_service_job_offer, append_external_opportunity, opportunity_instruction_lines
 from game.organization_response import property_vigilante_denial
 from game.organizations import effective_org_access_posture, property_service_practice_bundle
+from game.player_interactions import CAMPFIRE_HERB_CACHE_CAPACITY, CAMPFIRE_HERB_CACHE_KIND
 from game.player_businesses import player_business_apply_remodel as _player_business_apply_remodel
 from game.player_businesses import player_business_remodel_quote as _player_business_remodel_quote
 from game.property_access import evaluate_property_access as _evaluate_property_access
@@ -22,6 +23,7 @@ from game.property_runtime import (
     property_is_vehicle as _property_is_vehicle,
     property_metadata as _property_metadata,
     property_power_cut_active as _property_power_cut_active,
+    property_runtime_container_entries as _property_runtime_container_entries,
     site_services_for_property as _site_services_for_property,
     vehicle_fuel_values as _vehicle_fuel_values,
     vehicle_label as _vehicle_label,
@@ -2280,6 +2282,15 @@ class SiteServiceSystem(System):
         if service == "herbal_compound":
             self._apply_herbal_crafting_service(eid, prop, service, mode="self")
             return True
+        if service == "campfire_herb_cache":
+            self._open_campfire_herb_cache(eid, prop, service)
+            return True
+        if service == "campfire_herbal_recipe":
+            self._apply_campfire_herbal_cache_crafting_service(eid, prop, service, freeform=False)
+            return True
+        if service == "campfire_herbal_mix":
+            self._apply_campfire_herbal_cache_crafting_service(eid, prop, service, freeform=True)
+            return True
         if service == "campfire_cook":
             self._apply_meat_conversion_service(eid, prop, service)
             return True
@@ -2800,6 +2811,82 @@ class SiteServiceSystem(System):
             ingredient_names=tuple(result.get("ingredient_names", ()) or ()),
             component_plants=tuple(result.get("component_plants", ()) or ()),
             credits_spent=int(result.get("credits_spent", 0) or 0),
+        ))
+
+    def _open_campfire_herb_cache(self, eid, prop, service):
+        inventory_ui = getattr(self.sim, "inventory_ui", None)
+        if not isinstance(inventory_ui, dict):
+            self.sim.inventory_ui = {}
+            inventory_ui = self.sim.inventory_ui
+        property_id = str(prop.get("id", "") or "").strip()
+        _property_runtime_container_entries(self.sim, property_id, container_kind=CAMPFIRE_HERB_CACHE_KIND)
+        inventory_ui.update({
+            "panel_kind": "container",
+            "title": str(prop.get("name", prop.get("id", "Campfire Ring"))).strip() or "Campfire Ring",
+            "open": True,
+            "property_id": property_id,
+            "container_kind": CAMPFIRE_HERB_CACHE_KIND,
+            "container_label": "Herbs",
+            "container_instance_id": None,
+            "container_capacity": CAMPFIRE_HERB_CACHE_CAPACITY,
+            "container_view": "container",
+            "cache_view": "cache",
+            "selected_index": 0,
+            "inspect_text": "",
+            "note_text": "Campfire herbs: load 2-3 plant materials, then mix by recipe or experiment.",
+        })
+        self.sim.emit(Event(
+            "inventory_panel_toggled",
+            eid=eid,
+            open=True,
+            panel_kind="container",
+            title=inventory_ui["title"],
+            property_id=property_id,
+            container_kind=CAMPFIRE_HERB_CACHE_KIND,
+            container_label="Herbs",
+            container_instance_id=None,
+        ))
+
+    def _apply_campfire_herbal_cache_crafting_service(self, eid, prop, service, *, freeform):
+        result = craft_herbal_medicine_from_container(
+            self.sim,
+            eid,
+            prop,
+            freeform=bool(freeform),
+            mode="self",
+            emit_event=False,
+        )
+        if not result.get("ok"):
+            payload = {
+                "eid": eid,
+                "property_id": prop["id"],
+                "property_name": prop.get("name", prop["id"]),
+                "service": service,
+                "reason": str(result.get("reason", "blocked") or "blocked").strip().lower(),
+            }
+            for key in ("cost", "credits", "recipe_id", "tool_item_id", "output_item_id", "quantity"):
+                if key in result:
+                    payload[key] = result.get(key)
+            self.sim.emit(Event("site_service_blocked", **payload))
+            return
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service=service,
+            recipe_id=result.get("recipe_id"),
+            recipe_name=result.get("recipe_name"),
+            output_item_id=result.get("output_item_id"),
+            output_item_name=result.get("output_item_name"),
+            output_instance_id=result.get("output_instance_id"),
+            ingredient_count=int(result.get("ingredient_count", 0) or 0),
+            ingredient_names=tuple(result.get("ingredient_names", ()) or ()),
+            component_plants=tuple(result.get("component_plants", ()) or ()),
+            credits_spent=int(result.get("credits_spent", 0) or 0),
+            experiment_result=result.get("experiment_result"),
+            discovered_recipe=bool(result.get("discovered_recipe", False)),
+            ingredient_source=result.get("ingredient_source"),
         ))
 
     def _apply_herbal_recipe_sale(self, eid, prop, service):

@@ -73,6 +73,11 @@ from game.item_semantics import (
 )
 from game.opportunities import _item_label
 from game.player_action_system import PlayerActionSystem
+from game.player_interactions import (
+    CAMPFIRE_HERB_CACHE_CAPACITY,
+    CAMPFIRE_HERB_CACHE_KIND,
+    entry_allowed_in_container,
+)
 from game.character_sheet import (
     build_character_sheet_pages as _build_character_sheet_pages,
 )
@@ -3688,6 +3693,8 @@ class InputSystem(System):
             return "Cargo"
         if self._inventory_container_kind() == "bones":
             return "Stash"
+        if self._inventory_container_kind() == CAMPFIRE_HERB_CACHE_KIND:
+            return "Herbs"
         return "Container"
 
     def _inventory_container_view(self):
@@ -3779,7 +3786,15 @@ class InputSystem(System):
                 return self._worn_container_entries(self._inventory_container_instance_id())
             if self._inventory_container_view() == "pack":
                 inventory = self._player_inventory()
-                return list(inventory.items) if inventory else []
+                entries = list(inventory.items) if inventory else []
+                container_kind = self._inventory_container_kind()
+                if container_kind == CAMPFIRE_HERB_CACHE_KIND:
+                    return [
+                        entry
+                        for entry in entries
+                        if entry_allowed_in_container(entry, container_kind=container_kind, item_catalog=self.catalog)
+                    ]
+                return entries
             container_prop = self._inventory_container_property()
             if not container_prop:
                 return []
@@ -3812,6 +3827,8 @@ class InputSystem(System):
         container_kind = str(container_kind or self._inventory_container_kind() or "").strip().lower()
         if container_kind == "cache":
             return self._cache_panel_mission_note(prop)
+        if container_kind == CAMPFIRE_HERB_CACHE_KIND:
+            return "Campfire herbs: load 2-3 plant materials, then mix by recipe or experiment."
         if container_kind == "bones":
             metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
             note = str(metadata.get("bones_note", "") or "").strip()
@@ -3852,6 +3869,8 @@ class InputSystem(System):
                 container_label = "Cache"
             elif normalized_kind == "scene":
                 container_label = "Cargo"
+            elif normalized_kind == CAMPFIRE_HERB_CACHE_KIND:
+                container_label = "Herbs"
             else:
                 container_label = "Container"
         state["container_label"] = str(container_label or "Container").strip() or "Container"
@@ -3920,8 +3939,12 @@ class InputSystem(System):
                 container_label = "Cache"
             elif container_kind == "scene":
                 container_label = "Cargo"
+            elif container_kind == CAMPFIRE_HERB_CACHE_KIND:
+                container_label = "Herbs"
             else:
                 container_label = "Container"
+        if container_kind == CAMPFIRE_HERB_CACHE_KIND and container_capacity is None:
+            container_capacity = CAMPFIRE_HERB_CACHE_CAPACITY
         container_name = str(prop.get("name", prop.get("id", container_label))).strip() or str(container_label)
         self._set_inventory_panel_mode(
             panel_kind="container",

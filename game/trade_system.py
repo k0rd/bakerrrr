@@ -3191,7 +3191,16 @@ class TradeSystem(System):
         state["property_id"] = store_prop["id"]
         state["supply_note"] = str(store.get("supply_note", "")).strip()
         state["contact_note"] = str(terms.get("note", "")).strip()
-        state["service_note"] = str(service.get("service_note", "")).strip() if isinstance(service, dict) else ""
+        previous_service_note = str(state.get("service_note", "") or "").strip()
+        service_note = str(service.get("service_note", "")).strip() if isinstance(service, dict) else ""
+        if (
+            retain_open_session
+            and isinstance(service, dict)
+            and bool(service.get("fallback_self_serve"))
+            and previous_service_note.startswith("served by ")
+        ):
+            service_note = "counter service"
+        state["service_note"] = service_note
         state["service_eid"] = service.get("service_eid") if isinstance(service, dict) else None
         state["owner_transfer"] = bool(owner_transfer)
         self._refresh_trade_inspect_text(state)

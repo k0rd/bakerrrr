@@ -3,6 +3,7 @@
 import random
 
 from engine.events import Event
+from game.aerosol_trap_runtime import place_aerosol_floor_trap
 from game.components import AI, Inventory, JusticeProfile, PlayerAssets, Position, StatusEffects, Vitality, WeaponLoadout
 from game.appearance_loadout import (
     equip_appearance_item,
@@ -1215,6 +1216,39 @@ class ItemActionRuntime:
         )
         if lead_result is not None:
             return bool(lead_result)
+
+        if item_def.get("trap_profile"):
+            result = place_aerosol_floor_trap(
+                self.sim,
+                eid,
+                inventory,
+                entry,
+                x,
+                y,
+                z,
+                item_catalog=self.catalog,
+            )
+            if result.get("ok"):
+                self.sim.emit(Event(
+                    "item_used",
+                    eid=eid,
+                    item_id=item_def["id"],
+                    item_name=item_name,
+                    reason="place_trap",
+                    property_id=result.get("property_id"),
+                    x=x,
+                    y=y,
+                    z=z,
+                ))
+                return True
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason=f"trap_{result.get('reason', 'blocked')}",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
 
         cultivation_result = try_use_cultivation_item(
             self.sim,

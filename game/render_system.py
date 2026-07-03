@@ -131,6 +131,7 @@ from game.property_keys import (
     property_lock_state,
 )
 from game.player_action_system import PlayerActionSystem
+from game.player_interactions import CAMPFIRE_HERB_CACHE_KIND, entry_allowed_in_container
 from game.dialogue_runtime import (
     _disguise_role_label,
     _property_access_summary,
@@ -2103,7 +2104,7 @@ class RenderSystem(System):
         if not inventory_container_kind and inventory_panel_kind == "container":
             inventory_container_kind = "container"
         inventory_container_label = str(inventory_ui.get("container_label", "")).strip() or (
-            "Cache" if inventory_container_kind == "cache" else ("Cargo" if inventory_container_kind == "scene" else "Container")
+            "Cache" if inventory_container_kind == "cache" else ("Cargo" if inventory_container_kind == "scene" else ("Herbs" if inventory_container_kind == "campfire_herb_cache" else "Container"))
         )
         inventory_container_instance_id = str(inventory_ui.get("container_instance_id", "") or "").strip() or None
         inventory_container_capacity = max(0, _int_or_default(inventory_ui.get("container_capacity"), 0))
@@ -4078,6 +4079,12 @@ class RenderSystem(System):
                 entries = _inventory_entries_loose_for_container(inv, container_instance_id) if inv and container_instance_id else (list(inv.items) if inv else [])
             else:
                 entries = list(inv.items) if inv else []
+                if panel_kind == "container" and container_kind == CAMPFIRE_HERB_CACHE_KIND:
+                    entries = [
+                        entry
+                        for entry in entries
+                        if entry_allowed_in_container(entry, container_kind=container_kind, item_catalog=ITEM_CATALOG)
+                    ]
             if entries:
                 selected_index = int(inventory_ui.get("selected_index", 0))
                 selected_index = max(0, min(selected_index, len(entries) - 1))
@@ -4106,7 +4113,8 @@ class RenderSystem(System):
                             property_id,
                             container_kind="cache",
                         )
-                    container_count_text = f"{container_label} {container_count}/{PlayerActionSystem.CACHE_MAX_STACKS}"
+                    max_count = container_capacity if container_capacity > 0 else PlayerActionSystem.CACHE_MAX_STACKS
+                    container_count_text = f"{container_label} {container_count}/{max_count}"
                 else:
                     if property_id:
                         container_count = _property_runtime_container_entry_count(
@@ -4114,7 +4122,10 @@ class RenderSystem(System):
                             property_id,
                             container_kind=container_kind,
                         )
-                    container_count_text = f"{container_label} {container_count}"
+                    if container_capacity > 0:
+                        container_count_text = f"{container_label} {container_count}/{container_capacity}"
+                    else:
+                        container_count_text = f"{container_label} {container_count}"
                 if container_kind == "worn":
                     pack_entries = (
                         _inventory_entries_loose_for_container(inv, container_instance_id)
@@ -4123,6 +4134,12 @@ class RenderSystem(System):
                     )
                 else:
                     pack_entries = list(inv.items) if inv else []
+                    if container_kind == CAMPFIRE_HERB_CACHE_KIND:
+                        pack_entries = [
+                            entry
+                            for entry in pack_entries
+                            if entry_allowed_in_container(entry, container_kind=container_kind, item_catalog=ITEM_CATALOG)
+                        ]
                 pack_count = inv.slot_count(entries=pack_entries) if inv else 0
                 pack_cap = inv.capacity if inv else 0
                 slot_line = (

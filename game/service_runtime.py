@@ -1343,6 +1343,16 @@ def _storefront_service_profile(sim, prop, actor_eid=None):
             "source": member.get("source", "workplace"),
         }
 
+    for worker_eid, occupation in occupations.items():
+        if worker_eid in candidates_by_eid or not occupation_targets_property(prop, occupation):
+            continue
+        candidates_by_eid[worker_eid] = {
+            "eid": worker_eid,
+            "role": _occupation_service_role(occupation),
+            "occupation": occupation,
+            "source": "workplace",
+        }
+
     available = []
     for info in candidates_by_eid.values():
         service_actor_eid = info["eid"]
@@ -6078,6 +6088,9 @@ def _site_service_label(service):
         "business_remodel": "business refit",
         "butcher_prepare": "butcher prep",
         "campfire_cook": "campfire cooking",
+        "campfire_herb_cache": "campfire herb cache",
+        "campfire_herbal_mix": "campfire herb mixing",
+        "campfire_herbal_recipe": "campfire herbal recipe",
         "cult_contact": "circle contact",
         "cult_conversion": "circle membership",
         "cult_donation": "circle donation",
@@ -6128,6 +6141,9 @@ def _service_menu_option_label(option_id):
         "bodyguard_contract": "Hire bodyguards",
         "butcher_prepare": "Prepare meat",
         "campfire_cook": "Cook meat",
+        "campfire_herb_cache": "Open herb cache",
+        "campfire_herbal_mix": "Free-mix cached herbs",
+        "campfire_herbal_recipe": "Make cached recipe",
         "cult_contact": "Speak to contact",
         "cult_conversion": "Hear the circle out",
         "cult_donation": "Make a donation",

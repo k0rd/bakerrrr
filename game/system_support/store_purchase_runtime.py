@@ -63,7 +63,7 @@ TACTICAL_BUYER_ARCHETYPES = {
     "backroom_market",
 }
 
-DANGEROUS_TAGS = {"weapon", "ammo", "throwable", "tactical", "armor"}
+DANGEROUS_TAGS = {"weapon", "ammo", "throwable", "tactical", "armor", "trap", "aerosol_trap"}
 
 STYLE_BUYER_ARCHETYPES = {
     "top_shop",
@@ -356,6 +356,21 @@ def unusual_sale_allowed(sim, actor_eid, prop, entry, *, service_eid=None):
     return score >= 0.18
 
 
+def _homemade_trap_sale_allowed(sim, actor_eid, prop, entry, *, archetype="", service_eid=None):
+    if archetype not in BROAD_BUYER_ARCHETYPES and archetype not in SHADY_BUYER_ARCHETYPES:
+        return False
+    token = _stable_unit(
+        getattr(sim, "seed", 0),
+        "homemade_aerosol_trap",
+        actor_eid,
+        service_eid,
+        (prop or {}).get("id") if isinstance(prop, Mapping) else "",
+        (entry or {}).get("instance_id") if isinstance(entry, Mapping) else "",
+        (entry or {}).get("item_id") if isinstance(entry, Mapping) else "",
+    )
+    return token < 0.18
+
+
 def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, service_eid=None):
     item_id = str((entry or {}).get("item_id", "") or "").strip().lower()
     item_key = canonical_store_item_id(item_id)
@@ -367,11 +382,26 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
     dangerous = bool(tags.intersection(DANGEROUS_TAGS))
     illegal = bool(tags.intersection({"illegal", "stolen"}))
     restricted = "restricted" in tags
+    experimental = "experimental" in tags
+    homemade_aerosol_trap = "aerosol_trap" in tags and "homemade" in tags
 
     if _player_owns_store(sim, actor_eid, prop):
         actual = INTEREST_WANTED
         price_mult = 1.0
         reason = "owner shelf transfer"
+    elif homemade_aerosol_trap:
+        if _homemade_trap_sale_allowed(sim, actor_eid, prop, entry, archetype=archetype, service_eid=service_eid):
+            actual = INTEREST_UNUSUAL
+            price_mult = 0.24
+            reason = "least-discerning counter might risk homemade trap stock"
+        else:
+            actual = INTEREST_REFUSED
+            price_mult = 0.0
+            reason = "homemade aerosol traps are not trusted stock"
+    elif experimental:
+        actual = INTEREST_REFUSED
+        price_mult = 0.0
+        reason = "homemade experimental stock has no trusted buyer"
     elif listed:
         actual = INTEREST_WANTED
         price_mult = 1.0
@@ -409,7 +439,9 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
         price_mult = 0.35
         reason = "unusual for this shop"
 
-    if actual == INTEREST_UNUSUAL and not unusual_sale_allowed(sim, actor_eid, prop, entry, service_eid=service_eid):
+    if homemade_aerosol_trap and actual == INTEREST_UNUSUAL:
+        accepted = True
+    elif actual == INTEREST_UNUSUAL and not unusual_sale_allowed(sim, actor_eid, prop, entry, service_eid=service_eid):
         accepted = False
     else:
         accepted = actual != INTEREST_REFUSED
@@ -425,8 +457,12 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
         risk_label = "stolen risk"
     elif "illegal" in tags:
         risk_label = "contraband"
+    elif homemade_aerosol_trap:
+        risk_label = "homemade contraband"
     elif restricted:
         risk_label = "restricted"
+    elif experimental:
+        risk_label = "experimental"
     elif dangerous:
         risk_label = "dangerous goods"
 

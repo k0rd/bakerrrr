@@ -4238,12 +4238,20 @@ class ServiceMenuSystem(System):
             if practice_note:
                 lines.append(practice_note)
             return f"Herbal Care: {prop_name}", lines
-        if service in {"herbal_prepare", "herbal_compound"}:
+        if service in {"herbal_prepare", "herbal_compound", "campfire_herbal_recipe", "campfire_herbal_mix"}:
             output_name = str(event.data.get("output_item_name", "herbal medicine")).strip() or "herbal medicine"
             recipe_name = str(event.data.get("recipe_name", "recipe")).strip() or "recipe"
             ingredient_count = int(event.data.get("ingredient_count", 0) or 0)
             credits_spent = int(event.data.get("credits_spent", 0) or 0)
-            title = "Herbal Prep" if service == "herbal_prepare" else "Herbal Compounding"
+            experiment_result = str(event.data.get("experiment_result", "") or "").strip().lower()
+            if service == "herbal_prepare":
+                title = "Herbal Prep"
+            elif service == "campfire_herbal_recipe":
+                title = "Campfire Recipe"
+            elif service == "campfire_herbal_mix":
+                title = "Campfire Mixing"
+            else:
+                title = "Herbal Compounding"
             first = (
                 f"{prop_name} prepares {output_name} from {ingredient_count} plant material{'s' if ingredient_count != 1 else ''}."
                 if service == "herbal_prepare"
@@ -4252,7 +4260,17 @@ class ServiceMenuSystem(System):
             lines = [first, f"Recipe: {recipe_name}."]
             if credits_spent > 0:
                 lines.append(f"Fee {_credit_amount_label(credits_spent)}.")
-            lines.append(f"{output_name} is now identified for you.")
+            if experiment_result in {"diluted", "weak_toxic", "odd"}:
+                if experiment_result == "diluted":
+                    lines.append("The result is weaker than the recipe you were reaching for.")
+                elif experiment_result == "weak_toxic":
+                    lines.append("The result carries a weak toxic edge.")
+                else:
+                    lines.append("The result is odd and not trusted stock.")
+            else:
+                if bool(event.data.get("discovered_recipe")):
+                    lines.append("You worked out the recipe from the mix.")
+                lines.append(f"{output_name} is now identified for you.")
             return f"{title}: {prop_name}", lines
         if service == "herbal_recipe_sales":
             recipe_name = str(event.data.get("recipe_name", "herbal recipe")).strip() or "herbal recipe"
@@ -4265,7 +4283,7 @@ class ServiceMenuSystem(System):
             ]
             if revealed:
                 names = []
-                for row in revealed[:2]:
+                for row in revealed[:3]:
                     if isinstance(row, dict):
                         name = str(row.get("plant_name") or row.get("plant_id") or "").strip()
                         class_id = str(row.get("chemistry_class") or "").replace("_", " ").strip()
@@ -4696,13 +4714,16 @@ class ServiceMenuSystem(System):
             return title, [f"You do not need shelter at {prop_name} right now."]
         if reason == "no_need" and service == "herbal_care":
             return f"Herbal Care: {prop_name}", [f"You do not need restorative care at {prop_name} right now."]
-        if reason == "no_recipe" and service in {"herbal_prepare", "herbal_compound"}:
+        herbal_craft_services = {"herbal_prepare", "herbal_compound", "campfire_herbal_recipe", "campfire_herbal_mix"}
+        if reason == "no_recipe" and service in herbal_craft_services:
             return title, ["You need to learn an herbal recipe before this prep makes sense.", "Herbalists can sell recipes."]
-        if reason == "no_ingredients" and service in {"herbal_prepare", "herbal_compound"}:
+        if reason == "no_ingredients" and service in herbal_craft_services:
+            if service in {"campfire_herbal_recipe", "campfire_herbal_mix"}:
+                return title, ["The campfire herb cache needs 2-3 harvested plant materials.", "Open the herb cache and load the plants first."]
             return title, ["You do not have the known plant materials for any learned recipe.", "Harvest herbs, then learn which plants carry the needed affinities."]
-        if reason == "invalid_mix" and service in {"herbal_prepare", "herbal_compound"}:
+        if reason == "invalid_mix" and service in herbal_craft_services:
             return title, ["Those plant materials do not satisfy the recipe.", "Nothing was consumed."]
-        if reason == "no_tool" and service == "herbal_compound":
+        if reason == "no_tool" and service in {"herbal_compound", "campfire_herbal_recipe", "campfire_herbal_mix"}:
             return title, ["You need a mortar kit to compound herbs at a campfire ring."]
         if reason == "all_known" and service == "herbal_recipe_sales":
             return f"Herbal Recipe: {prop_name}", ["You already know the recipes this herbalist is selling."]
@@ -4871,7 +4892,7 @@ class ServiceMenuSystem(System):
                 f"No room for {output_name}.",
                 "Free up inventory space before filling the bottle.",
             ]
-        if reason == "inventory_full" and service in {"herbal_prepare", "herbal_compound"}:
+        if reason == "inventory_full" and service in herbal_craft_services:
             return title, [
                 "No room for the prepared medicine.",
                 "Free up inventory space before compounding the herbs.",
@@ -5554,6 +5575,20 @@ class ServiceMenuSystem(System):
         if option_id == "trade_sell":
             self._close_service_menu()
             self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="sell", property_id=property_id))
+            return
+        if option_id == "campfire_herb_cache":
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            self._close_service_menu()
+            self.sim.emit(Event(
+                "site_service_request",
+                eid=self.player_eid,
+                property_id=property_id,
+                service=option_id,
+                property_name=prop.get("name", property_id),
+            ))
             return
         if option_id == BODYGUARD_SERVICE_ID:
             if isinstance(prop, dict):

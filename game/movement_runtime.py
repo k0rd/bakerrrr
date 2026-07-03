@@ -2,6 +2,7 @@
 
 from engine.events import Event
 
+from game.aerosol_trap_runtime import actor_knows_armed_aerosol_trap_at
 from game.components import AI, Collider, Position
 from game.property_access import (
     evaluate_property_access as _evaluate_property_access,
@@ -204,6 +205,8 @@ def _is_traversable_for(sim, moving_eid, x, y, z):
             fire_cell = fire_cell_state(sim, x, y, z)
             if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
                 return False, "active_fire"
+            if actor_knows_armed_aerosol_trap_at(sim, moving_eid, x, y, z):
+                return False, "known_trap"
     blocked, blocker_eid = _entity_blocks(sim, moving_eid, x, y, z)
     if blocked:
         return False, f"blocked_entity:{blocker_eid}"

@@ -155,6 +155,8 @@ class Simulation:
             self.equipped_container = None
         if not isinstance(getattr(self, "cache_inventories", None), dict):
             self.cache_inventories = {}
+        if not isinstance(getattr(self, "container_inventories", None), dict):
+            self.container_inventories = {}
         if not isinstance(getattr(self, "chunk_population_membership", None), dict):
             self.chunk_population_membership = {}
         if not isinstance(getattr(self, "_pending_stream_unloads", None), set):
