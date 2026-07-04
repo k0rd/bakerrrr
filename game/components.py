@@ -27,6 +27,7 @@ class Render:
         glyph,
         color=None,
         *,
+        color_word=None,
         semantic_id=None,
         layer=None,
         priority=None,
@@ -37,6 +38,7 @@ class Render:
     ):
         self.glyph = str(glyph)[:1] or "?"
         self.color = color
+        self.color_word = str(color_word).strip().lower() if str(color_word or "").strip() else None
         self.semantic_id = str(semantic_id).strip() if semantic_id else None
         self.layer = str(layer).strip().lower() if str(layer or "").strip() else None
         self.priority = None if priority is None else int(priority)
@@ -56,6 +58,7 @@ class Render:
         *,
         glyph=_UNCHANGED,
         color=_UNCHANGED,
+        color_word=_UNCHANGED,
         semantic_id=_UNCHANGED,
         layer=_UNCHANGED,
         priority=_UNCHANGED,
@@ -68,6 +71,8 @@ class Render:
             self.glyph = str(glyph)[:1] or "?"
         if color is not _UNCHANGED:
             self.color = color
+        if color_word is not _UNCHANGED:
+            self.color_word = str(color_word).strip().lower() if str(color_word or "").strip() else None
         if semantic_id is not _UNCHANGED:
             semantic_text = str(semantic_id).strip()
             self.semantic_id = semantic_text or None

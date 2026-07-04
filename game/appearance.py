@@ -6,7 +6,13 @@ from typing import Mapping, Tuple
 
 from engine.buildings import building_exterior_profile
 from game.components import AI, CreatureIdentity, NPCSocial, NPCWill, Render, Vitality
-from game.appearance_loadout import appearance_color_key, appearance_render_colors, player_appearance_color_key
+from game.appearance_loadout import (
+    appearance_color_key,
+    appearance_color_word,
+    appearance_render_colors,
+    player_appearance_color_key,
+    player_appearance_color_word,
+)
 from game.dialogue_runtime import active_contractor_record
 from game.human_description import human_render_color_key as _human_render_color_key
 from game.property_runtime import (
@@ -326,6 +332,7 @@ def _normalize_overlays(overlays):
         normalized.append({
             "glyph": glyph or " ",
             "color": overlay.get("color"),
+            "color_word": str(overlay.get("color_word", "") or "").strip().lower() or None,
             "semantic_id": semantic_id,
             "attrs": int(overlay.get("attrs", 0) or 0),
             "effects": _normalize_effects(overlay.get("effects", ())),
@@ -785,6 +792,7 @@ def _actor_outfit_color_overlays(render_colors):
         overlays.append({
             "glyph": " ",
             "color": color,
+            "color_word": str(render_colors.get(f"{role}_word") or "").strip().lower() or None,
             "semantic_id": semantic_id,
         })
     return tuple(overlays)
@@ -804,9 +812,11 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
 
     if player:
         color = player_appearance_color_key(sim, eid) if sim is not None and eid is not None else None
+        color_word = player_appearance_color_word(sim, eid) if sim is not None and eid is not None else None
         return _semantic_snapshot(
             "@",
             color=color or "player",
+            color_word=color_word,
             semantic_id="entity_player",
             catalog=catalog,
             preferred_categories=("entities",),
@@ -818,11 +828,13 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
     taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower() or "other"
     glyph = str(identity.taxonomy_glyph(fallback="O"))[:1] or "O"
     color = creature_color_key(identity, role=role)
+    color_word = None
     semantic_id = None
 
     if taxonomy == "hominid":
         glyph = "@"
         worn_color = appearance_color_key(sim, eid) if sim is not None and eid is not None else None
+        worn_color_word = appearance_color_word(sim, eid) if sim is not None and eid is not None else None
         if seed is not None and not worn_color:
             color = _human_render_color_key(
                 seed,
@@ -831,6 +843,7 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
                 personal_name=getattr(identity, "personal_name", None),
             ) or color
         color = worn_color or color or "human"
+        color_word = worn_color_word
         semantic_id = _hominid_semantic_id_for_role(catalog, role=role)
     elif taxonomy in ENTITY_TAXONOMY_SEMANTICS:
         color = color or taxonomy
@@ -842,6 +855,7 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
     return _semantic_snapshot(
         glyph,
         color=color,
+        color_word=color_word,
         semantic_id=semantic_id,
         catalog=catalog,
         preferred_categories=("entities",),
@@ -1335,6 +1349,7 @@ class AppearanceManager:
             defaults = _semantic_snapshot(
                 defaults.glyph,
                 color=defaults.color,
+                color_word=defaults.color_word,
                 semantic_id=state_semantic,
                 catalog=self.catalog,
                 preferred_categories=("entities",),
@@ -1391,11 +1406,13 @@ class AppearanceManager:
         actor_layer = owned.layer if owned.layer is not None else defaults.layer
         if actor_layer is None and taxonomy == "hominid":
             actor_layer = "actor"
+        final_color = owned_color if owned_color is not None else defaults.color
+        final_color_word = owned.color_word if owned_color is not None else (owned.color_word or defaults.color_word)
 
         return AppearanceSnapshot(
             glyph=glyph,
-            color=owned_color if owned_color is not None else defaults.color,
-            color_word=owned.color_word or defaults.color_word,
+            color=final_color,
+            color_word=final_color_word,
             semantic_id=semantic_id,
             layer=actor_layer,
             priority=owned.priority if owned.priority is not None else defaults.priority,

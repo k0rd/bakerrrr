@@ -8,6 +8,7 @@ from game.color_words import (
     clothing_render_key_for_color_word,
     color_word_row,
     color_word_tags,
+    find_closest_native_color_word,
     normalize_color_word,
 )
 
@@ -128,6 +129,13 @@ def render_key_for_color_word(word: str, default: str | None = None) -> str | No
     if not normalized:
         return default
     return clothing_render_key_for_color_word(normalized, default=default)
+
+
+def fallback_render_key_for_color_word(word: str, default: str | None = None) -> str | None:
+    native_word = find_closest_native_color_word(word, default="")
+    if not native_word:
+        return render_key_for_color_word(word, default=default)
+    return clothing_render_key_for_color_word(native_word, default=default)
 
 
 def palette_row_for_render_key(render_key: str) -> AppearancePaletteRow | None:

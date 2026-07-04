@@ -7,6 +7,7 @@ from engine.events import Event
 from game.appearance_palette import (
     appearance_color_words,
     choose_appearance_color_word,
+    fallback_render_key_for_color_word,
     render_key_for_color_word,
 )
 from game.components import AI, AppearanceLoadout, ArmorLoadout, CreatureIdentity, Inventory, Occupation
@@ -681,6 +682,7 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
         slots = tuple(profile.get("slots", ()))
     appearance_type = _key(metadata.get("appearance_type") or nested_data.get("type")) or item_id
     color = _key(metadata.get("color") or nested_data.get("color"))
+    color_word = _key(color or metadata.get("color_word") or nested_data.get("color_word"))
     material = _key(metadata.get("material") or nested_data.get("material"))
     style = _key(metadata.get("style") or nested_data.get("style"))
     accent = _key(metadata.get("accent_color") or nested_data.get("accent_color"))
@@ -688,13 +690,15 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
     if not label:
         label = _text(profile.get("label")) or _text(item_def.get("name")) or _title_words(item_id)
     if not color:
-        color = "charcoal"
+        color = color_word or "charcoal"
+    if not color_word:
+        color_word = color
     if not material:
         material = _text((profile.get("materials") or ("cotton",))[0]).lower()
     if not style:
         style = _text((profile.get("styles") or ("plain",))[0]).lower()
     if not accent:
-        accent = render_key_for_color_word(color, default="human_monochrome")
+        accent = fallback_render_key_for_color_word(color_word, default="human_monochrome")
     if not slots:
         return {}
     return {
@@ -702,6 +706,7 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
         "label": label,
         "slots": slots,
         "color": color,
+        "color_word": color_word,
         "material": material,
         "style": style,
         "accent_color": accent,
@@ -740,7 +745,7 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None):
     styles = tuple(profile.get("styles") or ("plain",))
     material = rng.choice(materials)
     style = rng.choice(styles)
-    accent = render_key_for_color_word(color, default="human_monochrome")
+    accent = fallback_render_key_for_color_word(color, default="human_monochrome")
     label = str(profile.get("label", item_id)).strip() or item_id
     display_parts = [color, material, label]
     if style and style not in {"plain", "simple"}:
@@ -751,6 +756,7 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None):
         "label": label,
         "slots": list(slots),
         "color": color,
+        "color_word": color,
         "material": material,
         "style": style,
         "accent_color": accent,
@@ -760,6 +766,7 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None):
         "appearance_label": label,
         "appearance_slots": list(slots),
         "color": color,
+        "color_word": color,
         "material": material,
         "style": style,
         "accent_color": accent,
@@ -843,11 +850,13 @@ def apply_tattoo_service(sim, eid, *, design="", slot="", prop=None, source_meta
 def _metadata_with_color(metadata, *, color):
     updated = dict(metadata or {})
     color = _key(color) or "charcoal"
-    accent = render_key_for_color_word(color, default="human_monochrome")
+    accent = fallback_render_key_for_color_word(color, default="human_monochrome")
     updated["color"] = color
+    updated["color_word"] = color
     updated["accent_color"] = accent
     nested = dict(updated.get(APPEARANCE_METADATA_KEY) or {})
     nested["color"] = color
+    nested["color_word"] = color
     nested["accent_color"] = accent
     updated[APPEARANCE_METADATA_KEY] = nested
     label = _text(updated.get("appearance_label") or nested.get("label") or updated.get("appearance_type"))
@@ -1865,10 +1874,10 @@ def _appearance_render_color_part(sim, eid, slot):
     if not entry:
         return None
     profile = appearance_metadata_for_entry(entry)
-    word = _key(profile.get("color"))
+    word = _key(profile.get("color_word") or profile.get("color"))
     render_key = _key(profile.get("accent_color"))
     if not render_key and word:
-        render_key = _key(render_key_for_color_word(word, default=""))
+        render_key = _key(fallback_render_key_for_color_word(word, default=""))
     if not render_key:
         return None
     return {
@@ -1896,6 +1905,13 @@ def appearance_render_colors(sim, eid):
         "footwear": None,
         "headwear": None,
         "accessory": None,
+        "dominant_word": None,
+        "primary_word": None,
+        "inner_word": None,
+        "secondary_word": None,
+        "footwear_word": None,
+        "headwear_word": None,
+        "accessory_word": None,
         "words": {},
         "word_list": (),
     }
@@ -1917,9 +1933,11 @@ def appearance_render_colors(sim, eid):
         if not part:
             continue
         result[role] = part["render_key"]
+        result[f"{role}_word"] = _key(part.get("word")) or None
     for role in ("primary", "inner", "secondary", "footwear", "headwear", "accessory"):
         if result.get(role):
             result["dominant"] = result[role]
+            result["dominant_word"] = result.get(f"{role}_word")
             break
     words = {}
     word_list = []
@@ -1942,8 +1960,17 @@ def appearance_color_key(sim, eid):
     return colors.get("dominant") if isinstance(colors, dict) else None
 
 
+def appearance_color_word(sim, eid):
+    colors = appearance_render_colors(sim, eid)
+    return colors.get("dominant_word") if isinstance(colors, dict) else None
+
+
 def player_appearance_color_key(sim, player_eid):
     return appearance_color_key(sim, player_eid)
+
+
+def player_appearance_color_word(sim, player_eid):
+    return appearance_color_word(sim, player_eid)
 
 
 def apply_appearance_service(sim, eid, *, kind="", value="", prop=None):

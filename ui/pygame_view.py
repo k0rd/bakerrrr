@@ -5324,15 +5324,17 @@ class PygameView:
                 continue
             glyph = str(overlay.get("glyph", " ") or " ")[:1] or " "
             color = overlay.get("color")
+            color_word = overlay.get("color_word")
             semantic_id = overlay.get("semantic_id")
             overlay_attrs = int(attrs or 0) | int(overlay.get("attrs", 0) or 0)
-            if self._draw_procedural_shape(x, y, glyph, color=color, attrs=overlay_attrs, semantic_id=semantic_id, light_tint=light_tint):
+            if self._draw_procedural_shape(x, y, glyph, color=color, color_word=color_word, attrs=overlay_attrs, semantic_id=semantic_id, light_tint=light_tint):
                 continue
+            paint_color = self._paint_color(color, color_word)
             self._draw_font_char(
                 x,
                 y,
                 glyph,
-                color=color,
+                color=paint_color,
                 attrs=overlay_attrs,
                 preserve_background=True,
             )
