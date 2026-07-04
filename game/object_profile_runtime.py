@@ -392,6 +392,7 @@ def object_visual_signature(item_id: str, profile: Mapping[str, Any] | None, met
         "rarity": profile["rarity"],
         "glyph": profile.get("display_glyph") or OBJECT_PROFILE_GLYPHS[family],
         "color": profile.get("display_color") or OBJECT_PROFILE_COLOR_KEYS[family],
+        "color_word": profile["primary_color"],
         "semantic_id": f"world_object_{family}",
         "detail_seed": int(detail_seed),
     }

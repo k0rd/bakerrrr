@@ -4696,10 +4696,11 @@ class PygameView:
         self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 210), down)
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_procedural_shape(self, x, y, ch, color=None, attrs=0, semantic_id=None, effects=None, light_tint=None):
+    def _draw_procedural_shape(self, x, y, ch, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, light_tint=None):
         glyph = str(ch)[:1] or " "
         color_key = str(color or "").strip().lower()
         semantic_key = str(semantic_id or "").strip().lower()
+        color = self._paint_color(color, color_word)
         effect_set = {
             str(effect).strip().lower()
             for effect in (effects or ())
@@ -5156,6 +5157,18 @@ class PygameView:
             return (int(color[0]), int(color[1]), int(color[2]))
         return self.palette["default"]
 
+    def _color_word_value(self, color_word):
+        if not str(color_word or "").strip():
+            return None
+        rgb = color_word_rgb(color_word)
+        if rgb is None:
+            return None
+        return (int(rgb[0]), int(rgb[1]), int(rgb[2]))
+
+    def _paint_color(self, color, color_word=None):
+        exact = self._color_word_value(color_word)
+        return exact if exact is not None else color
+
     def _has_attr(self, attrs, flag_name):
         flag = attr_for_name(flag_name)
         attrs = int(attrs or 0)
@@ -5224,6 +5237,7 @@ class PygameView:
                     call.get("y", 0),
                     call.get("glyph", " "),
                     color=call.get("color"),
+                    color_word=call.get("color_word"),
                     attrs=call.get("attrs", 0),
                     semantic_id=call.get("semantic_id"),
                     effects=call.get("effects", ()),
@@ -5323,7 +5337,7 @@ class PygameView:
                 preserve_background=True,
             )
 
-    def _draw_char(self, x, y, ch, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, light_tint=None):
+    def _draw_char(self, x, y, ch, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, overlays=None, light_tint=None):
         region = self._clip_text(x, y, str(ch)[:1] or " ")
         if region is None:
             return
@@ -5334,12 +5348,13 @@ class PygameView:
         previous_light_tint = self._active_surface_light_tint
         self._active_surface_light_tint = self._normalize_light_tint(light_tint)
         try:
-            if self._draw_procedural_shape(x, y, text[0], color=color, attrs=attrs, semantic_id=semantic_id, effects=effects, light_tint=light_tint):
+            if self._draw_procedural_shape(x, y, text[0], color=color, color_word=color_word, attrs=attrs, semantic_id=semantic_id, effects=effects, light_tint=light_tint):
                 self._draw_overlay_stack(x, y, overlays, attrs=attrs, light_tint=light_tint)
                 return
             preserve_background = self._preserve_background_for_color(color)
+            paint_color = self._paint_color(color, color_word)
 
-            self._draw_font_char(x, y, text[0], color=color, attrs=attrs, preserve_background=preserve_background)
+            self._draw_font_char(x, y, text[0], color=paint_color, attrs=attrs, preserve_background=preserve_background)
             self._draw_overlay_stack(x, y, overlays, attrs=attrs, light_tint=light_tint)
         finally:
             self._active_surface_light_tint = previous_light_tint
@@ -5691,7 +5706,7 @@ class PygameView:
         self.surface.blit(surface, (int(pixel_x), dest_y))
         return self.cell_px
 
-    def draw(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None, light_tint=None):
+    def draw(self, x, y, glyph, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None, light_tint=None):
         if self._wants_layered_draw(layer=layer, priority=priority):
             self._queue_draw_call(
                 "glyph",
@@ -5699,6 +5714,7 @@ class PygameView:
                 y=int(y),
                 glyph=str(glyph)[:1] or " ",
                 color=color,
+                color_word=color_word,
                 attrs=int(attrs or 0),
                 semantic_id=semantic_id,
                 effects=tuple(effects or ()),
@@ -5714,6 +5730,7 @@ class PygameView:
             y,
             glyph,
             color=color,
+            color_word=color_word,
             attrs=attrs,
             semantic_id=semantic_id,
             effects=effects,

@@ -294,6 +294,7 @@ ENTITY_TAXONOMY_SEMANTICS = {
 class AppearanceSnapshot:
     glyph: str = "?"
     color: str | None = None
+    color_word: str | None = None
     semantic_id: str | None = None
     layer: str | None = None
     priority: int | None = None
@@ -337,6 +338,7 @@ def _snapshot(
     glyph,
     *,
     color=None,
+    color_word=None,
     semantic_id=None,
     layer=None,
     priority=None,
@@ -348,6 +350,7 @@ def _snapshot(
     return AppearanceSnapshot(
         glyph=str(glyph)[:1] or "?",
         color=(str(color).strip() if isinstance(color, str) else color),
+        color_word=str(color_word).strip().lower() if str(color_word or "").strip() else None,
         semantic_id=str(semantic_id).strip() if semantic_id else None,
         layer=str(layer).strip().lower() if str(layer or "").strip() else None,
         priority=None if priority is None else int(priority),
@@ -362,6 +365,7 @@ def _semantic_snapshot(
     glyph,
     *,
     color=None,
+    color_word=None,
     semantic_id=None,
     catalog=None,
     preferred_categories=(),
@@ -387,6 +391,7 @@ def _semantic_snapshot(
     return _snapshot(
         glyph,
         color=color,
+        color_word=color_word,
         semantic_id=resolved_semantic_id,
         layer=resolved_layer,
         priority=resolved_priority,
@@ -526,6 +531,7 @@ def _owner_appearance(owner, fallback_glyph="?"):
     return _snapshot(
         glyph,
         color=getattr(owner, "color", None),
+        color_word=getattr(owner, "color_word", None),
         semantic_id=getattr(owner, "semantic_id", None),
         layer=getattr(owner, "layer", None),
         priority=getattr(owner, "priority", None),
@@ -544,6 +550,7 @@ def _merge_snapshots(base, override):
     return AppearanceSnapshot(
         glyph=str(getattr(override, "glyph", "") or getattr(base, "glyph", "?"))[:1] or getattr(base, "glyph", "?"),
         color=override.color if override.color is not None else base.color,
+        color_word=override.color_word or base.color_word,
         semantic_id=override.semantic_id or base.semantic_id,
         layer=override.layer if override.layer is not None else base.layer,
         priority=override.priority if override.priority is not None else base.priority,
@@ -598,6 +605,7 @@ def _merge_structure_snapshot(
             or getattr(base, "glyph", "?")
         ),
         color=override_color if override_color is not None else base.color,
+        color_word=override.color_word or base.color_word,
         semantic_id=override_semantic or base.semantic_id,
         layer=override.layer if override.layer is not None else base.layer,
         priority=override.priority if override.priority is not None else base.priority,
@@ -1112,10 +1120,12 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None, sim=N
             signature = metadata.get("visual_signature") if isinstance(metadata.get("visual_signature"), dict) else {}
             profile = metadata.get("object_profile") if isinstance(metadata.get("object_profile"), dict) else {}
             semantic_id = str(signature.get("semantic_id", "") or "").strip() or f"world_object_{profile.get('family', 'personal_home')}"
+            color_word = str(signature.get("color_word", profile.get("primary_color", "")) or "").strip().lower() or None
             effects = object_profile_effects(profile, signature)
             return _semantic_snapshot(
                 glyph,
                 color=color,
+                color_word=color_word,
                 semantic_id=semantic_id,
                 catalog=catalog,
                 preferred_categories=("world_objects", "properties"),
@@ -1216,10 +1226,12 @@ def item_render_snapshot(item_def, *, metadata=None, catalog=None):
             signature = object_visual_signature(str(item_def.get("id", "") or ""), profile, metadata)
         glyph = str(signature.get("glyph", profile.get("display_glyph", "o")) or "o")[:1] or "o"
         color = str(signature.get("color", profile.get("display_color", "world_object_home")) or "world_object_home")
+        color_word = str(signature.get("color_word", profile.get("primary_color", "")) or "").strip().lower() or None
         semantic_id = str(signature.get("semantic_id", f"world_object_{profile.get('family', 'personal_home')}") or "")
         return _semantic_snapshot(
             glyph,
             color=color,
+            color_word=color_word,
             semantic_id=semantic_id,
             catalog=catalog,
             preferred_categories=("world_objects", "items"),
@@ -1383,6 +1395,7 @@ class AppearanceManager:
         return AppearanceSnapshot(
             glyph=glyph,
             color=owned_color if owned_color is not None else defaults.color,
+            color_word=owned.color_word or defaults.color_word,
             semantic_id=semantic_id,
             layer=actor_layer,
             priority=owned.priority if owned.priority is not None else defaults.priority,

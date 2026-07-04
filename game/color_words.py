@@ -671,6 +671,30 @@ def find_nearest_color_word(
 nearest_color_word = find_nearest_color_word
 
 
+def find_closest_native_color_word(
+    value: object,
+    *,
+    include_reserved: bool = True,
+    default: str = "",
+) -> str:
+    rgb = color_word_rgb(value)
+    if rgb is None:
+        rgb = parse_color_value(value)
+    if rgb is None:
+        normalized = normalize_color_word(value, default="")
+        native_words = approved_color_words(include_reserved=include_reserved, include_imported=False)
+        return normalized if normalized in native_words else default
+    return find_nearest_color_word(
+        rgb,
+        include_reserved=include_reserved,
+        include_imported=False,
+        default=default,
+    )
+
+
+find_closest_native_color = find_closest_native_color_word
+
+
 def choose_color_word(rng, *, slots=(), include_reserved: bool = False) -> str:
     slot_tokens = {
         str(slot or "").strip().lower()

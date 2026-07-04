@@ -1440,10 +1440,12 @@ class RenderSystem(System):
             break
         return visible_lines
 
-    def _draw(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None, light_tint=None):
+    def _draw(self, x, y, glyph, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None, light_tint=None):
         kwargs = {"attrs": int(attrs or 0)}
         if color is not None:
             kwargs["color"] = color
+        if color_word and hasattr(self.view, "pygame"):
+            kwargs["color_word"] = color_word
         if semantic_id:
             kwargs["semantic_id"] = semantic_id
         if effects:
@@ -1490,6 +1492,7 @@ class RenderSystem(System):
             y,
             getattr(appearance, "glyph", "?"),
             color=getattr(appearance, "color", None),
+            color_word=getattr(appearance, "color_word", None),
             attrs=int(attrs or 0) | int(getattr(appearance, "attrs", 0) or 0),
             semantic_id=getattr(appearance, "semantic_id", None),
             effects=getattr(appearance, "effects", ()),
