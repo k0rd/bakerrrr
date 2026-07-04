@@ -22,6 +22,7 @@ from game.system_support.entity_naming import _entity_display_name
 from game.system_support.building_repair_runtime import record_building_damage as _record_building_damage
 from game.system_support.fire_runtime import fire_cell_state
 from game.system_support.offense_runtime import _emit_action_offense_event
+from game.vehicle_explosion_runtime import arm_vehicle_explosion
 
 
 MAX_VEHICLE_SPEED = 4
@@ -449,7 +450,6 @@ def _vehicle_durability(vehicle_prop):
 
 
 def apply_vehicle_durability_loss(sim, vehicle_prop, amount=1, *, cause="vehicle_crash"):
-    del sim
     if not _property_is_vehicle(vehicle_prop):
         return 0, 0, 0
     loss = max(0, int(amount or 0))
@@ -460,6 +460,8 @@ def apply_vehicle_durability_loss(sim, vehicle_prop, amount=1, *, cause="vehicle
     metadata["last_vehicle_damage_cause"] = str(cause or "vehicle_crash")
     metadata["vehicle_usable"] = bool(after > 0)
     metadata["vehicle_broken"] = bool(after <= 0)
+    if before > 0 and after <= 0:
+        arm_vehicle_explosion(sim, vehicle_prop, cause=cause)
     return int(before), int(after), max(0, int(before) - int(after))
 
 

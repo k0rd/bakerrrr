@@ -241,6 +241,7 @@ class FireSystem(System):
             return
         source_eid = event.data.get("source_eid")
         source_intensity = max(0, _safe_int(event.data.get("fire_intensity"), 0))
+        force_fire = bool(event.data.get("force_fire", False))
         origin = _coord_key(x, y, z)
         if origin is None:
             return
@@ -256,12 +257,13 @@ class FireSystem(System):
                 if not bool(behavior.get("can_ignite")):
                     continue
                 distance = abs(dx) + abs(dy)
-                chance = max(0.18, 0.9 - (distance * 0.22))
-                roll = random.Random(
-                    f"{getattr(self.sim, 'seed', 0)}:fire-explosion:{getattr(self.sim, 'tick', 0)}:{tx}:{ty}:{tz}:{source_eid}"
-                ).random()
-                if roll > chance:
-                    continue
+                if not force_fire:
+                    chance = max(0.18, 0.9 - (distance * 0.22))
+                    roll = random.Random(
+                        f"{getattr(self.sim, 'seed', 0)}:fire-explosion:{getattr(self.sim, 'tick', 0)}:{tx}:{ty}:{tz}:{source_eid}"
+                    ).random()
+                    if roll > chance:
+                        continue
                 is_spread = distance > 0
                 self._ignite_cell(
                     tx,

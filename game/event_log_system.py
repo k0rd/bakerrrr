@@ -614,6 +614,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("vehicle_action_blocked", self.on_vehicle_action_blocked)
         self.sim.events.subscribe("vehicle_collision", self.on_vehicle_collision)
         self.sim.events.subscribe("vehicle_crash", self.on_vehicle_crash)
+        self.sim.events.subscribe("vehicle_explosion_armed", self.on_vehicle_explosion_armed)
+        self.sim.events.subscribe("vehicle_exploded", self.on_vehicle_exploded)
         self.sim.events.subscribe("overworld_travelled", self.on_overworld_travelled)
         self.sim.events.subscribe("overworld_discovery_found", self.on_overworld_discovery_found)
         self.sim.events.subscribe("overworld_marker_added", self.on_overworld_marker_added)
@@ -6585,8 +6587,41 @@ class EventLogSystem(System):
         durability_after = _int_or_default(event.data.get("durability_after"), 0)
         driver_damage = _int_or_default(event.data.get("driver_damage"), 0)
         hurt_text = f" You are jolted for {driver_damage} harm." if driver_damage > 0 else ""
-        broken_text = " It will not move until repaired." if bool(event.data.get("vehicle_broken", False)) else ""
+        vehicle_id = str(event.data.get("vehicle_id", "") or "").strip()
+        vehicle_metadata = _property_metadata(self.sim.properties.get(vehicle_id))
+        if bool(event.data.get("vehicle_broken", False)) and bool(vehicle_metadata.get("vehicle_explosion_armed")):
+            broken_text = " It is cooking off."
+        else:
+            broken_text = " It will not move until repaired." if bool(event.data.get("vehicle_broken", False)) else ""
         self.sim.log.add(f"The vehicle crashes into {impact_kind} and stops. Condition {durability_after}/10.{broken_text}{hurt_text}")
+
+    def _player_active_vehicle_matches(self, vehicle_id):
+        vehicle_id = str(vehicle_id or "").strip()
+        if not vehicle_id:
+            return False
+        state = self.sim.ecs.get(VehicleState).get(self.player_eid)
+        return bool(state and str(getattr(state, "active_vehicle_id", "") or "").strip() == vehicle_id)
+
+    def on_vehicle_explosion_armed(self, event):
+        vehicle_id = str(event.data.get("vehicle_id", "") or "").strip()
+        if not self._player_active_vehicle_matches(vehicle_id) and not self._player_can_perceive_event_position(event):
+            return
+        vehicle_name = str(event.data.get("vehicle_name", "") or "").strip() or "The vehicle"
+        fuse_ticks = _int_or_default(event.data.get("fuse_ticks"), 0)
+        fuse_text = f" in about {fuse_ticks} ticks" if fuse_ticks > 0 else " soon"
+        self.sim.log.add(f"{vehicle_name} starts cooking off. Get clear; it may blow{fuse_text}.")
+
+    def on_vehicle_exploded(self, event):
+        vehicle_id = str(event.data.get("vehicle_id", "") or "").strip()
+        occupant_eids = set(event.data.get("occupant_eids", ()) or ())
+        player_was_inside = self.player_eid in occupant_eids
+        if not player_was_inside and not self._player_active_vehicle_matches(vehicle_id) and not self._player_can_perceive_event_position(event):
+            return
+        vehicle_name = str(event.data.get("vehicle_name", "") or "").strip() or "The vehicle"
+        if player_was_inside:
+            self.sim.log.add(f"You are forced out as {vehicle_name} detonates. The wreck is gone.")
+            return
+        self.sim.log.add(f"{vehicle_name} detonates. The wreck is gone.")
 
     def on_overworld_travelled(self, event):
         if event.data.get("eid") != self.player_eid:

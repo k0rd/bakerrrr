@@ -1116,9 +1116,12 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None, sim=N
         + tuple(_property_open_status_overlay(sim, prop))
     )
     if kind == "vehicle":
+        effects = ()
         quality = str(metadata.get("vehicle_quality", "used")).strip().lower()
         paint_color = str(metadata.get("vehicle_paint", "")).strip()
         owner_tag = str(prop.get("owner_tag", "")).strip().lower()
+        if bool(metadata.get("vehicle_explosion_armed")) and not bool(metadata.get("vehicle_exploded")):
+            effects = ("blink",)
         if explicit_color:
             color = explicit_color
         elif paint_color:
@@ -1129,6 +1132,15 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None, sim=N
             color = "vehicle_new"
         elif not color:
             color = "vehicle_parked"
+        return _semantic_snapshot(
+            glyph,
+            color=color,
+            semantic_id=semantic_id,
+            catalog=catalog,
+            preferred_categories=("vehicles",),
+            effects=effects,
+            overlays=overlays,
+        )
     elif kind in {"fixture", "asset"}:
         if property_is_item_backed_fixture(prop):
             signature = metadata.get("visual_signature") if isinstance(metadata.get("visual_signature"), dict) else {}
