@@ -163,4 +163,4 @@ def tags_for_color_word(word: str) -> tuple[str, ...]:
 
 
 def choose_appearance_color_word(rng, *, slots=()) -> str:
-    return choose_color_word(rng, slots=slots, include_reserved=False)
+    return choose_color_word(rng, slots=slots, include_reserved=True, include_unweighted=True)

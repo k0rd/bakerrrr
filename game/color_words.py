@@ -695,7 +695,7 @@ def find_closest_native_color_word(
 find_closest_native_color = find_closest_native_color_word
 
 
-def choose_color_word(rng, *, slots=(), include_reserved: bool = False) -> str:
+def choose_color_word(rng, *, slots=(), include_reserved: bool = False, include_unweighted: bool = False) -> str:
     slot_tokens = {
         str(slot or "").strip().lower()
         for slot in tuple(slots or ())
@@ -703,9 +703,12 @@ def choose_color_word(rng, *, slots=(), include_reserved: bool = False) -> str:
     }
     weighted: list[tuple[str, int]] = []
     for row in COLOR_WORD_PALETTE:
-        if not include_reserved and int(row.roll_weight) <= 0:
+        row_weight = int(row.roll_weight)
+        if not include_reserved and row_weight <= 0:
             continue
-        weight = max(0, int(row.roll_weight))
+        weight = max(0, row_weight)
+        if include_unweighted and weight <= 0:
+            weight = 1
         if slot_tokens:
             bias = dict(row.slot_bias)
             weight += sum(max(0, int(bias.get(slot, 0))) for slot in slot_tokens)

@@ -349,77 +349,8 @@ TATTOO_LOCATION_ROWS = (
     ("lips", "near the lips"),
     ("upper_chest", "upper chest"),
 )
-STARTER_OUTFIT_COLOR_BUCKETS = {
-    "human_charcoal": ("charcoal", "black", "slate"),
-    "human_olive": ("olive", "green", "tan"),
-    "human_denim": ("denim", "blue", "slate"),
-    "human_accent": ("rust", "gold", "brown"),
-    "human_monochrome": ("gray", "white", "charcoal"),
-    "human_rust": ("rust", "brown", "tan"),
-    "human_slate": ("slate", "gray", "blue"),
-    "human_wine": ("wine", "red", "black"),
-}
-STARTER_SHOE_COLORS = ("black", "brown", "charcoal", "gray")
 NPC_DESCRIBED_OUTFIT_METADATA_KEY = "npc_described_outfit"
 NPC_DESCRIBED_OUTFIT_SOURCE = "seeded_description_outfit"
-NPC_DESCRIPTION_COLOR_BUCKETS = {
-    "human_charcoal": {
-        "outer": ("charcoal", "black", "slate", "smoke", "violet"),
-        "top": ("slate", "gray", "smoke", "lavender", "periwinkle", "rose", "white"),
-        "bottom": ("charcoal", "black", "slate", "plum", "navy"),
-        "shoes": ("black", "charcoal", "slate", "smoke", "purple"),
-        "accessory": ("silver", "steel", "onyx", "lavender", "cobalt"),
-    },
-    "human_olive": {
-        "outer": ("olive", "green", "moss", "forest", "sage", "mint"),
-        "top": ("green", "olive", "sage", "mint", "lime", "cream", "peach"),
-        "bottom": ("brown", "olive", "moss", "forest", "khaki", "sage"),
-        "shoes": ("brown", "olive", "moss", "tan", "green", "black"),
-        "accessory": ("brass", "copper", "bronze", "mint", "gold"),
-    },
-    "human_denim": {
-        "outer": ("denim", "blue", "cerulean", "slate"),
-        "top": ("blue", "sky", "aqua", "turquoise", "periwinkle", "ash", "white"),
-        "bottom": ("denim", "blue", "navy", "slate", "cerulean"),
-        "shoes": ("black", "denim", "navy", "blue", "aqua", "charcoal"),
-        "accessory": ("steel", "silver", "onyx", "aqua", "cobalt"),
-    },
-    "human_accent": {
-        "outer": ("cobalt", "teal", "coral", "violet", "pink", "orange", "charcoal"),
-        "top": ("cobalt", "coral", "violet", "gold", "teal", "pink", "magenta", "white"),
-        "bottom": ("black", "slate", "charcoal", "cobalt", "purple", "magenta"),
-        "shoes": ("black", "charcoal", "cobalt", "white", "red", "pink", "orange"),
-        "accessory": ("gold", "cobalt", "coral", "violet", "pink", "brass"),
-    },
-    "human_monochrome": {
-        "outer": ("black", "charcoal", "gray", "ash", "lavender"),
-        "top": ("white", "ivory", "gray", "ash", "lavender", "peach"),
-        "bottom": ("black", "gray", "charcoal", "ash"),
-        "shoes": ("black", "gray", "white", "charcoal", "silver"),
-        "accessory": ("silver", "steel", "onyx", "ivory", "lavender"),
-    },
-    "human_rust": {
-        "outer": ("rust", "copper", "orange", "brown", "amber"),
-        "top": ("rust", "amber", "orange", "coral", "salmon", "peach", "cream"),
-        "bottom": ("brown", "rust", "copper", "smoke", "maroon"),
-        "shoes": ("brown", "rust", "copper", "tan", "orange", "black"),
-        "accessory": ("copper", "brass", "bronze", "coral", "amber"),
-    },
-    "human_slate": {
-        "outer": ("slate", "blue", "navy", "cerulean", "periwinkle"),
-        "top": ("sky", "blue", "cerulean", "periwinkle", "aqua", "lavender", "ash"),
-        "bottom": ("navy", "denim", "slate", "blue", "indigo"),
-        "shoes": ("black", "navy", "slate", "blue", "cerulean", "charcoal"),
-        "accessory": ("steel", "silver", "blue", "cobalt", "periwinkle"),
-    },
-    "human_wine": {
-        "outer": ("wine", "burgundy", "maroon", "plum", "charcoal"),
-        "top": ("wine", "rose", "pink", "burgundy", "lilac", "magenta", "ivory"),
-        "bottom": ("black", "wine", "burgundy", "charcoal", "plum", "purple"),
-        "shoes": ("black", "wine", "burgundy", "brown", "plum", "rose"),
-        "accessory": ("brass", "gold", "copper", "rose", "lilac"),
-    },
-}
 NPC_DESCRIPTION_ATTIRE_ITEMS = {
     "dark fitted coat": ("coat", "tee", "trousers", "boots"),
     "tailored jacket": ("blazer", "button_up", "trousers", "boots"),
@@ -870,14 +801,7 @@ def _metadata_with_color(metadata, *, color):
 
 
 def _starter_outfit_color(sim, eid, identity, rng):
-    render_key = human_render_color_key(
-        getattr(sim, "seed", 0),
-        eid=eid,
-        identity=identity,
-        personal_name=getattr(identity, "personal_name", None),
-    )
-    options = STARTER_OUTFIT_COLOR_BUCKETS.get(_key(render_key), ("charcoal", "denim", "olive", "slate"))
-    return rng.choice(tuple(options))
+    return choose_appearance_color_word(rng, slots=("top", "starter"))
 
 
 NPC_BODYGUARD_COLOR_BUCKETS = {
@@ -896,11 +820,8 @@ def _description_color_for(profile, slot, rng, item_id="", role="", career=""):
         bucket_key = "accessory" if slot in {"hat", "earrings", "necklace", "bracelet", "ring_left", "ring_right"} else slot
         options = tuple(NPC_BODYGUARD_COLOR_BUCKETS.get(bucket_key) or NPC_BODYGUARD_COLOR_BUCKETS.get("top") or ("charcoal",))
         return rng.choice(options)
-    render_key = _key((profile or {}).get("render_color_key")) or "human_charcoal"
-    buckets = NPC_DESCRIPTION_COLOR_BUCKETS.get(render_key, NPC_DESCRIPTION_COLOR_BUCKETS["human_charcoal"])
     bucket_key = "accessory" if slot in {"hat", "earrings", "necklace", "bracelet", "ring_left", "ring_right"} else slot
-    options = tuple(buckets.get(bucket_key) or buckets.get("top") or ("charcoal",))
-    color = rng.choice(options)
+    color = choose_appearance_color_word(rng, slots=(bucket_key, _key(item_id)))
     if _key(item_id) == "jacket" and "denim" in _key((profile or {}).get("attire_compact")):
         color = "denim"
     if _key(item_id) == "ring" and "silver" in _key((profile or {}).get("accessory_compact")):
@@ -1040,8 +961,8 @@ def seed_player_starting_outfit(sim, eid, *, seed_token=""):
     outfit_color = _starter_outfit_color(sim, eid, identity, rng)
     rows = (
         (rng.choice(("tee", "button_up", "button_up")), outfit_color),
-        ("trousers", outfit_color if rng.random() < 0.35 else rng.choice(("charcoal", "denim", "slate", "black"))),
-        (rng.choice(("sneakers", "boots")), rng.choice(STARTER_SHOE_COLORS)),
+        ("trousers", outfit_color if rng.random() < 0.35 else choose_appearance_color_word(rng, slots=("bottom", "starter"))),
+        (rng.choice(("sneakers", "boots")), choose_appearance_color_word(rng, slots=("shoes", "starter"))),
     )
 
     seeded = []
