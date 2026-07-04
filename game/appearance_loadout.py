@@ -10,6 +10,7 @@ from game.appearance_palette import (
     fallback_render_key_for_color_word,
     render_key_for_color_word,
 )
+from game.color_words import color_word_display_name
 from game.components import AI, AppearanceLoadout, ArmorLoadout, CreatureIdentity, Inventory, Occupation
 from game.human_description import build_human_description_profile, human_self_physical_summary, human_render_color_key
 from game.human_identity import pronoun_format_slots
@@ -1230,7 +1231,8 @@ def _entry_phrase(entry, *, compact=False, article=False):
     profile = appearance_metadata_for_entry(entry)
     if not profile:
         return ""
-    color = profile.get("color", "")
+    color_key = profile.get("color_word") or profile.get("color", "")
+    color = color_word_display_name(color_key, default=str(color_key or ""))
     material = profile.get("material", "")
     style = profile.get("style", "")
     label = profile.get("label", "")

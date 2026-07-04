@@ -8,6 +8,7 @@ from math import copysign
 from engine.visibility import has_line_of_sight
 from game.appearance_palette import appearance_color_words, tags_for_color_word
 from game.appearance_loadout import appearance_loadout_for, appearance_metadata_for_entry, appearance_signal_profile
+from game.color_words import color_word_display_name, curated_color_words, find_closest_native_color_word
 from game.components import (
     AI,
     ArmorLoadout,
@@ -45,6 +46,7 @@ _TAG_WEIGHTS = (
     "visible_mark",
 )
 _COLORS = appearance_color_words()
+_COLOR_PREFERENCE_WORDS = curated_color_words()
 _RENDER_COLOR_PROFILE = {
     "human_charcoal": ("charcoal", "black"),
     "human_olive": ("olive", "brown"),
@@ -249,6 +251,13 @@ def _clean_list(values):
     return tuple(out)
 
 
+def _preference_color_key(color):
+    token = _key(color)
+    if not token:
+        return ""
+    return find_closest_native_color_word(token, default=token) or token
+
+
 def _profile_from_loadout(sim, eid):
     loadout = appearance_loadout_for(sim, eid, create=False)
     if loadout is None:
@@ -406,14 +415,14 @@ def _display_label(colors, labels, tags):
     if labels:
         label = labels[0].replace("_", " ")
         if colors:
-            return f"{colors[0]} {label}".strip()
+            return f"{color_word_display_name(colors[0], default=colors[0])} {label}".strip()
         return label
     if "armor" in tags:
         return "armor"
     if "jewelry" in tags:
         return "jewelry"
     if colors:
-        return f"{colors[0]} outfit"
+        return f"{color_word_display_name(colors[0], default=colors[0])} outfit"
     return "outfit"
 
 
@@ -478,10 +487,10 @@ def npc_outfit_taste_profile(sim, npc_eid) -> dict:
     seed = f"{getattr(sim, 'seed', 0)}:outfit-taste:{npc_eid}:{role}:{career}:{district}:{','.join(sorted(org_kinds))}"
     rng = random.Random(seed)
     tag_weights = {tag: rng.uniform(-0.045, 0.045) for tag in _TAG_WEIGHTS}
-    color_weights = {color: 0.0 for color in _COLORS}
-    for color in rng.sample(tuple(_COLORS), 2):
+    color_weights = {color: 0.0 for color in _COLOR_PREFERENCE_WORDS}
+    for color in rng.sample(tuple(_COLOR_PREFERENCE_WORDS), 2):
         color_weights[color] += rng.uniform(0.04, 0.09)
-    for color in rng.sample(tuple(_COLORS), 2):
+    for color in rng.sample(tuple(_COLOR_PREFERENCE_WORDS), 2):
         color_weights[color] -= rng.uniform(0.04, 0.09)
 
     tokens = {role, career, district}
@@ -559,9 +568,10 @@ def _weighted_profile_score(profile, taste, *, shared_org_kinds=()):
         if amount:
             contributions.append((amount, tag))
     for idx, color in enumerate(tuple(profile.get("colors", ()) or ())):
-        amount = _safe_float(color_weights.get(color)) * (1.0 if idx == 0 else 0.45)
+        preference_color = _preference_color_key(color)
+        amount = _safe_float(color_weights.get(preference_color)) * (1.0 if idx == 0 else 0.45)
         if amount:
-            contributions.append((amount, f"color:{color}"))
+            contributions.append((amount, f"color:{preference_color}"))
 
     score = sum(amount for amount, _reason in contributions)
     shared = {_key(kind) for kind in tuple(shared_org_kinds or ()) if _key(kind)}
