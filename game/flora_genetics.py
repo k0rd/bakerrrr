@@ -346,6 +346,38 @@ def _legacy_effect_traits(raw_genetics):
     return tuple(dict.fromkeys(value for value in values if value in EFFECT_TRAIT_IDS or value.startswith("+")))
 
 
+def _ensure_effect_trait_alleles(genetics, traits):
+    if not isinstance(genetics, Mapping):
+        return {}
+    genome = copy.deepcopy(dict(genetics))
+    genes = genome.setdefault("genes", {})
+    if not isinstance(genes, dict):
+        genes = {}
+        genome["genes"] = genes
+    effects = genes.setdefault("effects", {})
+    if not isinstance(effects, dict):
+        effects = {}
+        genes["effects"] = effects
+    rows = list(effects.get("traits") or ())
+    existing = {_key((row or {}).get("value")) for row in rows if isinstance(row, Mapping)}
+    for trait in tuple(traits or ()):
+        trait_key = _key(trait)
+        if trait_key not in EFFECT_TRAIT_IDS or trait_key in existing:
+            continue
+        rows.append(_allele(
+            trait_key,
+            locus="effects.traits",
+            dominance=0.55,
+            inherit_chance=0.75,
+            expression_chance=0.75,
+            stability_cost=STABILITY_COST_BY_TRAIT.get(trait_key, 0.12 if trait_key.startswith("+") else 0.0),
+            tags=("effect", trait_key),
+        ))
+        existing.add(trait_key)
+    effects["traits"] = rows
+    return genome
+
+
 def _legacy_genes_for_row(plant_id, row, raw_genetics, seed):
     color = _color_value(row, raw_genetics)
     shape = _shape_value(row, raw_genetics)
@@ -578,6 +610,7 @@ def express_flora_genetics(genetics, *, seed, generation=0, lineage_hash=""):
     genes = genetics.get("genes") if isinstance(genetics.get("genes"), Mapping) else {}
     lineage_hash = str(lineage_hash or (genetics.get("lineage") or {}).get("lineage_hash") or genetics.get("genome_id") or "")
     generation = _safe_int(generation, 0)
+    inheritance_resolved = bool(genetics.get("inheritance_resolved"))
     stability_pressure = _stability_pressure(genetics)
     inherited: dict[str, dict[str, list[dict]]] = {}
     carried: dict[str, dict[str, list[dict]]] = {}
@@ -601,7 +634,10 @@ def express_flora_genetics(genetics, *, seed, generation=0, lineage_hash=""):
                 if not isinstance(allele, Mapping):
                     continue
                 normalized = _normalize_allele(allele, locus=f"{group_key}.{locus_key}", fallback_value=allele.get("value"))
-                if not _roll_allows(normalized, "inherit", normalized.get("inherit_chance"), seed, generation, lineage_hash, group_key, locus_key):
+                if (
+                    not inheritance_resolved
+                    and not _roll_allows(normalized, "inherit", normalized.get("inherit_chance"), seed, generation, lineage_hash, group_key, locus_key)
+                ):
                     continue
                 inherited_rows.append(normalized)
                 can_express = (
@@ -639,6 +675,311 @@ def express_flora_genetics(genetics, *, seed, generation=0, lineage_hash=""):
         "stability_score": score,
         "stability_band": band,
     }
+
+
+def _genetics_from_parent(value, *, seed=0):
+    if isinstance(value, Mapping) and _safe_int(value.get("schema_version"), 0) == GENETICS_SCHEMA_VERSION and isinstance(value.get("genes"), Mapping):
+        genetics = copy.deepcopy(dict(value))
+        parent_row = {}
+    elif isinstance(value, Mapping):
+        parent_row = copy.deepcopy(dict(value))
+        raw_genetics = parent_row.get("genetics") if isinstance(parent_row.get("genetics"), Mapping) else {}
+        if _safe_int(raw_genetics.get("schema_version"), 0) == GENETICS_SCHEMA_VERSION and isinstance(raw_genetics.get("genes"), Mapping):
+            genetics = normalize_flora_genetics(
+                parent_row.get("plant_id") or parent_row.get("id") or raw_genetics.get("lineage", {}).get("plant_id"),
+                parent_row,
+                seed=seed,
+            )
+        else:
+            genetics = normalize_flora_genetics(parent_row.get("plant_id") or parent_row.get("id") or "unknown_parent", parent_row, seed=seed)
+    else:
+        parent_row = {}
+        genetics = normalize_flora_genetics("unknown_parent", {}, seed=seed)
+    traits = parent_row.get("secondary_traits") if isinstance(parent_row.get("secondary_traits"), (list, tuple, set)) else ()
+    if traits:
+        genetics = _ensure_effect_trait_alleles(genetics, traits)
+    return genetics
+
+
+def _lineage_depth(genetics):
+    lineage = genetics.get("lineage") if isinstance(genetics, Mapping) and isinstance(genetics.get("lineage"), Mapping) else {}
+    return max(_safe_int(lineage.get("lineage_depth"), 0), _safe_int(lineage.get("generation"), 0))
+
+
+def _parent_alleles_for_locus(genetics, group, locus):
+    rows = []
+    genes = genetics.get("genes") if isinstance(genetics.get("genes"), Mapping) else {}
+    gene_group = genes.get(group) if isinstance(genes.get(group), Mapping) else {}
+    rows.extend(row for row in tuple(gene_group.get(locus, ()) or ()) if isinstance(row, Mapping))
+    carried = genetics.get("carried") if isinstance(genetics.get("carried"), Mapping) else {}
+    carried_group = carried.get(group) if isinstance(carried.get(group), Mapping) else {}
+    rows.extend(row for row in tuple(carried_group.get(locus, ()) or ()) if isinstance(row, Mapping))
+    deduped = []
+    seen = set()
+    for row in rows:
+        token = (str(row.get("id", "")), repr(row.get("value")), str(row.get("source", "")))
+        if token in seen:
+            continue
+        seen.add(token)
+        deduped.append(row)
+    return tuple(deduped)
+
+
+def _child_allele_from_parent(allele, *, role, group, locus, parent_genome_id):
+    normalized = _normalize_allele(allele, locus=f"{group}.{locus}", fallback_value=allele.get("value"))
+    normalized["source"] = role
+    normalized["id"] = _stable_hash(
+        "child-allele",
+        group,
+        locus,
+        role,
+        parent_genome_id,
+        allele.get("id"),
+        normalized.get("value"),
+        length=10,
+    )
+    return normalized
+
+
+def _inherit_roll_allows(allele, *, seed, generation, lineage_hash, group, locus, role):
+    threshold = _clamp(allele.get("inherit_chance", 1.0))
+    if threshold >= 1.0:
+        return True
+    if threshold <= 0.0:
+        return False
+    roll = _stable_unit(seed, lineage_hash, generation, group, locus, role, allele.get("id"), "child-inherit")
+    return roll <= threshold
+
+
+def _best_parent_allele(rows):
+    if not rows:
+        return None
+    return max(
+        rows,
+        key=lambda allele: (
+            _safe_float(allele.get("dominance"), 1.0),
+            _safe_float(allele.get("inherit_chance"), 1.0),
+            str(allele.get("id", "")),
+        ),
+    )
+
+
+def _all_parent_loci(seed_parent, pollen_parent):
+    loci = set()
+    for genetics in (seed_parent, pollen_parent):
+        genes = genetics.get("genes") if isinstance(genetics.get("genes"), Mapping) else {}
+        carried = genetics.get("carried") if isinstance(genetics.get("carried"), Mapping) else {}
+        for source in (genes, carried):
+            for group, group_loci in source.items():
+                if not isinstance(group_loci, Mapping):
+                    continue
+                for locus in group_loci:
+                    loci.add((_key(group), _key(locus)))
+    for group, locus in (
+        ("visual", "color"),
+        ("visual", "shape"),
+        ("chemistry", "main_class"),
+        ("handling", "strength_class"),
+        ("handling", "stability"),
+        ("handling", "spoilability"),
+        ("handling", "blendability"),
+        ("handling", "inheritability"),
+        ("effects", "traits"),
+        ("social", "notability"),
+    ):
+        loci.add((group, locus))
+    return tuple(sorted(loci))
+
+
+def _safe_render_key_for_color_value(color_value, fallback="flora_leaf"):
+    if isinstance(color_value, Mapping):
+        word = color_value.get("word")
+        hint = color_value.get("render_key_hint")
+    else:
+        word = color_value
+        hint = ""
+    return flora_render_key_for_color_word(word, fallback=str(hint or fallback or "flora_leaf"))
+
+
+def _gentle_mutation(genome, *, seed, generation, lineage_hash):
+    if _stable_unit(seed, lineage_hash, generation, "gentle-mutation", "present") > 0.06:
+        return None
+    choice = int(_stable_unit(seed, lineage_hash, generation, "gentle-mutation", "kind") * 4) % 4
+    if choice == 0:
+        color = _blend_color_alleles(tuple((genome.get("genes", {}).get("visual", {}) or {}).get("color", ()) or ()))
+        rgb = parse_color_value(color.get("rgb") or color.get("word"), fallback=(90, 176, 94)) or (90, 176, 94)
+        drifted = []
+        for index, channel in enumerate(rgb):
+            drift = int(round((_stable_unit(seed, lineage_hash, generation, "gentle-mutation", "color", index) - 0.5) * 24))
+            drifted.append(max(0, min(255, int(channel) + drift)))
+        word = find_nearest_color_word(tuple(drifted), default=color.get("word") or "green")
+        return (
+            "visual",
+            "color",
+            _allele(
+                {
+                    "word": word,
+                    "rgb": [int(channel) for channel in drifted],
+                    "render_key_hint": flora_render_key_for_color_word(word, fallback=color.get("render_key_hint") or "flora_leaf"),
+                },
+                locus="visual.color",
+                source=PARENT_ROLE_MUTATION,
+                dominance=0.22,
+                inherit_chance=0.35,
+                expression_chance=0.45,
+                stability_cost=0.03,
+                tags=("mutation", "color"),
+            ),
+        )
+    if choice == 1:
+        locus = "blendability" if _stable_unit(seed, lineage_hash, generation, "gentle-mutation", "handling") < 0.5 else "inheritability"
+        values = BLENDABILITY_BANDS if locus == "blendability" else INHERITABILITY_BANDS
+        value = values[int(_stable_unit(seed, lineage_hash, generation, "gentle-mutation", locus) * len(values)) % len(values)]
+        return (
+            "handling",
+            locus,
+            _allele(
+                value,
+                locus=f"handling.{locus}",
+                source=PARENT_ROLE_MUTATION,
+                dominance=0.24,
+                inherit_chance=0.3,
+                expression_chance=0.4,
+                stability_cost=0.04,
+                tags=("mutation", "handling"),
+            ),
+        )
+    if choice == 2:
+        traits = ("binder", "fader", "potentiator", "diluter", "stabilizer", "spoiler")
+        trait = traits[int(_stable_unit(seed, lineage_hash, generation, "gentle-mutation", "effect") * len(traits)) % len(traits)]
+        return (
+            "effects",
+            "traits",
+            _allele(
+                trait,
+                locus="effects.traits",
+                source=PARENT_ROLE_MUTATION,
+                dominance=0.28,
+                inherit_chance=0.28,
+                expression_chance=0.35,
+                stability_cost=STABILITY_COST_BY_TRAIT.get(trait, 0.08),
+                tags=("mutation", "effect", trait),
+            ),
+        )
+    notability = NOTABILITY_BANDS[int(_stable_unit(seed, lineage_hash, generation, "gentle-mutation", "social") * len(NOTABILITY_BANDS)) % len(NOTABILITY_BANDS)]
+    return (
+        "social",
+        "notability",
+        _allele(
+            notability,
+            locus="social.notability",
+            source=PARENT_ROLE_MUTATION,
+            dominance=0.2,
+            inherit_chance=0.25,
+            expression_chance=0.35,
+            stability_cost=0.03,
+            tags=("mutation", "social"),
+        ),
+    )
+
+
+def _apply_genetics_aliases(genome, row=None):
+    row = row if isinstance(row, Mapping) else {}
+    visual = genome.get("expressed", {}).get("visual", {}) if isinstance(genome.get("expressed"), Mapping) else {}
+    color = visual.get("color", {}) if isinstance(visual.get("color"), Mapping) else {}
+    shape = visual.get("shape", {}) if isinstance(visual.get("shape"), Mapping) else {}
+    if color.get("word"):
+        genome["hue_family"] = color["word"]
+    for axis in SHAPE_AXES:
+        if shape.get(axis):
+            genome[axis] = shape[axis]
+    genome["growth_form"] = shape.get("growth_form") or row.get("growth_form")
+    genome["glyph"] = shape.get("glyph") or row.get("glyph")
+    return genome
+
+
+def inherit_flora_genetics(seed_parent, pollen_parent, *, seed, child_plant_id, generation, lineage_hash, mutation_profile="gentle"):
+    seed_genetics = _genetics_from_parent(seed_parent, seed=seed)
+    pollen_genetics = _genetics_from_parent(pollen_parent, seed=seed)
+    generation = max(1, _safe_int(generation, 1))
+    lineage_hash = str(lineage_hash or _stable_hash(seed, child_plant_id, generation, "flora-child-lineage", length=12))
+    child_genes: dict[str, dict[str, list[dict]]] = {}
+
+    for group, locus in _all_parent_loci(seed_genetics, pollen_genetics):
+        selected = []
+        parent_rows = (
+            (PARENT_ROLE_SEED, seed_genetics, _parent_alleles_for_locus(seed_genetics, group, locus)),
+            (PARENT_ROLE_POLLEN, pollen_genetics, _parent_alleles_for_locus(pollen_genetics, group, locus)),
+        )
+        for role, parent, rows in parent_rows:
+            parent_genome_id = str(parent.get("genome_id") or role)
+            normalized_rows = tuple(
+                _child_allele_from_parent(row, role=role, group=group, locus=locus, parent_genome_id=parent_genome_id)
+                for row in rows
+            )
+            if group == "visual" and locus == "color":
+                best = _best_parent_allele(normalized_rows)
+                if best is not None:
+                    selected.append(best)
+                continue
+            for row in normalized_rows:
+                if _inherit_roll_allows(row, seed=seed, generation=generation, lineage_hash=lineage_hash, group=group, locus=locus, role=role):
+                    selected.append(row)
+        if not selected and not (group == "effects" and locus == "traits"):
+            fallback_rows = []
+            for role, parent, rows in parent_rows:
+                parent_genome_id = str(parent.get("genome_id") or role)
+                fallback_rows.extend(
+                    _child_allele_from_parent(row, role=role, group=group, locus=locus, parent_genome_id=parent_genome_id)
+                    for row in rows
+                )
+            best = _best_parent_allele(fallback_rows)
+            if best is not None:
+                selected.append(best)
+        child_genes.setdefault(group, {})[locus] = selected
+
+    genome = {
+        "schema_version": GENETICS_SCHEMA_VERSION,
+        "genome_id": f"flora:{_key(child_plant_id, 'hybrid')}:v1",
+        "inheritance_resolved": True,
+        "lineage": {
+            "plant_id": _key(child_plant_id, "hybrid"),
+            "parents": [
+                (seed_genetics.get("lineage") or {}).get("plant_id") or seed_genetics.get("genome_id"),
+                (pollen_genetics.get("lineage") or {}).get("plant_id") or pollen_genetics.get("genome_id"),
+            ],
+            "seed_parent": (seed_genetics.get("lineage") or {}).get("plant_id") or seed_genetics.get("genome_id"),
+            "pollen_parent": (pollen_genetics.get("lineage") or {}).get("plant_id") or pollen_genetics.get("genome_id"),
+            "generation": generation,
+            "lineage_depth": max(_lineage_depth(seed_genetics), _lineage_depth(pollen_genetics)) + 1,
+            "lineage_hash": lineage_hash,
+        },
+        "genes": child_genes,
+        "mutation_profile": str(mutation_profile or "none").strip().lower() or "none",
+    }
+    if str(mutation_profile or "").strip().lower() == "gentle":
+        mutation = _gentle_mutation(genome, seed=seed, generation=generation, lineage_hash=lineage_hash)
+        if mutation is not None:
+            group, locus, allele = mutation
+            genome["genes"].setdefault(group, {}).setdefault(locus, []).append(allele)
+            genome["mutation"] = {
+                "group": group,
+                "locus": locus,
+                "allele_id": allele.get("id"),
+                "value": copy.deepcopy(allele.get("value")),
+            }
+
+    expressed_state = express_flora_genetics(
+        genome,
+        seed=seed,
+        generation=generation,
+        lineage_hash=lineage_hash,
+    )
+    genome["expressed"] = expressed_state["expressed"]
+    genome["carried"] = expressed_state["carried"]
+    genome["stability_score"] = expressed_state["stability_score"]
+    genome["stability_band"] = expressed_state["stability_band"]
+    return _apply_genetics_aliases(genome)
 
 
 def _color_from_genetics(value):

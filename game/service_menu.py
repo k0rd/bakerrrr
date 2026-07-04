@@ -21,6 +21,7 @@ from game.casino_ui_runtime import (
     ensure_casino_ui_state,
 )
 from game.finance_services import _nearest_property_with_finance_service
+from game.herbal_chemistry_runtime import secondary_trait_labels
 from game.justice_runtime import held_property_snapshot as _justice_held_property_snapshot
 from game.opportunities import SERVICE_JOB_BOARD_SERVICES, service_job_board_offers
 from game.player_businesses import (
@@ -4287,8 +4288,10 @@ class ServiceMenuSystem(System):
                     if isinstance(row, dict):
                         name = str(row.get("plant_name") or row.get("plant_id") or "").strip()
                         class_id = str(row.get("chemistry_class") or "").replace("_", " ").strip()
+                        trait_labels = secondary_trait_labels(row.get("secondary_traits", ()))
+                        trait_text = f" {' '.join(trait_labels)}" if trait_labels else ""
                         if name and class_id:
-                            names.append(f"{name}: {class_id}")
+                            names.append(f"{name}: {class_id}{trait_text}")
                 if names:
                     lines.append("Known plant affinities: " + "; ".join(names) + ".")
             return f"Herbal Recipe: {prop_name}", lines

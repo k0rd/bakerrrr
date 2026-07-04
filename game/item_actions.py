@@ -4,10 +4,13 @@ import random
 
 from engine.events import Event
 from game.aerosol_trap_runtime import place_aerosol_floor_trap
-from game.components import AI, Inventory, JusticeProfile, PlayerAssets, Position, StatusEffects, Vitality, WeaponLoadout
+from game.herbal_chemistry_runtime import decay_herbal_mixture_entry_if_due
+from game.components import AI, ArmorLoadout, Inventory, JusticeProfile, PlayerAssets, Position, StatusEffects, Vitality, WeaponLoadout
 from game.appearance_loadout import (
+    clear_appearance_instance,
     equip_appearance_item,
     is_appearance_item,
+    is_entry_worn,
     mark_inventory_instance_worn,
     stow_cosmetic_outer_for_armor,
 )
@@ -28,7 +31,7 @@ from game.property_runtime import (
 )
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed, _recover_downed_actor_state
 from game.system_support.container_runtime import (
-    _clear_inventory_container_assignments,
+    release_stowed_items_for_removed_container,
     _unlink_removed_item_from_gear,
 )
 from game.system_support.interaction_ordering import _manhattan
@@ -186,6 +189,13 @@ class ItemActionRuntime:
                 item_name=changes["container_name"],
                 reason=reason,
             ))
+            dropped = int(changes.get("dropped_container_items", 0) or 0)
+            if dropped > 0:
+                _log_player_feedback(
+                    self.sim,
+                    f"{dropped} stowed item{'s' if dropped != 1 else ''} spill onto the ground.",
+                    kind="interaction",
+                )
 
     def _toggle_weapon_item(self, eid, entry, item_def, reason="manual"):
         weapon_id = _item_weapon_id(item_def)
@@ -287,6 +297,22 @@ class ItemActionRuntime:
             ))
             return True
 
+        armor_slot = str(armor.get("slot", "body") or "body").strip().lower() or "body"
+        current_container = getattr(self.sim, "equipped_container", None)
+        if armor_slot == "body" and isinstance(current_container, dict):
+            container_slot = str(current_container.get("container_slot", "pack") or "pack").strip().lower()
+            if bool(current_container.get("blocks_armor")) or container_slot in {"body", "outer"}:
+                self.sim.emit(Event(
+                    "item_use_blocked",
+                    eid=eid,
+                    reason="container_body_slot_active",
+                    item_id=item_def["id"],
+                    item_name=item_name,
+                    blocked_slot="outer",
+                    container_name=current_container.get("item_name", "container"),
+                ))
+                return False
+
         if loadout.equipped_instance_id and loadout.equipped_instance_id != entry.get("instance_id"):
             previous_name = loadout.equipped_name or loadout.equipped_item_id or "armor"
             previous_item_id = loadout.equipped_item_id
@@ -320,7 +346,7 @@ class ItemActionRuntime:
             item_id=entry.get("item_id"),
             name=item_name,
             damage_reduction=armor["damage_reduction"],
-            slot=armor.get("slot", "body"),
+            slot=armor_slot,
         )
         mark_inventory_instance_worn(self.sim, eid, entry.get("instance_id"), worn=True, slot="outer")
         self.sim.emit(Event(
@@ -329,7 +355,7 @@ class ItemActionRuntime:
             item_id=entry.get("item_id"),
             armor_name=item_name,
             reason=reason,
-            slot=armor.get("slot", "body"),
+            slot=armor_slot,
             damage_reduction=armor["damage_reduction"],
         ))
         return True
@@ -393,43 +419,87 @@ class ItemActionRuntime:
         item_name = self._display_name_for_actor(eid, entry)
         inventory = self._inventory_for(eid)
         current = getattr(self.sim, "equipped_container", None)
-        if isinstance(current, dict) and current.get("instance_id") == instance_id:
-            if inventory:
-                _clear_inventory_container_assignments(inventory, instance_id)
+        container_slot = str(container_profile.get("slot", "pack") or "pack").strip().lower() or "pack"
+        blocks_armor = bool(container_profile.get("blocks_armor")) or container_slot in {"body", "outer"}
+
+        def _release_active_container(active, *, removed_reason):
+            if not isinstance(active, dict):
+                return {"released": 0, "dropped": 0, "ground_item_ids": ()}
+            active_instance_id = str(active.get("instance_id", "") or "").strip()
+            try:
+                active_bonus = int(max(0, int(active.get("bonus_slots", 0) or 0)))
+            except (TypeError, ValueError):
+                active_bonus = 0
+            if active_instance_id:
+                clear_appearance_instance(self.sim, eid, active_instance_id)
             self.sim.equipped_container = None
             if inventory:
-                inventory.capacity = max(1, inventory.capacity - bonus_slots)
+                inventory.capacity = max(1, inventory.capacity - active_bonus)
+                release = release_stowed_items_for_removed_container(self.sim, eid, inventory, active_instance_id)
+            else:
+                release = {"released": 0, "dropped": 0, "ground_item_ids": ()}
             self.sim.emit(Event(
                 "container_removed",
                 eid=eid,
-                item_id=item_id,
-                item_name=item_name,
-                reason=reason,
+                item_id=active.get("item_id"),
+                item_name=active.get("item_name", ""),
+                reason=removed_reason,
             ))
+            dropped = int(release.get("dropped", 0) or 0)
+            if dropped > 0:
+                _log_player_feedback(
+                    self.sim,
+                    f"{dropped} stowed item{'s' if dropped != 1 else ''} spill onto the ground.",
+                    kind="interaction",
+                )
+            return release
+
+        if isinstance(current, dict) and current.get("instance_id") == instance_id:
+            _release_active_container(current, removed_reason=reason)
             _log_player_feedback(self.sim, f"You put away the {item_name}.", kind="interaction")
             return True
-        old_bonus = 0
+
         if isinstance(current, dict):
-            old_instance_id = str(current.get("instance_id", "")).strip()
-            old_bonus = int(current.get("bonus_slots", 0))
-            if inventory and old_instance_id:
-                _clear_inventory_container_assignments(inventory, old_instance_id)
-            self.sim.emit(Event(
-                "container_removed",
-                eid=eid,
-                item_id=current.get("item_id"),
-                item_name=current.get("item_name", ""),
-                reason="replaced",
-            ))
+            _release_active_container(current, removed_reason="replaced")
+
+        if blocks_armor:
+            armor_loadout = self.sim.ecs.get(ArmorLoadout).get(eid)
+            armor_slot = str(getattr(armor_loadout, "slot", "body") or "body").strip().lower() if armor_loadout else ""
+            if armor_loadout and getattr(armor_loadout, "equipped_instance_id", None) and armor_slot == "body":
+                self.sim.emit(Event(
+                    "item_use_blocked",
+                    eid=eid,
+                    reason="container_body_armor_active",
+                    item_id=item_id,
+                    item_name=item_name,
+                    blocked_slot="outer",
+                ))
+                return False
+
+        if is_appearance_item(entry, item_catalog=self.catalog) and not is_entry_worn(entry):
+            appearance_result = equip_appearance_item(self.sim, eid, instance_id)
+            if not bool(getattr(appearance_result, "ok", False)):
+                self.sim.emit(Event(
+                    "item_use_blocked",
+                    eid=eid,
+                    reason=f"appearance_{getattr(appearance_result, 'reason', 'blocked')}",
+                    item_id=item_id,
+                    item_name=item_name,
+                    blocked_slot=getattr(appearance_result, "slot", ""),
+                ))
+                return False
+
         self.sim.equipped_container = {
             "item_id": item_id,
             "instance_id": instance_id,
             "item_name": item_name,
             "bonus_slots": bonus_slots,
+            "container_slot": container_slot,
+            "blocks_armor": blocks_armor,
             "equipped_tick": int(getattr(self.sim, "tick", 0)),
         }
         if inventory:
-            inventory.capacity = max(1, inventory.capacity - old_bonus + bonus_slots)
+            inventory.capacity = max(1, inventory.capacity + bonus_slots)
         self.sim.emit(Event(
             "container_equipped",
             eid=eid,
@@ -1104,6 +1174,12 @@ class ItemActionRuntime:
             self.sim.emit(Event("item_use_blocked", eid=eid, reason="no_usable_item"))
             return False
 
+        decay_herbal_mixture_entry_if_due(
+            self.sim,
+            entry,
+            holder_kind="inventory",
+            holder_eid=eid,
+        )
         item_def = self._item_def(entry["item_id"])
         item_name = self._display_name_for_actor(eid, entry)
         if _item_weapon_id(item_def):
@@ -1116,6 +1192,14 @@ class ItemActionRuntime:
 
         if _item_armor_profile(item_def):
             return self._toggle_armor_item(
+                eid=eid,
+                entry=entry,
+                item_def=item_def,
+                reason=reason,
+            )
+
+        if item_def.get("container"):
+            return self._toggle_container_item(
                 eid=eid,
                 entry=entry,
                 item_def=item_def,
@@ -1143,14 +1227,6 @@ class ItemActionRuntime:
 
         if item_def.get("disguise"):
             return self._toggle_disguise_item(
-                eid=eid,
-                entry=entry,
-                item_def=item_def,
-                reason=reason,
-            )
-
-        if item_def.get("container"):
-            return self._toggle_container_item(
                 eid=eid,
                 entry=entry,
                 item_def=item_def,

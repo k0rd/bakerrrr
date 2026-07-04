@@ -3,25 +3,30 @@
 from __future__ import annotations
 
 import random
+import re
 from hashlib import sha256
 from collections.abc import Mapping
 
 from engine.events import Event
 from engine.systems import System
 from game.components import AI, Inventory, Position
+from game.color_words import color_word_display_name, normalize_color_word
 from game.flora_genetics import normalize_flora_genetics
+from game.flora_genetics import inherit_flora_genetics
 from game.flora_runtime import (
     EXHAUSTED_FLORA_STAGES,
     DEFAULT_GLYPH_BY_FORM,
     DEFAULT_RENDER_KEY_BY_FORM,
+    dynamic_flora_profile,
     flora_at,
     flora_bloom_state,
     flora_harvest_limit,
     load_flora_catalog,
     normalize_flora_harvest_state,
+    register_dynamic_flora_profile,
     register_flora_patch,
 )
-from game.herbal_chemistry_runtime import plant_chemistry_class
+from game.herbal_chemistry_runtime import plant_chemistry_class, plant_secondary_traits
 from game.items import ITEM_CATALOG, item_display_name
 from game.property_runtime import property_fixture_type
 
@@ -35,6 +40,8 @@ PLANTABLE_MATERIAL_ITEM_IDS = {
     "vine_cuttings",
 }
 POLLEN_ITEM_IDS = {"fresh_blossoms"}
+SECONDARY_TRAIT_IDS = {"potentiator", "diluter", "stabilizer", "spoiler"}
+RUMOR_NOTABILITY_BANDS = {"suspect", "contraband", "notorious"}
 NON_POT_GROWTH_FORMS = {"vine"}
 FAILED_STAGES = {"withering", "failed"}
 MATURE_STAGES = {"mature", "flowering", "open", "closed"}
@@ -48,6 +55,42 @@ GARDENER_ROLES = {
     "drying_shelf_clerk",
     "recipe_keeper",
 }
+GENERIC_PLANT_NAME_WORDS = {
+    "plant",
+    "flora",
+    "flower",
+    "flowers",
+    "bloom",
+    "blooms",
+    "blossom",
+    "blossoms",
+    "leaf",
+    "leaves",
+    "grass",
+    "herb",
+    "herbs",
+    "shrub",
+    "vine",
+    "moss",
+    "lichen",
+    "reed",
+}
+SHAPE_NAME_WORDS = {
+    "bell",
+    "star",
+    "cup",
+    "round",
+    "blade",
+    "frond",
+    "tuft",
+    "fern",
+    "vine",
+    "moss",
+    "lichen",
+    "reed",
+    "shrub",
+    "flower",
+}
 GROWTH_STAGE_TICKS = (
     ("sprouting", 6 * 600),
     ("young", 18 * 600),
@@ -58,6 +101,65 @@ GROWTH_STAGE_TICKS = (
 def _key(value, fallback=""):
     text = str(value if value is not None else "").strip().lower()
     return text or str(fallback or "").strip().lower()
+
+
+def _name_words(value):
+    text = re.sub(r"[^a-z0-9_ -]+", " ", str(value or "").strip().lower())
+    text = text.replace("_", " ").replace("-", " ")
+    return tuple(word for word in re.split(r"\s+", text) if word)
+
+
+def _display_phrase(words):
+    return " ".join(str(word or "").strip().replace("_", " ") for word in tuple(words or ()) if str(word or "").strip())
+
+
+def _parent_name_fragment(name, plant_id=""):
+    words = list(_name_words(name) or _name_words(plant_id))
+    if not words:
+        return ""
+    useful = [
+        word
+        for word in words
+        if word not in GENERIC_PLANT_NAME_WORDS and not normalize_color_word(word)
+    ]
+    if useful:
+        return useful[-1]
+    non_generic = [word for word in words if word not in GENERIC_PLANT_NAME_WORDS]
+    return (non_generic or words)[-1]
+
+
+def hybrid_plant_names(seed_parent, pollen_parent, expressed_values):
+    """Build durable hybrid names from parent lineage plus expressed visual traits."""
+    if not isinstance(seed_parent, Mapping):
+        seed_parent = {}
+    if not isinstance(pollen_parent, Mapping):
+        pollen_parent = {}
+    if not isinstance(expressed_values, Mapping):
+        expressed_values = {}
+    seed_name = str(seed_parent.get("plant_name") or seed_parent.get("name") or seed_parent.get("plant_id") or "plant").strip()
+    pollen_name = str(pollen_parent.get("plant_name") or pollen_parent.get("name") or pollen_parent.get("plant_id") or "plant").strip()
+    seed_fragment = _parent_name_fragment(seed_name, seed_parent.get("plant_id"))
+    pollen_fragment = _parent_name_fragment(pollen_name, pollen_parent.get("plant_id"))
+    fragments = [fragment for fragment in (seed_fragment, pollen_fragment) if fragment]
+    lineage_noun = "-".join(dict.fromkeys(fragments)) if fragments else _key(expressed_values.get("growth_form"), "hybrid")
+    color_word = _key(expressed_values.get("color_word"))
+    color_label = color_word_display_name(color_word) if color_word else ""
+    shape = _key(expressed_values.get("shape_word") or expressed_values.get("growth_form"))
+    shape_label = shape.replace("_", " ") if shape and shape not in _name_words(lineage_noun) else ""
+    words = []
+    if color_label:
+        words.extend(_name_words(color_label))
+    if shape_label and shape in SHAPE_NAME_WORDS:
+        words.extend(_name_words(shape_label))
+    words.append(lineage_noun)
+    lower_name = _display_phrase(words).strip() or f"{seed_name} x {pollen_name}"
+    parent_line = f"{seed_name} x {pollen_name}".strip()
+    display_name = lower_name.title()
+    return {
+        "plant_name": lower_name,
+        "display_name": f"{display_name} Seed Packet",
+        "parent_line_name": parent_line,
+    }
 
 
 def _safe_int(value, default=0):
@@ -85,6 +187,8 @@ def ensure_cultivation_state(sim):
         sim.next_cultivation_id = 1
     if not isinstance(getattr(sim, "cultivation_gardener_cooldowns", None), dict):
         sim.cultivation_gardener_cooldowns = {}
+    if not isinstance(getattr(sim, "flora_natural_crossbreed_cooldowns", None), dict):
+        sim.flora_natural_crossbreed_cooldowns = {}
     return sim.cultivation_records
 
 
@@ -161,10 +265,18 @@ def _plant_row(plant_id):
     return load_flora_catalog().get(plant_id, {}) if plant_id else {}
 
 
-def _row_or_source(source):
+def _plant_row_for_sim(sim, plant_id):
+    row = _plant_row(plant_id)
+    if row:
+        return row
+    profile = dynamic_flora_profile(sim, plant_id) if sim is not None else {}
+    return profile if isinstance(profile, Mapping) else {}
+
+
+def _row_or_source(source, sim=None):
     if not isinstance(source, Mapping):
         return {}
-    row = _plant_row(source.get("plant_id"))
+    row = _plant_row_for_sim(sim, source.get("plant_id"))
     if row:
         return row
     return {
@@ -191,7 +303,7 @@ def seed_packet_metadata(sim, *, plant_id=None, seed_token="", source_kind="stoc
     catalog = load_flora_catalog()
     if isinstance(hybrid, Mapping):
         plant_id = _key(hybrid.get("plant_id"))
-        row = _row_or_source(hybrid)
+        row = _row_or_source(hybrid, sim=sim)
     else:
         plant_id = _key(plant_id)
         rng = random.Random(f"{getattr(sim, 'seed', 0)}:seed-packet:{seed_token or plant_id or 'stock'}")
@@ -230,6 +342,7 @@ def seed_packet_metadata(sim, *, plant_id=None, seed_token="", source_kind="stoc
         "source_plant_name": plant_name,
         "growth_form": growth_form,
         "color_key": color_key,
+        "color_word": _key(row.get("color_word")),
         "render_key": _key(row.get("render_key"), color_key),
         "glyph": str(row.get("glyph") or DEFAULT_GLYPH_BY_FORM.get(growth_form, "'"))[:1],
         "rarity": _key(row.get("rarity"), "common"),
@@ -246,9 +359,22 @@ def seed_packet_metadata(sim, *, plant_id=None, seed_token="", source_kind="stoc
         "genetics": dict(row.get("genetics") or {}) if isinstance(row.get("genetics"), Mapping) else {},
     }
     if isinstance(hybrid, Mapping):
-        for key in ("chemistry_class", "parent_chemistry_classes", "hybrid_signature", "genetics"):
+        for key in (
+            "chemistry_class",
+            "parent_chemistry_classes",
+            "parent_line_name",
+            "hybrid_signature",
+            "genetics",
+            "color_word",
+            "secondary_traits",
+            "dynamic_flora",
+            "stability_score",
+            "stability_band",
+            "notability",
+        ):
             if key in hybrid:
                 payload[key] = hybrid[key]
+        register_dynamic_flora_profile(sim, dict(hybrid, id=plant_id, plant_id=plant_id))
     return payload
 
 
@@ -267,8 +393,11 @@ def _source_from_entry(sim, entry):
         return None
     if not plant_id:
         return None
-    row = _plant_row(plant_id)
+    row = _plant_row_for_sim(sim, plant_id)
     growth_form = _key(metadata.get("growth_form") or row.get("growth_form"), "flower")
+    secondary_traits = tuple(metadata.get("secondary_traits") or row.get("secondary_traits", ()) or ())
+    if not secondary_traits:
+        secondary_traits = plant_secondary_traits(sim, plant_id)
     return {
         "item_id": item_id,
         "instance_id": str(entry.get("instance_id", "") or ""),
@@ -276,11 +405,13 @@ def _source_from_entry(sim, entry):
         "plant_name": str(metadata.get("source_plant_name") or row.get("name") or plant_id.replace("_", " ")).strip(),
         "growth_form": growth_form,
         "color_key": _key(metadata.get("color_key") or (tuple(row.get("colors", ()) or ()) or ("",))[0], row.get("render_key") or DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_flower_pink")),
+        "color_word": _key(metadata.get("color_word") or row.get("color_word")),
         "render_key": _key(metadata.get("render_key") or row.get("render_key"), DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_flower_pink")),
         "glyph": str(metadata.get("glyph") or row.get("glyph") or DEFAULT_GLYPH_BY_FORM.get(growth_form, "'"))[:1],
         "rarity": _key(metadata.get("rarity") or row.get("rarity"), "common"),
         "tags": tuple(metadata.get("tags") or row.get("tags", ()) or ()),
         "crossbreed_tags": tuple(metadata.get("crossbreed_tags") or row.get("crossbreed_tags", ()) or ()),
+        "secondary_traits": tuple(_key(trait) for trait in tuple(secondary_traits or ()) if _key(trait)),
         "genetics": dict(metadata.get("genetics") or row.get("genetics") or {}) if isinstance(metadata.get("genetics") or row.get("genetics"), Mapping) else {},
         "chemistry_class": _key(metadata.get("chemistry_class")) or plant_chemistry_class(sim, plant_id),
         "metadata": dict(metadata),
@@ -352,8 +483,8 @@ def _record_flora_id(record):
     return f"flora:{cid}" if cid else ""
 
 
-def _flora_record_from_cultivation(record):
-    row = _row_or_source(record)
+def _flora_record_from_cultivation(sim, record):
+    row = _row_or_source(record, sim=sim)
     growth_form = _key(record.get("growth_form") or row.get("growth_form"), "flower")
     flora_id = str(record.get("linked_flora_id") or _record_flora_id(record))
     stage = _key(record.get("stage"), "seeded")
@@ -373,6 +504,7 @@ def _flora_record_from_cultivation(record):
         "stage": stage,
         "variant_seed": _safe_int(record.get("variant_seed"), 1),
         "color_key": _key(record.get("color_key"), row.get("render_key") or DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_leaf")),
+        "color_word": _key(record.get("color_word") or row.get("color_word")),
         "growth_form": growth_form,
         "glyph": str(record.get("glyph") or row.get("glyph") or DEFAULT_GLYPH_BY_FORM.get(growth_form, ","))[:1],
         "render_key": _key(record.get("render_key") or row.get("render_key"), DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_leaf")),
@@ -380,8 +512,10 @@ def _flora_record_from_cultivation(record):
         "spread_direction": record.get("spread_direction"),
         "cluster_id": f"cultivation:{record.get('id')}",
         "tags": list(record.get("tags") or row.get("tags", ()) or ()),
+        "crossbreed_tags": list(record.get("crossbreed_tags") or row.get("crossbreed_tags", ()) or ()),
         "rarity": _key(record.get("rarity") or row.get("rarity"), "common"),
         "genetics": dict(record.get("genetics") or row.get("genetics") or {}) if isinstance(record.get("genetics") or row.get("genetics"), Mapping) else {},
+        "secondary_traits": list(record.get("secondary_traits") or row.get("secondary_traits", ()) or ()),
         "harvest_potential": dict(row.get("harvest_potential", {}) or {}),
         "harvest_limit": harvest_limit,
         "harvest_count": max(0, _safe_int(record.get("harvest_count"), 0)),
@@ -389,6 +523,14 @@ def _flora_record_from_cultivation(record):
         "fertility_remaining": max(0, _safe_int(record.get("fertility_remaining"), 0)),
         "chemistry_class": _key(record.get("chemistry_class")),
         "parent_chemistry_classes": list(record.get("parent_chemistry_classes", ()) or ()),
+        "parent_plant_ids": list(record.get("parent_plant_ids") or row.get("parent_plant_ids", ()) or ()),
+        "parent_line_name": str(record.get("parent_line_name") or row.get("parent_line_name") or "").strip(),
+        "hybrid_generation": _safe_int(record.get("hybrid_generation") or row.get("hybrid_generation"), 0),
+        "lineage": dict(record.get("lineage") or row.get("lineage") or {}),
+        "dynamic_flora": bool(record.get("dynamic_flora") or row.get("dynamic_flora")),
+        "stability_score": record.get("stability_score") if record.get("stability_score") is not None else row.get("stability_score"),
+        "stability_band": _key(record.get("stability_band") or row.get("stability_band")),
+        "notability": _key(record.get("notability") or row.get("notability")),
         "container_kind": _key(record.get("container_kind"), "ground"),
         "tended_tick": record.get("tended_tick"),
         "tend_count": max(0, _safe_int(record.get("tend_count"), 0)),
@@ -412,7 +554,7 @@ def sync_cultivation_flora_patch(sim, record):
         return None
     if record.get("x") is None or record.get("y") is None:
         return None
-    flora_record = _flora_record_from_cultivation(record)
+    flora_record = _flora_record_from_cultivation(sim, record)
     flora_id = register_flora_patch(sim, flora_record)
     if flora_id:
         records = ensure_cultivation_state(sim)
@@ -432,7 +574,26 @@ def sync_cultivation_from_flora_patch(sim, flora_record):
     record = records.get(cid)
     if not isinstance(record, dict):
         return False
-    for key in ("stage", "harvest_count", "harvest_remaining", "harvest_exhausted", "last_harvest_tick", "exhausted_tick"):
+    for key in (
+        "stage",
+        "harvest_count",
+        "harvest_remaining",
+        "harvest_exhausted",
+        "last_harvest_tick",
+        "exhausted_tick",
+        "genetics",
+        "secondary_traits",
+        "chemistry_class",
+        "parent_chemistry_classes",
+        "parent_plant_ids",
+        "parent_line_name",
+        "hybrid_generation",
+        "lineage",
+        "dynamic_flora",
+        "stability_score",
+        "stability_band",
+        "notability",
+    ):
         if key in flora_record:
             record[key] = flora_record[key]
     if _safe_int(record.get("harvest_remaining"), 0) <= 0:
@@ -484,7 +645,9 @@ def advance_cultivation_records(sim):
 
 
 def _biome_fit(sim, source, x, y, z=0):
-    row = _plant_row(source.get("plant_id"))
+    row = _plant_row_for_sim(sim, source.get("plant_id"))
+    if _key(source.get("plant_id")).startswith("hybrid_") or bool(row.get("dynamic_flora")):
+        return {"ok": True, "score": 0.5, "area": "hybrid", "district": "", "terrain": _tile_color_key(sim, x, y, z)}
     area_key, district_type = _chunk_area_context(sim, x, y)
     terrain_key = _tile_color_key(sim, x, y, z)
     area_weight = _safe_float((row.get("area_weights") or {}).get(area_key), 0.0)
@@ -522,12 +685,15 @@ def _new_cultivation_record(sim, source, *, container_kind, x=None, y=None, z=0,
         "biome_fit": dict(biome_fit or {"ok": True}),
         "lineage": dict((source.get("metadata") or {}).get("lineage") or {}),
         "parent_plant_ids": list((source.get("metadata") or {}).get("parent_plant_ids") or ()),
+        "parent_line_name": str((source.get("metadata") or {}).get("parent_line_name") or source.get("parent_line_name") or "").strip(),
         "hybrid_generation": _safe_int((source.get("metadata") or {}).get("hybrid_generation"), 0),
         "variant_seed": random.Random(f"{getattr(sim, 'seed', 0)}:{cid}:{source.get('plant_id')}").randrange(1, 2**31 - 1),
         "color_key": source.get("color_key"),
+        "color_word": source.get("color_word") or (source.get("metadata") or {}).get("color_word"),
         "render_key": source.get("render_key"),
         "glyph": source.get("glyph"),
         "growth_form": growth_form,
+        "rarity": source.get("rarity"),
         "fertility_remaining": 0 if failed else 2,
         "harvest_limit": harvest_limit,
         "harvest_count": 0,
@@ -536,9 +702,14 @@ def _new_cultivation_record(sim, source, *, container_kind, x=None, y=None, z=0,
         "tend_count": 0,
         "tags": list(source.get("tags") or ()),
         "crossbreed_tags": list(source.get("crossbreed_tags") or ()),
+        "secondary_traits": list(source.get("secondary_traits") or (source.get("metadata") or {}).get("secondary_traits") or ()),
         "genetics": dict(source.get("genetics") or {}),
         "chemistry_class": source.get("chemistry_class"),
         "parent_chemistry_classes": list((source.get("metadata") or {}).get("parent_chemistry_classes") or ()),
+        "dynamic_flora": bool(source.get("dynamic_flora") or (source.get("metadata") or {}).get("dynamic_flora")),
+        "stability_score": (source.get("metadata") or {}).get("stability_score") or source.get("stability_score"),
+        "stability_band": (source.get("metadata") or {}).get("stability_band") or source.get("stability_band"),
+        "notability": (source.get("metadata") or {}).get("notability") or source.get("notability"),
         "carried_by_eid": carried_by_eid,
         "growth_paused": carried_by_eid is not None,
         "paused_ticks": 0,
@@ -547,6 +718,33 @@ def _new_cultivation_record(sim, source, *, container_kind, x=None, y=None, z=0,
     }
     if x is not None and y is not None:
         record.update({"x": int(x), "y": int(y), "z": int(z), "chunk": list(_chunk_for_xy(sim, x, y))})
+    register_dynamic_flora_profile(sim, {
+        "id": record.get("plant_id"),
+        "plant_id": record.get("plant_id"),
+        "name": record.get("plant_name"),
+        "plant_name": record.get("plant_name"),
+        "growth_form": record.get("growth_form"),
+        "glyph": record.get("glyph"),
+        "render_key": record.get("render_key"),
+        "color_key": record.get("color_key"),
+        "color_word": record.get("color_word"),
+        "colors": [record.get("color_key")],
+        "rarity": record.get("rarity"),
+        "tags": list(record.get("tags") or ()),
+        "crossbreed_tags": list(record.get("crossbreed_tags") or ()),
+        "secondary_traits": list(record.get("secondary_traits") or ()),
+        "genetics": dict(record.get("genetics") or {}),
+        "chemistry_class": record.get("chemistry_class"),
+        "parent_chemistry_classes": list(record.get("parent_chemistry_classes") or ()),
+        "parent_plant_ids": list(record.get("parent_plant_ids") or ()),
+        "parent_line_name": record.get("parent_line_name"),
+        "hybrid_generation": record.get("hybrid_generation"),
+        "lineage": dict(record.get("lineage") or {}),
+        "dynamic_flora": record.get("dynamic_flora"),
+        "stability_score": record.get("stability_score"),
+        "stability_band": record.get("stability_band"),
+        "notability": record.get("notability"),
+    })
     return record
 
 
@@ -744,65 +942,154 @@ def _update_target_fertility(sim, flora_record, remaining):
         sync_cultivation_flora_patch(sim, sim.cultivation_records[cid])
 
 
-def _hybrid_seed_metadata(sim, source, target):
-    target_plant_id = _key(target.get("plant_id"))
-    source_plant_id = _key(source.get("plant_id"))
-    target_name = str(target.get("name") or target.get("plant_name") or target_plant_id.replace("_", " ")).strip()
-    source_name = str(source.get("plant_name") or source_plant_id.replace("_", " ")).strip()
-    prior_gen = max(_safe_int(source.get("hybrid_generation"), 0), _safe_int(target.get("hybrid_generation"), 0))
-    generation = min(3, prior_gen + 1)
-    signature_source = f"{getattr(sim, 'seed', 0)}:{source_plant_id}:{target_plant_id}:{generation}"
-    signature = sha256(signature_source.encode("utf-8")).hexdigest()[:8]
+def _genetics_generation(value):
+    genetics = value.get("genetics") if isinstance(value, Mapping) and isinstance(value.get("genetics"), Mapping) else value
+    lineage = genetics.get("lineage") if isinstance(genetics, Mapping) and isinstance(genetics.get("lineage"), Mapping) else {}
+    return max(_safe_int(value.get("hybrid_generation"), 0) if isinstance(value, Mapping) else 0, _safe_int(lineage.get("generation"), 0), _safe_int(lineage.get("lineage_depth"), 0))
+
+
+def _parent_profile_for_crossbreed(sim, source):
+    if not isinstance(source, Mapping):
+        source = {}
+    metadata = source.get("metadata") if isinstance(source.get("metadata"), Mapping) else {}
+    plant_id = _key(source.get("plant_id") or metadata.get("source_plant_id"))
+    row = _plant_row_for_sim(sim, plant_id)
+    growth_form = _key(source.get("growth_form") or metadata.get("growth_form") or row.get("growth_form"), "flower")
+    genetics = source.get("genetics") if isinstance(source.get("genetics"), Mapping) else metadata.get("genetics")
+    if not isinstance(genetics, Mapping):
+        genetics = row.get("genetics") if isinstance(row.get("genetics"), Mapping) else {}
+    profile = {
+        "id": plant_id,
+        "plant_id": plant_id,
+        "name": str(source.get("name") or source.get("plant_name") or metadata.get("source_plant_name") or row.get("name") or plant_id.replace("_", " ")).strip(),
+        "plant_name": str(source.get("plant_name") or source.get("name") or metadata.get("source_plant_name") or row.get("plant_name") or row.get("name") or plant_id.replace("_", " ")).strip(),
+        "growth_form": growth_form,
+        "glyph": str(source.get("glyph") or metadata.get("glyph") or row.get("glyph") or DEFAULT_GLYPH_BY_FORM.get(growth_form, "'"))[:1],
+        "render_key": _key(source.get("render_key") or metadata.get("render_key") or row.get("render_key"), DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_leaf")),
+        "color_key": _key(source.get("color_key") or metadata.get("color_key") or (tuple(row.get("colors", ()) or ()) or ("",))[0], row.get("render_key") or DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_leaf")),
+        "color_word": _key(source.get("color_word") or metadata.get("color_word") or row.get("color_word")),
+        "rarity": _key(source.get("rarity") or metadata.get("rarity") or row.get("rarity"), "common"),
+        "tags": tuple(source.get("tags") or metadata.get("tags") or row.get("tags", ()) or ()),
+        "crossbreed_tags": tuple(source.get("crossbreed_tags") or metadata.get("crossbreed_tags") or row.get("crossbreed_tags", ()) or ()),
+        "secondary_traits": tuple(source.get("secondary_traits") or metadata.get("secondary_traits") or row.get("secondary_traits", ()) or plant_secondary_traits(sim, plant_id)),
+        "chemistry_class": _key(source.get("chemistry_class") or metadata.get("chemistry_class") or row.get("chemistry_class")) or plant_chemistry_class(sim, plant_id),
+        "parent_chemistry_classes": tuple(source.get("parent_chemistry_classes") or metadata.get("parent_chemistry_classes") or row.get("parent_chemistry_classes", ()) or ()),
+        "parent_plant_ids": tuple(source.get("parent_plant_ids") or metadata.get("parent_plant_ids") or row.get("parent_plant_ids", ()) or ()),
+        "parent_line_name": str(source.get("parent_line_name") or metadata.get("parent_line_name") or row.get("parent_line_name") or "").strip(),
+        "hybrid_generation": _safe_int(source.get("hybrid_generation") or metadata.get("hybrid_generation") or row.get("hybrid_generation"), 0),
+        "lineage": dict(source.get("lineage") or metadata.get("lineage") or row.get("lineage") or {}),
+        "genetics": dict(genetics or {}),
+    }
+    profile["colors"] = (profile["color_key"],)
+    if not isinstance(profile["genetics"], Mapping) or _safe_int(profile["genetics"].get("schema_version"), 0) != 1:
+        profile["genetics"] = normalize_flora_genetics(plant_id, profile, seed=getattr(sim, "seed", 0))
+    return profile
+
+
+def _expressed_child_profile_values(genetics, *, fallback_form="flower", fallback_color="flora_leaf"):
+    expressed = genetics.get("expressed") if isinstance(genetics.get("expressed"), Mapping) else {}
+    visual = expressed.get("visual") if isinstance(expressed.get("visual"), Mapping) else {}
+    handling = expressed.get("handling") if isinstance(expressed.get("handling"), Mapping) else {}
+    social = expressed.get("social") if isinstance(expressed.get("social"), Mapping) else {}
+    color = visual.get("color") if isinstance(visual.get("color"), Mapping) else {}
+    shape = visual.get("shape") if isinstance(visual.get("shape"), Mapping) else {}
+    chemistry = expressed.get("chemistry") if isinstance(expressed.get("chemistry"), Mapping) else {}
+    effects = expressed.get("effects") if isinstance(expressed.get("effects"), Mapping) else {}
+    growth_form = _key(shape.get("growth_form"), fallback_form)
+    color_key = _key(color.get("render_key_hint"), fallback_color or DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_leaf"))
+    traits = tuple(_key(trait) for trait in tuple(effects.get("traits") or ()) if _key(trait) in SECONDARY_TRAIT_IDS)
+    return {
+        "growth_form": growth_form,
+        "shape_word": _key(shape.get("petal_shape") or shape.get("leaf_shape") or shape.get("blade_shape") or shape.get("habit") or growth_form),
+        "glyph": str(shape.get("glyph") or DEFAULT_GLYPH_BY_FORM.get(growth_form, "'"))[:1],
+        "render_key": color_key,
+        "color_key": color_key,
+        "color_word": _key(color.get("word")),
+        "chemistry_class": _key(chemistry.get("main_class"), "mending"),
+        "secondary_traits": traits,
+        "stability_score": _safe_float(genetics.get("stability_score"), 100.0),
+        "stability_band": _key(genetics.get("stability_band") or handling.get("stability"), "stable"),
+        "notability": _key(social.get("notability"), "ordinary"),
+    }
+
+
+def _hybrid_profile(sim, source, target, *, source_kind="hybrid_seed"):
+    seed_parent = _parent_profile_for_crossbreed(sim, target)
+    pollen_parent = _parent_profile_for_crossbreed(sim, source)
+    target_plant_id = _key(seed_parent.get("plant_id"))
+    source_plant_id = _key(pollen_parent.get("plant_id"))
+    target_name = str(seed_parent.get("plant_name") or target_plant_id.replace("_", " ")).strip()
+    source_name = str(pollen_parent.get("plant_name") or source_plant_id.replace("_", " ")).strip()
+    generation = max(_genetics_generation(seed_parent), _genetics_generation(pollen_parent)) + 1
+    parent_genomes = (
+        (seed_parent.get("genetics") or {}).get("genome_id"),
+        (pollen_parent.get("genetics") or {}).get("genome_id"),
+    )
+    signature_source = f"{getattr(sim, 'seed', 0)}:{target_plant_id}:{source_plant_id}:{parent_genomes}:{generation}:{source_kind}"
+    signature = sha256(signature_source.encode("utf-8")).hexdigest()[:12]
     hybrid_id = f"hybrid_{target_plant_id}_{source_plant_id}_{signature}"[:96]
-    target_form = _key(target.get("growth_form"), source.get("growth_form") or "flower")
-    source_class = _key(source.get("chemistry_class")) or plant_chemistry_class(sim, source_plant_id)
-    target_class = _key(target.get("chemistry_class")) or plant_chemistry_class(sim, target_plant_id)
-    rng = random.Random(f"{getattr(sim, 'seed', 0)}:hybrid:{source_plant_id}:{target_plant_id}:{generation}:{signature}")
-    colors = [value for value in (source.get("color_key"), target.get("color_key")) if value]
-    color_key = rng.choice(colors) if colors else DEFAULT_RENDER_KEY_BY_FORM.get(target_form, "flora_leaf")
+    genetics = inherit_flora_genetics(
+        seed_parent,
+        pollen_parent,
+        seed=getattr(sim, "seed", 0),
+        child_plant_id=hybrid_id,
+        generation=generation,
+        lineage_hash=signature,
+        mutation_profile="gentle",
+    )
+    expressed = _expressed_child_profile_values(
+        genetics,
+        fallback_form=seed_parent.get("growth_form") or pollen_parent.get("growth_form") or "flower",
+        fallback_color=seed_parent.get("color_key") or seed_parent.get("render_key") or pollen_parent.get("color_key") or "flora_leaf",
+    )
+    target_class = _key(seed_parent.get("chemistry_class")) or plant_chemistry_class(sim, target_plant_id)
+    source_class = _key(pollen_parent.get("chemistry_class")) or plant_chemistry_class(sim, source_plant_id)
+    secondary_traits = tuple(expressed.get("secondary_traits") or ())
+    if not secondary_traits:
+        secondary_traits = tuple(dict.fromkeys(tuple(seed_parent.get("secondary_traits") or ()) + tuple(pollen_parent.get("secondary_traits") or ())))[:2]
+    names = hybrid_plant_names(seed_parent, pollen_parent, expressed)
     hybrid = {
         "plant_id": hybrid_id,
-        "plant_name": f"{target_name} x {source_name}",
-        "display_name": f"{target_name.title()} x {source_name.title()} Seed Packet",
-        "growth_form": target_form,
-        "glyph": str(target.get("glyph") or source.get("glyph") or DEFAULT_GLYPH_BY_FORM.get(target_form, "'"))[:1],
-        "render_key": _key(target.get("render_key") or source.get("render_key"), DEFAULT_RENDER_KEY_BY_FORM.get(target_form, "flora_leaf")),
-        "color_key": color_key,
-        "rarity": _key(target.get("rarity") or source.get("rarity"), "common"),
-        "crossbreed_tags": sorted((_crossbreed_tags(source) | _crossbreed_tags(target)))[:6],
-        "tags": sorted(set(tuple(source.get("tags", ()) or ())) | set(tuple(target.get("tags", ()) or ())))[:10],
-        "chemistry_class": rng.choice([value for value in (source_class, target_class) if value] or ["mending"]),
+        "id": hybrid_id,
+        "plant_name": names["plant_name"],
+        "name": names["plant_name"],
+        "parent_line_name": names["parent_line_name"],
+        "display_name": names["display_name"],
+        "growth_form": expressed["growth_form"],
+        "glyph": expressed["glyph"],
+        "render_key": expressed["render_key"],
+        "color_key": expressed["color_key"],
+        "color_word": expressed["color_word"],
+        "colors": [expressed["color_key"]],
+        "rarity": _key(seed_parent.get("rarity") or pollen_parent.get("rarity"), "common"),
+        "crossbreed_tags": sorted((_crossbreed_tags(seed_parent) | _crossbreed_tags(pollen_parent)))[:6],
+        "tags": sorted(set(tuple(seed_parent.get("tags", ()) or ())) | set(tuple(pollen_parent.get("tags", ()) or ())) | {"hybrid"})[:10],
+        "chemistry_class": expressed["chemistry_class"] or target_class or source_class or "mending",
+        "secondary_traits": list(secondary_traits),
         "parent_chemistry_classes": [value for value in (target_class, source_class) if value],
         "parent_plant_ids": [target_plant_id, source_plant_id],
         "hybrid_generation": generation,
         "hybrid_signature": signature,
         "lineage": {
             "target_parent": target_plant_id,
+            "seed_parent": target_plant_id,
             "pollen_parent": source_plant_id,
             "generation": generation,
+            "lineage_depth": (genetics.get("lineage") or {}).get("lineage_depth", generation),
+            "lineage_hash": signature,
         },
+        "genetics": genetics,
+        "dynamic_flora": True,
+        "stability_score": expressed["stability_score"],
+        "stability_band": expressed["stability_band"],
+        "notability": expressed["notability"],
     }
-    hybrid["genetics"] = normalize_flora_genetics(
-        hybrid_id,
-        {
-            "id": hybrid_id,
-            "name": hybrid["plant_name"],
-            "growth_form": hybrid["growth_form"],
-            "glyph": hybrid["glyph"],
-            "render_key": hybrid["render_key"],
-            "colors": [hybrid["color_key"]],
-            "rarity": hybrid["rarity"],
-            "tags": list(hybrid.get("tags") or ()),
-            "crossbreed_tags": list(hybrid.get("crossbreed_tags") or ()),
-            "genetics": {
-                "parents": [target_plant_id, source_plant_id],
-                "generation": generation,
-                "lineage_depth": generation,
-                "lineage_hash": signature,
-            },
-        },
-        seed=getattr(sim, "seed", 0),
-    )
+    register_dynamic_flora_profile(sim, hybrid)
+    return hybrid
+
+
+def _hybrid_seed_metadata(sim, source, target):
+    hybrid = _hybrid_profile(sim, source, target, source_kind="hybrid_seed")
     return seed_packet_metadata(sim, source_kind="hybrid_seed", hybrid=hybrid)
 
 
@@ -857,6 +1144,265 @@ def crossbreed_with_flora(sim, eid, source, target):
         z=target.get("z", 0),
     ))
     return {"ok": True, "metadata": seed_metadata, "instance_id": instance_id, "consumed": removed}
+
+
+def _record_chunk(sim, record):
+    chunk = record.get("chunk") if isinstance(record, Mapping) else None
+    if isinstance(chunk, (tuple, list)) and len(chunk) == 2:
+        try:
+            return (int(chunk[0]), int(chunk[1]))
+        except (TypeError, ValueError):
+            pass
+    return _chunk_for_xy(sim, record.get("x", 0), record.get("y", 0))
+
+
+def _record_is_loaded(sim, record):
+    loaded = getattr(getattr(sim, "world", None), "loaded_chunks", None)
+    if not isinstance(loaded, dict) or not loaded:
+        return True
+    return _record_chunk(sim, record) in loaded
+
+
+def _natural_seed_source(sim, profile):
+    metadata = seed_packet_metadata(sim, source_kind="natural_crossbreed", hybrid=profile)
+    return {
+        "item_id": SEED_PACKET_ITEM_ID,
+        "instance_id": f"natural:{profile.get('plant_id')}:{profile.get('hybrid_signature')}",
+        "plant_id": profile.get("plant_id"),
+        "plant_name": profile.get("plant_name"),
+        "growth_form": profile.get("growth_form"),
+        "color_key": profile.get("color_key"),
+        "color_word": profile.get("color_word"),
+        "render_key": profile.get("render_key"),
+        "glyph": profile.get("glyph"),
+        "rarity": profile.get("rarity"),
+        "tags": tuple(profile.get("tags") or ()),
+        "crossbreed_tags": tuple(profile.get("crossbreed_tags") or ()),
+        "secondary_traits": tuple(profile.get("secondary_traits") or ()),
+        "genetics": dict(profile.get("genetics") or {}),
+        "chemistry_class": profile.get("chemistry_class"),
+        "dynamic_flora": True,
+        "stability_score": profile.get("stability_score"),
+        "stability_band": profile.get("stability_band"),
+        "notability": profile.get("notability"),
+        "metadata": metadata,
+    }
+
+
+def _flora_rumor_topic(notability):
+    notability = _key(notability, "unusual")
+    if notability == "notorious":
+        return "notorious_flora"
+    if notability == "contraband":
+        return "contraband_flora"
+    if notability == "suspect":
+        return "suspect_flora"
+    return "unusual_flora"
+
+
+def _seed_natural_flora_rumor(sim, profile, record, target, pollen):
+    notability = _key(profile.get("notability"))
+    if notability not in RUMOR_NOTABILITY_BANDS:
+        return None
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        sim.world_traits = {}
+        traits = sim.world_traits
+    rumor_rows = traits.get("flora_rumors")
+    if not isinstance(rumor_rows, list):
+        rumor_rows = []
+        traits["flora_rumors"] = rumor_rows
+    plant_id = _key(profile.get("plant_id"))
+    signature = str(profile.get("hybrid_signature") or plant_id).strip()
+    if any(isinstance(row, dict) and str(row.get("hybrid_signature") or "") == signature for row in rumor_rows):
+        return None
+    plant_name = str(profile.get("plant_name") or plant_id.replace("_", " ")).strip()
+    topic = _flora_rumor_topic(notability)
+    row = {
+        "topic": topic,
+        "claimed_value": plant_name,
+        "plant_id": plant_id,
+        "plant_name": plant_name,
+        "notability": notability,
+        "hybrid_signature": signature,
+        "parent_line_name": str(profile.get("parent_line_name") or "").strip(),
+        "parent_plant_ids": list(profile.get("parent_plant_ids") or ()),
+        "hybrid_generation": _safe_int(profile.get("hybrid_generation"), 0),
+        "tick": _safe_int(getattr(sim, "tick", 0), 0),
+        "x": record.get("x"),
+        "y": record.get("y"),
+        "z": record.get("z", 0),
+        "target_plant_id": target.get("plant_id") if isinstance(target, Mapping) else None,
+        "pollen_plant_id": pollen.get("plant_id") if isinstance(pollen, Mapping) else None,
+        "source": "natural_crossbreed",
+    }
+    rumor_rows.append(row)
+    if len(rumor_rows) > 24:
+        del rumor_rows[:-24]
+    world_rumors = getattr(sim, "world_rumors", None)
+    if not isinstance(world_rumors, list):
+        sim.world_rumors = []
+        world_rumors = sim.world_rumors
+    if not any(isinstance(rumor, dict) and str(rumor.get("hybrid_signature") or "") == signature for rumor in world_rumors):
+        world_rumors.append({
+            "topic": topic,
+            "true_value": plant_name,
+            "false_value": "",
+            "tone": "danger",
+            "seed_share_chance": 0.84 if notability == "notorious" else 0.68,
+            "misguided_chance": 0.12,
+            "source": "natural_crossbreed",
+            "plant_id": plant_id,
+            "plant_name": plant_name,
+            "notability": notability,
+            "hybrid_signature": signature,
+        })
+    sim.emit(Event(
+        "flora_natural_rumor_seeded",
+        topic=topic,
+        claimed_value=plant_name,
+        plant_id=plant_id,
+        plant_name=plant_name,
+        notability=notability,
+        hybrid_signature=signature,
+        parent_line_name=row["parent_line_name"],
+        parent_plant_ids=list(row["parent_plant_ids"]),
+        hybrid_generation=row["hybrid_generation"],
+        x=record.get("x"),
+        y=record.get("y"),
+        z=record.get("z", 0),
+        is_true=True,
+        tone="danger",
+        source="natural_crossbreed",
+    ))
+    return row
+
+
+def _natural_seedling_sites(sim, target, pollen):
+    z = _safe_int(target.get("z"), _safe_int(pollen.get("z"), 0))
+    anchors = (
+        (_safe_int(target.get("x"), 0), _safe_int(target.get("y"), 0)),
+        (_safe_int(pollen.get("x"), 0), _safe_int(pollen.get("y"), 0)),
+    )
+    seen = set()
+    for ax, ay in anchors:
+        for radius in (1, 2):
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    if max(abs(dx), abs(dy)) != radius:
+                        continue
+                    tx, ty = ax + dx, ay + dy
+                    token = (tx, ty, z)
+                    if token in seen:
+                        continue
+                    seen.add(token)
+                    if flora_at(sim, tx, ty, z):
+                        continue
+                    if not _tile_allows_ground_planting(sim, tx, ty, z):
+                        continue
+                    yield tx, ty, z
+
+
+def _loaded_crossbreed_candidates(sim):
+    ensure_cultivation_state(sim)
+    rows = []
+    for record in tuple(getattr(sim, "flora_patches", {}).values()):
+        if not isinstance(record, dict):
+            continue
+        if not _record_is_loaded(sim, record):
+            continue
+        if not _flora_live_for_crossbreed(sim, record):
+            continue
+        rows.append(record)
+    return tuple(sorted(rows, key=lambda row: (tuple(_record_chunk(sim, row)), _safe_int(row.get("y"), 0), _safe_int(row.get("x"), 0), str(row.get("id") or ""))))
+
+
+def natural_crossbreed_loaded_flora(sim):
+    records = ensure_cultivation_state(sim)
+    now = _safe_int(getattr(sim, "tick", 0), 0)
+    if now <= 0 or now % 600 != 0:
+        return {"ok": False, "reason": "cadence", "created": 0, "records": []}
+    cooldowns = getattr(sim, "flora_natural_crossbreed_cooldowns", {})
+    if not isinstance(cooldowns, dict):
+        sim.flora_natural_crossbreed_cooldowns = {}
+        cooldowns = sim.flora_natural_crossbreed_cooldowns
+    candidates = _loaded_crossbreed_candidates(sim)
+    created = []
+    created_by_chunk = set()
+    for target in candidates:
+        if len(created) >= 3:
+            break
+        target_id = str(target.get("id") or "")
+        if _target_fertility_remaining(target) <= 0:
+            continue
+        if _safe_int(cooldowns.get(target_id), 0) > now:
+            continue
+        target_chunk = _record_chunk(sim, target)
+        if target_chunk in created_by_chunk:
+            continue
+        target_plant_id = _key(target.get("plant_id"))
+        pollen_options = []
+        tx = _safe_int(target.get("x"), 0)
+        ty = _safe_int(target.get("y"), 0)
+        tz = _safe_int(target.get("z"), 0)
+        for pollen in candidates:
+            if pollen is target:
+                continue
+            if _record_chunk(sim, pollen) != target_chunk:
+                continue
+            px = _safe_int(pollen.get("x"), 0)
+            py = _safe_int(pollen.get("y"), 0)
+            pz = _safe_int(pollen.get("z"), 0)
+            if pz != tz or max(abs(px - tx), abs(py - ty)) > 2:
+                continue
+            pollen_plant_id = _key(pollen.get("plant_id"))
+            if target_plant_id == pollen_plant_id and not (target_plant_id.startswith("hybrid_") or pollen_plant_id.startswith("hybrid_")):
+                continue
+            if not _crossbreed_compatible(pollen, target):
+                continue
+            pollen_options.append(pollen)
+        if not pollen_options:
+            continue
+        pollen_options.sort(key=lambda row: (abs(_safe_int(row.get("x"), 0) - tx) + abs(_safe_int(row.get("y"), 0) - ty), str(row.get("id") or "")))
+        pollen = pollen_options[0]
+        site = next(_natural_seedling_sites(sim, target, pollen), None)
+        if site is None:
+            cooldowns[target_id] = now + 600
+            continue
+        profile = _hybrid_profile(sim, pollen, target, source_kind="natural_crossbreed")
+        source = _natural_seed_source(sim, profile)
+        record = _new_cultivation_record(
+            sim,
+            source,
+            container_kind="ground",
+            x=site[0],
+            y=site[1],
+            z=site[2],
+            biome_fit={"ok": True, "natural_crossbreed": True},
+            stage="seeded",
+        )
+        records[record["id"]] = record
+        sync_cultivation_flora_patch(sim, record)
+        _update_target_fertility(sim, target, _target_fertility_remaining(target) - 1)
+        cooldowns[target_id] = now + 2400
+        pollen_id = str(pollen.get("id") or "")
+        if pollen_id:
+            cooldowns[pollen_id] = now + 2400
+        _seed_natural_flora_rumor(sim, profile, record, target, pollen)
+        created_by_chunk.add(target_chunk)
+        created.append(record)
+        sim.emit(Event(
+            "flora_natural_crossbred",
+            target_plant_id=target.get("plant_id"),
+            pollen_plant_id=pollen.get("plant_id"),
+            output_plant_id=record.get("plant_id"),
+            cultivation_id=record.get("id"),
+            hybrid_generation=record.get("hybrid_generation"),
+            x=record.get("x"),
+            y=record.get("y"),
+            z=record.get("z", 0),
+        ))
+    return {"ok": bool(created), "created": len(created), "records": created, "reason": "" if created else "no_pairs"}
 
 
 def _adjacent_flora_targets(sim, x, y, z, preferred_steps):
@@ -1159,6 +1705,8 @@ class CultivationSystem(System):
     def update(self):
         advance_cultivation_records(self.sim)
         now = _safe_int(getattr(self.sim, "tick", 0), 0)
+        if now % 600 == 0:
+            natural_crossbreed_loaded_flora(self.sim)
         if now % 120 != 0:
             return
         for eid in tuple(self.sim.ecs.get(AI).keys())[:80]:

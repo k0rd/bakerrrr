@@ -75,9 +75,11 @@ class Simulation:
         self.next_ground_item_id = 1
         self.next_item_instance_id = 1
         self.flora_patches = {}
+        self.dynamic_flora_profiles = {}
         self.cultivation_records = {}
         self.next_cultivation_id = 1
         self.cultivation_gardener_cooldowns = {}
+        self.flora_natural_crossbreed_cooldowns = {}
         self.meaningful_objects = {"objects": {}, "actor_index": {}, "place_index": {}, "player_knowledge": {}, "cooldowns": {}}
         self.next_meaningful_object_id = 1
         self.projectiles = {}
@@ -173,12 +175,16 @@ class Simulation:
             self.flora_patches = {}
         if not isinstance(getattr(self, "chunk_flora_records", None), dict):
             self.chunk_flora_records = {}
+        if not isinstance(getattr(self, "dynamic_flora_profiles", None), dict):
+            self.dynamic_flora_profiles = {}
         if not isinstance(getattr(self, "cultivation_records", None), dict):
             self.cultivation_records = {}
         if not hasattr(self, "next_cultivation_id"):
             self.next_cultivation_id = 1
         if not isinstance(getattr(self, "cultivation_gardener_cooldowns", None), dict):
             self.cultivation_gardener_cooldowns = {}
+        if not isinstance(getattr(self, "flora_natural_crossbreed_cooldowns", None), dict):
+            self.flora_natural_crossbreed_cooldowns = {}
         if not isinstance(getattr(self, "hunting_carcasses", None), dict):
             self.hunting_carcasses = {}
         if not hasattr(self, "next_hunting_carcass_id"):

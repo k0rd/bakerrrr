@@ -21,6 +21,12 @@ from game.items import ITEM_CATALOG, item_display_name, item_instance_condition
 LEGAL_STATUSES = {"legal", "restricted", "suspicious", "illegal", "stolen", "unknown"}
 PHONE_TAGS = {"phone", "cellular", "communication", "radio", "comms"}
 PHONE_ITEM_IDS = {"mobile_phone", "burner_phone", "unregistered_mobile_phone", "cell_phone", "phone", "radio", "walkie_talkie", "two_way_radio"}
+HERBAL_SECONDARY_TRAIT_LABELS = {
+    "potentiator": "+effect",
+    "diluter": "-effect",
+    "stabilizer": "stabilizer",
+    "spoiler": "spoiler",
+}
 
 
 def item_entry_is_critical_quest_item(entry) -> bool:
@@ -550,9 +556,21 @@ def _herbal_trait_label_for_actor(sim, actor_eid, item_or_entry) -> str:
     if not isinstance(actor_rows, dict) or plant_id not in actor_rows:
         return ""
     row = actor_rows.get(plant_id, {})
+    secondary_traits = ()
     if isinstance(row, dict):
         class_id = _key(row.get("chemistry_class")) or class_id
-    return class_id.replace("_", " ")
+        secondary_traits = (
+            tuple(row.get("secondary_traits", ()) or ())
+            if isinstance(row.get("secondary_traits"), (list, tuple, set))
+            else ()
+        )
+    labels = [class_id.replace("_", " ")]
+    labels.extend(
+        HERBAL_SECONDARY_TRAIT_LABELS.get(_key(trait), _key(trait).replace("_", " "))
+        for trait in secondary_traits
+        if _key(trait) in HERBAL_SECONDARY_TRAIT_LABELS
+    )
+    return " ".join(token for token in labels if str(token).strip())
 
 
 def item_display_name_for_actor(sim, actor_eid, item_or_entry, *, identified=None, item_catalog=None) -> str:
@@ -565,7 +583,7 @@ def item_display_name_for_actor(sim, actor_eid, item_or_entry, *, identified=Non
         return item_unknown_name_for_actor(sim, actor_eid, item_or_entry, item_catalog=item_catalog)
     name = item_display_name(item_id, metadata=metadata, item_catalog=item_catalog or ITEM_CATALOG)
     herbal_trait = _herbal_trait_label_for_actor(sim, actor_eid, item_or_entry)
-    if herbal_trait and f"[{herbal_trait}]" not in name.lower():
+    if herbal_trait and f"[{herbal_trait.lower()}]" not in name.lower():
         return f"{name} [{herbal_trait}]"
     return name
 

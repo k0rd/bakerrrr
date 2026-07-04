@@ -3766,7 +3766,11 @@ class InputSystem(System):
         bonus_slots = max(0, _int_or_default(container_profile.get("bonus_slots"), 0))
         if bonus_slots <= 0:
             return ""
-        return f"Equipped +{bonus_slots} slots"
+        accepts_note = str(container_profile.get("accepts_note", "") or "").strip()
+        note = f"Equipped +{bonus_slots} slots"
+        if accepts_note:
+            note += f"; accepts {accepts_note}"
+        return note
 
     def _container_inventory_entries(self, property_id=None, *, container_kind=None):
         property_id = str(property_id or "").strip()

@@ -690,6 +690,7 @@ _CHARACTER_LABEL_PREFIXES = (
 _INVENTORY_KEY_ITEM_COLOR = "objective"
 _INVENTORY_KEY_ITEM_IDS = frozenset(("property_key", "access_badge", "manager_badge"))
 _INVENTORY_CRITICAL_QUEST_ITEM_COLOR = "inventory_critical_quest"
+_INVENTORY_STOWED_ITEM_COLOR = "inventory_stowed"
 
 
 def _help_section_color(index):
@@ -4178,6 +4179,7 @@ class RenderSystem(System):
                 gear_marker = ""
                 row_color = None
                 entry_instance_id = str(entry.get("instance_id", "") or "").strip()
+                stowed_container_instance = _entry_stowed_container_instance(entry)
                 if panel_kind != "container" or container_view == "pack":
                     if armor_loadout and armor_loadout.is_equipped(entry_instance_id):
                         gear_marker = "A"
@@ -4205,6 +4207,13 @@ class RenderSystem(System):
                         and str(equipped_container.get("instance_id", "")).strip() == entry_instance_id
                     ):
                         gear_marker = "C"
+                if (
+                    panel_kind == "container"
+                    and container_kind == "worn"
+                    and container_view == "container"
+                    and row_color is None
+                ):
+                    row_color = _INVENTORY_STOWED_ITEM_COLOR
                 ammo_suffix = ""
                 weapon_id = _item_weapon_id(item_def)
                 if weapon_id and (panel_kind != "container" or container_view == "pack"):
@@ -4224,9 +4233,10 @@ class RenderSystem(System):
                         ammo_suffix = " [melee]"
                 storage_suffix = ""
                 if panel_kind != "container":
-                    stowed_container_instance = _entry_stowed_container_instance(entry)
                     if stowed_container_instance:
                         storage_suffix = " [stowed]"
+                        if row_color is None:
+                            row_color = _INVENTORY_STOWED_ITEM_COLOR
                 worn_suffix = ""
                 if (panel_kind != "container" or container_view == "pack") and is_entry_worn(entry):
                     worn_suffix = " [worn]"

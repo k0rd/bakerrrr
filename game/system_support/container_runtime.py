@@ -1,7 +1,7 @@
 """Shared inventory-container runtime helpers."""
 
 from game.appearance_loadout import clear_removed_entry_appearance, mark_inventory_instance_worn
-from game.components import ArmorLoadout, Inventory, WeaponLoadout
+from game.components import ArmorLoadout, Inventory, Position, WeaponLoadout
 from game.items import ITEM_CATALOG, item_display_name
 from game.weapons import weapon_by_id
 
@@ -65,6 +65,64 @@ def _clear_inventory_container_assignments(inventory, container_instance_id):
     return cleared
 
 
+def _actor_position(sim, eid):
+    if sim is None or eid is None:
+        return None
+    return sim.ecs.get(Position).get(eid)
+
+
+def _drop_inventory_entry_to_ground(sim, eid, inventory, entry):
+    if sim is None or inventory is None or not isinstance(entry, dict):
+        return None
+    pos = _actor_position(sim, eid)
+    if pos is None:
+        return None
+    instance_id = str(entry.get("instance_id", "") or "").strip()
+    quantity = max(1, _int_or_default(entry.get("quantity"), 1))
+    removed = inventory.remove_item(instance_id=instance_id, quantity=quantity)
+    if not removed:
+        return None
+    metadata = dict(removed.get("metadata") or {})
+    metadata.pop(ITEM_STOWED_CONTAINER_METADATA_KEY, None)
+    return sim.register_ground_item(
+        item_id=removed["item_id"],
+        x=pos.x,
+        y=pos.y,
+        z=pos.z,
+        quantity=removed["quantity"],
+        owner_eid=removed.get("owner_eid"),
+        owner_tag=removed.get("owner_tag"),
+        instance_id=removed.get("instance_id"),
+        metadata=metadata,
+    )
+
+
+def release_stowed_items_for_removed_container(sim, eid, inventory, container_instance_id, *, drop_overflow=True):
+    container_instance_id = str(container_instance_id or "").strip()
+    if not inventory or not container_instance_id:
+        return {"released": 0, "dropped": 0, "ground_item_ids": ()}
+
+    stowed_entries = list(_inventory_entries_stowed_in_container(inventory, container_instance_id))
+    stowed_instance_ids = [str(entry.get("instance_id", "") or "").strip() for entry in stowed_entries]
+    released = _clear_inventory_container_assignments(inventory, container_instance_id)
+    ground_item_ids = []
+    if drop_overflow:
+        for instance_id in stowed_instance_ids:
+            if inventory.slot_count() <= int(getattr(inventory, "capacity", 0) or 0):
+                break
+            entry = inventory.find(instance_id=instance_id)
+            if not entry:
+                continue
+            ground_id = _drop_inventory_entry_to_ground(sim, eid, inventory, entry)
+            if ground_id:
+                ground_item_ids.append(ground_id)
+    return {
+        "released": int(released),
+        "dropped": int(len(ground_item_ids)),
+        "ground_item_ids": tuple(ground_item_ids),
+    }
+
+
 def _unlink_removed_item_from_gear(sim, eid, removed_entry, item_catalog=None):
     if eid is None or not isinstance(removed_entry, dict):
         return {}
@@ -126,6 +184,9 @@ def _unlink_removed_item_from_gear(sim, eid, removed_entry, item_catalog=None):
         inventory = sim.ecs.get(Inventory).get(eid)
         if inventory:
             inventory.capacity = max(1, inventory.capacity - changes["container_bonus_slots"])
-            changes["released_container_items"] = _clear_inventory_container_assignments(inventory, instance_id)
+            release = release_stowed_items_for_removed_container(sim, eid, inventory, instance_id)
+            changes["released_container_items"] = release["released"]
+            changes["dropped_container_items"] = release["dropped"]
+            changes["dropped_container_ground_item_ids"] = release["ground_item_ids"]
 
     return changes

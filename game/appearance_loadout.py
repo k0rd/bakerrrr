@@ -210,6 +210,18 @@ COSMETIC_ITEM_IDS = {
         "materials": ("cotton", "canvas", "wool", "denim"),
         "styles": ("sleeveless", "plain", "neat", "severe"),
     },
+    "butcher_apron": {
+        "label": "butcher apron",
+        "slots": ("outer",),
+        "materials": ("canvas", "waxed cotton", "heavy cotton", "duck cloth"),
+        "styles": ("work-stained", "plain", "cross-back", "heavy"),
+    },
+    "botany_apron": {
+        "label": "botany apron",
+        "slots": ("outer",),
+        "materials": ("canvas", "linen", "cotton", "soft duck cloth"),
+        "styles": ("pocketed", "plain", "garden", "cross-back"),
+    },
     "earrings": {
         "label": "earrings",
         "slots": ("earrings",),
@@ -1084,6 +1096,39 @@ def _pack_has_room_to_unwear(inventory, entry):
     return (inventory.slot_count() + int(max(0, cost))) <= int(getattr(inventory, "capacity", 0) or 0)
 
 
+def _release_active_container_for_unworn_item(sim, eid, instance_id, *, item_name="", reason="appearance_unequipped"):
+    current = getattr(sim, "equipped_container", None)
+    if not isinstance(current, dict):
+        return None
+    instance_id = str(instance_id or "").strip()
+    if not instance_id or str(current.get("instance_id", "") or "").strip() != instance_id:
+        return None
+
+    from game.system_support.container_runtime import release_stowed_items_for_removed_container
+
+    inventory = sim.ecs.get(Inventory).get(eid)
+    try:
+        bonus_slots = int(max(0, int(current.get("bonus_slots", 0) or 0)))
+    except (TypeError, ValueError):
+        bonus_slots = 0
+    sim.equipped_container = None
+    release = {"released": 0, "dropped": 0, "ground_item_ids": ()}
+    if inventory:
+        inventory.capacity = max(1, int(getattr(inventory, "capacity", 1) or 1) - bonus_slots)
+        release = release_stowed_items_for_removed_container(sim, eid, inventory, instance_id)
+    sim.emit(Event(
+        "container_removed",
+        eid=eid,
+        item_id=current.get("item_id"),
+        item_name=current.get("item_name") or item_name,
+        reason=reason,
+        released_container_items=release.get("released", 0),
+        dropped_container_items=release.get("dropped", 0),
+        dropped_container_ground_item_ids=release.get("ground_item_ids", ()),
+    ))
+    return release
+
+
 def equip_appearance_item(sim, eid, instance_id, preferred_slot=None):
     loadout = appearance_loadout_for(sim, eid, create=True)
     inventory, entry = _find_entry_by_instance(sim, eid, instance_id)
@@ -1109,7 +1154,8 @@ def equip_appearance_item(sim, eid, instance_id, preferred_slot=None):
         return AppearanceEquipResult(False, reason="invalid_slot", item_name=item_name)
 
     armor = sim.ecs.get(ArmorLoadout).get(eid)
-    if target_slot == "outer" and armor and getattr(armor, "equipped_instance_id", None):
+    armor_slot = str(getattr(armor, "slot", "body") or "body").strip().lower() if armor else ""
+    if target_slot == "outer" and armor and getattr(armor, "equipped_instance_id", None) and armor_slot == "body":
         return AppearanceEquipResult(False, reason="armor_outer_active", slot=target_slot, item_name=item_name)
 
     occupied = loadout.slots.get(target_slot)
@@ -1151,6 +1197,13 @@ def unequip_appearance_slot(sim, eid, slot):
     metadata = _metadata_with_worn(entry.get("metadata"), worn=False)
     inventory.update_item_metadata(instance_id, metadata=metadata, replace=True)
     loadout.slots[slot] = None
+    _release_active_container_for_unworn_item(
+        sim,
+        eid,
+        instance_id,
+        item_name=item_name,
+        reason="appearance_unequipped",
+    )
     sim.emit(Event(
         "appearance_item_unequipped",
         eid=eid,

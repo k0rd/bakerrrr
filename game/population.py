@@ -41,7 +41,7 @@ from game.components import (
     WildlifeBehavior,
 )
 from game.economy import chunk_economy_profile, pick_career_for_workplace
-from game.appearance_loadout import seed_npc_appearance_from_description
+from game.appearance_loadout import cosmetic_variant_metadata, is_appearance_item, seed_npc_appearance_from_description
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot
 from game.human_identity import seed_human_identity_profile
 from game.npc_names import generate_human_personal_name, human_descriptor
@@ -1169,6 +1169,14 @@ def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
     item_def = ITEM_CATALOG.get(item_id)
     if not item_def:
         return False
+    metadata = {"ambient_spawn": True}
+    if is_appearance_item(item_id, item_catalog=ITEM_CATALOG):
+        metadata.update(cosmetic_variant_metadata(
+            item_id,
+            seed_token=f"ambient:{getattr(sim, 'seed', 0)}:{eid}:{item_id}:{len(inventory.items)}",
+            item_catalog=ITEM_CATALOG,
+        ))
+        metadata["ambient_spawn"] = True
     added, _instance_id = inventory.add_item(
         item_id=item_id,
         quantity=int(max(1, quantity)),
@@ -1176,7 +1184,7 @@ def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
         instance_factory=sim.new_item_instance_id,
         owner_eid=eid,
         owner_tag=owner_tag,
-        metadata={"ambient_spawn": True},
+        metadata=metadata,
     )
     return bool(added)
 
@@ -2584,6 +2592,11 @@ def _seed_npc_inventory(sim, eid, rng, role, workplace_prop=None, home_prop=None
     report_device_item_id = _report_device_item_for_npc(role, workplace_prop=workplace_prop, home_prop=home_prop)
     if report_device_item_id in ITEM_CATALOG:
         _give_item(sim, eid, report_device_item_id, quantity=1)
+    archetype = _property_archetype(workplace_prop or home_prop)
+    if archetype == "butcher_shop" and rng.random() < 0.34:
+        _give_item(sim, eid, "butcher_apron", quantity=1)
+    elif archetype in {"herbalist_shop", "herbalist_camp"} and rng.random() < 0.34:
+        _give_item(sim, eid, "botany_apron", quantity=1)
     pool = [item_id for item_id in _inventory_pool_for(role, workplace_prop=workplace_prop, home_prop=home_prop) if item_id in ITEM_CATALOG]
     if not pool:
         return

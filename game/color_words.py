@@ -5,6 +5,7 @@ import html
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -42,6 +43,11 @@ def _row(
 
 
 _COLOR_WORD_HEX_PATH = Path(__file__).resolve().parent / "color_words_hex_values.json"
+_MORE_COLOR_WORDS_PATH = Path(__file__).resolve().parent / "morecolors.json"
+_IMPORTED_COLOR_WORD_PATHS = (
+    _COLOR_WORD_HEX_PATH,
+    _MORE_COLOR_WORDS_PATH,
+)
 
 
 _CURATED_COLOR_WORD_PALETTE: tuple[ColorWordRow, ...] = (
@@ -431,13 +437,43 @@ def _dedupe_imported_word(word: str, used: set[str], *, native_collision: bool) 
     return candidate
 
 
-def _load_imported_color_word_palette() -> tuple[ColorWordRow, ...]:
+def _imported_row_rgb(raw: dict) -> tuple[int, int, int] | None:
+    for key in ("color", "hex", "value"):
+        rgb = _parse_hex_rgb(raw.get(key))
+        if rgb is not None:
+            return rgb
+    rgb_payload = raw.get("rgb")
+    if isinstance(rgb_payload, (tuple, list)) and len(rgb_payload) >= 3:
+        rgb = _coerce_rgb_channels(rgb_payload)
+        if rgb is not None:
+            return rgb
+    if {"r", "g", "b"} <= set(raw):
+        return _coerce_rgb_channels((raw.get("r"), raw.get("g"), raw.get("b")))
+    return None
+
+
+def _imported_slot_bias_for_tags(tags: tuple[str, ...]) -> tuple[tuple[str, int], ...]:
+    tag_set = set(tags)
+    if "metal" in tag_set:
+        return _METAL_BIAS
+    return ()
+
+
+def _imported_raw_color_rows(path: Path) -> tuple[dict, ...]:
     try:
-        raw_document = json.loads(_COLOR_WORD_HEX_PATH.read_text(encoding="utf-8"))
+        raw_document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return ()
     if isinstance(raw_document, list):
-        raw_rows = raw_document
+        raw_rows = []
+        for index, value in enumerate(raw_document):
+            if isinstance(value, dict):
+                row = dict(value)
+                row.setdefault("id", row.get("code") or f"{path.stem}_{index}")
+                raw_rows.append(row)
+            elif isinstance(value, str):
+                raw_rows.append({"name": f"{path.stem}_{index}", "color": value})
+        return tuple(raw_rows)
     elif isinstance(raw_document, dict):
         meta = raw_document.get("_meta", {})
         schema_version = meta.get("schema_version") if isinstance(meta, dict) else None
@@ -454,8 +490,17 @@ def _load_imported_color_word_palette() -> tuple[ColorWordRow, ...]:
             row = dict(value)
             row.setdefault("id", key)
             raw_rows.append(row)
-    else:
+        return tuple(raw_rows)
+    return ()
+
+
+def _load_imported_color_word_palette() -> tuple[ColorWordRow, ...]:
+    raw_rows = []
+    for path in _IMPORTED_COLOR_WORD_PATHS:
+        raw_rows.extend(_imported_raw_color_rows(path))
+    if not raw_rows:
         return ()
+    raw_rows = tuple(raw_rows)
     native_words = {row.word for row in _CURATED_COLOR_WORD_PALETTE}
     used_words = set(native_words)
     rows: list[ColorWordRow] = []
@@ -463,12 +508,13 @@ def _load_imported_color_word_palette() -> tuple[ColorWordRow, ...]:
         if not isinstance(raw, dict):
             continue
         word = _clean_word(raw.get("name"))
-        rgb = _parse_hex_rgb(raw.get("color"))
+        rgb = _imported_row_rgb(raw)
         if not word or rgb is None:
             continue
         word = _dedupe_imported_word(word, used_words, native_collision=word in native_words)
         used_words.add(word)
-        rows.append(_row(word, rgb, tags=_imported_tags_for_rgb(word, rgb), weight=0))
+        tags = _imported_tags_for_rgb(word, rgb)
+        rows.append(_row(word, rgb, tags=tags, weight=0, bias=_imported_slot_bias_for_tags(tags)))
     return tuple(rows)
 
 
@@ -638,6 +684,97 @@ def render_key_for_color_word(
 
 def _rgb_distance_sq(a: tuple[int, int, int], b: tuple[int, int, int]) -> int:
     return sum((int(left) - int(right)) ** 2 for left, right in zip(a, b))
+
+
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    channels = []
+    for channel in tuple(rgb[:3]):
+        value = max(0.0, min(1.0, float(channel) / 255.0))
+        if value <= 0.04045:
+            channels.append(value / 12.92)
+        else:
+            channels.append(((value + 0.055) / 1.055) ** 2.4)
+    return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2])
+
+
+def color_contrast_ratio(
+    foreground: object,
+    background: object = (0, 0, 0),
+    *,
+    default: float = 1.0,
+) -> float:
+    fg = parse_color_value(foreground)
+    bg = parse_color_value(background)
+    if fg is None or bg is None:
+        return float(default)
+    fg_lum = _relative_luminance(fg)
+    bg_lum = _relative_luminance(bg)
+    lighter = max(fg_lum, bg_lum)
+    darker = min(fg_lum, bg_lum)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+@lru_cache(maxsize=8192)
+def _nearest_readable_color_word_cached(
+    source_rgb: tuple[int, int, int],
+    background_rgb: tuple[int, int, int],
+    minimum_contrast: float,
+    include_reserved: bool,
+    include_imported: bool,
+) -> str:
+    best_word = ""
+    best_distance: int | None = None
+    for word in approved_color_words(include_reserved=include_reserved, include_imported=include_imported):
+        candidate_rgb = color_word_rgb(word)
+        if candidate_rgb is None:
+            continue
+        if color_contrast_ratio(candidate_rgb, background_rgb) < minimum_contrast:
+            continue
+        distance = _rgb_distance_sq(source_rgb, candidate_rgb)
+        if best_distance is None or distance < best_distance:
+            best_word = word
+            best_distance = distance
+            if distance == 0:
+                break
+    return best_word
+
+
+def readable_color_word_for_text(
+    value: object,
+    *,
+    background: object = (0, 0, 0),
+    minimum_contrast: float = 3.8,
+    include_reserved: bool = True,
+    include_imported: bool = True,
+    default: str = "",
+) -> str:
+    normalized = normalize_color_word(value, default="")
+    source_rgb = color_word_rgb(normalized) if normalized else parse_color_value(value)
+    background_rgb = parse_color_value(background, fallback=(0, 0, 0)) or (0, 0, 0)
+    if source_rgb is None:
+        return normalize_color_word(default, default="") or default
+    try:
+        threshold = max(1.0, float(minimum_contrast))
+    except (TypeError, ValueError):
+        threshold = 3.8
+    if color_contrast_ratio(source_rgb, background_rgb) >= threshold:
+        if normalized:
+            return normalized
+        return find_nearest_color_word(
+            source_rgb,
+            include_reserved=include_reserved,
+            include_imported=include_imported,
+            default=default,
+        )
+    rounded_threshold = round(threshold, 3)
+    readable = _nearest_readable_color_word_cached(
+        tuple(source_rgb),
+        tuple(background_rgb),
+        rounded_threshold,
+        bool(include_reserved),
+        bool(include_imported),
+    )
+    return readable or normalize_color_word(default, default="") or default
 
 
 def find_nearest_color_word(

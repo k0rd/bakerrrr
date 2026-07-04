@@ -620,6 +620,39 @@
       }
     ]
   },
+  "spoiled_herbal_slurry": {
+    "name": "Spoiled Herbal Slurry",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "herbal_medicine",
+      "experimental",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": -3
+      },
+      {
+        "type": "status",
+        "status": "unsettled",
+        "duration": 6,
+        "modifiers": {
+          "safety_tick_delta": -0.015,
+          "ranged_accuracy_mult": -0.03
+        }
+      }
+    ]
+  },
   "focus_inhaler": {
     "name": "Focus Inhaler",
     "glyph": "!",
@@ -3994,6 +4027,89 @@
     ],
     "legal_status": "legal",
     "effects": []
+  },
+  "butcher_apron": {
+    "name": "Butcher Apron",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "container",
+      "gear",
+      "clothing",
+      "cosmetic",
+      "wearable",
+      "workwear",
+      "butcher",
+      "legal"
+    ],
+    "appearance_family": "clothing",
+    "appearance_slots": [
+      "outer"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "container": {
+      "bonus_slots": 8,
+      "slot": "body",
+      "blocks_armor": true,
+      "accepted_item_ids": [
+        "field_knife",
+        "kill_bag",
+        "raw_game_meat",
+        "bagged_game_meat",
+        "cooked_game_meat",
+        "packaged_game_meat"
+      ],
+      "accepted_tags": [
+        "meat"
+      ],
+      "accepts_note": "butcher tools and meat products"
+    }
+  },
+  "botany_apron": {
+    "name": "Botany Apron",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "container",
+      "gear",
+      "clothing",
+      "cosmetic",
+      "wearable",
+      "workwear",
+      "botany",
+      "legal"
+    ],
+    "appearance_family": "clothing",
+    "appearance_slots": [
+      "outer"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "container": {
+      "bonus_slots": 8,
+      "slot": "body",
+      "blocks_armor": true,
+      "accepted_item_ids": [
+        "pruning_shears",
+        "mortar_kit",
+        "fresh_blossoms",
+        "leaf_clippings",
+        "moss_scrapings",
+        "vine_cuttings",
+        "experimental_herbal_concoction",
+        "weak_toxic_concoction",
+        "spoiled_herbal_slurry"
+      ],
+      "accepted_tags": [
+        "herbal",
+        "herbal_ingredient",
+        "plant_material",
+        "herbal_medicine",
+        "cultivation"
+      ],
+      "accepts_note": "botany tools and herbal products"
+    }
   },
   "mortar_kit": {
     "name": "Mortar Kit",

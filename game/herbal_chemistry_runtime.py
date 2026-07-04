@@ -10,10 +10,12 @@ from pathlib import Path
 from typing import Mapping
 
 from engine.events import Event
+from engine.systems import System
 from engine.visibility import has_line_of_sight
 
 from game.components import Inventory, PlayerAssets, Position
 from game.flora_runtime import (
+    dynamic_flora_profile,
     flora_harvest_context,
     flora_harvest_remaining,
     flora_harvest_updates_after_pick,
@@ -23,7 +25,7 @@ from game.flora_runtime import (
     normalize_flora_harvest_state,
 )
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor
-from game.items import ITEM_CATALOG, item_display_name
+from game.items import ITEM_CATALOG, item_display_name, prepare_item_stack_metadata
 from game.json_metadata import split_object_document
 from game.property_runtime import property_runtime_container_entries
 from game.system_support.interaction_ordering import _manhattan
@@ -47,6 +49,18 @@ CHEMISTRY_CLASSES = (
     "deliriant",
     "volatile",
 )
+SECONDARY_TRAITS = (
+    "potentiator",
+    "diluter",
+    "stabilizer",
+    "spoiler",
+)
+SECONDARY_TRAIT_LABELS = {
+    "potentiator": "+effect",
+    "diluter": "-effect",
+    "stabilizer": "stabilizer",
+    "spoiler": "spoiler",
+}
 
 HERBAL_INGREDIENT_ITEM_IDS = {
     "fresh_blossoms",
@@ -86,6 +100,7 @@ CUT_TOOL_TAGS = {"knife", "blade"}
 MORTAR_KIT_ITEM_ID = "mortar_kit"
 EXPERIMENTAL_CONCOCTION_ITEM_ID = "experimental_herbal_concoction"
 WEAK_TOXIC_CONCOCTION_ITEM_ID = "weak_toxic_concoction"
+SPOILED_HERBAL_SLURRY_ITEM_ID = "spoiled_herbal_slurry"
 CAMPFIRE_HERB_CACHE_KIND = "campfire_herb_cache"
 DILUTED_HERBAL_OUTPUTS = {
     "herbal_poultice": "diluted_herbal_poultice",
@@ -95,6 +110,30 @@ DILUTED_HERBAL_OUTPUTS = {
     "field_restorative": "diluted_field_restorative",
     "steadying_draught": "diluted_steadying_draught",
     "focus_inhaler": "diluted_focus_inhaler",
+}
+HERBAL_STABILITY_BASE_SCORES = {
+    "recipe": 76,
+    "discovered_recipe": 68,
+    "exact_recipe": 68,
+    "diluted": 50,
+    "odd": 36,
+    "weak_toxic": 30,
+}
+HERBAL_STABILITY_WINDOWS = {
+    "temperamental": 2400,
+    "volatile": 1200,
+    "feral": 600,
+    "collapsed": 120,
+}
+HERBAL_DECAY_METADATA_KEYS = {
+    "item_effect_scalar",
+    "item_positive_effect_scalar",
+    "item_negative_effect_scalar",
+    "item_status_duration_scalar",
+    "stability_window_ticks",
+    "breakdown_tick",
+    "herbal_decay",
+    "herbal_result_read",
 }
 
 _BIAS_TERMS = {
@@ -378,9 +417,285 @@ def herbal_chemistry_profiles(sim):
     return dict(assignments)
 
 
+def _catalog_marker(catalog):
+    return ",".join(sorted(str(key) for key in (catalog or {}).keys()))
+
+
+def _expressed_genetic_secondary_traits(row):
+    if not isinstance(row, Mapping):
+        return ()
+    genetics = row.get("genetics") if isinstance(row.get("genetics"), Mapping) else {}
+    expressed = genetics.get("expressed") if isinstance(genetics.get("expressed"), Mapping) else {}
+    effects = expressed.get("effects") if isinstance(expressed.get("effects"), Mapping) else {}
+    traits = effects.get("traits") if isinstance(effects.get("traits"), (list, tuple, set)) else ()
+    rows = []
+    for trait in tuple(traits or ()):
+        trait_key = _key(trait)
+        if trait_key in SECONDARY_TRAITS:
+            rows.append(trait_key)
+    return tuple(dict.fromkeys(rows))
+
+
+def _expressed_genetic_chemistry_class(row):
+    if not isinstance(row, Mapping):
+        return ""
+    genetics = row.get("genetics") if isinstance(row.get("genetics"), Mapping) else {}
+    expressed = genetics.get("expressed") if isinstance(genetics.get("expressed"), Mapping) else {}
+    chemistry = expressed.get("chemistry") if isinstance(expressed.get("chemistry"), Mapping) else {}
+    class_id = _key(chemistry.get("main_class"))
+    return class_id if class_id in CHEMISTRY_CLASSES else ""
+
+
+def _secondary_trait_fallback(seed, plant_id, class_id, row):
+    marker = str(row.get("rarity") or row.get("growth_form") or "").strip().lower()
+    rng = random.Random(f"{int(seed)}:herbal-secondary:v1:{plant_id}:{class_id}:{marker}")
+    weights = {trait: 1.0 for trait in SECONDARY_TRAITS}
+    if class_id in {"mending", "hydrating", "calming", "cleansing", "binding"}:
+        weights["stabilizer"] += 0.8
+    if class_id in {"catalyst", "energizing", "volatile"}:
+        weights["potentiator"] += 0.8
+    if class_id in {"cooling", "numbing"}:
+        weights["diluter"] += 0.6
+    if class_id in {"irritant", "toxic", "deliriant", "volatile"}:
+        weights["spoiler"] += 0.9
+    if str(row.get("rarity", "")).strip().lower() == "rare":
+        weights["potentiator"] += 0.5
+    return _weighted_choice(rng, tuple(weights.items())) or "stabilizer"
+
+
+def herbal_secondary_trait_profiles(sim):
+    state = getattr(sim, "herbal_secondary_trait_profiles", None)
+    seed = int(getattr(sim, "seed", 0) or 0)
+    catalog = load_flora_catalog()
+    catalog_marker = _catalog_marker(catalog)
+    class_assignments = herbal_chemistry_profiles(sim)
+    chemistry_marker = ",".join(
+        f"{plant_id}:{class_assignments.get(plant_id, '')}"
+        for plant_id in sorted(catalog)
+    )
+    if (
+        isinstance(state, dict)
+        and state.get("seed") == seed
+        and state.get("catalog_marker") == catalog_marker
+        and state.get("chemistry_marker") == chemistry_marker
+    ):
+        return {
+            _key(plant_id): tuple(_key(trait) for trait in tuple(traits or ()) if _key(trait) in SECONDARY_TRAITS)
+            for plant_id, traits in (state.get("plants", {}) or {}).items()
+        }
+
+    assignments = {}
+    for plant_id in sorted(catalog):
+        row = catalog[plant_id]
+        explicit = _expressed_genetic_secondary_traits(row)
+        if explicit:
+            assignments[plant_id] = tuple(explicit)
+            continue
+        class_id = class_assignments.get(plant_id, "") or "mending"
+        assignments[plant_id] = (_secondary_trait_fallback(seed, plant_id, class_id, row),)
+
+    sim.herbal_secondary_trait_profiles = {
+        "seed": seed,
+        "catalog_marker": catalog_marker,
+        "chemistry_marker": chemistry_marker,
+        "plants": {plant_id: list(traits) for plant_id, traits in assignments.items()},
+    }
+    return dict(assignments)
+
+
 def plant_chemistry_class(sim, plant_id):
     plant_id = _key(plant_id)
+    profile = dynamic_flora_profile(sim, plant_id) if plant_id else {}
+    if profile:
+        class_id = _key(profile.get("chemistry_class")) or _expressed_genetic_chemistry_class(profile)
+        if class_id in CHEMISTRY_CLASSES:
+            return class_id
     return str(herbal_chemistry_profiles(sim).get(plant_id, "") or "").strip().lower()
+
+
+def plant_secondary_traits(sim, plant_id):
+    plant_id = _key(plant_id)
+    profile = dynamic_flora_profile(sim, plant_id) if plant_id else {}
+    if profile:
+        explicit = tuple(
+            _key(trait)
+            for trait in tuple(profile.get("secondary_traits") or ())
+            if _key(trait) in SECONDARY_TRAITS
+        )
+        if explicit:
+            return tuple(dict.fromkeys(explicit))
+        genetic = _expressed_genetic_secondary_traits(profile)
+        if genetic:
+            return tuple(dict.fromkeys(genetic))
+    traits = herbal_secondary_trait_profiles(sim).get(plant_id, ()) if plant_id else ()
+    return tuple(_key(trait) for trait in tuple(traits or ()) if _key(trait) in SECONDARY_TRAITS)
+
+
+def secondary_trait_labels(traits):
+    return tuple(
+        SECONDARY_TRAIT_LABELS.get(_key(trait), _key(trait).replace("_", " "))
+        for trait in tuple(traits or ())
+        if _key(trait) in SECONDARY_TRAITS
+    )
+
+
+def _clamp_float(value, lo, hi):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = float(lo)
+    return max(float(lo), min(float(hi), parsed))
+
+
+def _entry_secondary_traits(sim, entry):
+    metadata = entry.get("metadata") if isinstance(entry, Mapping) else {}
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    raw_traits = metadata.get("secondary_traits") if isinstance(metadata.get("secondary_traits"), (list, tuple, set)) else ()
+    traits = tuple(
+        _key(trait)
+        for trait in tuple(raw_traits or ())
+        if _key(trait) in SECONDARY_TRAITS
+    )
+    plant_id = _key(metadata.get("source_plant_id"))
+    if plant_id and not traits:
+        traits = plant_secondary_traits(sim, plant_id)
+    return traits
+
+
+def _secondary_trait_counts_from_entries(sim, selected):
+    counts = {trait: 0 for trait in SECONDARY_TRAITS}
+    for entry in tuple(selected or ()):
+        if not isinstance(entry, Mapping):
+            continue
+        for trait in _entry_secondary_traits(sim, entry):
+            counts[trait] = int(counts.get(trait, 0)) + 1
+    return counts
+
+
+def _secondary_trait_counts_from_payload(component_payload):
+    counts = {trait: 0 for trait in SECONDARY_TRAITS}
+    for row in tuple(component_payload or ()):
+        if not isinstance(row, Mapping):
+            continue
+        for trait in tuple(row.get("secondary_traits", ()) or ()):
+            trait_key = _key(trait)
+            if trait_key in SECONDARY_TRAITS:
+                counts[trait_key] = int(counts.get(trait_key, 0)) + 1
+    return counts
+
+
+def herbal_weak_toxic_chance_for_traits(trait_counts=None):
+    counts = trait_counts if isinstance(trait_counts, Mapping) else {}
+    chance = 0.55
+    chance += 0.15 * _safe_int(counts.get("spoiler"), 0)
+    chance -= 0.15 * _safe_int(counts.get("stabilizer"), 0)
+    chance += 0.08 * _safe_int(counts.get("potentiator"), 0)
+    chance -= 0.08 * _safe_int(counts.get("diluter"), 0)
+    return _clamp_float(chance, 0.10, 0.90)
+
+
+def _herbal_stability_band(score):
+    score = int(max(0, min(100, _safe_int(score, 0))))
+    if score >= 75:
+        return "stable"
+    if score >= 55:
+        return "temperamental"
+    if score >= 35:
+        return "volatile"
+    if score >= 20:
+        return "feral"
+    return "collapsed"
+
+
+def _herbal_item_allows_decay(item_id):
+    item_def = ITEM_CATALOG.get(_key(item_id), {})
+    tags = {
+        str(tag).strip().lower()
+        for tag in tuple(item_def.get("tags", ()) or ())
+        if str(tag).strip()
+    }
+    if item_def.get("throw_profile") or item_def.get("trap_profile"):
+        return False
+    if tags.intersection({"aerosol", "throwable", "trap", "aerosol_trap"}):
+        return False
+    return "consumable" in tags or "herbal_medicine" in tags or "experimental" in tags
+
+
+def _herbal_trait_result_read(trait_counts, band):
+    reads = []
+    if _safe_int(trait_counts.get("potentiator"), 0) > _safe_int(trait_counts.get("diluter"), 0):
+        reads.append("stronger")
+    elif _safe_int(trait_counts.get("diluter"), 0) > _safe_int(trait_counts.get("potentiator"), 0):
+        reads.append("weaker")
+    if band == "stable":
+        reads.append("stable")
+    elif band in {"feral", "collapsed"}:
+        reads.append("spoiling soon")
+    elif band in {"temperamental", "volatile"}:
+        reads.append("unstable")
+    return ", ".join(dict.fromkeys(reads))
+
+
+def _herbal_trait_effect_metadata(sim, trait_counts, *, experiment_result="", mode="self", output_item_id=""):
+    counts = {trait: max(0, _safe_int((trait_counts or {}).get(trait), 0)) for trait in SECONDARY_TRAITS}
+    result_key = _key(experiment_result) or "recipe"
+    base_score = HERBAL_STABILITY_BASE_SCORES.get(result_key, HERBAL_STABILITY_BASE_SCORES["recipe"])
+    stability_score = int(base_score)
+    stability_score += 15 * counts["stabilizer"]
+    stability_score -= 18 * counts["spoiler"]
+    stability_score += 4 * counts["diluter"]
+    stability_score -= 5 * counts["potentiator"]
+    if _key(mode) == "herbalist":
+        stability_score += 10
+    stability_score = int(max(0, min(100, stability_score)))
+    band = _herbal_stability_band(stability_score)
+
+    positive_scalar = _clamp_float(
+        1.0
+        + (0.14 * counts["potentiator"])
+        - (0.12 * counts["diluter"])
+        + (0.04 * counts["stabilizer"])
+        - (0.06 * counts["spoiler"]),
+        0.50,
+        1.75,
+    )
+    negative_scalar = _clamp_float(
+        1.0
+        + (0.06 * counts["potentiator"])
+        - (0.12 * counts["diluter"])
+        - (0.08 * counts["stabilizer"])
+        + (0.16 * counts["spoiler"]),
+        0.50,
+        2.00,
+    )
+    duration_scalar = _clamp_float(
+        1.0
+        + (0.06 * counts["potentiator"])
+        - (0.04 * counts["diluter"])
+        + (0.08 * counts["stabilizer"])
+        - (0.04 * counts["spoiler"]),
+        0.50,
+        1.75,
+    )
+
+    metadata = {
+        "trait_effects_applied": {trait: count for trait, count in counts.items() if count > 0},
+        "item_positive_effect_scalar": round(positive_scalar, 3),
+        "item_negative_effect_scalar": round(negative_scalar, 3),
+        "item_status_duration_scalar": round(duration_scalar, 3),
+        "stability_score": stability_score,
+        "stability_band": band,
+    }
+    result_read = _herbal_trait_result_read(counts, band)
+    if result_read:
+        metadata["herbal_result_read"] = result_read
+    if band != "stable" and _herbal_item_allows_decay(output_item_id):
+        window = int(HERBAL_STABILITY_WINDOWS.get(band, HERBAL_STABILITY_WINDOWS["collapsed"]))
+        metadata["stability_window_ticks"] = window
+        metadata["breakdown_tick"] = _safe_int(getattr(sim, "tick", 0), 0) + window
+        metadata["herbal_decay"] = True
+    return metadata
 
 
 def herbal_ingredient_display_name(item_id, plant_name):
@@ -415,11 +730,26 @@ def learn_plant_trait(sim, eid, plant_id, *, source_kind="recipe"):
     actor_key = _actor_key(eid)
     rows = known_traits.setdefault(actor_key, {})
     was_new = plant_id not in rows
-    rows[plant_id] = {
-        "chemistry_class": class_id,
-        "learned_tick": _safe_int(getattr(sim, "tick", 0), 0),
-        "source_kind": str(source_kind or "recipe").strip().lower() or "recipe",
-    }
+    existing = rows.get(plant_id)
+    row = dict(existing) if isinstance(existing, Mapping) else {}
+    tick = _safe_int(getattr(sim, "tick", 0), 0)
+    source = str(source_kind or "recipe").strip().lower() or "recipe"
+    if not row.get("learned_tick"):
+        row["learned_tick"] = tick
+    row["chemistry_class"] = class_id
+    row["source_kind"] = source
+    existing_traits = [
+        _key(trait)
+        for trait in tuple(row.get("secondary_traits", ()) or ())
+        if _key(trait) in SECONDARY_TRAITS
+    ]
+    merged_traits = tuple(dict.fromkeys(tuple(existing_traits) + plant_secondary_traits(sim, plant_id)))
+    if merged_traits:
+        if tuple(existing_traits) != merged_traits:
+            row["secondary_learned_tick"] = tick
+            row["secondary_source_kind"] = source
+        row["secondary_traits"] = list(merged_traits)
+    rows[plant_id] = row
     return was_new
 
 
@@ -486,6 +816,7 @@ def _reveal_recipe_plants(sim, eid, recipe, *, prop=None, limit=2):
                 "plant_id": plant_id,
                 "plant_name": catalog.get(plant_id, {}).get("name", plant_id.replace("_", " ")),
                 "chemistry_class": assignments.get(plant_id),
+                "secondary_traits": list(plant_secondary_traits(sim, plant_id)),
             })
             break
     if len(revealed) < limit:
@@ -500,6 +831,7 @@ def _reveal_recipe_plants(sim, eid, recipe, *, prop=None, limit=2):
                 "plant_id": plant_id,
                 "plant_name": catalog.get(plant_id, {}).get("name", plant_id.replace("_", " ")),
                 "chemistry_class": assignments.get(plant_id),
+                "secondary_traits": list(plant_secondary_traits(sim, plant_id)),
             })
     return tuple(revealed)
 
@@ -633,6 +965,11 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
     item_id = INGREDIENT_ITEM_BY_FORM.get(form, "leaf_clippings")
     plant_id = _key(record.get("plant_id"))
     class_id = _key(record.get("chemistry_class")) or plant_chemistry_class(sim, plant_id)
+    secondary_traits = tuple(
+        _key(trait)
+        for trait in tuple(record.get("secondary_traits") or plant_secondary_traits(sim, plant_id) or ())
+        if _key(trait) in SECONDARY_TRAITS
+    )
     harvest_context = flora_harvest_context(sim, record)
     base_units = _harvest_units(record, tool) + int(harvest_context.get("unit_bonus", 0) or 0)
     units = max(1, int(round(float(base_units) * float(harvest_context.get("yield_factor", 1.0) or 1.0))))
@@ -649,6 +986,21 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         "source_plant_name": str(record.get("name") or plant_id.replace("_", " ")).strip(),
         "growth_form": form,
         "chemistry_class": class_id,
+        "secondary_traits": list(secondary_traits),
+        "color_key": record.get("color_key"),
+        "color_word": record.get("color_word"),
+        "render_key": record.get("render_key"),
+        "glyph": record.get("glyph"),
+        "rarity": record.get("rarity"),
+        "tags": list(record.get("tags") or ()),
+        "crossbreed_tags": list(record.get("crossbreed_tags") or ()),
+        "hybrid_generation": _safe_int(record.get("hybrid_generation"), 0),
+        "parent_plant_ids": list(record.get("parent_plant_ids") or ()),
+        "lineage": dict(record.get("lineage") or {}),
+        "dynamic_flora": bool(record.get("dynamic_flora")),
+        "stability_score": record.get("stability_score"),
+        "stability_band": record.get("stability_band"),
+        "notability": record.get("notability"),
         "harvest_method": method,
         "plant_part": str(harvest_context.get("plant_part") or "").strip().lower(),
         "bloom_state": str(harvest_context.get("bloom_state") or "").strip().lower(),
@@ -880,11 +1232,12 @@ def _experimental_mix_roll(sim, eid, selected, class_ids):
     return random.Random(f"{getattr(sim, 'seed', 0)}:{getattr(sim, 'tick', 0)}:{eid}:herbal-experiment:{instance_bits}:{class_bits}")
 
 
-def _experimental_recipe_for_mix(sim, eid, selected, class_ids):
+def _experimental_recipe_for_mix(sim, eid, selected, class_ids, trait_counts=None):
     classes = tuple(_key(class_id) for class_id in tuple(class_ids or ()) if _key(class_id))
     rng = _experimental_mix_roll(sim, eid, selected, classes)
     toxic = "toxic" in classes
-    output_item_id = WEAK_TOXIC_CONCOCTION_ITEM_ID if toxic and rng.random() < 0.55 else EXPERIMENTAL_CONCOCTION_ITEM_ID
+    weak_toxic_chance = herbal_weak_toxic_chance_for_traits(trait_counts)
+    output_item_id = WEAK_TOXIC_CONCOCTION_ITEM_ID if toxic and rng.random() < weak_toxic_chance else EXPERIMENTAL_CONCOCTION_ITEM_ID
     name = "weak toxic concoction" if output_item_id == WEAK_TOXIC_CONCOCTION_ITEM_ID else "odd herbal concoction"
     return {
         "id": "experimental_mix",
@@ -942,6 +1295,7 @@ def craft_herbal_medicine(
     experiment_result = ""
     discovered_recipe = False
     diluted_target_recipe = None
+    selected_trait_counts = {trait: 0 for trait in SECONDARY_TRAITS}
 
     if recipe is None and ingredient_instance_ids and mode == "self":
         if mode == "self" and not _has_item(inventory, MORTAR_KIT_ITEM_ID):
@@ -950,6 +1304,7 @@ def craft_herbal_medicine(
         if selected is None:
             return {"ok": False, "reason": "invalid_mix"}
         selected_classes = tuple(_entry_chemistry_class_for_actor(sim, eid, entry, require_known=False) for entry in selected)
+        selected_trait_counts = _secondary_trait_counts_from_entries(sim, selected)
         for entry in selected:
             metadata = entry.get("metadata") if isinstance(entry.get("metadata"), Mapping) else {}
             if metadata.get("source_plant_id"):
@@ -969,7 +1324,7 @@ def craft_herbal_medicine(
                 diluted_target_recipe = near_recipe
                 experiment_result = "diluted"
             else:
-                recipe = _experimental_recipe_for_mix(sim, eid, selected, selected_classes)
+                recipe = _experimental_recipe_for_mix(sim, eid, selected, selected_classes, selected_trait_counts)
                 experiment_result = "weak_toxic" if recipe["output_item_id"] == WEAK_TOXIC_CONCOCTION_ITEM_ID else "odd"
 
     if recipe is None:
@@ -995,6 +1350,7 @@ def craft_herbal_medicine(
         selected = _auto_select_ingredients(sim, eid, recipe, ingredient_source)
         if not selected:
             return {"ok": False, "reason": "no_ingredients", "recipe_id": recipe["id"]}
+    selected_trait_counts = _secondary_trait_counts_from_entries(sim, selected)
 
     fee = int(recipe.get("service_fee", 0) or 0) if mode == "herbalist" else 0
     assets = _assets_for(sim, eid)
@@ -1007,15 +1363,27 @@ def craft_herbal_medicine(
     component_payload = []
     for entry in selected:
         metadata = entry.get("metadata") if isinstance(entry.get("metadata"), Mapping) else {}
+        plant_id = _key(metadata.get("source_plant_id"))
+        secondary_traits = _entry_secondary_traits(sim, entry)
         component_payload.append({
             "item_id": entry.get("item_id"),
             "instance_id": entry.get("instance_id"),
-            "plant_id": metadata.get("source_plant_id"),
+            "plant_id": plant_id or metadata.get("source_plant_id"),
             "plant_name": metadata.get("source_plant_name"),
             "chemistry_class": metadata.get("chemistry_class"),
+            "secondary_traits": list(secondary_traits),
             "material_units": _safe_int(metadata.get("material_units"), 1),
             "quality": metadata.get("quality"),
         })
+    component_secondary_traits = tuple(
+        dict.fromkeys(
+            trait
+            for row in component_payload
+            for trait in tuple(row.get("secondary_traits", ()) or ())
+            if _key(trait) in SECONDARY_TRAITS
+        )
+    )
+    component_secondary_trait_counts = _secondary_trait_counts_from_payload(component_payload)
     owner_tag = "player" if eid == getattr(sim, "player_eid", None) else "npc"
     source_context = "crafted" if mode == "self" else "herbalist_prepared"
     output_metadata = {
@@ -1027,6 +1395,8 @@ def craft_herbal_medicine(
         "ingredient_source": str(ingredient_source_kind or "inventory").strip().lower() or "inventory",
         "component_plants": [row.get("plant_id") for row in component_payload if row.get("plant_id")],
         "component_classes": [row.get("chemistry_class") for row in component_payload if row.get("chemistry_class")],
+        "component_secondary_traits": list(component_secondary_traits),
+        "component_secondary_trait_counts": dict(component_secondary_trait_counts),
         "legal_status": str(ITEM_CATALOG.get(output_item_id, {}).get("legal_status", "legal") or "legal").strip().lower(),
     }
     if experiment_result:
@@ -1039,6 +1409,13 @@ def craft_herbal_medicine(
             output_metadata["target_recipe_name"] = diluted_target_recipe["name"]
             output_metadata["target_output_item_id"] = base_output_item_id
             output_metadata["legal_status"] = "suspicious"
+    output_metadata.update(_herbal_trait_effect_metadata(
+        sim,
+        component_secondary_trait_counts,
+        experiment_result=experiment_result,
+        mode=mode,
+        output_item_id=output_item_id,
+    ))
     source_context = str(output_metadata.get("source_context", source_context) or source_context)
     output_metadata = stamp_item_provenance(
         sim,
@@ -1058,7 +1435,11 @@ def craft_herbal_medicine(
         last_transfer_kind=source_context,
         last_holder_eid=eid,
     )
-    output_stack_max = 1 if diluted_target_recipe is not None else max(1, int(ITEM_CATALOG.get(output_item_id, {}).get("stack_max", 1) or 1))
+    output_stack_max = (
+        1
+        if diluted_target_recipe is not None or output_metadata.get("breakdown_tick")
+        else max(1, int(ITEM_CATALOG.get(output_item_id, {}).get("stack_max", 1) or 1))
+    )
     if not _inventory_can_accept(
         inventory,
         output_item_id,
@@ -1112,6 +1493,12 @@ def craft_herbal_medicine(
         "ingredient_count": len(selected),
         "ingredient_names": tuple(item_display_name_for_actor(sim, eid, entry, item_catalog=ITEM_CATALOG) for entry in selected),
         "component_plants": tuple(row.get("plant_name") or row.get("plant_id") for row in component_payload),
+        "component_secondary_traits": component_secondary_traits,
+        "trait_effects_applied": dict(output_metadata.get("trait_effects_applied") or {}),
+        "stability_score": output_metadata.get("stability_score"),
+        "stability_band": output_metadata.get("stability_band"),
+        "breakdown_tick": output_metadata.get("breakdown_tick"),
+        "herbal_result_read": output_metadata.get("herbal_result_read"),
         "credits_spent": fee,
         "mode": mode,
         "ingredient_source": str(ingredient_source_kind or "inventory").strip().lower() or "inventory",
@@ -1124,6 +1511,180 @@ def craft_herbal_medicine(
     if emit_event:
         sim.emit(Event("herbal_medicine_crafted", eid=eid, **result))
     return result
+
+
+def _entry_breakdown_tick(entry):
+    metadata = entry.get("metadata") if isinstance(entry, Mapping) else {}
+    if not isinstance(metadata, Mapping):
+        return None
+    breakdown_tick = metadata.get("breakdown_tick")
+    if breakdown_tick is None:
+        return None
+    try:
+        return int(breakdown_tick)
+    except (TypeError, ValueError):
+        return None
+
+
+def decay_herbal_mixture_entry_if_due(
+    sim,
+    entry,
+    *,
+    holder_kind="",
+    holder_eid=None,
+    property_id=None,
+    container_kind=None,
+    ground_item_id=None,
+    x=None,
+    y=None,
+    z=None,
+    emit_event=True,
+):
+    if not isinstance(entry, dict):
+        return False
+    old_item_id = _key(entry.get("item_id"))
+    if not old_item_id or old_item_id == SPOILED_HERBAL_SLURRY_ITEM_ID:
+        return False
+    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), Mapping) else {}
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    breakdown_tick = _entry_breakdown_tick(entry)
+    if breakdown_tick is None:
+        return False
+    if _safe_int(getattr(sim, "tick", 0), 0) < int(breakdown_tick):
+        return False
+    if not bool(metadata.get("herbal_decay")) and _key(metadata.get("source")) != "herbal_chemistry":
+        return False
+
+    old_name = item_display_name(old_item_id, metadata=metadata, item_catalog=ITEM_CATALOG)
+    updated = dict(metadata)
+    for key in HERBAL_DECAY_METADATA_KEYS:
+        updated.pop(key, None)
+    updated.pop("display_name", None)
+    updated.update({
+        "source": "herbal_chemistry",
+        "source_context": "herbal_breakdown",
+        "legal_status": "suspicious",
+        "decayed_from_item_id": old_item_id,
+        "decayed_from_item_name": old_name,
+        "decayed_from_recipe_id": metadata.get("recipe_id"),
+        "decayed_tick": _safe_int(getattr(sim, "tick", 0), 0),
+        "decay_holder_kind": str(holder_kind or "").strip().lower() or "unknown",
+    })
+    quantity = 1
+    entry["item_id"] = SPOILED_HERBAL_SLURRY_ITEM_ID
+    entry["quantity"] = quantity
+    entry["metadata"] = prepare_item_stack_metadata(
+        SPOILED_HERBAL_SLURRY_ITEM_ID,
+        metadata=updated,
+        quantity=quantity,
+        item_catalog=ITEM_CATALOG,
+    )
+    if emit_event:
+        sim.emit(Event(
+            "herbal_mixture_decayed",
+            item_id=SPOILED_HERBAL_SLURRY_ITEM_ID,
+            item_name=item_display_name(SPOILED_HERBAL_SLURRY_ITEM_ID, metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG),
+            old_item_id=old_item_id,
+            old_item_name=old_name,
+            instance_id=entry.get("instance_id"),
+            holder_kind=str(holder_kind or "").strip().lower() or "unknown",
+            holder_eid=holder_eid,
+            property_id=property_id,
+            container_kind=container_kind,
+            ground_item_id=ground_item_id,
+            x=x if x is not None else entry.get("x"),
+            y=y if y is not None else entry.get("y"),
+            z=z if z is not None else entry.get("z"),
+            breakdown_tick=breakdown_tick,
+            decayed_tick=_safe_int(getattr(sim, "tick", 0), 0),
+        ))
+    return True
+
+
+class HerbalMixtureDecaySystem(System):
+    """Transforms expired loaded herbal mixtures without materializing chunks."""
+
+    def __init__(self, sim, *, scan_interval_ticks=1):
+        super().__init__(sim)
+        self.scan_interval_ticks = max(1, int(scan_interval_ticks or 1))
+        self._last_scan_tick = None
+
+    def _should_scan(self):
+        tick = _safe_int(getattr(self.sim, "tick", 0), 0)
+        if self._last_scan_tick is None:
+            self._last_scan_tick = tick
+            return True
+        if tick < self._last_scan_tick:
+            self._last_scan_tick = tick
+            return True
+        if tick - int(self._last_scan_tick) >= self.scan_interval_ticks:
+            self._last_scan_tick = tick
+            return True
+        return False
+
+    def _scan_inventory_entries(self):
+        inventories = self.sim.ecs.get(Inventory)
+        for eid, inventory in tuple(inventories.items()):
+            for entry in tuple(getattr(inventory, "items", ()) or ()):
+                decay_herbal_mixture_entry_if_due(
+                    self.sim,
+                    entry,
+                    holder_kind="inventory",
+                    holder_eid=eid,
+                )
+
+    def _scan_ground_entries(self):
+        ground_items = getattr(self.sim, "ground_items", None)
+        if not isinstance(ground_items, dict):
+            return
+        for ground_item_id, entry in tuple(ground_items.items()):
+            if not isinstance(entry, dict):
+                continue
+            decay_herbal_mixture_entry_if_due(
+                self.sim,
+                entry,
+                holder_kind="ground",
+                ground_item_id=ground_item_id,
+                x=entry.get("x"),
+                y=entry.get("y"),
+                z=entry.get("z"),
+            )
+
+    def _scan_container_entries(self):
+        cache_inventories = getattr(self.sim, "cache_inventories", None)
+        if isinstance(cache_inventories, dict):
+            for property_id, entries in tuple(cache_inventories.items()):
+                for entry in tuple(entries or ()):
+                    decay_herbal_mixture_entry_if_due(
+                        self.sim,
+                        entry,
+                        holder_kind="container",
+                        property_id=property_id,
+                        container_kind="cache",
+                    )
+        inventories_by_kind = getattr(self.sim, "container_inventories", None)
+        if not isinstance(inventories_by_kind, dict):
+            return
+        for container_kind, inventories in tuple(inventories_by_kind.items()):
+            if not isinstance(inventories, dict):
+                continue
+            for property_id, entries in tuple(inventories.items()):
+                for entry in tuple(entries or ()):
+                    decay_herbal_mixture_entry_if_due(
+                        self.sim,
+                        entry,
+                        holder_kind="container",
+                        property_id=property_id,
+                        container_kind=container_kind,
+                    )
+
+    def update(self):
+        if not self._should_scan():
+            return
+        self._scan_inventory_entries()
+        self._scan_ground_entries()
+        self._scan_container_entries()
 
 
 def _remove_container_ingredient_entry(container_entries, selected_entry):

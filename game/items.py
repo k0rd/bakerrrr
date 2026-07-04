@@ -300,9 +300,27 @@ def _normalize_container_profile(value):
     bonus_slots = max(0, _int_or_default(value.get("bonus_slots"), 0))
     if bonus_slots <= 0:
         return None
-    return {
+    slot = str(value.get("slot", value.get("wear_slot", "pack")) or "pack").strip().lower() or "pack"
+    if slot not in {"pack", "body", "outer"}:
+        slot = "pack"
+    profile = {
         "bonus_slots": int(bonus_slots),
+        "slot": slot,
+        "blocks_armor": bool(value.get("blocks_armor", slot in {"body", "outer"})),
     }
+    accepted_item_ids = _string_tuple(value.get("accepted_item_ids"))
+    accepted_tags = _string_tuple(value.get("accepted_tags"))
+    rejected_tags = _string_tuple(value.get("rejected_tags"))
+    accepts_note = str(value.get("accepts_note", "") or "").strip()
+    if accepted_item_ids:
+        profile["accepted_item_ids"] = accepted_item_ids
+    if accepted_tags:
+        profile["accepted_tags"] = accepted_tags
+    if rejected_tags:
+        profile["rejected_tags"] = rejected_tags
+    if accepts_note:
+        profile["accepts_note"] = accepts_note
+    return profile
 
 
 def _normalize_throw_profile(value):

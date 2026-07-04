@@ -69,6 +69,7 @@ from game.items import (
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
 )
+from game.herbal_chemistry_runtime import secondary_trait_labels
 from game.item_semantics import (
     appraise_item_for_actor,
     item_display_name_for_actor,
@@ -486,6 +487,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("potted_plant_placed", self.on_potted_plant_placed)
         self.sim.events.subscribe("potted_plant_picked_up", self.on_potted_plant_picked_up)
         self.sim.events.subscribe("herbal_medicine_crafted", self.on_herbal_medicine_crafted)
+        self.sim.events.subscribe("herbal_mixture_decayed", self.on_herbal_mixture_decayed)
         self.sim.events.subscribe("herbal_recipe_purchased", self.on_herbal_recipe_purchased)
         self.sim.events.subscribe("hunter_party_carcass_dressed", self.on_hunter_party_carcass_dressed)
         self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
@@ -2754,6 +2756,13 @@ class EventLogSystem(System):
             text = f"You paid {credits} cr and " + text[0].lower() + text[1:]
         _log_player_feedback(self.sim, text, kind="craft")
 
+    def on_herbal_mixture_decayed(self, event):
+        if event.data.get("holder_eid") != self.player_eid:
+            return
+        old_name = str(event.data.get("old_item_name") or "herbal mixture").strip() or "herbal mixture"
+        new_name = str(event.data.get("item_name") or "spoiled herbal slurry").strip() or "spoiled herbal slurry"
+        _log_player_feedback(self.sim, f"Your {old_name} breaks down into {new_name}.", kind="inventory")
+
     def on_herbal_recipe_purchased(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -2768,8 +2777,10 @@ class EventLogSystem(System):
                 if isinstance(row, dict):
                     name = str(row.get("plant_name") or "").strip()
                     class_id = str(row.get("chemistry_class") or "").replace("_", " ").strip()
+                    trait_labels = secondary_trait_labels(row.get("secondary_traits", ()))
+                    trait_text = f" {' '.join(trait_labels)}" if trait_labels else ""
                     if name and class_id:
-                        names.append(f"{name} is {class_id}")
+                        names.append(f"{name} is {class_id}{trait_text}")
             if names:
                 suffix = " " + "; ".join(names) + "."
         _log_player_feedback(self.sim, f"You bought {recipe_name} for {credits} cr; it makes {output_name}.{suffix}", kind="commerce")
@@ -4682,6 +4693,11 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"Your pack is too full to stow {item_name}.", kind="interaction")
         elif reason == "appearance_armor_outer_active":
             _log_player_feedback(self.sim, "Armor is occupying your outer slot.", kind="interaction")
+        elif reason == "container_body_armor_active":
+            _log_player_feedback(self.sim, "Body armor is occupying the apron slot.", kind="interaction")
+        elif reason == "container_body_slot_active":
+            container_name = str(event.data.get("container_name", "worn container") or "worn container").strip()
+            _log_player_feedback(self.sim, f"{container_name} is occupying your body slot.", kind="interaction")
         elif reason == "appearance_slot_occupied":
             _log_player_feedback(self.sim, "That appearance slot is already occupied.", kind="interaction")
         elif str(reason or "").startswith("appearance_conflicts_"):

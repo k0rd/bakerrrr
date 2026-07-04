@@ -140,6 +140,7 @@ SYMBOLIC_PALETTE: tuple[SymbolicPaletteRow, ...] = (
     _row("inventory_equipped_clothing", (145, 205, 215), 153, "cyan", tags=("ui", "inventory")),
     _row("inventory_equipped_weapon", (230, 145, 95), 209, "yellow", tags=("ui", "inventory")),
     _row("inventory_equipped_consequence", (198, 160, 230), 177, "magenta", tags=("ui", "inventory")),
+    _row("inventory_stowed", (126, 218, 150), 120, "green", attrs=("bold",), tags=("ui", "inventory")),
     _row("inventory_critical_quest", (95, 230, 210), 123, "cyan", attrs=("bold",), tags=("ui", "inventory")),
     _row("projectile", (220, 110, 110), 203, "red", attrs=("bold",), tags=("fx",)),
     _row("objective", (245, 220, 110), 226, "yellow", attrs=("bold",), tags=("objective",)),

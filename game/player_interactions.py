@@ -64,10 +64,32 @@ def _item_tags_for_entry(entry, *, item_catalog=ITEM_CATALOG):
     }
 
 
-def entry_allowed_in_container(entry, *, container_kind="container", item_catalog=ITEM_CATALOG):
+def entry_allowed_in_container(entry, *, container_kind="container", item_catalog=ITEM_CATALOG, container_profile=None):
     container_kind = str(container_kind or "container").strip().lower() or "container"
     if container_kind == CAMPFIRE_HERB_CACHE_KIND:
         return bool(_item_tags_for_entry(entry, item_catalog=item_catalog).intersection(HERBAL_CACHE_ITEM_TAGS))
+    if isinstance(container_profile, dict):
+        accepted_item_ids = {
+            str(item_id or "").strip().lower()
+            for item_id in tuple(container_profile.get("accepted_item_ids", ()) or ())
+            if str(item_id or "").strip()
+        }
+        accepted_tags = {
+            str(tag or "").strip().lower()
+            for tag in tuple(container_profile.get("accepted_tags", ()) or ())
+            if str(tag or "").strip()
+        }
+        rejected_tags = {
+            str(tag or "").strip().lower()
+            for tag in tuple(container_profile.get("rejected_tags", ()) or ())
+            if str(tag or "").strip()
+        }
+        if accepted_item_ids or accepted_tags or rejected_tags:
+            item_id = str((entry or {}).get("item_id", "") or "").strip().lower()
+            tags = _item_tags_for_entry(entry, item_catalog=item_catalog)
+            if rejected_tags and tags.intersection(rejected_tags):
+                return False
+            return bool(item_id in accepted_item_ids or tags.intersection(accepted_tags))
     return True
 
 
@@ -779,6 +801,7 @@ class PlayerInteractionRuntime:
             "inventory": inventory,
             "entry": entry,
             "item_def": item_def,
+            "container_profile": container_profile,
             "instance_id": target_instance_id,
             "item_name": item_name,
             "bonus_slots": bonus_slots,
@@ -790,7 +813,12 @@ class PlayerInteractionRuntime:
         bonus_slots = max(0, _int_or_default(runtime.get("bonus_slots"), 0))
         if bonus_slots <= 0:
             return ""
-        return f"Equipped +{bonus_slots} slots"
+        profile = runtime.get("container_profile") if isinstance(runtime.get("container_profile"), dict) else {}
+        accepts_note = str(profile.get("accepts_note", "") or "").strip()
+        note = f"Equipped +{bonus_slots} slots"
+        if accepts_note:
+            note += f"; accepts {accepts_note}"
+        return note
 
     def refresh_worn_container_panel_state(self, eid, container_instance_id):
         inventory_ui = getattr(self.sim, "inventory_ui", None)
@@ -1175,6 +1203,18 @@ class PlayerInteractionRuntime:
             return False
         if _entry_stowed_container_instance(target_entry) == runtime["instance_id"]:
             _log_player_feedback(self.sim, f"{runtime['item_name']} already holds that item.", kind="interaction")
+            return False
+        if not entry_allowed_in_container(
+            target_entry,
+            container_kind="worn",
+            item_catalog=ITEM_CATALOG,
+            container_profile=runtime.get("container_profile"),
+        ):
+            accepts_note = str((runtime.get("container_profile") or {}).get("accepts_note", "") or "").strip()
+            if accepts_note:
+                _log_player_feedback(self.sim, f"The {runtime['item_name']} only holds {accepts_note}.", kind="interaction")
+            else:
+                _log_player_feedback(self.sim, f"The {runtime['item_name']} will not hold that.", kind="interaction")
             return False
         metadata = dict(target_entry.get("metadata") or {})
         metadata[ITEM_STOWED_CONTAINER_METADATA_KEY] = runtime["instance_id"]

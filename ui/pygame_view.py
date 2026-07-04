@@ -8,7 +8,7 @@ from pathlib import Path
 
 from game.appearance_palette import pygame_palette_entries
 from game.action_bindings import CONTROLLER_DEADZONE, CONTROLLER_REPEAT_DELAY, CONTROLLER_REPEAT_INTERVAL
-from game.color_words import casino_color_word, color_word_rgb
+from game.color_words import casino_color_word, color_contrast_ratio, color_word_rgb, readable_color_word_for_text, render_key_for_color_word
 from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_semantic_catalog
 from game.symbolic_palette import pygame_symbolic_palette_entries
 from game.world_palette import pygame_world_palette_entries
@@ -114,6 +114,9 @@ _INPUT_DEBUG_PATH_ENV = "BAKERRRR_INPUT_DEBUG_PATH"
 _INPUT_DEBUG_MAX_BYTES_ENV = "BAKERRRR_INPUT_DEBUG_MAX_BYTES"
 _INPUT_DEBUG_DEFAULT_PATH = Path("saves") / "debug" / "input_debug.log"
 _INPUT_DEBUG_DEFAULT_MAX_BYTES = 5 * 1024 * 1024
+_PYGAME_TEXT_CONTRAST_ENV = "BAKERRRR_PYGAME_TEXT_CONTRAST_MIN"
+_PYGAME_TEXT_CONTRAST_MIN = 3.8
+_PYGAME_TEXT_BACKGROUND = (0, 0, 0)
 
 
 def _resource_path(*parts):
@@ -125,6 +128,22 @@ def _resource_path(*parts):
 
 def _env_truthy(name):
     return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on", "debug", "trace"}
+
+
+def _env_float(name, default, *, minimum=None, maximum=None):
+    raw = str(os.getenv(name, "") or "").strip()
+    if not raw:
+        value = float(default)
+    else:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = float(default)
+    if minimum is not None:
+        value = max(float(minimum), value)
+    if maximum is not None:
+        value = min(float(maximum), value)
+    return value
 
 
 class PygameView:
@@ -204,6 +223,7 @@ class PygameView:
         self._queued_draw_calls = []
         self._draw_sequence = 0
         self._active_surface_light_tint = None
+        self._text_contrast_min = _env_float(_PYGAME_TEXT_CONTRAST_ENV, _PYGAME_TEXT_CONTRAST_MIN, minimum=1.0, maximum=7.0)
         self._semantic_catalog = None
         self._load_render_semantics()
 
@@ -5169,6 +5189,30 @@ class PygameView:
         exact = self._color_word_value(color_word)
         return exact if exact is not None else color
 
+    def _readable_text_color(self, color):
+        if not isinstance(color, str):
+            return color
+        key = color.strip().lower()
+        if not key.startswith("clothing_"):
+            return color
+        if color_contrast_ratio(self._color_value(key), _PYGAME_TEXT_BACKGROUND) >= float(self._text_contrast_min):
+            return color
+        word = key.removeprefix("clothing_")
+        readable_word = readable_color_word_for_text(
+            word,
+            background=_PYGAME_TEXT_BACKGROUND,
+            minimum_contrast=float(self._text_contrast_min),
+            include_reserved=True,
+            include_imported=True,
+            default=word,
+        )
+        if not readable_word or readable_word == word:
+            return color
+        render_key = render_key_for_color_word(readable_word, domain="clothing", default="")
+        if render_key and render_key in self.palette:
+            return render_key
+        return color
+
     def _has_attr(self, attrs, flag_name):
         flag = attr_for_name(flag_name)
         attrs = int(attrs or 0)
@@ -5562,6 +5606,7 @@ class PygameView:
         if not text:
             return 0
 
+        color = self._readable_text_color(color)
         fg = self._color_value(color)
         bg = None
         if self._has_attr(attrs, "A_REVERSE"):
@@ -5582,6 +5627,7 @@ class PygameView:
         return int(surface.get_width())
 
     def _draw_grid_text(self, x, y, text, color=None, attrs=0):
+        color = self._readable_text_color(color)
         for idx, ch in enumerate(text):
             self._draw_font_char(x + idx, y, ch, color=color, attrs=attrs)
 

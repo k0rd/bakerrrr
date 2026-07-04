@@ -311,6 +311,14 @@ def world_trait_claim_text(topic, claim_value):
         return f"{claim} groups are gearing for conflict."
     if topic == "blessing_taxonomy":
         return f"{claim} animals are said to be lucky this run."
+    if topic == "notorious_flora":
+        return f"people are talking about a notorious wild plant called {claim}."
+    if topic == "contraband_flora":
+        return f"people are watching a contraband wild plant called {claim}."
+    if topic == "suspect_flora":
+        return f"people are wary of a strange wild plant called {claim}."
+    if topic == "unusual_flora":
+        return f"people mention an unusual wild plant called {claim}."
     return f"{topic.replace('_', ' ')} -> {claim}."
 
 

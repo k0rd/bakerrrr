@@ -724,6 +724,31 @@ def _validate_items(path, report):
                     minimum=1,
                     field_name="bonus_slots",
                 )
+            if "slot" in container:
+                if _validate_non_empty_string(report, source, item_path + ["container", "slot"], container["slot"], field_name="slot"):
+                    slot = str(container["slot"]).strip().lower()
+                    if slot not in {"pack", "body", "outer"}:
+                        report.error(source, item_path + ["container", "slot"], "slot must be one of ['body', 'outer', 'pack']")
+            if "blocks_armor" in container and not isinstance(container["blocks_armor"], bool):
+                report.error(source, item_path + ["container", "blocks_armor"], "blocks_armor must be a boolean")
+            for list_key in ("accepted_item_ids", "accepted_tags", "rejected_tags"):
+                if list_key in container:
+                    _validate_string_list(
+                        report,
+                        source,
+                        item_path + ["container", list_key],
+                        container[list_key],
+                        field_name=list_key,
+                        allow_scalar=False,
+                    )
+            if "accepts_note" in container:
+                _validate_non_empty_string(
+                    report,
+                    source,
+                    item_path + ["container", "accepts_note"],
+                    container["accepts_note"],
+                    field_name="accepts_note",
+                )
 
         if "throw_profile" in item:
             throw_profile = item["throw_profile"]

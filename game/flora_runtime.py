@@ -334,6 +334,70 @@ def ensure_flora_state(sim):
     return sim.flora_patches, sim.chunk_flora_records
 
 
+def ensure_dynamic_flora_profiles(sim):
+    if sim is None:
+        return {}
+    if not isinstance(getattr(sim, "dynamic_flora_profiles", None), dict):
+        sim.dynamic_flora_profiles = {}
+    return sim.dynamic_flora_profiles
+
+
+def dynamic_flora_profile(sim, plant_id):
+    if sim is None:
+        return {}
+    plant_id = _str_key(plant_id)
+    if not plant_id:
+        return {}
+    profiles = ensure_dynamic_flora_profiles(sim)
+    profile = profiles.get(plant_id)
+    return dict(profile) if isinstance(profile, dict) else {}
+
+
+def register_dynamic_flora_profile(sim, profile):
+    if sim is None:
+        return None
+    if not isinstance(profile, dict):
+        return None
+    plant_id = _str_key(profile.get("plant_id") or profile.get("id"))
+    if not plant_id:
+        return None
+    is_dynamic = (
+        plant_id not in load_flora_catalog()
+        or str(plant_id).startswith("hybrid_")
+        or _safe_int(profile.get("hybrid_generation"), 0) > 0
+        or bool(profile.get("dynamic_flora"))
+    )
+    if not is_dynamic:
+        return None
+    row = dict(profile)
+    row["id"] = plant_id
+    row["plant_id"] = plant_id
+    row["name"] = str(row.get("name") or row.get("plant_name") or plant_id.replace("_", " ")).strip()
+    row["plant_name"] = str(row.get("plant_name") or row["name"]).strip()
+    row["growth_form"] = _str_key(row.get("growth_form"), "flower")
+    row["glyph"] = str(row.get("glyph") or DEFAULT_GLYPH_BY_FORM.get(row["growth_form"], "'"))[:1]
+    row["render_key"] = _str_key(row.get("render_key") or row.get("color_key"), DEFAULT_RENDER_KEY_BY_FORM.get(row["growth_form"], "flora_flower_pink"))
+    row["color_key"] = _str_key(row.get("color_key") or row.get("render_key"), row["render_key"])
+    row["color_word"] = _str_key(row.get("color_word"))
+    row["colors"] = tuple(_normalize_string_tuple(row.get("colors")) or (row["color_key"],))
+    row["tags"] = tuple(_normalize_string_tuple(row.get("tags")) or (row["growth_form"],))
+    row["crossbreed_tags"] = tuple(_normalize_string_tuple(row.get("crossbreed_tags")))
+    row["secondary_traits"] = tuple(_normalize_string_tuple(row.get("secondary_traits")))
+    row["chemistry_class"] = _str_key(row.get("chemistry_class"))
+    row["parent_chemistry_classes"] = tuple(_normalize_string_tuple(row.get("parent_chemistry_classes")))
+    row["parent_plant_ids"] = tuple(_normalize_string_tuple(row.get("parent_plant_ids")))
+    row["parent_line_name"] = str(row.get("parent_line_name") or "").strip()
+    row["hybrid_generation"] = _safe_int(row.get("hybrid_generation"), 0)
+    row["hybrid_signature"] = _str_key(row.get("hybrid_signature"))
+    row["lineage"] = dict(row.get("lineage") or {}) if isinstance(row.get("lineage"), dict) else {}
+    row["stability_band"] = _str_key(row.get("stability_band"))
+    row["notability"] = _str_key(row.get("notability"))
+    row["genetics"] = dict(row.get("genetics") or {}) if isinstance(row.get("genetics"), dict) else {}
+    row["dynamic_flora"] = True
+    ensure_dynamic_flora_profiles(sim)[plant_id] = row
+    return dict(row)
+
+
 def _chunk_key_from_chunk(chunk):
     if not isinstance(chunk, dict):
         return None
@@ -793,6 +857,7 @@ def register_flora_patch(sim, record):
         genetics_row = dict(catalog_row or normalized)
         genetics_row["genetics"] = genetics or catalog_row.get("genetics", {}) if isinstance(catalog_row, dict) else genetics
         normalized["genetics"] = normalize_flora_genetics(normalized.get("plant_id") or normalized.get("id"), genetics_row, seed=0)
+    register_dynamic_flora_profile(sim, normalized)
     patches[record_id] = dict(normalized)
     chunk = record.get("chunk")
     if isinstance(chunk, (tuple, list)) and len(chunk) == 2:

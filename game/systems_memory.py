@@ -56,6 +56,7 @@ class NPCMemorySystem(System):
         self.sim.events.subscribe("property_threatened", self.on_property_threatened)
         self.sim.events.subscribe("creature_hazard_triggered", self.on_creature_hazard_triggered)
         self.sim.events.subscribe("world_condition_triggered", self.on_world_condition_triggered)
+        self.sim.events.subscribe("flora_natural_rumor_seeded", self.on_flora_natural_rumor_seeded)
 
     def on_noise(self, event):
         source_eid = event.data.get("source_eid")
@@ -830,6 +831,42 @@ class NPCMemorySystem(System):
                 is_true=True,
                 via="witnessed_world_condition",
                 tone="boon" if is_positive else "danger",
+            )
+
+    def on_flora_natural_rumor_seeded(self, event):
+        topic = str(event.data.get("topic", "")).strip().lower()
+        claim = str(event.data.get("claimed_value", "")).strip().lower()
+        rx = event.data.get("x")
+        ry = event.data.get("y")
+        rz = event.data.get("z")
+        if not topic or not claim or rx is None or ry is None or rz is None:
+            return
+
+        positions = self.sim.ecs.get(Position)
+        memories = self.sim.ecs.get(NPCMemory)
+        for eid, memory in memories.items():
+            pos = positions.get(eid)
+            if not pos or pos.z != rz:
+                continue
+            dist = _manhattan(pos.x, pos.y, rx, ry)
+            if dist > 14:
+                continue
+            strength = max(0.26, 1.0 - (dist / 15.0))
+            memory.remember(
+                tick=self.sim.tick,
+                kind="world_trait",
+                strength=min(1.0, strength * 0.82),
+                topic=topic,
+                claimed_value=claim,
+                is_true=bool(event.data.get("is_true", True)),
+                via="natural_flora_rumor",
+                tone=str(event.data.get("tone") or "danger").strip().lower(),
+                plant_id=event.data.get("plant_id"),
+                plant_name=event.data.get("plant_name"),
+                notability=event.data.get("notability"),
+                hybrid_signature=event.data.get("hybrid_signature"),
+                parent_line_name=event.data.get("parent_line_name"),
+                source="natural_crossbreed",
             )
 
     def update(self):

@@ -18,7 +18,12 @@ from game.components import (
 from game.appearance_loadout import appearance_slot_rows, player_appearance_summary
 from game.flora_runtime import load_flora_catalog
 from game.human_identity import normalize_gender_identity, pronoun_display_text
-from game.herbal_chemistry_runtime import known_plant_traits_for_actor, known_recipes_for_actor, load_herbal_recipe_catalog
+from game.herbal_chemistry_runtime import (
+    known_plant_traits_for_actor,
+    known_recipes_for_actor,
+    load_herbal_recipe_catalog,
+    secondary_trait_labels,
+)
 from game.items import item_display_name
 from game.property_runtime import property_is_vehicle, vehicle_fuel_values, vehicle_label, vehicle_profile_from_property
 from game.run_pressure import pressure_snapshot
@@ -209,16 +214,31 @@ def _known_recipe_lines(sim, player_eid):
             class_id = ""
             source_kind = "learned"
             learned_tick = 0
+            secondary_traits = ()
             if isinstance(knowledge, dict):
                 class_id = str(knowledge.get("chemistry_class", "") or "").strip().lower()
+                if isinstance(knowledge.get("secondary_traits"), (list, tuple, set)):
+                    secondary_traits = tuple(knowledge.get("secondary_traits", ()) or ())
                 source_kind = _sheet_source_label(knowledge.get("source_kind"))
                 try:
                     learned_tick = int(knowledge.get("learned_tick", 0) or 0)
                 except (TypeError, ValueError):
                     learned_tick = 0
-            trait_rows.append((plant_name.lower(), learned_tick, plant_name, class_id, source_kind))
-        for _name_key, _learned_tick, plant_name, class_id, source_kind in sorted(trait_rows):
+            trait_rows.append((
+                plant_name.lower(),
+                learned_tick,
+                plant_name,
+                class_id,
+                secondary_traits,
+                source_kind,
+            ))
+        for _name_key, _learned_tick, plant_name, class_id, secondary_traits, source_kind in sorted(
+            trait_rows
+        ):
             affinity = _sheet_text_label(class_id, fallback="unknown")
+            labels = secondary_trait_labels(secondary_traits)
+            if labels:
+                affinity = f"{affinity} {' '.join(labels)}"
             lines.append(f"{_sheet_title_label(plant_name)}: {affinity} | {source_kind}")
     else:
         lines.append("No plant affinities learned yet.")

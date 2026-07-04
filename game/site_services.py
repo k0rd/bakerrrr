@@ -2810,6 +2810,7 @@ class SiteServiceSystem(System):
             ingredient_count=int(result.get("ingredient_count", 0) or 0),
             ingredient_names=tuple(result.get("ingredient_names", ()) or ()),
             component_plants=tuple(result.get("component_plants", ()) or ()),
+            component_secondary_traits=tuple(result.get("component_secondary_traits", ()) or ()),
             credits_spent=int(result.get("credits_spent", 0) or 0),
         ))
 
@@ -2883,6 +2884,7 @@ class SiteServiceSystem(System):
             ingredient_count=int(result.get("ingredient_count", 0) or 0),
             ingredient_names=tuple(result.get("ingredient_names", ()) or ()),
             component_plants=tuple(result.get("component_plants", ()) or ()),
+            component_secondary_traits=tuple(result.get("component_secondary_traits", ()) or ()),
             credits_spent=int(result.get("credits_spent", 0) or 0),
             experiment_result=result.get("experiment_result"),
             discovered_recipe=bool(result.get("discovered_recipe", False)),

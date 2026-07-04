@@ -167,6 +167,7 @@ from game.combat_systems import NPCItemUseSystem, NPCWeaponSystem, StatusEffectS
 from game.environment_hazard_system import EnvironmentalHazardSystem
 from game.fire_system import FireSystem
 from game.aerosol_trap_runtime import AerosolTrapSystem
+from game.herbal_chemistry_runtime import HerbalMixtureDecaySystem
 from game.human_identity import normalize_gender_identity, seed_player_identity_profile
 from game.world_progression_systems import (
     FinalOperationSystem,
@@ -650,6 +651,7 @@ def _register_runtime_systems(sim, view, player):
     environmental_hazard_system = EnvironmentalHazardSystem(sim)
     fire_system = FireSystem(sim)
     aerosol_trap_system = AerosolTrapSystem(sim)
+    herbal_decay_system = HerbalMixtureDecaySystem(sim)
     hunting_carcass_system = HuntingCarcassSystem(sim)
     cultivation_system = CultivationSystem(sim)
 
@@ -797,6 +799,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(cult_system)
     sim.register_system(weapon_system)
     sim.register_system(world_streaming_system)
+    sim.register_system(herbal_decay_system)
     sim.register_system(noise_system)
     sim.register_system(lighting_system)
     sim.register_system(creature_hazard_system)
