@@ -154,7 +154,7 @@ def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z
 
 def _movement_allows_auto_open(sim, eid, *, reason="move"):
     reason_key = str(reason or "").strip().lower()
-    if reason_key in {"player_move", "vehicle_move", "vehicle_momentum", "npc_vehicle_move"}:
+    if reason_key in {"player_move", "vehicle_move", "vehicle_momentum", "npc_vehicle_move", "drone_move"}:
         return False
     return True
 

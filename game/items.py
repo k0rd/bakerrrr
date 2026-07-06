@@ -3,6 +3,7 @@ import random
 from pathlib import Path
 
 from game.content_warnings import warn_content_fallback
+from game.drone_runtime import PACKED_DRONE_ITEM_ID, normalize_drone_profile, normalize_packed_drone_metadata
 from game.json_metadata import split_object_document
 from game.object_profile_runtime import normalize_object_profile, object_profile_display_text
 
@@ -1232,6 +1233,7 @@ def _normalize_item_catalog_source(source):
             "trap_profile": _normalize_trap_profile(item.get("trap_profile")),
             "substance_profile": _normalize_substance_profile(item.get("substance_profile")),
             "lead_profile": _normalize_lead_profile(item.get("lead_profile")),
+            "drone_profile": normalize_drone_profile(item.get("drone_profile"), item_id=item_id),
             "object_profile": normalize_object_profile(
                 item.get("object_profile"),
                 item_id=item_id,
@@ -1468,6 +1470,8 @@ def normalize_item_instance_metadata(item_id, metadata=None, item_catalog=None):
         merged["stored_credits"] = max(0, _int_or_default(merged.get("stored_credits"), DEFAULT_CREDSTICK_VALUE))
     if is_scratch_ticket_item(item_id):
         merged = _normalize_scratch_ticket_metadata(merged, quantity=1, item_catalog=catalog)
+    if str(item_id or "").strip().lower() == PACKED_DRONE_ITEM_ID:
+        merged = normalize_packed_drone_metadata(merged, item_catalog=catalog)
     return merged
 
 

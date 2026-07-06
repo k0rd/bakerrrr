@@ -746,6 +746,38 @@
     {
       "item_id": "transit_daypass",
       "weight": 8
+    },
+    {
+      "item_id": "drone_battery_heavy",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_chassis_c",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk3",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_remote_receiver_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_pistol_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_ammo_rack_module",
+      "weight": 1
     }
   ],
   "archetype:armory": [
@@ -1031,6 +1063,46 @@
     },
     {
       "item_id": "toxic_aerosol_canister",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_battery_heavy",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_battery_industrial",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_chassis_c",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_chassis_d",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk4",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_armor_shell_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_pistol_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_ammo_rack_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_flame_nozzle_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_fuel_tank_module",
       "weight": 1
     }
   ],
@@ -1328,6 +1400,46 @@
     {
       "item_id": "patrol_rain_shell",
       "weight": 5
+    },
+    {
+      "item_id": "drone_battery_heavy",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_chassis_c",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_chassis_d",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk3",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk4",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_remote_receiver_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_pistol_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_ammo_rack_module",
+      "weight": 1
+    },
+    {
+      "item_id": "packed_drone",
+      "weight": 1
     }
   ],
   "archetype:nightclub": [
@@ -2092,6 +2204,22 @@
     {
       "item_id": "maintenance_vest",
       "weight": 4
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_chassis_b",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk2",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_cargo_clamp_module",
+      "weight": 2
     }
   ],
   "archetype:factory": [
@@ -2158,6 +2286,26 @@
     {
       "item_id": "brick",
       "weight": 5
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_battery_heavy",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_chassis_c",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk3",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_armor_shell_module",
+      "weight": 1
     }
   ],
   "archetype:machine_shop": [
@@ -2208,6 +2356,34 @@
     {
       "item_id": "box_cutter",
       "weight": 5
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_chassis_a",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_chassis_b",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk1",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_power_core_mk2",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_light_module",
+      "weight": 2
     }
   ],
   "archetype:auto_garage": [
@@ -2278,6 +2454,30 @@
     {
       "item_id": "maintenance_vest",
       "weight": 4
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_chassis_b",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_chassis_c",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_power_core_mk2",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_remote_receiver_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_cargo_clamp_module",
+      "weight": 1
     }
   ],
   "archetype:freight_depot": [
@@ -2324,6 +2524,26 @@
     {
       "item_id": "bulk_light_rounds",
       "weight": 3
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_chassis_b",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk2",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_cargo_clamp_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 1
     }
   ],
   "archetype:bank": [
@@ -2654,6 +2874,38 @@
     {
       "item_id": "brick",
       "weight": 4
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_chassis_a",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_chassis_b",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk1",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_remote_receiver_module",
+      "weight": 2
+    },
+    {
+      "item_id": "packed_drone",
+      "weight": 1
     }
   ],
   "archetype:chop_shop": [
@@ -2832,6 +3084,42 @@
     {
       "item_id": "maintenance_vest",
       "weight": 5
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_battery_heavy",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_chassis_b",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_chassis_c",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk2",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_remote_receiver_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_pistol_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_ammo_rack_module",
+      "weight": 1
+    },
+    {
+      "item_id": "packed_drone",
+      "weight": 1
     }
   ],
   "archetype:junk_market": [
@@ -2918,6 +3206,34 @@
     {
       "item_id": "water_purifier_tabs",
       "weight": 5
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_chassis_a",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk1",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 1
+    },
+    {
+      "item_id": "packed_drone",
+      "weight": 1
     }
   ],
   "archetype:soup_kitchen": [
@@ -3026,6 +3342,26 @@
     {
       "item_id": "med_gel",
       "weight": 8
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_mapping_procedure_module",
+      "weight": 2
     }
   ],
   "archetype:roadhouse": [
@@ -3130,6 +3466,22 @@
     {
       "item_id": "varmint_rifle",
       "weight": 2
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_mapping_procedure_module",
+      "weight": 1
     }
   ],
   "archetype:ferry_post": [
@@ -3152,6 +3504,22 @@
     {
       "item_id": "protein_wrap",
       "weight": 10
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 1
     }
   ],
   "archetype:tide_station": [
@@ -3174,6 +3542,22 @@
     {
       "item_id": "city_pass_token",
       "weight": 10
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_mapping_procedure_module",
+      "weight": 1
     }
   ],
   "archetype:salvage_camp": [
@@ -3228,6 +3612,34 @@
     {
       "item_id": "water_purifier_tabs",
       "weight": 5
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 5
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_chassis_a",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_chassis_b",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk1",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 2
+    },
+    {
+      "item_id": "packed_drone",
+      "weight": 1
     }
   ],
   "archetype:work_shed": [
@@ -3274,6 +3686,22 @@
     {
       "item_id": "cutproof_apron",
       "weight": 4
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_power_core_mk1",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_light_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_chassis_a",
+      "weight": 1
     }
   ],
   "archetype:pump_house": [
@@ -3316,6 +3744,22 @@
     {
       "item_id": "glass_bottle",
       "weight": 4
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_light_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_power_core_mk1",
+      "weight": 1
     }
   ],
   "archetype:field_camp": [
@@ -3362,6 +3806,26 @@
     {
       "item_id": "glass_bottle",
       "weight": 3
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_chassis_a",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_mapping_procedure_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 1
     }
   ]
 }

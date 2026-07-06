@@ -2030,6 +2030,142 @@ class RenderSystem(System):
             )
         return True
 
+    def _draw_drone_command_card(self, drone_command_ui, *, map_w, map_h, modal_theme):
+        if not isinstance(drone_command_ui, dict) or not bool(drone_command_ui.get("open")):
+            return False
+        map_w = int(map_w)
+        map_h = int(map_h)
+        if map_w < 36 or map_h < 9:
+            return False
+        panel_w = min(74, map_w - 2)
+        panel_w = max(34, panel_w)
+        body_w = max(12, _view_text_wrap_width(self.view, panel_w - 4))
+        raw_lines = list(drone_command_ui.get("status_lines", ()) or [])
+        feedback = str(drone_command_ui.get("feedback", "") or "").strip()
+        camera_open = bool(drone_command_ui.get("camera_open"))
+        camera_mode = str(drone_command_ui.get("camera_mode", "inspect") or "inspect").strip().lower()
+        camera_inspect = str(drone_command_ui.get("camera_inspect_text", "") or "").strip()
+        hint = (
+            "Attack: move cursor  A/Enter fire  X inspect  Esc command"
+            if camera_open and camera_mode == "attack" else
+            "Camera: move cursor  X/Enter inspect  Esc command  G close"
+            if camera_open else
+            "Move: directions  Cycle: [/]  A attack  X camera  H/F/R/M intent  G/Esc close"
+        )
+        body_lines = ["Drone Attack" if camera_open and camera_mode == "attack" else "Drone Camera" if camera_open else "Drone Command"]
+        for line in raw_lines:
+            body_lines.extend(_wrap_display_lines(str(line), body_w, max_lines=2))
+        if camera_open and camera_inspect:
+            body_lines.extend(_wrap_display_lines(camera_inspect, body_w, max_lines=2))
+        if feedback:
+            body_lines.extend(_wrap_display_lines(feedback, body_w, max_lines=2))
+        body_lines.extend(_wrap_display_lines(hint, body_w, max_lines=2))
+        max_body = max(3, min(12, map_h - 3))
+        body_lines = body_lines[:max_body]
+        panel_h = len(body_lines) + 2
+        panel_x = 1
+        panel_y = max(0, map_h - panel_h - 1)
+        self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
+        for idx, line in enumerate(body_lines):
+            if idx == 0:
+                self.view.draw_text(
+                    panel_x + 2,
+                    panel_y + 1 + idx,
+                    _clip(str(line), body_w),
+                    color=self._theme_color(modal_theme, "title", "objective"),
+                )
+                continue
+            self._draw_display_line(panel_x + 2, panel_y + 1 + idx, _clip_display_line(line, body_w), body_w)
+        return True
+
+    def _draw_drone_sheet_modal(self, drone_sheet_ui, *, screen_w, map_h, modal_theme):
+        if not isinstance(drone_sheet_ui, dict) or not bool(drone_sheet_ui.get("open")):
+            return False
+        screen_w = int(screen_w)
+        map_h = int(map_h)
+        if screen_w < 48 or map_h < 12:
+            return False
+
+        def _local_clip(text, width):
+            text = str(text)
+            width = int(max(0, width))
+            if len(text) <= width:
+                return text
+            if width <= 3:
+                return text[:width]
+            return text[: width - 3] + "..."
+
+        panel_w = min(screen_w - 4, _modal_panel_width(screen_w, fraction=0.75, min_width=58))
+        panel_x = max(0, (screen_w - panel_w) // 2)
+        panel_h = max(12, min(map_h, int(round(map_h * 0.82))))
+        panel_y = max(0, (map_h - panel_h) // 2)
+        body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
+        row_cell_w, row_w = _modal_body_widths(self.view, panel_w, horizontal_padding=4)
+        self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
+
+        tab = str(drone_sheet_ui.get("tab", "status") or "status").strip().lower() or "status"
+        cargo_side = str(drone_sheet_ui.get("cargo_side", "pack") or "pack").strip().lower() or "pack"
+        module_side = str(drone_sheet_ui.get("module_side", "drone") or "drone").strip().lower() or "drone"
+        title = " Drone Sheet "
+        self.view.draw_text(panel_x + 2, panel_y, _local_clip(title, body_w), color=self._theme_color(modal_theme, "title", "objective"))
+        tab_labels = []
+        tab_ids = tuple(drone_sheet_ui.get("tabs", ()) or ("status", "cargo", "battery", "modules", "schematic"))
+        for idx, tab_id in enumerate(tab_ids, start=1):
+            label = tab_id.upper() if tab_id == tab else tab_id
+            tab_labels.append(f"{idx}:{label}")
+        tab_line = "Tabs " + "  ".join(tab_labels)
+        if tab == "cargo":
+            tab_line += f" | side {cargo_side}"
+        if tab == "modules":
+            tab_line += f" | side {module_side}"
+        self.view.draw_text(panel_x + 2, panel_y + 1, _local_clip(tab_line, body_w), color=self._theme_color(modal_theme, "muted"))
+
+        eligible = list(drone_sheet_ui.get("eligible", ()) or ())
+        visible_start = max(0, int(drone_sheet_ui.get("visible_start", 0) or 0))
+        visible = eligible[visible_start: visible_start + 4]
+        slot_bits = []
+        for row in visible:
+            marker = "*" if bool(row.get("selected")) else "-"
+            access = "adj" if bool(row.get("accessible")) else f"d{row.get('distance', 0)}"
+            slot_bits.append(f"{marker}{row.get('label', 'drone')}#{row.get('eid')} {access}")
+        slot_line = "Drones: " + (" | ".join(slot_bits) if slot_bits else "none")
+        self._draw_display_line(panel_x + 2, panel_y + 2, _clip_display_line(slot_line, body_w), body_cell_w)
+
+        rows = list(drone_sheet_ui.get("rows", ()) or [])
+        selected_index = max(0, min(int(drone_sheet_ui.get("selected_index", 0) or 0), len(rows) - 1)) if rows else 0
+        body_top = panel_y + 4
+        footer_y = panel_y + panel_h - 2
+        list_h = max(1, footer_y - body_top - 1)
+        display_rows = []
+        row_anchors = []
+        for idx, row in enumerate(rows):
+            label = str(row.get("label", row) if isinstance(row, dict) else row)
+            prefix = "> " if idx == selected_index else "  "
+            row_anchors.append(len(display_rows))
+            wrapped = _wrap_display_lines(prefix + label, row_w, max_lines=2) if label.strip() else [prefix.strip()]
+            display_rows.extend(wrapped)
+        scroll = max(0, int(drone_sheet_ui.get("scroll", 0) or 0))
+        if row_anchors and selected_index < len(row_anchors):
+            anchor = row_anchors[selected_index]
+            if anchor < scroll:
+                scroll = anchor
+            elif anchor >= scroll + list_h:
+                scroll = max(0, anchor - list_h + 1)
+        max_scroll = max(0, len(display_rows) - list_h)
+        scroll = max(0, min(scroll, max_scroll))
+        drone_sheet_ui["scroll"] = scroll
+        for idx, line in enumerate(display_rows[scroll: scroll + list_h]):
+            self._draw_display_line(panel_x + 2, body_top + idx, _clip_display_line(line, row_w), row_cell_w)
+        if not display_rows:
+            self.view.draw_text(panel_x + 2, body_top, "(empty)", color=self._theme_color(modal_theme, "muted"))
+
+        feedback = str(drone_sheet_ui.get("feedback", "") or "").strip()
+        if feedback:
+            self._draw_display_line(panel_x + 2, footer_y - 1, _clip_display_line(feedback, body_w), body_cell_w)
+        hint = "1-5 tabs  [/] drone  Arrows select/side  Enter/U edit  G/Esc close"
+        self.view.draw_text(panel_x + 2, footer_y, _local_clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
+        return True
+
     def _dialog_header_line(self, dialog_ui):
         dialog_ui = dialog_ui if isinstance(dialog_ui, dict) else {}
         title = str(dialog_ui.get("title", "Conversation")).strip() or "Conversation"
@@ -2169,6 +2305,23 @@ class RenderSystem(System):
             "selected_index": 0,
             "scroll": 0,
         })
+        drone_command_ui = getattr(self.sim, "drone_command_ui", {
+            "open": False,
+            "selected_drone_eid": None,
+            "eligible": [],
+            "status_lines": [],
+            "feedback": "",
+        })
+        drone_sheet_ui = getattr(self.sim, "drone_sheet_ui", {
+            "open": False,
+            "selected_drone_eid": None,
+            "eligible": [],
+            "tab": "status",
+            "cargo_side": "pack",
+            "module_side": "drone",
+            "rows": [],
+            "feedback": "",
+        })
         character_ui = getattr(self.sim, "character_ui", {
             "open": False,
             "title": "Character Sheet",
@@ -2195,6 +2348,8 @@ class RenderSystem(System):
                 casino_ui,
                 dialog_ui,
                 action_menu_ui,
+                drone_command_ui,
+                drone_sheet_ui,
                 help_ui,
                 character_ui,
                 report_ui,
@@ -4012,6 +4167,18 @@ class RenderSystem(System):
             active_z=active_z,
             zoom_mode=zoom_mode,
             panels_open=blocking_panel_open,
+        )
+        self._draw_drone_command_card(
+            drone_command_ui,
+            map_w=map_w,
+            map_h=map_h,
+            modal_theme=modal_theme,
+        )
+        self._draw_drone_sheet_modal(
+            drone_sheet_ui,
+            screen_w=screen_w,
+            map_h=map_h,
+            modal_theme=modal_theme,
         )
         if (
             isinstance(action_menu_ui, dict)

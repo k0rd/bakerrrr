@@ -515,6 +515,27 @@ class EventLogSystem(System):
         self.sim.events.subscribe("item_drop_blocked", self.on_item_drop_blocked)
         self.sim.events.subscribe("item_used", self.on_item_used)
         self.sim.events.subscribe("item_use_blocked", self.on_item_use_blocked)
+        self.sim.events.subscribe("drone_deployed", self.on_drone_deployed)
+        self.sim.events.subscribe("drone_picked_up", self.on_drone_picked_up)
+        self.sim.events.subscribe("drone_moved", self.on_drone_moved)
+        self.sim.events.subscribe("drone_move_blocked", self.on_drone_move_blocked)
+        self.sim.events.subscribe("drone_destroyed", self.on_drone_destroyed)
+        self.sim.events.subscribe("drone_command_opened", self.on_drone_command_opened)
+        self.sim.events.subscribe("drone_command_blocked", self.on_drone_command_blocked)
+        self.sim.events.subscribe("drone_commanded", self.on_drone_commanded)
+        self.sim.events.subscribe("drone_weapon_fired", self.on_drone_weapon_fired)
+        self.sim.events.subscribe("drone_weapon_blocked", self.on_drone_weapon_blocked)
+        self.sim.events.subscribe("drone_procedure_ran", self.on_drone_procedure_ran)
+        self.sim.events.subscribe("drone_procedure_blocked", self.on_drone_procedure_blocked)
+        self.sim.events.subscribe("drone_sheet_opened", self.on_drone_sheet_opened)
+        self.sim.events.subscribe("drone_sheet_blocked", self.on_drone_sheet_blocked)
+        self.sim.events.subscribe("drone_cargo_transferred", self.on_drone_cargo_transferred)
+        self.sim.events.subscribe("drone_battery_swapped", self.on_drone_battery_swapped)
+        self.sim.events.subscribe("drone_module_installed", self.on_drone_module_installed)
+        self.sim.events.subscribe("drone_module_removed", self.on_drone_module_removed)
+        self.sim.events.subscribe("drone_chassis_swapped", self.on_drone_chassis_swapped)
+        self.sim.events.subscribe("drone_power_core_swapped", self.on_drone_power_core_swapped)
+        self.sim.events.subscribe("drone_paint_changed", self.on_drone_paint_changed)
         self.sim.events.subscribe("aerosol_trap_placed", self.on_aerosol_trap_placed)
         self.sim.events.subscribe("aerosol_trap_triggered", self.on_aerosol_trap_triggered)
         self.sim.events.subscribe("report_device_used", self.on_report_device_used)
@@ -4383,8 +4404,352 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, "No item on or next to you to pick up.", kind="pickup")
         elif reason == "inventory_full":
             _log_player_feedback(self.sim, f"Inventory is full. Cannot pick up {item_name}.", kind="pickup")
+        elif reason == "drone_remove_failed":
+            _log_player_feedback(self.sim, f"{item_name} would not pack up cleanly.", kind="pickup")
         else:
             _log_player_feedback(self.sim, f"You cannot pick up {item_name} right now.", kind="pickup")
+
+    def _event_drone_label(self, event):
+        chassis_class = str(event.data.get("chassis_class", "") or "").strip().upper()
+        if chassis_class:
+            return f"{chassis_class}-class drone"
+        return str(event.data.get("item_name", event.data.get("item_id", "drone")) or "drone").strip()
+
+    def on_drone_deployed(self, event):
+        eid = event.data.get("eid")
+        drone_label = self._event_drone_label(event)
+        if eid == self.player_eid:
+            _log_player_feedback(self.sim, f"Deployed {drone_label}.", kind="interaction")
+            return
+
+        if not (
+            self._player_can_perceive_entity(eid)
+            or self._player_can_perceive_event_position(event)
+        ):
+            return
+        npc_name = self._npc_label(eid)
+        self._log_npc_message(eid, f"{npc_name} deployed {drone_label}.", channel="general")
+
+    def on_drone_picked_up(self, event):
+        eid = event.data.get("eid")
+        drone_label = self._event_drone_label(event)
+        if eid == self.player_eid:
+            _log_player_feedback(self.sim, f"Packed up {drone_label}.", kind="pickup")
+            return
+
+        if not (
+            self._player_can_perceive_entity(eid)
+            or self._player_can_perceive_event_position(event)
+        ):
+            return
+        npc_name = self._npc_label(eid)
+        self._log_npc_message(eid, f"{npc_name} packed up {drone_label}.", channel="general")
+
+    def on_drone_moved(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        drone_label = self._event_drone_label(event)
+        if eid == self.player_eid:
+            charge = _int_or_default(event.data.get("battery_charge"), 0)
+            max_charge = _int_or_default(event.data.get("battery_charge_max"), 0)
+            suffix = f" ({charge}/{max_charge} charge)" if max_charge > 0 else ""
+            _log_player_feedback(self.sim, f"{drone_label} moved{suffix}.", kind="interaction")
+            return
+
+        if not self._player_can_perceive_event_position(event):
+            return
+        self._log_npc_message(eid, f"{drone_label} rolls nearby.", channel="general")
+
+    def on_drone_move_blocked(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        messages = {
+            "invalid_direction": f"{drone_label} needs a single cardinal move.",
+            "not_deployed": "No deployed drone responds.",
+            "not_controller": f"{drone_label} does not answer your controller.",
+            "missing_position": f"{drone_label} has no usable position.",
+            "battery_depleted": f"{drone_label}'s battery is depleted.",
+            "no_range_anchor": f"{drone_label} has no range anchor.",
+            "no_range": f"{drone_label} has no usable range.",
+            "out_of_range": f"{drone_label} would exceed its range.",
+            "active_fire": f"{drone_label} refuses the burning tile.",
+            "armed_trap": f"{drone_label} refuses the armed trap.",
+            "blocked_tile": f"{drone_label} cannot enter that tile.",
+            "closed_door": f"{drone_label} is blocked by a closed door.",
+        }
+        if reason.startswith("blocked_entity"):
+            message = f"{drone_label} is blocked."
+        else:
+            message = messages.get(reason, f"{drone_label} cannot move there.")
+        _log_player_feedback(self.sim, message, kind="interaction")
+
+    def on_drone_destroyed(self, event):
+        owner_eid = event.data.get("owner_eid")
+        controller_eid = event.data.get("controller_eid")
+        source_eid = event.data.get("source_eid")
+        drone_label = self._event_drone_label(event)
+        dropped = len(tuple(event.data.get("dropped_items", ()) or ()))
+        destroyed = len(tuple(event.data.get("destroyed_items", ()) or ()))
+        pieces = []
+        if dropped:
+            pieces.append(f"{dropped} left")
+        if destroyed:
+            pieces.append(f"{destroyed} lost")
+        suffix = f" Parts scatter ({', '.join(pieces)})." if pieces else ""
+        if self.player_eid in {owner_eid, controller_eid, source_eid}:
+            _log_player_feedback(self.sim, f"{drone_label} is destroyed.{suffix}", kind="danger")
+            return
+        if not self._player_can_perceive_event_position(event):
+            return
+        self._log(f"{drone_label} is destroyed.{suffix}", channel="general", priority="normal")
+
+    def on_drone_command_opened(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        count = _int_or_default(event.data.get("count"), 1)
+        suffix = f" ({count} available)" if count > 1 else ""
+        _log_player_feedback(self.sim, f"Drone command linked to {drone_label}{suffix}.", kind="interaction")
+
+    def on_drone_command_blocked(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        messages = {
+            "ui_busy": "Close the current panel before opening drone command.",
+            "no_commandable_drone": "No deployed drone with a remote receiver is commandable here.",
+            "selected_unavailable": "The selected drone is no longer available.",
+            "not_deployed": "No deployed drone responds.",
+            "not_controller": f"{drone_label} does not answer your controller.",
+            "no_remote_control": f"{drone_label} has no remote receiver.",
+            "unknown_command": f"{drone_label} does not know that command.",
+        }
+        _log_player_feedback(self.sim, messages.get(reason, f"{drone_label} cannot accept commands right now."), kind="interaction")
+
+    def on_drone_commanded(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        command = str(event.data.get("command", "") or "").strip().lower()
+        if command == "hold":
+            message = f"{drone_label} holds position."
+        elif command == "follow":
+            message = f"{drone_label} marks you as follow target."
+        elif command == "return":
+            message = f"{drone_label} marks home as return target."
+        elif command == "mapping":
+            message = f"{drone_label} starts autonomous mapping."
+        else:
+            message = f"{drone_label} accepts the command."
+        _log_player_feedback(self.sim, message, kind="interaction")
+
+    def on_drone_weapon_fired(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        drone_label = self._event_drone_label(event)
+        weapon = str(event.data.get("weapon_kind", "weapon") or "weapon").strip().lower()
+        remaining = _int_or_default(event.data.get("resource_remaining"), 0)
+        resource_key = str(event.data.get("resource_key", "charge") or "charge").strip().replace("_", " ")
+        if eid == self.player_eid:
+            _log_player_feedback(
+                self.sim,
+                f"{drone_label} fires {weapon} ({remaining} {resource_key} left).",
+                kind="danger",
+            )
+            return
+        if not self._player_can_perceive_event_position(event):
+            return
+        self._log(f"{drone_label} fires {weapon}.", channel="general", priority="normal")
+
+    def on_drone_weapon_blocked(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        messages = {
+            "not_deployed": "No deployed drone weapon responds.",
+            "not_controller": f"{drone_label} does not answer your controller.",
+            "no_remote_control": f"{drone_label} has no remote receiver.",
+            "no_camera": f"{drone_label} needs a camera or sensor to aim.",
+            "camera_unavailable": f"{drone_label}'s camera cannot guide a shot.",
+            "no_camera_los": f"{drone_label}'s camera has no line of sight.",
+            "missing_weapon": f"{drone_label} has no armed weapon module.",
+            "missing_ammo": f"{drone_label} needs an ammo rack.",
+            "missing_fuel": f"{drone_label} needs a fuel tank.",
+            "ammo_depleted": f"{drone_label}'s ammo rack is empty.",
+            "fuel_depleted": f"{drone_label}'s fuel tank is empty.",
+            "battery_depleted": f"{drone_label}'s battery cannot power that shot.",
+            "cooldown": f"{drone_label}'s weapon is still cycling.",
+            "missing_target": "No target is selected.",
+            "no_target": "No target is under the drone cursor.",
+            "invalid_target": "That is not a valid drone target.",
+            "blocked_line": f"{drone_label}'s shot is blocked.",
+            "out_of_range": f"{drone_label}'s target is out of range.",
+            "wrong_floor": f"{drone_label} cannot fire across floors.",
+        }
+        _log_player_feedback(self.sim, messages.get(reason, f"{drone_label} cannot fire right now."), kind="interaction")
+
+    def on_drone_procedure_ran(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        procedure = str(event.data.get("procedure_key", "") or "").strip().lower()
+        action = str(event.data.get("action", "") or "").strip().lower()
+        if procedure == "mapping":
+            learned = _int_or_default(event.data.get("learned_count"), 0)
+            if learned > 0:
+                _log_player_feedback(self.sim, f"{drone_label} maps {learned} new cells.", kind="interaction")
+            return
+        if procedure == "return" and bool(event.data.get("arrived")):
+            _log_player_feedback(self.sim, f"{drone_label} is back at its home point.", kind="interaction")
+            return
+        if procedure == "hold" and action == "hold":
+            return
+
+    def on_drone_procedure_blocked(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        procedure_label = str(event.data.get("procedure_label", event.data.get("procedure_key", "procedure")) or "procedure").strip()
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        messages = {
+            "unknown_procedure": f"{drone_label} does not know the {procedure_label} procedure.",
+            "procedure_not_implemented": f"{drone_label} cannot run {procedure_label} yet.",
+            "missing_controller": f"{drone_label} has no controller for {procedure_label}.",
+            "missing_position": f"{drone_label} has no usable position for {procedure_label}.",
+            "missing_target": f"{drone_label} has no target for {procedure_label}.",
+            "missing_home": f"{drone_label} has no home point for {procedure_label}.",
+            "wrong_floor": f"{drone_label} cannot run {procedure_label} across floors.",
+            "no_step": f"{drone_label} cannot find a step for {procedure_label}.",
+            "missing_follow": f"{drone_label} needs a follow procedure module.",
+            "missing_mapping": f"{drone_label} needs a mapping procedure module.",
+            "no_mapping_procedure": f"{drone_label} needs a mapping procedure module.",
+            "no_camera": f"{drone_label} needs a camera or sensor for {procedure_label}.",
+            "no_radio": f"{drone_label} needs radio/comms to send autonomous mapping.",
+            "battery_depleted": f"{drone_label}'s battery is depleted.",
+            "no_range_anchor": f"{drone_label} has no range anchor.",
+            "no_range": f"{drone_label} has no usable range.",
+            "out_of_range": f"{drone_label} is out of range.",
+        }
+        _log_player_feedback(self.sim, messages.get(reason, f"{drone_label} cannot run {procedure_label}."), kind="interaction")
+
+    def on_drone_sheet_opened(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        count = _int_or_default(event.data.get("count"), 1)
+        suffix = f" ({count} available)" if count > 1 else ""
+        _log_player_feedback(self.sim, f"Drone sheet opened for {drone_label}{suffix}.", kind="interaction")
+
+    def on_drone_sheet_blocked(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        messages = {
+            "ui_busy": "Close the current panel before opening the drone sheet.",
+            "no_manageable_drone": "No deployed drone is available to manage here.",
+            "selected_unavailable": "The selected drone is no longer available.",
+            "not_adjacent": f"Stand next to {drone_label} for physical work.",
+            "no_cargo_module": f"{drone_label} has no cargo module.",
+            "drone_cargo_full": f"{drone_label}'s cargo is full.",
+            "inventory_full": "Your pack has no room for the removed part or cargo.",
+            "missing_inventory": "No usable inventory is available.",
+            "item_unavailable": "That item is no longer available.",
+            "battery_unavailable": "That spare battery is no longer available.",
+            "not_battery": "That is not a drone battery.",
+            "incompatible_battery": f"That battery does not fit {drone_label}.",
+            "module_unavailable": "That module is no longer available.",
+            "not_module": "That is not a drone module.",
+            "invalid_loadout": f"That edit would make {drone_label}'s loadout invalid.",
+            "module_remove_failed": "The module could not be removed from your pack.",
+            "chassis_unavailable": "That chassis is no longer available.",
+            "not_chassis": "That is not a drone chassis.",
+            "chassis_remove_failed": "The chassis could not be removed from your pack.",
+            "power_center_unavailable": "That power core is no longer available.",
+            "not_power_center": "That is not a drone power core.",
+            "power_center_remove_failed": "The power core could not be removed from your pack.",
+            "invalid_paint": "That paint color is not available yet.",
+            "invalid_paint_key": "That paint channel is not available.",
+        }
+        _log_player_feedback(self.sim, messages.get(reason, f"{drone_label} cannot be managed right now."), kind="interaction")
+
+    def on_drone_cargo_transferred(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "item")) or "item").strip()
+        quantity = _int_or_default(event.data.get("quantity"), 1)
+        suffix = f" x{quantity}" if quantity != 1 else ""
+        direction = str(event.data.get("direction", "") or "").strip().lower()
+        if direction == "to_pack":
+            message = f"Recovered {item_name}{suffix} from {drone_label}."
+        else:
+            message = f"Loaded {item_name}{suffix} onto {drone_label}."
+        _log_player_feedback(self.sim, message, kind="interaction")
+
+    def on_drone_battery_swapped(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        item_name = str(event.data.get("item_name", event.data.get("new_battery_item_id", "battery")) or "battery").strip()
+        charge = _int_or_default(event.data.get("battery_charge"), 0)
+        max_charge = _int_or_default(event.data.get("battery_charge_max"), 0)
+        suffix = f" ({charge}/{max_charge} charge)" if max_charge > 0 else ""
+        _log_player_feedback(self.sim, f"Swapped {item_name} into {drone_label}{suffix}.", kind="interaction")
+
+    def on_drone_module_installed(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "module")) or "module").strip()
+        _log_player_feedback(self.sim, f"Installed {item_name} on {drone_label}.", kind="interaction")
+
+    def on_drone_module_removed(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "module")) or "module").strip()
+        _log_player_feedback(self.sim, f"Removed {item_name} from {drone_label}.", kind="interaction")
+
+    def on_drone_chassis_swapped(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "chassis")) or "chassis").strip()
+        _log_player_feedback(self.sim, f"Swapped {drone_label}'s chassis to {item_name}.", kind="interaction")
+
+    def on_drone_power_core_swapped(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "power core")) or "power core").strip()
+        _log_player_feedback(self.sim, f"Swapped {drone_label}'s power core to {item_name}.", kind="interaction")
+
+    def on_drone_paint_changed(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        paint_key = str(event.data.get("paint_key", "") or "").replace("_", " ").strip() or "paint"
+        color = str(event.data.get("paint_color", "") or "").strip() or "new color"
+        _log_player_feedback(self.sim, f"Set {drone_label}'s {paint_key} to {color}.", kind="interaction")
 
     def on_item_dropped(self, event):
         eid = event.data.get("eid")
@@ -4708,6 +5073,14 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{item_name} has no effect right now.", kind="interaction")
         elif reason == "consume_failed":
             _log_player_feedback(self.sim, f"{item_name} failed before it took effect.", kind="interaction")
+        elif reason == "drone_invalid_loadout":
+            errors = tuple(event.data.get("loadout_errors", ()) or ())
+            detail = str(errors[0]) if errors else "its packed loadout is invalid"
+            _log_player_feedback(self.sim, f"{item_name} will not deploy: {detail}.", kind="interaction")
+        elif reason == "drone_no_deploy_tile":
+            _log_player_feedback(self.sim, f"{item_name} needs open adjacent floor.", kind="interaction")
+        elif reason == "drone_remove_failed":
+            _log_player_feedback(self.sim, f"{item_name} would not leave your pack.", kind="interaction")
         elif str(reason or "").startswith("trap_"):
             trap_reason = str(reason or "").removeprefix("trap_")
             if trap_reason == "blocked_tile":

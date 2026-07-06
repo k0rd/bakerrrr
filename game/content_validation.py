@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from game.drone_runtime import DRONE_CHASSIS_CLASSES, DRONE_PROFILE_KINDS
 from game.flora_genetics import GENETICS_SCHEMA_VERSION, normalize_flora_genetics, validate_flora_genetics
 from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_document
 from game.lighting import LIGHT_COLOR_PROFILES
@@ -425,6 +426,146 @@ def _validate_float_pair(report, source, path, value, *, minimum=None, maximum=N
     return True
 
 
+def _validate_drone_chassis_class(report, source, path, value, *, field_name="chassis_class"):
+    if not _validate_non_empty_string(report, source, path, value, field_name=field_name):
+        return False
+    if str(value).strip().upper() not in DRONE_CHASSIS_CLASSES:
+        report.error(source, path, f"{field_name} must be one of {list(DRONE_CHASSIS_CLASSES)}")
+        return False
+    return True
+
+
+def _validate_drone_compatible_chassis(report, source, path, value, *, require_non_empty=True):
+    values = _validate_string_list(
+        report,
+        source,
+        path,
+        value,
+        field_name="compatible_chassis",
+        allow_scalar=False,
+        require_non_empty=require_non_empty,
+    )
+    for index, chassis_class in enumerate(values):
+        if str(chassis_class).strip().upper() not in DRONE_CHASSIS_CLASSES:
+            report.error(source, path + [index], f"compatible chassis must be one of {list(DRONE_CHASSIS_CLASSES)}")
+    return values
+
+
+def _validate_drone_visible_overlay(report, source, path, value):
+    if not _expect_type(report, source, path, value, dict, "an object"):
+        return
+    if "glyph" in value:
+        if _validate_non_empty_string(report, source, path + ["glyph"], value.get("glyph"), field_name="glyph"):
+            if len(str(value.get("glyph"))) > 1:
+                report.warn(source, path + ["glyph"], "glyph will be truncated to the first character at runtime")
+            _validate_reserved_glyph_literal(report, source, path + ["glyph"], value.get("glyph"), owner_label="drone profiles")
+    if "color" in value:
+        _validate_non_empty_string(report, source, path + ["color"], value.get("color"), field_name="color")
+    if "label" in value:
+        _validate_non_empty_string(report, source, path + ["label"], value.get("label"), field_name="label")
+
+
+def _validate_drone_profile(report, source, item_path, profile):
+    profile_path = item_path + ["drone_profile"]
+    if not _expect_type(report, source, profile_path, profile, dict, "an object"):
+        return
+    kind = profile.get("kind")
+    if not _validate_non_empty_string(report, source, profile_path + ["kind"], kind, field_name="kind"):
+        return
+    kind = str(kind).strip().lower()
+    if kind not in DRONE_PROFILE_KINDS:
+        report.error(source, profile_path + ["kind"], f"kind must be one of {list(DRONE_PROFILE_KINDS)}")
+        return
+
+    if kind == "chassis":
+        required = ("chassis_class", "slot_limit", "weight_limit", "base_hp", "base_range", "base_glyph", "base_color")
+        for key in required:
+            if key not in profile:
+                report.error(source, profile_path + [key], f"chassis profile requires {key}")
+        if "chassis_class" in profile:
+            _validate_drone_chassis_class(report, source, profile_path + ["chassis_class"], profile.get("chassis_class"))
+        for key in ("slot_limit", "weight_limit", "base_hp", "base_range"):
+            if key in profile:
+                _validate_int(report, source, profile_path + [key], profile.get(key), minimum=1, field_name=key)
+        if "base_glyph" in profile:
+            if _validate_non_empty_string(report, source, profile_path + ["base_glyph"], profile.get("base_glyph"), field_name="base_glyph"):
+                if len(str(profile.get("base_glyph"))) > 1:
+                    report.warn(source, profile_path + ["base_glyph"], "base_glyph will be truncated to the first character at runtime")
+                _validate_reserved_glyph_literal(report, source, profile_path + ["base_glyph"], profile.get("base_glyph"), owner_label="drone profiles")
+        if "base_color" in profile:
+            _validate_non_empty_string(report, source, profile_path + ["base_color"], profile.get("base_color"), field_name="base_color")
+        return
+
+    if kind == "power_center":
+        required = ("mark", "power_output", "idle_overhead", "compatible_chassis")
+        for key in required:
+            if key not in profile:
+                report.error(source, profile_path + [key], f"power_center profile requires {key}")
+        if "mark" in profile:
+            _validate_int(report, source, profile_path + ["mark"], profile.get("mark"), minimum=1, field_name="mark")
+        if "power_output" in profile:
+            _validate_int(report, source, profile_path + ["power_output"], profile.get("power_output"), minimum=1, field_name="power_output")
+        if "idle_overhead" in profile:
+            _validate_int(report, source, profile_path + ["idle_overhead"], profile.get("idle_overhead"), minimum=0, field_name="idle_overhead")
+        if "compatible_chassis" in profile:
+            _validate_drone_compatible_chassis(report, source, profile_path + ["compatible_chassis"], profile.get("compatible_chassis"))
+        return
+
+    if kind == "battery":
+        required = ("charge_max", "weight", "disposable", "compatible_chassis")
+        for key in required:
+            if key not in profile:
+                report.error(source, profile_path + [key], f"battery profile requires {key}")
+        if "charge_max" in profile:
+            _validate_int(report, source, profile_path + ["charge_max"], profile.get("charge_max"), minimum=1, field_name="charge_max")
+        if "weight" in profile:
+            _validate_int(report, source, profile_path + ["weight"], profile.get("weight"), minimum=0, field_name="weight")
+        if "disposable" in profile and not isinstance(profile.get("disposable"), bool):
+            report.error(source, profile_path + ["disposable"], "disposable must be boolean")
+        if "compatible_chassis" in profile:
+            _validate_drone_compatible_chassis(report, source, profile_path + ["compatible_chassis"], profile.get("compatible_chassis"))
+        return
+
+    if kind == "module":
+        required = (
+            "module_kind",
+            "slot_cost",
+            "weight",
+            "standby_draw",
+            "active_draw",
+            "capabilities",
+            "visible_overlay",
+            "compatible_chassis",
+        )
+        for key in required:
+            if key not in profile:
+                report.error(source, profile_path + [key], f"module profile requires {key}")
+        if "module_kind" in profile:
+            _validate_identifier(report, source, profile_path + ["module_kind"], profile.get("module_kind"), field_name="module_kind")
+        for key in ("slot_cost", "weight", "standby_draw", "active_draw"):
+            if key in profile:
+                minimum = 1 if key == "slot_cost" else 0
+                _validate_int(report, source, profile_path + [key], profile.get(key), minimum=minimum, field_name=key)
+        if "capabilities" in profile:
+            _validate_string_list(
+                report,
+                source,
+                profile_path + ["capabilities"],
+                profile.get("capabilities"),
+                field_name="capabilities",
+                allow_scalar=False,
+                require_non_empty=True,
+            )
+        if "visible_overlay" in profile:
+            _validate_drone_visible_overlay(report, source, profile_path + ["visible_overlay"], profile.get("visible_overlay"))
+        if "compatible_chassis" in profile:
+            _validate_drone_compatible_chassis(report, source, profile_path + ["compatible_chassis"], profile.get("compatible_chassis"))
+        return
+
+    if kind == "assembly":
+        return
+
+
 def _validate_items(path, report):
     data, source = _load_object_document(path, report, "an object keyed by item id")
     if data is None:
@@ -461,6 +602,9 @@ def _validate_items(path, report):
                 status = str(item["legal_status"]).strip().lower()
                 if status not in ALLOWED_LEGAL_STATUS:
                     report.error(source, item_path + ["legal_status"], f"legal_status must be one of {sorted(ALLOWED_LEGAL_STATUS)}")
+
+        if "drone_profile" in item:
+            _validate_drone_profile(report, source, item_path, item["drone_profile"])
 
         if "object_profile" in item:
             for path_suffix, message in object_profile_validation_errors(item.get("object_profile"), stack_max=stack_max_for_profile):

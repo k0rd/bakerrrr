@@ -2724,6 +2724,887 @@
     "legal_status": "legal",
     "effects": []
   },
+  "drone_chassis_a": {
+    "name": "A-Class Drone Chassis",
+    "glyph": "d",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_chassis",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "chassis",
+      "chassis_class": "A",
+      "slot_limit": 2,
+      "weight_limit": 4,
+      "base_hp": 12,
+      "base_range": 10,
+      "base_glyph": "d",
+      "base_color": "item_restricted"
+    },
+    "effects": []
+  },
+  "drone_chassis_b": {
+    "name": "B-Class Drone Chassis",
+    "glyph": "d",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_chassis",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "chassis",
+      "chassis_class": "B",
+      "slot_limit": 3,
+      "weight_limit": 7,
+      "base_hp": 18,
+      "base_range": 12,
+      "base_glyph": "d",
+      "base_color": "item_restricted"
+    },
+    "effects": []
+  },
+  "drone_chassis_c": {
+    "name": "C-Class Drone Chassis",
+    "glyph": "d",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_chassis",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "chassis",
+      "chassis_class": "C",
+      "slot_limit": 4,
+      "weight_limit": 11,
+      "base_hp": 25,
+      "base_range": 14,
+      "base_glyph": "d",
+      "base_color": "item_restricted"
+    },
+    "effects": []
+  },
+  "drone_chassis_d": {
+    "name": "D-Class Drone Chassis",
+    "glyph": "d",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_chassis",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "chassis",
+      "chassis_class": "D",
+      "slot_limit": 5,
+      "weight_limit": 16,
+      "base_hp": 34,
+      "base_range": 14,
+      "base_glyph": "d",
+      "base_color": "item_restricted"
+    },
+    "effects": []
+  },
+  "drone_chassis_e": {
+    "name": "E-Class Drone Chassis",
+    "glyph": "d",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_chassis",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "chassis",
+      "chassis_class": "E",
+      "slot_limit": 6,
+      "weight_limit": 24,
+      "base_hp": 45,
+      "base_range": 12,
+      "base_glyph": "d",
+      "base_color": "item_restricted"
+    },
+    "effects": []
+  },
+  "drone_power_core_mk1": {
+    "name": "Drone Power Core Mk 1",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_power",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "power_center",
+      "mark": 1,
+      "power_output": 4,
+      "idle_overhead": 1,
+      "compatible_chassis": [
+        "A",
+        "B"
+      ]
+    },
+    "effects": []
+  },
+  "drone_power_core_mk2": {
+    "name": "Drone Power Core Mk 2",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_power",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "power_center",
+      "mark": 2,
+      "power_output": 6,
+      "idle_overhead": 1,
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    "effects": []
+  },
+  "drone_power_core_mk3": {
+    "name": "Drone Power Core Mk 3",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_power",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "power_center",
+      "mark": 3,
+      "power_output": 8,
+      "idle_overhead": 1,
+      "compatible_chassis": [
+        "B",
+        "C",
+        "D"
+      ]
+    },
+    "effects": []
+  },
+  "drone_power_core_mk4": {
+    "name": "Drone Power Core Mk 4",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_power",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "power_center",
+      "mark": 4,
+      "power_output": 11,
+      "idle_overhead": 1,
+      "compatible_chassis": [
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_power_core_mk5": {
+    "name": "Drone Power Core Mk 5",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_power",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "power_center",
+      "mark": 5,
+      "power_output": 14,
+      "idle_overhead": 1,
+      "compatible_chassis": [
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_battery_light": {
+    "name": "Light Drone Battery",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "battery",
+      "tool",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "drone_profile": {
+      "kind": "battery",
+      "charge_max": 40,
+      "weight": 1,
+      "disposable": true,
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_battery_standard": {
+    "name": "Standard Drone Battery",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "battery",
+      "tool",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "drone_profile": {
+      "kind": "battery",
+      "charge_max": 70,
+      "weight": 2,
+      "disposable": true,
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_battery_heavy": {
+    "name": "Heavy Drone Battery",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "battery",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "battery",
+      "charge_max": 110,
+      "weight": 3,
+      "disposable": true,
+      "compatible_chassis": [
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_battery_industrial": {
+    "name": "Industrial Drone Battery",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "battery",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "battery",
+      "charge_max": 160,
+      "weight": 5,
+      "disposable": true,
+      "compatible_chassis": [
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_camera_module": {
+    "name": "Drone Camera Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "camera",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "camera",
+      "slot_cost": 1,
+      "weight": 1,
+      "standby_draw": 1,
+      "active_draw": 2,
+      "capabilities": [
+        "camera",
+        "sensor",
+        "linked_vision"
+      ],
+      "visible_overlay": {
+        "glyph": "c",
+        "color": "item_restricted",
+        "label": "camera"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_radio_module": {
+    "name": "Drone Radio Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "radio",
+      "comms",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "radio",
+      "slot_cost": 1,
+      "weight": 1,
+      "standby_draw": 1,
+      "active_draw": 2,
+      "capabilities": [
+        "radio",
+        "comms"
+      ],
+      "visible_overlay": {
+        "glyph": "r",
+        "color": "item_restricted",
+        "label": "radio"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_remote_receiver_module": {
+    "name": "Drone Remote Receiver Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "remote",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "remote_receiver",
+      "slot_cost": 1,
+      "weight": 1,
+      "standby_draw": 1,
+      "active_draw": 1,
+      "capabilities": [
+        "remote_control"
+      ],
+      "visible_overlay": {
+        "glyph": "r",
+        "color": "item_restricted",
+        "label": "remote"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_cargo_clamp_module": {
+    "name": "Drone Cargo Clamp Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "cargo",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "cargo_clamp",
+      "slot_cost": 1,
+      "weight": 2,
+      "standby_draw": 0,
+      "active_draw": 1,
+      "capabilities": [
+        "cargo"
+      ],
+      "visible_overlay": {
+        "glyph": "k",
+        "color": "item_restricted",
+        "label": "cargo"
+      },
+      "compatible_chassis": [
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_light_module": {
+    "name": "Drone Light Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "light",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "light",
+      "slot_cost": 1,
+      "weight": 1,
+      "standby_draw": 0,
+      "active_draw": 1,
+      "capabilities": [
+        "light"
+      ],
+      "visible_overlay": {
+        "glyph": "l",
+        "color": "item_legal",
+        "label": "light"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_speaker_module": {
+    "name": "Drone Speaker Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "speaker",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "speaker",
+      "slot_cost": 1,
+      "weight": 1,
+      "standby_draw": 0,
+      "active_draw": 1,
+      "capabilities": [
+        "speaker",
+        "noise"
+      ],
+      "visible_overlay": {
+        "glyph": "s",
+        "color": "item_restricted",
+        "label": "speaker"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_armor_shell_module": {
+    "name": "Drone Armor Shell Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "armor",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "armor_shell",
+      "slot_cost": 1,
+      "weight": 3,
+      "standby_draw": 0,
+      "active_draw": 0,
+      "capabilities": [
+        "armor"
+      ],
+      "visible_overlay": {
+        "glyph": "a",
+        "color": "item_restricted",
+        "label": "armor"
+      },
+      "compatible_chassis": [
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_alarm_probe_module": {
+    "name": "Drone Alarm Probe Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "alarm",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "alarm_probe",
+      "slot_cost": 1,
+      "weight": 1,
+      "standby_draw": 0,
+      "active_draw": 2,
+      "capabilities": [
+        "alarm_probe",
+        "tamper"
+      ],
+      "visible_overlay": {
+        "glyph": "p",
+        "color": "item_restricted",
+        "label": "probe"
+      },
+      "compatible_chassis": [
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_mapping_procedure_module": {
+    "name": "Drone Mapping Procedure Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "procedure",
+      "mapping",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "procedure_mapping",
+      "slot_cost": 1,
+      "weight": 0,
+      "standby_draw": 0,
+      "active_draw": 1,
+      "capabilities": [
+        "procedure",
+        "mapping",
+        "autonomy"
+      ],
+      "visible_overlay": {
+        "glyph": "m",
+        "color": "item_restricted",
+        "label": "mapping"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_follow_procedure_module": {
+    "name": "Drone Follow Procedure Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "procedure",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "procedure_follow",
+      "slot_cost": 1,
+      "weight": 0,
+      "standby_draw": 0,
+      "active_draw": 1,
+      "capabilities": [
+        "procedure",
+        "follow",
+        "autonomy"
+      ],
+      "visible_overlay": {
+        "glyph": "f",
+        "color": "item_restricted",
+        "label": "follow"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_pistol_module": {
+    "name": "Drone Pistol Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "weapon_mount",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "pistol",
+      "slot_cost": 2,
+      "weight": 3,
+      "standby_draw": 0,
+      "active_draw": 4,
+      "capabilities": [
+        "weapon",
+        "ranged"
+      ],
+      "visible_overlay": {
+        "glyph": "w",
+        "color": "item_restricted",
+        "label": "weapon"
+      },
+      "compatible_chassis": [
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_ammo_rack_module": {
+    "name": "Drone Ammo Rack Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "ammo",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "ammo_rack",
+      "slot_cost": 1,
+      "weight": 2,
+      "standby_draw": 0,
+      "active_draw": 0,
+      "capabilities": [
+        "ammo"
+      ],
+      "visible_overlay": {
+        "glyph": "a",
+        "color": "item_restricted",
+        "label": "ammo"
+      },
+      "compatible_chassis": [
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_fuel_tank_module": {
+    "name": "Drone Fuel Tank Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "fuel",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "fuel_tank",
+      "slot_cost": 2,
+      "weight": 4,
+      "standby_draw": 0,
+      "active_draw": 0,
+      "capabilities": [
+        "fuel"
+      ],
+      "visible_overlay": {
+        "glyph": "u",
+        "color": "item_restricted",
+        "label": "fuel"
+      },
+      "compatible_chassis": [
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_flame_nozzle_module": {
+    "name": "Drone Flame Nozzle Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "flame",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "flame_nozzle",
+      "slot_cost": 2,
+      "weight": 3,
+      "standby_draw": 0,
+      "active_draw": 5,
+      "capabilities": [
+        "weapon",
+        "flame"
+      ],
+      "visible_overlay": {
+        "glyph": "w",
+        "color": "item_restricted",
+        "label": "flame"
+      },
+      "compatible_chassis": [
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "packed_drone": {
+    "name": "Packed Drone",
+    "glyph": "d",
+    "stack_max": 1,
+    "category": "drone",
+    "tags": [
+      "drone",
+      "drone_assembly",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "assembly"
+    },
+    "effects": []
+  },
   "cheap_whiskey": {
     "name": "Cheap Whiskey",
     "glyph": "!",

@@ -42,6 +42,7 @@ from game.components import (
 )
 from game.economy import chunk_economy_profile, pick_career_for_workplace
 from game.appearance_loadout import cosmetic_variant_metadata, is_appearance_item, seed_npc_appearance_from_description
+from game.drone_distribution import drone_distribution_metadata
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot
 from game.human_identity import seed_human_identity_profile
 from game.npc_names import generate_human_personal_name, human_descriptor
@@ -2090,6 +2091,20 @@ def seed_chunk_items(sim, chunk, property_records):
             if not tile:
                 continue
             room_kind = _room_kind_at(sim, tile[0], tile[1], tile[2])
+            item_metadata = {
+                "source_property_id": prop.get("id"),
+                "chunk": key,
+                "placement_zone": zone,
+                "placement_room_kind": room_kind or None,
+            }
+            item_metadata = drone_distribution_metadata(
+                item_id,
+                item_metadata,
+                source_context="loot_spawn",
+                distribution_context=str(record.get("archetype") or _property_archetype(prop) or ""),
+                seed_token=f"{sim.seed}:{key[0]}:{key[1]}:{prop.get('id')}:{item_id}:{len(spawned)}",
+                item_catalog=ITEM_CATALOG,
+            )
             ground_id = sim.register_ground_item(
                 item_id=item_id,
                 x=tile[0],
@@ -2098,12 +2113,7 @@ def seed_chunk_items(sim, chunk, property_records):
                 quantity=1,
                 owner_eid=None,
                 owner_tag="city",
-                metadata={
-                    "source_property_id": prop.get("id"),
-                    "chunk": key,
-                    "placement_zone": zone,
-                    "placement_room_kind": room_kind or None,
-                },
+                metadata=item_metadata,
             )
             spawned.append(ground_id)
 

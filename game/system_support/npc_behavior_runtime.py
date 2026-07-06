@@ -7,6 +7,7 @@ import random
 from engine.sites import site_entry_front_cell
 from engine.events import Event
 from game.components import AI, ArmorLoadout, BehaviorProfile, CriminalDriveState, FinancialProfile, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Occupation, Position, PropertyKnowledge, StatusEffects, Vitality, WeaponLoadout
+from game.drone_distribution import drone_item_base_value
 from game.item_semantics import (
     appraise_item_for_actor,
     identify_item_for_actor,
@@ -1396,6 +1397,9 @@ def _street_item_value(item_id):
         return int(_STREET_DEFAULT_VALUE)
     if item_id in _STREET_ITEM_OVERRIDES:
         return int(_STREET_ITEM_OVERRIDES[item_id])
+    drone_value = drone_item_base_value(item_id, default=0)
+    if drone_value > 0:
+        return int(drone_value)
     item_def = ITEM_CATALOG.get(item_id, {})
     tags = {
         str(tag).strip().lower()

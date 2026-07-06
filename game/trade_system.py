@@ -14,6 +14,12 @@ from game.appearance_loadout import (
 )
 from game.components import Inventory, NPCSocial, PlayerAssets, Position, VehicleState
 from game.cultivation_runtime import seed_packet_metadata
+from game.drone_distribution import (
+    DRONE_ITEM_BASE_VALUES,
+    drone_distribution_metadata,
+    drone_store_item_pool,
+    drone_item_base_value,
+)
 from game.economy import item_market_bias, item_trade_pressure_bias, store_supply_profile
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor, item_entry_is_critical_quest_item
 from game.items import ITEM_CATALOG
@@ -375,6 +381,7 @@ class TradeSystem(System):
         "security_vest": 96,
         "riot_plates": 124,
         "ceramic_plate_rig": 158,
+        **DRONE_ITEM_BASE_VALUES,
     }
 
     DEFAULT_PROFILE = {
@@ -1905,6 +1912,10 @@ class TradeSystem(System):
     def _store_profile(self, archetype):
         profile = dict(self.DEFAULT_PROFILE)
         profile.update(self.STORE_PROFILES.get(archetype, {}))
+        drone_pool = drone_store_item_pool(archetype)
+        if drone_pool:
+            profile["item_pool"] = tuple(profile.get("item_pool", ())) + tuple(drone_pool)
+            profile["max_slots"] = int(max(profile.get("max_slots", 5), min(9, int(profile.get("max_slots", 5)) + 1)))
         return profile
 
     def _is_storefront(self, prop):
@@ -2384,9 +2395,17 @@ class TradeSystem(System):
                 )
             else:
                 entry_metadata = {}
+            entry_metadata = drone_distribution_metadata(
+                item_id,
+                entry_metadata,
+                source_context="store_stock",
+                distribution_context=archetype,
+                seed_token=seed_token,
+                item_catalog=ITEM_CATALOG,
+            )
             bias = item_market_bias(item_id, market_profile)
             pressure_bias = item_trade_pressure_bias(self.sim, prop, item_id)
-            base = int(max(1, self.ITEM_BASE_VALUES.get(item_id, 10)))
+            base = int(max(1, self.ITEM_BASE_VALUES.get(item_id, drone_item_base_value(item_id, default=10))))
             buy_price = max(
                 1,
                 int(round(

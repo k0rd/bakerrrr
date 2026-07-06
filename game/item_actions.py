@@ -5,7 +5,32 @@ import random
 from engine.events import Event
 from game.aerosol_trap_runtime import place_aerosol_floor_trap
 from game.herbal_chemistry_runtime import decay_herbal_mixture_entry_if_due
-from game.components import AI, ArmorLoadout, Inventory, JusticeProfile, PlayerAssets, Position, StatusEffects, Vitality, WeaponLoadout
+from game.components import (
+    AI,
+    ArmorLoadout,
+    Collider,
+    CreatureIdentity,
+    DroneState,
+    Inventory,
+    JusticeProfile,
+    PlayerAssets,
+    Position,
+    Render,
+    StatusEffects,
+    Vitality,
+    WeaponLoadout,
+)
+from game.drone_runtime import (
+    PACKED_DRONE_ITEM_ID,
+    deployed_drone_common_name,
+    deployed_drone_render_spec,
+    drone_profile_for_item,
+    find_deployed_drone_for_pickup,
+    first_open_drone_deploy_tile,
+    is_packed_drone_entry,
+    packed_drone_metadata_from_state,
+    validate_packed_drone_deploy_entry,
+)
 from game.appearance_loadout import (
     clear_appearance_instance,
     equip_appearance_item,
@@ -526,6 +551,183 @@ class ItemActionRuntime:
         if not callable(rotate):
             return False
         return bool(rotate(ground_item_id))
+
+    def _actor_owner_tag(self, eid):
+        return "player" if eid == self.player_eid else "npc"
+
+    def _use_packed_drone(self, eid, x, y, z, inventory, entry, item_def, item_name, *, reason="manual"):
+        deploy = validate_packed_drone_deploy_entry(entry, item_catalog=self.catalog)
+        if not deploy.get("ok"):
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="drone_invalid_loadout",
+                item_id=item_def["id"],
+                item_name=item_name,
+                loadout_errors=deploy.get("errors", ()),
+            ))
+            return False
+
+        target = first_open_drone_deploy_tile(self.sim, x, y, z)
+        if target is None:
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="drone_no_deploy_tile",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+
+        removed = inventory.remove_item(instance_id=entry.get("instance_id"), quantity=1)
+        if not removed:
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="drone_remove_failed",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+
+        metadata = removed.get("metadata") if isinstance(removed.get("metadata"), dict) else deploy.get("metadata", {})
+        owner_tag = self._actor_owner_tag(eid)
+        drone_eid = self.sim.ecs.create()
+        state = DroneState.from_packed_metadata(
+            metadata,
+            source_item_instance_id=removed.get("instance_id"),
+            source_item_id=removed.get("item_id") or PACKED_DRONE_ITEM_ID,
+            owner_eid=eid,
+            owner_tag=owner_tag,
+            controller_eid=eid,
+            controller_tag=owner_tag,
+            deployed_tick=getattr(self.sim, "tick", 0),
+            item_catalog=self.catalog,
+        )
+        state.mode = "deployed"
+        state.home = (int(x), int(y), int(z))
+        chassis_profile = drone_profile_for_item(state.chassis_item_id, item_catalog=self.catalog)
+        state.range_limit = int(chassis_profile.get("base_range", getattr(state, "range_limit", 0) or 0) or 0)
+        state.hull_hp_max = int(max(1, getattr(state, "hull_hp_max", 1) or chassis_profile.get("base_hp", 1) or 1))
+        state.hull_hp = int(max(0, min(state.hull_hp_max, getattr(state, "hull_hp", state.hull_hp_max) or state.hull_hp_max)))
+        state.source_metadata["hull_hp"] = int(state.hull_hp)
+        state.source_metadata["hull_hp_max"] = int(state.hull_hp_max)
+
+        target_x, target_y, target_z = target
+        render_spec = deployed_drone_render_spec(metadata, item_catalog=self.catalog)
+        self.sim.ecs.add(drone_eid, Position(target_x, target_y, target_z))
+        self.sim.ecs.add(drone_eid, Collider(blocks=True))
+        self.sim.ecs.add(drone_eid, Vitality(max_hp=state.hull_hp_max, hp=state.hull_hp))
+        self.sim.ecs.add(
+            drone_eid,
+            Render(
+                render_spec.get("glyph", "d"),
+                color=render_spec.get("color") or "item_restricted",
+                semantic_id="entity_drone",
+                layer="actor",
+                priority=20,
+            ),
+        )
+        self.sim.ecs.add(
+            drone_eid,
+            CreatureIdentity(
+                taxonomy_class="machine",
+                species="drone",
+                creature_type="drone",
+                common_name=deployed_drone_common_name(metadata, item_catalog=self.catalog),
+            ),
+        )
+        self.sim.ecs.add(drone_eid, state)
+        self.sim.tilemap.add_entity(drone_eid, target_x, target_y, target_z)
+        self.sim.emit(Event(
+            "drone_deployed",
+            eid=eid,
+            drone_eid=drone_eid,
+            item_id=removed.get("item_id") or PACKED_DRONE_ITEM_ID,
+            item_name=item_name,
+            instance_id=removed.get("instance_id"),
+            chassis_class=state.chassis_class,
+            x=target_x,
+            y=target_y,
+            z=target_z,
+            reason=reason,
+        ))
+        return True
+
+    def _pickup_deployed_drone(self, eid, drone_record, inventory):
+        if not isinstance(drone_record, dict):
+            return False
+        drone_eid = drone_record.get("eid")
+        state = drone_record.get("state")
+        pos = drone_record.get("position")
+        if state is None or pos is None:
+            self.sim.emit(Event("item_pickup_blocked", eid=eid, reason="no_item_nearby"))
+            return False
+
+        item_id = str(getattr(state, "source_item_id", "") or PACKED_DRONE_ITEM_ID).strip().lower() or PACKED_DRONE_ITEM_ID
+        vitality = self.sim.ecs.get(Vitality).get(drone_eid)
+        if vitality is not None:
+            state.hull_hp = int(max(0, int(getattr(vitality, "hp", 0) or 0)))
+            state.hull_hp_max = int(max(1, int(getattr(vitality, "max_hp", 1) or 1)))
+            state.source_metadata["hull_hp"] = int(state.hull_hp)
+            state.source_metadata["hull_hp_max"] = int(state.hull_hp_max)
+        metadata = packed_drone_metadata_from_state(state, item_catalog=self.catalog)
+        source_instance_id = str(getattr(state, "source_item_instance_id", "") or "").strip() or None
+        item_def = self._item_def(item_id)
+        item_name = self._display_name_for_actor(
+            eid,
+            {
+                "item_id": item_id,
+                "metadata": metadata,
+                "instance_id": source_instance_id,
+            },
+        )
+        added, instance_id = inventory.add_item(
+            item_id=item_id,
+            quantity=1,
+            stack_max=item_def.get("stack_max", 1),
+            instance_id=source_instance_id,
+            instance_factory=self.sim.new_item_instance_id,
+            owner_eid=eid,
+            owner_tag=self._actor_owner_tag(eid),
+            metadata=metadata,
+        )
+        if not added:
+            self.sim.emit(Event(
+                "item_pickup_blocked",
+                eid=eid,
+                reason="inventory_full",
+                item_id=item_id,
+                item_name=item_name,
+                drone_eid=drone_eid,
+            ))
+            return False
+
+        if not self.sim.remove_entity(drone_eid):
+            inventory.remove_item(instance_id=instance_id, quantity=1)
+            self.sim.emit(Event(
+                "item_pickup_blocked",
+                eid=eid,
+                reason="drone_remove_failed",
+                item_id=item_id,
+                item_name=item_name,
+                drone_eid=drone_eid,
+            ))
+            return False
+
+        self.sim.emit(Event(
+            "drone_picked_up",
+            eid=eid,
+            drone_eid=drone_eid,
+            item_id=item_id,
+            item_name=item_name,
+            instance_id=instance_id,
+            chassis_class=getattr(state, "chassis_class", None),
+            x=getattr(pos, "x", None),
+            y=getattr(pos, "y", None),
+            z=getattr(pos, "z", None),
+        ))
+        return True
 
     def _is_theft(self, actor_eid, item_entry):
         entitlement = item_entitlement_for_actor(self.sim, actor_eid, item_entry)
@@ -1182,6 +1384,19 @@ class ItemActionRuntime:
         )
         item_def = self._item_def(entry["item_id"])
         item_name = self._display_name_for_actor(eid, entry)
+        if is_packed_drone_entry(entry, item_catalog=self.catalog):
+            return self._use_packed_drone(
+                eid,
+                x,
+                y,
+                z,
+                inventory,
+                entry,
+                item_def,
+                item_name,
+                reason=reason,
+            )
+
         if _item_weapon_id(item_def):
             return self._toggle_weapon_item(
                 eid=eid,
@@ -1485,6 +1700,19 @@ class ItemActionRuntime:
 
         ground = self._nearest_ground_item(x, y, z, radius=1)
         if not ground:
+            drone_record = find_deployed_drone_for_pickup(
+                self.sim,
+                eid,
+                x,
+                y,
+                z,
+                radius=1,
+                drone_state_type=DroneState,
+                position_type=Position,
+            )
+            if drone_record:
+                self._pickup_deployed_drone(eid, drone_record, inventory)
+                return
             self.sim.emit(Event("item_pickup_blocked", eid=eid, reason="no_item_nearby"))
             return
 

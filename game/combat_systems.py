@@ -12,6 +12,7 @@ from game.components import (
     Collider,
     CoverState,
     CreatureIdentity,
+    DroneState,
     EcologyProfile,
     Inventory,
     ItemUseProfile,
@@ -38,6 +39,7 @@ from game.checks import (
     justice_level as _justice_level,
 )
 from game.dialogue_runtime import active_contractor_record
+from game.drone_system import destroy_deployed_drone
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import (
     _apply_downed_actor_state,
@@ -961,6 +963,7 @@ class WeaponSystem(System):
             ),
         )
 
+        previous_hp = int(max(0, getattr(vitality, "hp", 0) or 0))
         raw_damage = int(max(1, raw_damage))
         after_cover_damage = raw_damage * (1.0 - cover_absorb)
         incoming_damage_mult = _status_multiplier(
@@ -992,6 +995,19 @@ class WeaponSystem(System):
         ))
 
         if vitality.hp > 0:
+            return True
+
+        drone_state = self.sim.ecs.get(DroneState).get(target_eid)
+        if drone_state is not None and str(getattr(drone_state, "mode", "") or "").strip().lower() == "deployed":
+            destroy_deployed_drone(
+                self.sim,
+                target_eid,
+                source_eid=source_eid,
+                reason="lethal_damage",
+                damage_kind=damage_kind,
+                damage_amount=final_damage,
+                overkill_amount=max(0, int(final_damage) - int(previous_hp)),
+            )
             return True
 
         vitality.downed_count += 1

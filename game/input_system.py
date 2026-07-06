@@ -18,6 +18,7 @@ from game.components import (
     CoverState,
     CreatureIdentity,
     DoorWaitState,
+    DroneState,
     EcologyProfile,
     FinancialProfile,
     HumanWildlifePresence,
@@ -106,6 +107,35 @@ from game.dialogue_runtime import (
     _dialog_backup_cursor_payload,
     _dialog_backup_mark_from_state,
     _disguise_role_label,
+)
+from game.drone_runtime import (
+    drone_state_capabilities,
+    drone_state_controlled_by_actor,
+    drone_state_has_capability,
+)
+from game.drone_combat import drone_weapon_status
+from game.drone_recon import (
+    DRONE_LINKED_CAMERA_RADIUS,
+    apply_linked_camera_knowledge,
+    clear_linked_camera_view,
+    describe_drone_camera_cell,
+    linked_camera_status,
+)
+from game.drone_sheet import (
+    DRONE_SHEET_TABS,
+    DRONE_SHEET_VISIBLE_SLOTS,
+    drone_sheet_label,
+    drone_sheet_records,
+    drone_sheet_status_lines,
+    drone_sheet_tab_rows,
+    install_drone_module,
+    paint_drone,
+    remove_drone_module,
+    swap_drone_battery,
+    swap_drone_chassis,
+    swap_drone_power_center,
+    transfer_drone_cargo_to_player,
+    transfer_player_cargo_to_drone,
 )
 from game.property_doors import (
     _door_action_text,
@@ -460,6 +490,37 @@ class InputSystem(System):
                 "last_anchor_dy": 1,
                 "feedback": "",
             }
+        if not hasattr(self.sim, "drone_command_ui"):
+            self.sim.drone_command_ui = {
+                "open": False,
+                "selected_drone_eid": None,
+                "eligible": [],
+                "status_lines": [],
+                "feedback": "",
+                "camera_open": False,
+                "camera_mode": "inspect",
+                "camera_drone_eid": None,
+                "camera_cursor_x": 0,
+                "camera_cursor_y": 0,
+                "camera_cursor_z": 0,
+                "camera_visible": set(),
+                "camera_radius": DRONE_LINKED_CAMERA_RADIUS,
+                "camera_inspect_text": "",
+            }
+        if not hasattr(self.sim, "drone_sheet_ui"):
+            self.sim.drone_sheet_ui = {
+                "open": False,
+                "selected_drone_eid": None,
+                "eligible": [],
+                "tab": "status",
+                "selected_index": 0,
+                "scroll": 0,
+                "cargo_side": "pack",
+                "module_side": "drone",
+                "rows": [],
+                "status_lines": [],
+                "feedback": "",
+            }
 
         self.sim.events.subscribe("move_blocked", self.on_move_blocked)
         self.sim.events.subscribe("zoom_mode_changed", self.on_zoom_mode_changed)
@@ -467,6 +528,9 @@ class InputSystem(System):
         self.sim.events.subscribe("vehicle_action_blocked", self.on_vehicle_action_blocked)
         self.sim.events.subscribe("vehicle_collision", self.on_vehicle_hard_stop)
         self.sim.events.subscribe("vehicle_crash", self.on_vehicle_hard_stop)
+        self.sim.events.subscribe("drone_picked_up", self.on_drone_command_target_changed)
+        self.sim.events.subscribe("drone_destroyed", self.on_drone_command_target_changed)
+        self.sim.events.subscribe("chunk_unloaded", self.on_drone_command_target_changed)
         self.sim.events.subscribe("chunk_loaded", self.on_chunk_stream_changed)
         self.sim.events.subscribe("chunk_unloaded", self.on_chunk_stream_changed)
         self.sim.events.subscribe("chunk_focus_changed", self.on_chunk_stream_changed)
@@ -750,6 +814,998 @@ class InputSystem(System):
         state.setdefault("feedback", "")
         state.setdefault("last_input_kind", "key")
         return state
+
+    def _drone_command_state(self):
+        state = getattr(self.sim, "drone_command_ui", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.drone_command_ui = state
+        state.setdefault("open", False)
+        state.setdefault("selected_drone_eid", None)
+        state.setdefault("eligible", [])
+        state.setdefault("status_lines", [])
+        state.setdefault("feedback", "")
+        state.setdefault("camera_open", False)
+        state.setdefault("camera_mode", "inspect")
+        state.setdefault("camera_drone_eid", None)
+        state.setdefault("camera_cursor_x", 0)
+        state.setdefault("camera_cursor_y", 0)
+        state.setdefault("camera_cursor_z", 0)
+        state.setdefault("camera_visible", set())
+        state.setdefault("camera_radius", DRONE_LINKED_CAMERA_RADIUS)
+        state.setdefault("camera_inspect_text", "")
+        return state
+
+    def _drone_sheet_state(self):
+        state = getattr(self.sim, "drone_sheet_ui", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.drone_sheet_ui = state
+        state.setdefault("open", False)
+        state.setdefault("selected_drone_eid", None)
+        state.setdefault("eligible", [])
+        state.setdefault("tab", "status")
+        if str(state.get("tab", "") or "").strip().lower() not in DRONE_SHEET_TABS:
+            state["tab"] = "status"
+        state.setdefault("selected_index", 0)
+        state.setdefault("scroll", 0)
+        state.setdefault("cargo_side", "pack")
+        if str(state.get("cargo_side", "") or "").strip().lower() not in {"pack", "drone"}:
+            state["cargo_side"] = "pack"
+        state.setdefault("module_side", "drone")
+        if str(state.get("module_side", "") or "").strip().lower() not in {"pack", "drone"}:
+            state["module_side"] = "drone"
+        state.setdefault("rows", [])
+        state.setdefault("status_lines", [])
+        state.setdefault("feedback", "")
+        return state
+
+    def _drone_command_modal_open(self):
+        aim_state = self._aim_lock_state()
+        if bool(aim_state.get("active")) or aim_state.get("target_eid") is not None:
+            return True
+        if self._overworld_view_only_for_player():
+            return True
+        return any(
+            bool(state.get("open"))
+            for state in (
+                self._inventory_state(),
+                self._trade_state(),
+                self._casino_state(),
+                self._dialog_state(),
+                self._help_state(),
+                self._character_state(),
+                self._report_state(),
+                self._log_state(),
+                self._debug_state(),
+                self._action_menu_state(),
+                self._drone_sheet_state(),
+            )
+            if isinstance(state, dict)
+        ) or bool(self._look_state().get("active"))
+
+    def _drone_sheet_modal_blocked(self):
+        if self._drone_command_modal_open():
+            return True
+        return bool(self._drone_command_state().get("open"))
+
+    def _drone_command_label(self, state):
+        chassis_class = str(getattr(state, "chassis_class", "") or "").strip().upper()
+        return f"{chassis_class}-class drone" if chassis_class else "deployed drone"
+
+    def _drone_module_labels(self, state, *, limit=4):
+        labels = []
+        for module in tuple(getattr(state, "modules", ()) or ()):
+            if not isinstance(module, dict):
+                continue
+            item_id = str(module.get("item_id", "") or "").strip().lower()
+            if not item_id:
+                continue
+            labels.append(item_display_name(item_id, item_catalog=self.catalog))
+        if len(labels) > int(limit):
+            labels = labels[: int(limit)] + [f"+{len(labels) - int(limit)}"]
+        return labels
+
+    def _drone_cargo_line(self, state):
+        cargo = [entry for entry in tuple(getattr(state, "cargo", ()) or ()) if isinstance(entry, dict)]
+        if not cargo:
+            return "Cargo: empty"
+        labels = []
+        for entry in cargo[:3]:
+            item_id = str(entry.get("item_id", "") or "").strip().lower()
+            if not item_id:
+                continue
+            qty = max(1, _int_or_default(entry.get("quantity"), 1))
+            suffix = f" x{qty}" if qty > 1 else ""
+            labels.append(f"{item_display_name(item_id, item_catalog=self.catalog)}{suffix}")
+        if len(cargo) > 3:
+            labels.append(f"+{len(cargo) - 3}")
+        return "Cargo: " + (", ".join(labels) if labels else "loaded")
+
+    def _drone_camera_status_line(self, camera):
+        if not isinstance(camera, dict):
+            return "Camera: unavailable"
+        if not bool(camera.get("ok")):
+            reason = str(camera.get("reason", "") or "unavailable").replace("_", " ")
+            return f"Camera: unavailable ({reason})"
+        report = "report gate ready" if bool(camera.get("can_live_report")) else "local view only"
+        visible = len(camera.get("visible", ()) or ())
+        radius = int(camera.get("radius", DRONE_LINKED_CAMERA_RADIUS) or DRONE_LINKED_CAMERA_RADIUS)
+        return f"Camera: linked r{radius} | {visible} cells | {report}"
+
+    def _drone_weapon_status_line(self, state):
+        status = drone_weapon_status(state, item_catalog=self.catalog, tick=int(getattr(self.sim, "tick", 0) or 0))
+        weapons = [row for row in tuple(status.get("weapons", ()) or ()) if row.get("installed")]
+        if not weapons:
+            return "Weapon: none"
+        parts = []
+        for row in weapons[:2]:
+            kind = str(row.get("weapon_kind", "weapon") or "weapon").strip().lower()
+            resource = row.get("resource_amount")
+            resource_label = str(row.get("resource_label", "charge") or "charge").strip()
+            cooldown = _int_or_default(row.get("cooldown_remaining"), 0)
+            suffix = f"{resource} {resource_label}" if resource is not None else resource_label
+            if cooldown > 0:
+                suffix += f", cd {cooldown}"
+            parts.append(f"{kind}: {suffix}")
+        if len(weapons) > 2:
+            parts.append(f"+{len(weapons) - 2}")
+        return "Weapon: " + "; ".join(parts)
+
+    def _drone_status_lines(self, record):
+        if not isinstance(record, dict):
+            return []
+        state = record.get("state")
+        pos = record.get("position")
+        if state is None or pos is None:
+            return ["Drone command link lost."]
+        capabilities = tuple(record.get("capabilities", ()) or ())
+        modules = self._drone_module_labels(state)
+        intent = str(getattr(state, "procedure_key", "") or getattr(state, "last_command", "") or "manual").strip().lower()
+        if not intent:
+            intent = "manual"
+        cap_text = ", ".join(capabilities[:5]) if capabilities else "none"
+        if len(capabilities) > 5:
+            cap_text += f", +{len(capabilities) - 5}"
+        module_text = ", ".join(modules) if modules else "none"
+        return [
+            f"{self._drone_command_label(state)} #{record.get('eid')} | dist {record.get('distance', 0)}",
+            f"Pos {int(pos.x)},{int(pos.y)},{int(pos.z)} | battery {int(getattr(state, 'battery_charge', 0) or 0)}/{int(getattr(state, 'battery_charge_max', 0) or 0)} | hull {int(getattr(state, 'hull_hp', 0) or 0)}/{int(getattr(state, 'hull_hp_max', 0) or 0)}",
+            f"Range {int(getattr(state, 'range_limit', 0) or 0)} | intent {intent}",
+            self._drone_camera_status_line(record.get("camera")),
+            self._drone_weapon_status_line(state),
+            f"Capabilities: {cap_text}",
+            f"Modules: {module_text}",
+            self._drone_cargo_line(state),
+        ]
+
+    def _drone_camera_cursor_tuple(self):
+        state = self._drone_command_state()
+        return (
+            int(state.get("camera_cursor_x", 0) or 0),
+            int(state.get("camera_cursor_y", 0) or 0),
+            int(state.get("camera_cursor_z", 0) or 0),
+        )
+
+    def _set_drone_camera_cursor(self, x, y, z):
+        state = self._drone_command_state()
+        state["camera_cursor_x"] = int(x)
+        state["camera_cursor_y"] = int(y)
+        state["camera_cursor_z"] = int(z)
+
+    def _close_drone_camera_ui(self):
+        state = self._drone_command_state()
+        state["camera_open"] = False
+        state["camera_mode"] = "inspect"
+        state["camera_drone_eid"] = None
+        state["camera_visible"] = set()
+        state["camera_inspect_text"] = ""
+        clear_linked_camera_view(self.sim)
+        return True
+
+    def _sync_linked_drone_camera(self, record, *, announce_unavailable=False):
+        state = self._drone_command_state()
+        if not isinstance(record, dict):
+            if bool(state.get("camera_open")):
+                self._close_drone_camera_ui()
+            else:
+                clear_linked_camera_view(self.sim)
+            return {"ok": False, "reason": "selected_unavailable", "visible": set()}
+
+        camera = apply_linked_camera_knowledge(
+            self.sim,
+            self.player_eid,
+            record.get("eid"),
+            radius=DRONE_LINKED_CAMERA_RADIUS,
+            item_catalog=self.catalog,
+        )
+        record["camera"] = camera
+        if not bool(camera.get("ok")):
+            if bool(state.get("camera_open")):
+                reason = str(camera.get("reason", "unavailable") or "unavailable").replace("_", " ")
+                state["feedback"] = f"Drone camera link lost: {reason}."
+                self._close_drone_camera_ui()
+            return camera
+
+        visible = set(camera.get("visible", set()) or set())
+        pos = camera.get("position")
+        state["camera_visible"] = visible
+        state["camera_radius"] = int(camera.get("radius", DRONE_LINKED_CAMERA_RADIUS) or DRONE_LINKED_CAMERA_RADIUS)
+        if bool(state.get("camera_open")):
+            if state.get("camera_drone_eid") != record.get("eid") and pos is not None:
+                self._set_drone_camera_cursor(pos.x, pos.y, pos.z)
+                state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, pos.x, pos.y, pos.z)
+            state["camera_drone_eid"] = record.get("eid")
+            cursor = self._drone_camera_cursor_tuple()
+            if cursor not in visible and pos is not None:
+                self._set_drone_camera_cursor(pos.x, pos.y, pos.z)
+                state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, pos.x, pos.y, pos.z)
+                if announce_unavailable:
+                    state["feedback"] = "Drone camera cursor returned to the link origin."
+        return camera
+
+    def _drone_command_records(self):
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if player_pos is None:
+            return []
+        positions = self.sim.ecs.get(Position)
+        records = []
+        for drone_eid, state in self.sim.ecs.get(DroneState).items():
+            if str(getattr(state, "mode", "") or "").strip().lower() != "deployed":
+                continue
+            if not drone_state_controlled_by_actor(state, self.player_eid):
+                continue
+            if not drone_state_has_capability(state, "remote_control", item_catalog=self.catalog):
+                continue
+            pos = positions.get(drone_eid)
+            if pos is None or int(pos.z) != int(player_pos.z):
+                continue
+            distance = _manhattan(player_pos.x, player_pos.y, pos.x, pos.y)
+            capabilities = drone_state_capabilities(state, item_catalog=self.catalog)
+            camera = linked_camera_status(
+                self.sim,
+                self.player_eid,
+                drone_eid,
+                radius=DRONE_LINKED_CAMERA_RADIUS,
+                item_catalog=self.catalog,
+            )
+            records.append({
+                "eid": drone_eid,
+                "state": state,
+                "position": pos,
+                "distance": int(distance),
+                "capabilities": capabilities,
+                "camera": camera,
+                "label": self._drone_command_label(state),
+            })
+        return sorted(records, key=lambda row: (int(row.get("distance", 0)), int(row.get("eid", 0))))
+
+    def _refresh_drone_command_ui(self, *, announce_unavailable=False):
+        state = self._drone_command_state()
+        records = self._drone_command_records()
+        state["eligible"] = [
+            {"eid": record["eid"], "label": record["label"], "distance": record["distance"]}
+            for record in records
+        ]
+        selected = state.get("selected_drone_eid")
+        selected_record = next((record for record in records if record.get("eid") == selected), None)
+        if selected_record is None and records:
+            selected_record = records[0]
+            state["selected_drone_eid"] = selected_record.get("eid")
+            if bool(state.get("open")) and announce_unavailable:
+                state["feedback"] = "Selected drone unavailable; switched to nearest commandable drone."
+        if selected_record is None:
+            state["selected_drone_eid"] = None
+            state["status_lines"] = []
+            self._close_drone_camera_ui()
+            if bool(state.get("open")):
+                state["open"] = False
+                if announce_unavailable:
+                    self.sim.emit(Event(
+                        "drone_command_blocked",
+                        eid=self.player_eid,
+                        controller_eid=self.player_eid,
+                        reason="selected_unavailable",
+                    ))
+            return None
+        if bool(state.get("open")):
+            self._sync_linked_drone_camera(selected_record, announce_unavailable=announce_unavailable)
+        state["status_lines"] = self._drone_status_lines(selected_record)
+        return selected_record
+
+    def _open_drone_command_ui(self, zoom_mode=None):
+        zoom_mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
+        state = self._drone_command_state()
+        if zoom_mode == "overworld" or self._drone_command_modal_open():
+            state["feedback"] = "Drone command is not available right now."
+            self.sim.emit(Event("drone_command_blocked", eid=self.player_eid, controller_eid=self.player_eid, reason="ui_busy"))
+            return True
+        record = self._refresh_drone_command_ui()
+        if record is None:
+            state["feedback"] = "No commandable deployed drone."
+            self.sim.emit(Event("drone_command_blocked", eid=self.player_eid, controller_eid=self.player_eid, reason="no_commandable_drone"))
+            return True
+        state["open"] = True
+        self._sync_linked_drone_camera(record)
+        state["status_lines"] = self._drone_status_lines(record)
+        state["feedback"] = "Movement keys command the selected drone. [/] cycles. X links camera."
+        self.sim.emit(Event(
+            "drone_command_opened",
+            eid=self.player_eid,
+            controller_eid=self.player_eid,
+            drone_eid=record.get("eid"),
+            chassis_class=getattr(record.get("state"), "chassis_class", None),
+            count=len(state.get("eligible", ()) or ()),
+        ))
+        return True
+
+    def _close_drone_command_ui(self):
+        state = self._drone_command_state()
+        self._close_drone_camera_ui()
+        state["open"] = False
+        state["feedback"] = ""
+        return True
+
+    def _cycle_drone_command_selection(self, step):
+        state = self._drone_command_state()
+        records = self._drone_command_records()
+        if not records:
+            self._refresh_drone_command_ui(announce_unavailable=True)
+            return None
+        selected = state.get("selected_drone_eid")
+        index = next((idx for idx, record in enumerate(records) if record.get("eid") == selected), 0)
+        index = (int(index) + int(step)) % len(records)
+        state["selected_drone_eid"] = records[index].get("eid")
+        state["feedback"] = f"Selected {records[index].get('label', 'drone')}."
+        if bool(state.get("camera_open")):
+            state["camera_drone_eid"] = None
+        return self._refresh_drone_command_ui()
+
+    def _selected_drone_command_record(self):
+        return self._refresh_drone_command_ui(announce_unavailable=True)
+
+    def _emit_drone_command_request(self, record, command, *, dx=0, dy=0, consume_turn=False):
+        if not record:
+            self.sim.emit(Event(
+                "drone_command_blocked",
+                eid=self.player_eid,
+                controller_eid=self.player_eid,
+                reason="selected_unavailable",
+            ))
+            return False
+        self.sim.emit(Event(
+            "drone_command_request",
+            eid=self.player_eid,
+            controller_eid=self.player_eid,
+            drone_eid=record.get("eid"),
+            command=command,
+            dx=dx,
+            dy=dy,
+            consume_turn=bool(consume_turn),
+        ))
+        self._refresh_drone_command_ui(announce_unavailable=True)
+        return True
+
+    def _open_drone_camera_ui(self, record):
+        state = self._drone_command_state()
+        camera = self._sync_linked_drone_camera(record, announce_unavailable=True)
+        if not bool(camera.get("ok")):
+            reason = str(camera.get("reason", "unavailable") or "unavailable").replace("_", " ")
+            state["feedback"] = f"Drone camera unavailable: {reason}."
+            self.sim.emit(Event(
+                "drone_command_blocked",
+                eid=self.player_eid,
+                controller_eid=self.player_eid,
+                drone_eid=(record or {}).get("eid") if isinstance(record, dict) else None,
+                reason="camera_unavailable",
+            ))
+            return True
+        pos = camera.get("position")
+        state["camera_open"] = True
+        state["camera_mode"] = "inspect"
+        state["camera_drone_eid"] = record.get("eid")
+        if pos is not None:
+            self._set_drone_camera_cursor(pos.x, pos.y, pos.z)
+            state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, pos.x, pos.y, pos.z)
+        state["feedback"] = "Linked drone camera active."
+        return True
+
+    def _open_drone_attack_ui(self, record):
+        state = self._drone_command_state()
+        if not isinstance(record, dict):
+            state["feedback"] = "No selected drone can attack."
+            return True
+        weapon_status = drone_weapon_status(record.get("state"), item_catalog=self.catalog, tick=int(getattr(self.sim, "tick", 0) or 0))
+        if not bool(weapon_status.get("armed")):
+            state["feedback"] = "Selected drone has no armed module pair."
+            self.sim.emit(Event(
+                "drone_weapon_blocked",
+                eid=self.player_eid,
+                controller_eid=self.player_eid,
+                drone_eid=record.get("eid"),
+                reason="missing_weapon",
+            ))
+            return True
+        camera = self._sync_linked_drone_camera(record, announce_unavailable=True)
+        if not bool(camera.get("ok")):
+            reason = str(camera.get("reason", "unavailable") or "unavailable").replace("_", " ")
+            state["feedback"] = f"Attack camera unavailable: {reason}."
+            self.sim.emit(Event(
+                "drone_weapon_blocked",
+                eid=self.player_eid,
+                controller_eid=self.player_eid,
+                drone_eid=record.get("eid"),
+                reason="camera_unavailable",
+            ))
+            return True
+        pos = camera.get("position")
+        state["camera_open"] = True
+        state["camera_mode"] = "attack"
+        state["camera_drone_eid"] = record.get("eid")
+        if pos is not None:
+            self._set_drone_camera_cursor(pos.x, pos.y, pos.z)
+            state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, pos.x, pos.y, pos.z)
+        state["feedback"] = "Drone attack cursor active."
+        return True
+
+    def _drone_camera_cursor_visible(self, x, y, z):
+        state = self._drone_command_state()
+        visible = state.get("camera_visible")
+        if not isinstance(visible, set):
+            visible = set(visible or ())
+            state["camera_visible"] = visible
+        return (int(x), int(y), int(z)) in visible
+
+    def _examine_drone_camera_cursor(self):
+        state = self._drone_command_state()
+        x, y, z = self._drone_camera_cursor_tuple()
+        if not self._drone_camera_cursor_visible(x, y, z):
+            state["feedback"] = "Drone camera has no line of sight there."
+            return True
+        state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, x, y, z)
+        state["feedback"] = "Drone camera examined the cursor."
+        return True
+
+    def _fire_drone_attack_cursor(self):
+        state = self._drone_command_state()
+        record = self._selected_drone_command_record()
+        if not isinstance(record, dict):
+            state["feedback"] = "Selected drone is unavailable."
+            return True
+        x, y, z = self._drone_camera_cursor_tuple()
+        if not self._drone_camera_cursor_visible(x, y, z):
+            state["feedback"] = "Drone camera has no line of sight there."
+            return True
+        self.sim.emit(Event(
+            "drone_weapon_fire_request",
+            eid=self.player_eid,
+            controller_eid=self.player_eid,
+            drone_eid=record.get("eid"),
+            target_x=x,
+            target_y=y,
+            target_z=z,
+            weapon_kind="auto",
+            consume_turn=True,
+        ))
+        state["feedback"] = "Drone weapon command sent."
+        self._refresh_drone_command_ui(announce_unavailable=True)
+        return True
+
+    def _move_drone_camera_cursor(self, dx, dy):
+        state = self._drone_command_state()
+        x, y, z = self._drone_camera_cursor_tuple()
+        nx = int(x) + int(dx)
+        ny = int(y) + int(dy)
+        if not self.sim.tilemap.in_bounds(nx, ny):
+            state["feedback"] = "Drone camera cursor hit the map edge."
+            return True
+        if not self._drone_camera_cursor_visible(nx, ny, z):
+            state["feedback"] = "Drone camera LOS does not reach there."
+            return True
+        self._set_drone_camera_cursor(nx, ny, z)
+        state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, nx, ny, z)
+        state["feedback"] = "Drone camera cursor moved."
+        return True
+
+    def _handle_drone_camera_input(self, physical_input, zoom_mode):
+        state = self._drone_command_state()
+        if not bool(state.get("camera_open")):
+            return False
+        key = self._input_key_code(physical_input)
+        if str(zoom_mode).strip().lower() == "overworld":
+            self._close_drone_command_ui()
+            return True
+        if key == 27:
+            self._close_drone_camera_ui()
+            state["feedback"] = "Returned to drone command."
+            self._refresh_drone_command_ui(announce_unavailable=True)
+            return True
+        if key in (ord("q"), ord("Q"), ord("g"), ord("G")):
+            self._close_drone_command_ui()
+            return True
+        if str(state.get("camera_mode", "inspect") or "inspect").strip().lower() == "attack" and key in ENTER_KEYS + (ord("a"), ord("A")):
+            return self._fire_drone_attack_cursor()
+        if key in ENTER_KEYS or key in (ord("x"), ord("X")):
+            return self._examine_drone_camera_cursor()
+        movement_delta = self._input_movement_delta(physical_input)
+        if movement_delta is not None:
+            dx, dy = movement_delta
+            return self._move_drone_camera_cursor(dx, dy)
+        return True
+
+    def _handle_drone_command_input(self, physical_input, zoom_mode):
+        state = self._drone_command_state()
+        if not bool(state.get("open")):
+            return False
+        if bool(state.get("camera_open")):
+            return self._handle_drone_camera_input(physical_input, zoom_mode)
+        key = self._input_key_code(physical_input)
+        if str(zoom_mode).strip().lower() == "overworld":
+            self._close_drone_command_ui()
+            return True
+        if key in (27, ord("q"), ord("Q"), ord("g"), ord("G")):
+            self._close_drone_command_ui()
+            return True
+        if key in (ord("["), ord("{")):
+            self._cycle_drone_command_selection(-1)
+            return True
+        if key in (ord("]"), ord("}")):
+            self._cycle_drone_command_selection(1)
+            return True
+        if key in ENTER_KEYS or key in (ord("i"), ord("I")):
+            self._refresh_drone_command_ui(announce_unavailable=True)
+            return True
+        record = self._selected_drone_command_record()
+        if key in (ord("x"), ord("X")):
+            self._open_drone_camera_ui(record)
+            return True
+        if key in (ord("a"), ord("A")) and bool(drone_weapon_status((record or {}).get("state"), item_catalog=self.catalog, tick=int(getattr(self.sim, "tick", 0) or 0)).get("armed")):
+            self._open_drone_attack_ui(record)
+            return True
+        if key in (ord("H"),):
+            self._emit_drone_command_request(record, "hold")
+            return True
+        if key in (ord("f"), ord("F")):
+            self._emit_drone_command_request(record, "follow")
+            return True
+        if key in (ord("r"), ord("R")):
+            self._emit_drone_command_request(record, "return")
+            return True
+        if key in (ord("m"), ord("M")):
+            self._emit_drone_command_request(record, "mapping")
+            return True
+        movement_delta = self._input_movement_delta(physical_input)
+        if movement_delta is not None:
+            dx, dy = movement_delta
+            self._emit_drone_command_request(record, "move", dx=dx, dy=dy, consume_turn=True)
+            return True
+        return True
+
+    def _drone_sheet_records(self):
+        return drone_sheet_records(self.sim, self.player_eid, item_catalog=self.catalog)
+
+    def _refresh_drone_sheet_ui(self, *, announce_unavailable=False):
+        state = self._drone_sheet_state()
+        records = self._drone_sheet_records()
+        selected = state.get("selected_drone_eid")
+        selected_record = next((record for record in records if record.get("eid") == selected), None)
+        if selected_record is None and records:
+            selected_record = records[0]
+            state["selected_drone_eid"] = selected_record.get("eid")
+            if bool(state.get("open")) and announce_unavailable:
+                state["feedback"] = "Selected drone unavailable; switched to nearest manageable drone."
+        if selected_record is None:
+            state["selected_drone_eid"] = None
+            state["eligible"] = []
+            state["rows"] = []
+            state["status_lines"] = []
+            state["selected_index"] = 0
+            state["scroll"] = 0
+            if bool(state.get("open")):
+                state["open"] = False
+                if announce_unavailable:
+                    self.sim.emit(Event(
+                        "drone_sheet_blocked",
+                        eid=self.player_eid,
+                        controller_eid=self.player_eid,
+                        reason="selected_unavailable",
+                    ))
+            return None
+
+        selected_index = next((idx for idx, record in enumerate(records) if record.get("eid") == selected_record.get("eid")), 0)
+        visible_start = max(0, min(selected_index, max(0, len(records) - DRONE_SHEET_VISIBLE_SLOTS)))
+        if selected_index >= visible_start + DRONE_SHEET_VISIBLE_SLOTS:
+            visible_start = selected_index - DRONE_SHEET_VISIBLE_SLOTS + 1
+        state["eligible"] = [
+            {
+                "eid": record.get("eid"),
+                "label": record.get("label"),
+                "distance": record.get("distance", 0),
+                "accessible": bool(record.get("accessible")),
+                "selected": record.get("eid") == selected_record.get("eid"),
+            }
+            for record in records
+        ]
+        state["visible_start"] = int(visible_start)
+        state["tabs"] = tuple(DRONE_SHEET_TABS)
+        tab = str(state.get("tab", "status") or "status").strip().lower()
+        if tab not in DRONE_SHEET_TABS:
+            tab = "status"
+            state["tab"] = tab
+        rows = list(drone_sheet_tab_rows(
+            self.sim,
+            self.player_eid,
+            selected_record,
+            tab=tab,
+            cargo_side=state.get("cargo_side", "pack"),
+            module_side=state.get("module_side", "drone"),
+            item_catalog=self.catalog,
+        ))
+        state["rows"] = rows
+        state["status_lines"] = list(drone_sheet_status_lines(selected_record, item_catalog=self.catalog))
+        if rows:
+            state["selected_index"] = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
+        else:
+            state["selected_index"] = 0
+        state["scroll"] = max(0, min(int(state.get("scroll", 0) or 0), max(0, len(rows) - 1)))
+        return selected_record
+
+    def _open_drone_sheet_ui(self, zoom_mode=None):
+        zoom_mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
+        state = self._drone_sheet_state()
+        if zoom_mode == "overworld" or self._drone_sheet_modal_blocked():
+            state["feedback"] = "Drone sheet is not available right now."
+            self.sim.emit(Event("drone_sheet_blocked", eid=self.player_eid, controller_eid=self.player_eid, reason="ui_busy"))
+            return True
+        record = self._refresh_drone_sheet_ui()
+        if record is None:
+            state["feedback"] = "No deployed drone to manage."
+            self.sim.emit(Event("drone_sheet_blocked", eid=self.player_eid, controller_eid=self.player_eid, reason="no_manageable_drone"))
+            return True
+        state["open"] = True
+        state["feedback"] = "Drone sheet open."
+        self.sim.emit(Event(
+            "drone_sheet_opened",
+            eid=self.player_eid,
+            controller_eid=self.player_eid,
+            drone_eid=record.get("eid"),
+            chassis_class=getattr(record.get("state"), "chassis_class", None),
+            count=len(state.get("eligible", ()) or ()),
+        ))
+        return True
+
+    def _close_drone_sheet_ui(self):
+        state = self._drone_sheet_state()
+        state["open"] = False
+        state["feedback"] = ""
+        return True
+
+    def _cycle_drone_sheet_selection(self, step):
+        state = self._drone_sheet_state()
+        records = self._drone_sheet_records()
+        if not records:
+            self._refresh_drone_sheet_ui(announce_unavailable=True)
+            return None
+        selected = state.get("selected_drone_eid")
+        index = next((idx for idx, record in enumerate(records) if record.get("eid") == selected), 0)
+        index = (int(index) + int(step)) % len(records)
+        state["selected_drone_eid"] = records[index].get("eid")
+        state["selected_index"] = 0
+        state["scroll"] = 0
+        state["feedback"] = f"Selected {records[index].get('label', 'drone')}."
+        return self._refresh_drone_sheet_ui()
+
+    def _set_drone_sheet_tab(self, tab):
+        state = self._drone_sheet_state()
+        tab = str(tab or "").strip().lower()
+        if tab not in DRONE_SHEET_TABS:
+            return False
+        state["tab"] = tab
+        state["selected_index"] = 0
+        state["scroll"] = 0
+        state["feedback"] = f"Drone sheet: {tab}."
+        self._refresh_drone_sheet_ui(announce_unavailable=True)
+        return True
+
+    def _toggle_drone_sheet_cargo_side(self):
+        state = self._drone_sheet_state()
+        state["cargo_side"] = "drone" if str(state.get("cargo_side", "pack")).strip().lower() == "pack" else "pack"
+        state["selected_index"] = 0
+        state["scroll"] = 0
+        state["feedback"] = f"Cargo view: {'drone' if state['cargo_side'] == 'drone' else 'pack'}."
+        self._refresh_drone_sheet_ui(announce_unavailable=True)
+        return True
+
+    def _toggle_drone_sheet_module_side(self):
+        state = self._drone_sheet_state()
+        state["module_side"] = "pack" if str(state.get("module_side", "drone")).strip().lower() == "drone" else "drone"
+        state["selected_index"] = 0
+        state["scroll"] = 0
+        state["feedback"] = f"Module bay: {'pack' if state['module_side'] == 'pack' else 'installed'}."
+        self._refresh_drone_sheet_ui(announce_unavailable=True)
+        return True
+
+    def _selected_drone_sheet_record(self):
+        return self._refresh_drone_sheet_ui(announce_unavailable=True)
+
+    def _selected_drone_sheet_row(self):
+        state = self._drone_sheet_state()
+        rows = list(state.get("rows", ()) or ())
+        if not rows:
+            return None
+        index = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
+        state["selected_index"] = index
+        return rows[index]
+
+    def _emit_drone_sheet_blocked(self, record, reason, *, action=None):
+        self.sim.emit(Event(
+            "drone_sheet_blocked",
+            eid=self.player_eid,
+            controller_eid=self.player_eid,
+            drone_eid=(record or {}).get("eid") if isinstance(record, dict) else None,
+            chassis_class=getattr((record or {}).get("state"), "chassis_class", None) if isinstance(record, dict) else None,
+            reason=str(reason or "blocked").strip().lower() or "blocked",
+            action=str(action or "").strip().lower(),
+        ))
+
+    def _drone_sheet_item_name(self, result):
+        entry = result.get("entry") if isinstance(result, dict) else None
+        if isinstance(entry, dict):
+            return item_display_name(entry.get("item_id"), metadata=entry.get("metadata"), item_catalog=self.catalog)
+        item_id = result.get("new_battery_item_id") if isinstance(result, dict) else None
+        return item_display_name(item_id, item_catalog=self.catalog) if item_id else "item"
+
+    def _activate_selected_drone_sheet_row(self):
+        state = self._drone_sheet_state()
+        record = self._selected_drone_sheet_record()
+        row = self._selected_drone_sheet_row()
+        if record is None or row is None:
+            self._emit_drone_sheet_blocked(record, "selected_unavailable")
+            return True
+        if not bool(row.get("actionable", False)):
+            state["feedback"] = "That drone sheet row is read-only."
+            return True
+
+        tab = str(state.get("tab", "status") or "status").strip().lower()
+        if tab == "cargo":
+            instance_id = str(row.get("instance_id", "") or "").strip()
+            if not instance_id:
+                state["feedback"] = "No cargo row selected."
+                return True
+            if str(state.get("cargo_side", "pack")).strip().lower() == "drone":
+                result = transfer_drone_cargo_to_player(
+                    self.sim,
+                    self.player_eid,
+                    record.get("eid"),
+                    instance_id,
+                    item_catalog=self.catalog,
+                )
+            else:
+                result = transfer_player_cargo_to_drone(
+                    self.sim,
+                    self.player_eid,
+                    record.get("eid"),
+                    instance_id,
+                    item_catalog=self.catalog,
+                )
+            if bool(result.get("ok")):
+                item_name = self._drone_sheet_item_name(result)
+                state["feedback"] = f"Transferred {item_name}."
+                entry = result.get("entry") if isinstance(result.get("entry"), dict) else {}
+                self.sim.emit(Event(
+                    "drone_cargo_transferred",
+                    eid=self.player_eid,
+                    controller_eid=self.player_eid,
+                    drone_eid=record.get("eid"),
+                    chassis_class=getattr(record.get("state"), "chassis_class", None),
+                    direction=result.get("direction"),
+                    item_id=entry.get("item_id"),
+                    quantity=entry.get("quantity", 1),
+                    item_name=item_name,
+                    used=result.get("used"),
+                    capacity=result.get("capacity"),
+                ))
+            else:
+                reason = result.get("reason", "blocked")
+                state["feedback"] = f"Cargo transfer blocked: {str(reason).replace('_', ' ')}."
+                self._emit_drone_sheet_blocked(record, reason, action="cargo")
+            self._refresh_drone_sheet_ui(announce_unavailable=True)
+            return True
+
+        if tab == "battery":
+            instance_id = str(row.get("instance_id", "") or "").strip()
+            if not instance_id:
+                state["feedback"] = "No spare battery selected."
+                return True
+            result = swap_drone_battery(
+                self.sim,
+                self.player_eid,
+                record.get("eid"),
+                instance_id,
+                item_catalog=self.catalog,
+            )
+            if bool(result.get("ok")):
+                item_name = self._drone_sheet_item_name(result)
+                state["feedback"] = f"Swapped in {item_name}."
+                self.sim.emit(Event(
+                    "drone_battery_swapped",
+                    eid=self.player_eid,
+                    controller_eid=self.player_eid,
+                    drone_eid=record.get("eid"),
+                    chassis_class=getattr(record.get("state"), "chassis_class", None),
+                    new_battery_item_id=result.get("new_battery_item_id"),
+                    old_battery_item_id=result.get("old_battery_item_id"),
+                    item_name=item_name,
+                    battery_charge=result.get("battery_charge"),
+                    battery_charge_max=result.get("battery_charge_max"),
+                    previous=result.get("previous"),
+                ))
+            else:
+                reason = result.get("reason", "blocked")
+                state["feedback"] = f"Battery swap blocked: {str(reason).replace('_', ' ')}."
+                self._emit_drone_sheet_blocked(record, reason, action="battery")
+            self._refresh_drone_sheet_ui(announce_unavailable=True)
+            return True
+
+        if tab == "modules":
+            action = str(row.get("action", "") or "").strip().lower()
+            if action == "install_module":
+                instance_id = str(row.get("instance_id", "") or "").strip()
+                result = install_drone_module(
+                    self.sim,
+                    self.player_eid,
+                    record.get("eid"),
+                    instance_id,
+                    item_catalog=self.catalog,
+                )
+                event_name = "drone_module_installed"
+            elif action == "remove_module":
+                result = remove_drone_module(
+                    self.sim,
+                    self.player_eid,
+                    record.get("eid"),
+                    row.get("module_index"),
+                    item_catalog=self.catalog,
+                )
+                event_name = "drone_module_removed"
+            else:
+                state["feedback"] = "No module edit selected."
+                return True
+            if bool(result.get("ok")):
+                item_name = self._drone_sheet_item_name(result)
+                state["feedback"] = f"{'Installed' if event_name.endswith('installed') else 'Removed'} {item_name}."
+                self.sim.emit(Event(
+                    event_name,
+                    eid=self.player_eid,
+                    controller_eid=self.player_eid,
+                    drone_eid=record.get("eid"),
+                    chassis_class=getattr(record.get("state"), "chassis_class", None),
+                    item_id=(result.get("entry") or {}).get("item_id") if isinstance(result.get("entry"), dict) else None,
+                    item_name=item_name,
+                    errors=tuple(result.get("errors", ()) or ()),
+                ))
+            else:
+                reason = result.get("reason", "blocked")
+                details = "; ".join(str(error) for error in result.get("errors", ()) if str(error).strip())
+                state["feedback"] = f"Module edit blocked: {str(reason).replace('_', ' ')}{(': ' + details) if details else ''}."
+                self._emit_drone_sheet_blocked(record, reason, action="modules")
+            self._refresh_drone_sheet_ui(announce_unavailable=True)
+            return True
+
+        if tab == "schematic":
+            action = str(row.get("action", "") or "").strip().lower()
+            if action == "swap_chassis":
+                result = swap_drone_chassis(
+                    self.sim,
+                    self.player_eid,
+                    record.get("eid"),
+                    str(row.get("instance_id", "") or "").strip(),
+                    item_catalog=self.catalog,
+                )
+                event_name = "drone_chassis_swapped"
+            elif action == "swap_power_center":
+                result = swap_drone_power_center(
+                    self.sim,
+                    self.player_eid,
+                    record.get("eid"),
+                    str(row.get("instance_id", "") or "").strip(),
+                    item_catalog=self.catalog,
+                )
+                event_name = "drone_power_core_swapped"
+            elif action == "paint":
+                result = paint_drone(
+                    self.sim,
+                    self.player_eid,
+                    record.get("eid"),
+                    row.get("paint_key"),
+                    row.get("paint_color"),
+                    item_catalog=self.catalog,
+                )
+                event_name = "drone_paint_changed"
+            else:
+                state["feedback"] = "No schematic edit selected."
+                return True
+            if bool(result.get("ok")):
+                if event_name == "drone_paint_changed":
+                    item_name = str(result.get("paint_color") or "paint")
+                    state["feedback"] = f"Paint set to {item_name}."
+                else:
+                    item_name = self._drone_sheet_item_name(result)
+                    state["feedback"] = f"Schematic updated: {item_name}."
+                self.sim.emit(Event(
+                    event_name,
+                    eid=self.player_eid,
+                    controller_eid=self.player_eid,
+                    drone_eid=record.get("eid"),
+                    chassis_class=getattr(record.get("state"), "chassis_class", None),
+                    item_id=result.get("new_item_id"),
+                    item_name=item_name,
+                    paint_key=result.get("paint_key"),
+                    paint_color=result.get("paint_color"),
+                    old_item_id=result.get("old_item_id"),
+                    errors=tuple(result.get("errors", ()) or ()),
+                ))
+            else:
+                reason = result.get("reason", "blocked")
+                details = "; ".join(str(error) for error in result.get("errors", ()) if str(error).strip())
+                state["feedback"] = f"Schematic edit blocked: {str(reason).replace('_', ' ')}{(': ' + details) if details else ''}."
+                self._emit_drone_sheet_blocked(record, reason, action="schematic")
+            self._refresh_drone_sheet_ui(announce_unavailable=True)
+            return True
+
+        state["feedback"] = "That tab is read-only."
+        return True
+
+    def _handle_drone_sheet_input(self, physical_input, zoom_mode):
+        state = self._drone_sheet_state()
+        if not bool(state.get("open")):
+            return False
+        key = self._input_key_code(physical_input)
+        if str(zoom_mode).strip().lower() == "overworld":
+            self._close_drone_sheet_ui()
+            return True
+        if key in (27, ord("q"), ord("Q"), ord("G")):
+            self._close_drone_sheet_ui()
+            return True
+        if key in (ord("["), ord("{")):
+            self._cycle_drone_sheet_selection(-1)
+            return True
+        if key in (ord("]"), ord("}")):
+            self._cycle_drone_sheet_selection(1)
+            return True
+        if key in tuple(ord(str(idx)) for idx in range(1, len(DRONE_SHEET_TABS) + 1)):
+            self._set_drone_sheet_tab(DRONE_SHEET_TABS[key - ord("1")])
+            return True
+        if key in (KEY_LEFT, ord("h"), ord("H")):
+            if str(state.get("tab", "")).strip().lower() == "cargo":
+                self._toggle_drone_sheet_cargo_side()
+            elif str(state.get("tab", "")).strip().lower() == "modules":
+                self._toggle_drone_sheet_module_side()
+            else:
+                current = DRONE_SHEET_TABS.index(str(state.get("tab", "status")).strip().lower())
+                self._set_drone_sheet_tab(DRONE_SHEET_TABS[(current - 1) % len(DRONE_SHEET_TABS)])
+            return True
+        if key in (KEY_RIGHT, ord("l"), ord("L")):
+            if str(state.get("tab", "")).strip().lower() == "cargo":
+                self._toggle_drone_sheet_cargo_side()
+            elif str(state.get("tab", "")).strip().lower() == "modules":
+                self._toggle_drone_sheet_module_side()
+            else:
+                current = DRONE_SHEET_TABS.index(str(state.get("tab", "status")).strip().lower())
+                self._set_drone_sheet_tab(DRONE_SHEET_TABS[(current + 1) % len(DRONE_SHEET_TABS)])
+            return True
+        rows = list(state.get("rows", ()) or ())
+        if key in (KEY_UP, ord("k"), ord("K")):
+            state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 1)
+            state["scroll"] = min(int(state.get("scroll", 0) or 0), int(state["selected_index"]))
+            return True
+        if key in (KEY_DOWN, ord("j"), ord("J")):
+            state["selected_index"] = min(max(0, len(rows) - 1), int(state.get("selected_index", 0) or 0) + 1)
+            return True
+        if key in ENTER_KEYS or key in (ord("u"), ord("U")):
+            return self._activate_selected_drone_sheet_row()
+        self._refresh_drone_sheet_ui(announce_unavailable=True)
+        return True
 
     def _normalize_input_event(self, raw):
         physical = normalize_physical_input(raw)
@@ -1460,6 +2516,7 @@ class InputSystem(System):
         debug_state=None,
         inventory_state=None,
         trade_state=None,
+        drone_sheet_state=None,
     ):
         state = self._auto_walk_state()
         if not state.get("active"):
@@ -1474,6 +2531,7 @@ class InputSystem(System):
             or (debug_state and debug_state.get("open"))
             or (inventory_state and inventory_state.get("open"))
             or (trade_state and trade_state.get("open"))
+            or (drone_sheet_state and drone_sheet_state.get("open"))
             or (look_state and look_state.get("active"))
         ):
             return False
@@ -1553,6 +2611,7 @@ class InputSystem(System):
         debug_state=None,
         inventory_state=None,
         trade_state=None,
+        drone_sheet_state=None,
     ):
         state = self._auto_drive_state()
         if not state.get("active"):
@@ -1567,6 +2626,7 @@ class InputSystem(System):
             or (debug_state and debug_state.get("open"))
             or (inventory_state and inventory_state.get("open"))
             or (trade_state and trade_state.get("open"))
+            or (drone_sheet_state and drone_sheet_state.get("open"))
             or (look_state and look_state.get("active"))
         ):
             return False
@@ -1625,6 +2685,7 @@ class InputSystem(System):
         debug_state=None,
         inventory_state=None,
         trade_state=None,
+        drone_sheet_state=None,
     ):
         state = self._local_drive_state()
         if not state.get("active"):
@@ -1639,6 +2700,7 @@ class InputSystem(System):
             or (debug_state and debug_state.get("open"))
             or (inventory_state and inventory_state.get("open"))
             or (trade_state and trade_state.get("open"))
+            or (drone_sheet_state and drone_sheet_state.get("open"))
             or (look_state and look_state.get("active"))
         ):
             return False
@@ -3574,6 +4636,10 @@ class InputSystem(System):
         if action_id == "map" and not state.get("open") and not trade_state.get("open"):
             self._emit_player_action("zoom_overworld", consume_turn=False)
             return True
+        if action_id == "drone_command":
+            return self._open_drone_command_ui(zoom_mode)
+        if action_id == "drone_sheet":
+            return self._open_drone_sheet_ui(zoom_mode)
         if action_id == "look":
             self._activate_look_mode(zoom_mode=zoom_mode, purpose="inspect")
             return True
@@ -4647,7 +5713,7 @@ class InputSystem(System):
         state["last_repeat_at"] = float(now)
         return key
 
-    def _should_collapse_input_burst(self, *, look_state=None, help_state=None, dialog_state=None, character_state=None, report_state=None, log_state=None, debug_state=None, inventory_state=None, trade_state=None):
+    def _should_collapse_input_burst(self, *, look_state=None, help_state=None, dialog_state=None, character_state=None, report_state=None, log_state=None, debug_state=None, inventory_state=None, trade_state=None, drone_sheet_state=None):
         if help_state and help_state.get("open"):
             return False
         if dialog_state and dialog_state.get("open"):
@@ -4663,6 +5729,8 @@ class InputSystem(System):
         if inventory_state and inventory_state.get("open"):
             return False
         if trade_state and trade_state.get("open"):
+            return False
+        if drone_sheet_state and drone_sheet_state.get("open"):
             return False
 
         if look_state and look_state.get("active"):
@@ -4736,6 +5804,13 @@ class InputSystem(System):
         if self._local_drive_state().get("active"):
             self._stop_local_drive(reason="blocked", announce=False)
 
+    def on_drone_command_target_changed(self, event):
+        del event
+        if bool(self._drone_command_state().get("open")):
+            self._refresh_drone_command_ui(announce_unavailable=True)
+        if bool(self._drone_sheet_state().get("open")):
+            self._refresh_drone_sheet_ui(announce_unavailable=True)
+
     def on_chunk_stream_changed(self, event):
         del event
         state = self._report_state()
@@ -4761,6 +5836,8 @@ class InputSystem(System):
         log_state = self._log_state()
         debug_state = self._debug_state()
         action_menu_state = self._action_menu_state()
+        drone_command_state = self._drone_command_state()
+        drone_sheet_state = self._drone_sheet_state()
         zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
         physical_input = self._next_input_event(
             collapse_burst=self._should_collapse_input_burst(
@@ -4773,6 +5850,7 @@ class InputSystem(System):
                 debug_state=debug_state,
                 inventory_state=state,
                 trade_state=trade_state,
+                drone_sheet_state=drone_sheet_state,
             )
         )
         key = self._input_key_code(physical_input)
@@ -4780,6 +5858,12 @@ class InputSystem(System):
             key = self._held_aim_repeat_key(look_state)
             physical_input = key_physical_input(key) if key is not None else None
         if physical_input is None and key is None:
+            if drone_command_state.get("open"):
+                self._refresh_drone_command_ui(announce_unavailable=True)
+                return
+            if drone_sheet_state.get("open"):
+                self._refresh_drone_sheet_ui(announce_unavailable=True)
+                return
             if action_menu_state.get("open"):
                 return
             if self._maybe_continue_auto_walk(
@@ -4793,6 +5877,7 @@ class InputSystem(System):
                 debug_state=debug_state,
                 inventory_state=state,
                 trade_state=trade_state,
+                drone_sheet_state=drone_sheet_state,
             ):
                 return
             if self._maybe_continue_local_drive(
@@ -4806,6 +5891,7 @@ class InputSystem(System):
                 debug_state=debug_state,
                 inventory_state=state,
                 trade_state=trade_state,
+                drone_sheet_state=drone_sheet_state,
             ):
                 return
             if self._maybe_continue_auto_drive(
@@ -4819,6 +5905,7 @@ class InputSystem(System):
                 debug_state=debug_state,
                 inventory_state=state,
                 trade_state=trade_state,
+                drone_sheet_state=drone_sheet_state,
             ):
                 return
             return
@@ -4863,6 +5950,14 @@ class InputSystem(System):
 
         if key == ord("?") and not look_state.get("active"):
             help_state["open"] = True
+            return
+
+        if drone_command_state.get("open"):
+            self._handle_drone_command_input(physical_input, zoom_mode)
+            return
+
+        if drone_sheet_state.get("open"):
+            self._handle_drone_sheet_input(physical_input, zoom_mode)
             return
 
         if look_state.get("active"):

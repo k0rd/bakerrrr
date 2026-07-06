@@ -9,7 +9,7 @@ from .world import World, normalize_building_levels
 from .eventlog import EventLog
 from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
-from game.components import AI, CreatureIdentity, PlayerAssets, Position
+from game.components import AI, CreatureIdentity, DroneState, PlayerAssets, Position
 from game.items import prepare_ground_item_stack_metadata
 from game.property_access import COMMON_AREA_ROOM_KINDS
 from game.system_support.actor_attention_runtime import actor_attention_state, warmth_protected_chunks
@@ -658,6 +658,44 @@ class Simulation:
     def chunk_coords(self, x, y):
         return (x // self.chunk_size, y // self.chunk_size)
 
+    def _player_controlled_drone_chunks(self):
+        player_eid = getattr(self, "player_eid", None)
+        try:
+            player_eid = int(player_eid) if player_eid is not None else None
+        except (TypeError, ValueError):
+            player_eid = None
+        if player_eid is None:
+            return set()
+
+        chunks = set()
+        drone_states = self.ecs.get(DroneState) if getattr(self, "ecs", None) is not None else {}
+        positions = self.ecs.get(Position) if getattr(self, "ecs", None) is not None else {}
+        for eid, state in tuple(drone_states.items()):
+            if str(getattr(state, "mode", "") or "").strip().lower() != "deployed":
+                continue
+            owner_eid = getattr(state, "owner_eid", None)
+            controller_eid = getattr(state, "controller_eid", None)
+            try:
+                owner_eid = int(owner_eid) if owner_eid is not None else None
+            except (TypeError, ValueError):
+                owner_eid = None
+            try:
+                controller_eid = int(controller_eid) if controller_eid is not None else None
+            except (TypeError, ValueError):
+                controller_eid = None
+            owner_tag = str(getattr(state, "owner_tag", "") or "").strip().lower()
+            controller_tag = str(getattr(state, "controller_tag", "") or "").strip().lower()
+            if player_eid not in {owner_eid, controller_eid} and "player" not in {owner_tag, controller_tag}:
+                continue
+            pos = positions.get(eid)
+            if pos is None:
+                continue
+            try:
+                chunks.add(self.chunk_coords(int(pos.x), int(pos.y)))
+            except (TypeError, ValueError):
+                continue
+        return chunks
+
     def stream_world(self, focus_x, focus_y, *, manage_unloads=True):
         cx, cy = self.chunk_coords(focus_x, focus_y)
         previous_loaded = dict(getattr(self.world, "loaded_chunks", {}) or {})
@@ -668,7 +706,8 @@ class Simulation:
             loaded_radius=self.loaded_chunk_radius,
         )
 
-        protected_chunks = set(fire_protected_chunks(self))
+        player_drone_protected = self._player_controlled_drone_chunks()
+        protected_chunks = set(fire_protected_chunks(self)) | set(player_drone_protected)
         if protected_chunks and isinstance(report, dict):
             unloaded = []
             for raw_chunk in tuple(report.get("unloaded", ()) or ()):
@@ -689,6 +728,8 @@ class Simulation:
                         "detail": detail,
                     }
             report["unloaded"] = tuple(unloaded)
+            if player_drone_protected:
+                report["player_drone_protected"] = tuple(sorted(player_drone_protected))
 
         if isinstance(report, dict):
             warmth_protected = set(warmth_protected_chunks(self, report.get("unloaded", ())))
@@ -783,6 +824,7 @@ class Simulation:
         except (TypeError, ValueError):
             player_eid = None
         player_assets = self.ecs.get(PlayerAssets) if getattr(self, "ecs", None) is not None else {}
+        player_drones = self.ecs.get(DroneState) if getattr(self, "ecs", None) is not None else {}
         blockers = []
         for eid in tuple(self.entity_ids_in_chunk(key) or ()):
             try:
@@ -793,6 +835,26 @@ class Simulation:
             if int_eid == player_eid or int_eid in player_assets:
                 blockers.append(int_eid)
                 continue
+            drone_state = player_drones.get(int_eid)
+            if drone_state is not None:
+                owner_eid = getattr(drone_state, "owner_eid", None)
+                controller_eid = getattr(drone_state, "controller_eid", None)
+                try:
+                    owner_eid = int(owner_eid) if owner_eid is not None else None
+                except (TypeError, ValueError):
+                    owner_eid = None
+                try:
+                    controller_eid = int(controller_eid) if controller_eid is not None else None
+                except (TypeError, ValueError):
+                    controller_eid = None
+                owner_tag = str(getattr(drone_state, "owner_tag", "") or "").strip().lower()
+                controller_tag = str(getattr(drone_state, "controller_tag", "") or "").strip().lower()
+                if (
+                    player_eid in {owner_eid, controller_eid}
+                    or "player" in {owner_tag, controller_tag}
+                ):
+                    blockers.append(int_eid)
+                    continue
             if memberships.get(int_eid) == key or int_eid in chunk_roster:
                 continue
         return tuple(blockers)

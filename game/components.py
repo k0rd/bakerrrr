@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from game.drone_runtime import drone_loadout_summary, normalize_packed_drone_metadata
 from game.items import (
     item_metadata_has_scratch_roll,
     item_metadata_with_creation_seed,
@@ -2669,6 +2670,123 @@ class PlayerAssets:
     def __init__(self, credits=100):
         self.credits = int(credits)
         self.owned_property_ids = set()
+
+
+class DroneState:
+    def __init__(
+        self,
+        *,
+        owner_eid=None,
+        owner_tag=None,
+        controller_eid=None,
+        controller_tag=None,
+        faction_id=None,
+        legal_owner_tag=None,
+        chassis_item_id=None,
+        chassis_class=None,
+        power_center_item_id=None,
+        battery_item_id=None,
+        battery_charge=0,
+        battery_charge_max=0,
+        hull_hp=1,
+        hull_hp_max=1,
+        modules=None,
+        cargo=None,
+        paint=None,
+        mode="packed",
+        procedure_key=None,
+        home=None,
+        range_limit=0,
+        deployed_tick=None,
+        last_command=None,
+        target=None,
+        target_eid=None,
+        source_item_id="packed_drone",
+        source_item_instance_id=None,
+        source_metadata=None,
+        loadout_errors=None,
+    ):
+        self.owner_eid = owner_eid
+        self.owner_tag = str(owner_tag or "").strip() or None
+        self.controller_eid = controller_eid
+        self.controller_tag = str(controller_tag or "").strip() or None
+        self.faction_id = str(faction_id or "").strip() or None
+        self.legal_owner_tag = str(legal_owner_tag or "").strip() or None
+        self.chassis_item_id = str(chassis_item_id or "").strip().lower() or None
+        self.chassis_class = str(chassis_class or "").strip().upper() or None
+        self.power_center_item_id = str(power_center_item_id or "").strip().lower() or None
+        self.battery_item_id = str(battery_item_id or "").strip().lower() or None
+        self.battery_charge = int(max(0, battery_charge or 0))
+        self.battery_charge_max = int(max(0, battery_charge_max or 0))
+        self.hull_hp_max = int(max(1, hull_hp_max or 1))
+        try:
+            hull_value = int(hull_hp if hull_hp is not None else self.hull_hp_max)
+        except (TypeError, ValueError):
+            hull_value = self.hull_hp_max
+        self.hull_hp = int(max(0, min(self.hull_hp_max, hull_value)))
+        self.modules = [dict(module) for module in (modules or ()) if isinstance(module, dict)]
+        self.cargo = [dict(entry) for entry in (cargo or ()) if isinstance(entry, dict)]
+        self.paint = dict(paint or {})
+        self.mode = str(mode or "packed").strip().lower() or "packed"
+        self.procedure_key = str(procedure_key or "").strip().lower() or None
+        self.home = tuple(home) if isinstance(home, (list, tuple)) else None
+        self.range_limit = int(max(0, range_limit or 0))
+        self.deployed_tick = None if deployed_tick is None else int(deployed_tick)
+        self.last_command = str(last_command or "").strip().lower() or None
+        self.target = tuple(target) if isinstance(target, (list, tuple)) else None
+        self.target_eid = target_eid
+        self.source_item_id = str(source_item_id or "packed_drone").strip().lower() or "packed_drone"
+        self.source_item_instance_id = str(source_item_instance_id or "").strip() or None
+        self.source_metadata = dict(source_metadata or {})
+        self.loadout_errors = tuple(str(error) for error in (loadout_errors or ()) if str(error).strip())
+
+    @classmethod
+    def from_packed_metadata(
+        cls,
+        metadata=None,
+        *,
+        source_item_instance_id=None,
+        source_item_id="packed_drone",
+        owner_eid=None,
+        owner_tag=None,
+        controller_eid=None,
+        controller_tag=None,
+        deployed_tick=None,
+        item_catalog=None,
+    ):
+        normalized = normalize_packed_drone_metadata(metadata, item_catalog=item_catalog)
+        summary = drone_loadout_summary(normalized, item_catalog=item_catalog)
+        return cls(
+            owner_eid=owner_eid if owner_eid is not None else normalized.get("owner_eid"),
+            owner_tag=owner_tag if owner_tag is not None else normalized.get("owner_tag"),
+            controller_eid=controller_eid if controller_eid is not None else normalized.get("controller_eid"),
+            controller_tag=controller_tag if controller_tag is not None else normalized.get("controller_tag"),
+            faction_id=normalized.get("faction_id"),
+            legal_owner_tag=normalized.get("legal_owner_tag"),
+            chassis_item_id=normalized.get("chassis_item_id"),
+            chassis_class=summary.get("chassis_class") or normalized.get("chassis_class"),
+            power_center_item_id=normalized.get("power_center_item_id"),
+            battery_item_id=normalized.get("battery_item_id"),
+            battery_charge=summary.get("battery_charge", normalized.get("battery_charge", 0)),
+            battery_charge_max=summary.get("battery_charge_max", normalized.get("battery_charge_max", 0)),
+            hull_hp=summary.get("hull_hp", normalized.get("hull_hp", 1)),
+            hull_hp_max=summary.get("hull_hp_max", normalized.get("hull_hp_max", 1)),
+            modules=normalized.get("modules", ()),
+            cargo=normalized.get("cargo", ()),
+            paint=normalized.get("paint", {}),
+            mode=normalized.get("mode", "packed"),
+            procedure_key=normalized.get("procedure_key"),
+            home=normalized.get("home"),
+            range_limit=summary.get("range_limit", normalized.get("range_limit", 0)),
+            deployed_tick=deployed_tick,
+            last_command=normalized.get("last_command"),
+            target=normalized.get("target"),
+            target_eid=normalized.get("target_eid"),
+            source_item_id=source_item_id,
+            source_item_instance_id=source_item_instance_id or normalized.get("source_item_instance_id"),
+            source_metadata=normalized,
+            loadout_errors=summary.get("errors", ()),
+        )
 
 
 class VehicleState:

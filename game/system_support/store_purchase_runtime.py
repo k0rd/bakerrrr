@@ -10,6 +10,7 @@ import hashlib
 from collections.abc import Mapping
 
 from game.components import NPCSocial, PlayerAssets
+from game.drone_runtime import drone_profile_for_item
 from game.economy import item_trade_pressure_bias
 from game.items import ITEM_CATALOG
 
@@ -131,6 +132,21 @@ def item_purchase_tags(item_id, entry=None):
         tags.add(legal_status)
     if canonical_store_item_id(item_id) == "phone":
         tags.update({"phone", "communication", "device"})
+    drone_profile = drone_profile_for_item(item_id, item_catalog=ITEM_CATALOG)
+    drone_kind = str(drone_profile.get("kind", "") or "").strip().lower()
+    if drone_kind:
+        tags.update({"drone", "device"})
+        if drone_kind == "assembly":
+            tags.update({"drone_assembly", "tool", "restricted"})
+        elif drone_kind == "chassis":
+            tags.update({"drone_part", "part", "tool"})
+        elif drone_kind == "power_center":
+            tags.update({"drone_part", "part", "device", "battery", "tool"})
+        elif drone_kind == "battery":
+            tags.update({"drone_part", "part", "battery", "tool"})
+        elif drone_kind == "module":
+            tags.update({"drone_part", "drone_module", "part", "device"})
+            tags.update(str(capability or "").strip().lower() for capability in drone_profile.get("capabilities", ()) if str(capability or "").strip())
     if isinstance(item_def.get("armor"), Mapping):
         tags.update({"armor", "wearable"})
     if isinstance(item_def.get("disguise"), Mapping):

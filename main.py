@@ -78,6 +78,7 @@ from game.custom_content import (
 )
 from game.final_notice import show_final_notice, show_run_end_notice
 from game.flora_runtime import ensure_chunk_flora
+from game.drone_system import DroneSystem
 from game.items import ITEM_CATALOG
 from game.hunting_runtime import HuntingCarcassSystem
 from game.large_span_places import register_large_span_child_properties
@@ -627,6 +628,7 @@ def _register_runtime_systems(sim, view, player):
     camera_system = CameraSystem(sim, player)
     skill_progression_system = SkillProgressionSystem(sim, player)
     item_system = ItemSystem(sim, player)
+    drone_system = DroneSystem(sim)
     incident_knowledge_system = IncidentKnowledgeSystem(sim)
     observed_incident_consequence_system = ObservedIncidentConsequenceSystem(sim)
     observed_incident_response_system = ObservedIncidentResponseSystem(sim)
@@ -726,6 +728,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(camera_system, 5)
     _live_timeskip_stride(cover_system, 10)
     _live_timeskip_stride(item_system, 1)
+    _live_timeskip_stride(drone_system, 0)
     _live_timeskip_stride(incident_knowledge_system, 10)
     _live_timeskip_stride(observed_incident_consequence_system, 10)
     _live_timeskip_stride(observed_incident_response_system, 10)
@@ -788,6 +791,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(camera_system)
     sim.register_system(skill_progression_system)
     sim.register_system(item_system)
+    sim.register_system(drone_system)
     sim.register_system(incident_knowledge_system)
     sim.register_system(observed_incident_consequence_system)
     sim.register_system(observed_incident_response_system)
