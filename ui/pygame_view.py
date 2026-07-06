@@ -1760,6 +1760,84 @@ class PygameView:
         )
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_drone_overlay(self, x, y, color=None, attrs=0):
+        color_key = str(color or "").strip().lower() if isinstance(color, str) else ""
+        base_color = "item_metal" if color_key in {"", "item_restricted"} else color
+        frame = self._styled_overlay_color(base_color, attrs=attrs, bold_scale=1.06)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        mid_x = self.cell_px // 2
+        stroke_w = max(1, self.cell_px // 18)
+        outline = self._alpha_color("item_outline", 184)
+        glass = self._alpha_color("item_glass", 168)
+        highlight = self._alpha_color("item_highlight", 148)
+        tread = self._darkened_rgba(frame, 166, amount=0.58)
+        fill = (frame[0], frame[1], frame[2], 172)
+        stroke = self._lightened_rgba(frame, 222, amount=0.18)
+
+        backing = self._local_tile_rect(inset=max(2, self.cell_px // 9), min_size=7)
+        self._draw_legibility_backing(
+            overlay,
+            backing,
+            color="item_outline",
+            alpha=50,
+            radius=max(2, self.cell_px // 7),
+        )
+
+        body = self.pygame.Rect(
+            max(3, self.cell_px // 5),
+            max(4, self.cell_px // 3),
+            self.cell_px - max(6, (self.cell_px // 5) * 2),
+            max(5, self.cell_px // 3),
+        )
+        tread_h = max(2, self.cell_px // 8)
+        left_tread = self.pygame.Rect(
+            body.left - max(2, self.cell_px // 12),
+            body.bottom - tread_h,
+            max(4, body.w // 2),
+            tread_h,
+        )
+        right_tread = self.pygame.Rect(
+            body.centerx,
+            body.bottom - tread_h,
+            max(4, body.w // 2),
+            tread_h,
+        )
+
+        self.pygame.draw.rect(overlay, outline, body.move(1, 1), border_radius=max(2, self.cell_px // 9))
+        self.pygame.draw.rect(overlay, fill, body, border_radius=max(2, self.cell_px // 9))
+        self.pygame.draw.rect(overlay, stroke, body, stroke_w, border_radius=max(2, self.cell_px // 9))
+        self.pygame.draw.rect(overlay, tread, left_tread, border_radius=max(1, self.cell_px // 22))
+        self.pygame.draw.rect(overlay, tread, right_tread, border_radius=max(1, self.cell_px // 22))
+
+        dome_r = max(2, self.cell_px // 7)
+        dome_y = body.top - max(1, self.cell_px // 12)
+        self.pygame.draw.circle(overlay, outline, (mid_x + 1, dome_y + 1), dome_r)
+        self.pygame.draw.circle(overlay, glass, (mid_x, dome_y), dome_r)
+        self.pygame.draw.circle(overlay, stroke, (mid_x, dome_y), dome_r, max(1, stroke_w))
+        self.pygame.draw.circle(
+            overlay,
+            highlight,
+            (mid_x - max(1, dome_r // 3), dome_y - max(1, dome_r // 3)),
+            max(1, dome_r // 3),
+        )
+
+        mast_top = max(2, body.top - max(4, self.cell_px // 4))
+        mast_x = body.right - max(2, self.cell_px // 6)
+        self.pygame.draw.line(overlay, stroke, (mast_x, body.top), (mast_x, mast_top), max(1, stroke_w))
+        self.pygame.draw.circle(overlay, highlight, (mast_x, mast_top), max(1, stroke_w + 1))
+        self.pygame.draw.line(
+            overlay,
+            highlight,
+            (body.left + max(2, self.cell_px // 8), body.centery),
+            (body.right - max(2, self.cell_px // 8), body.centery),
+            max(1, stroke_w),
+        )
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _draw_item_overlay(self, x, y, color=None, attrs=0, *, kind="ground"):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
         cell_x = int(x) * self.cell_px
@@ -4935,6 +5013,9 @@ class PygameView:
         if color_key == "projectile" or semantic_key.startswith("projectile"):
             self._draw_projectile_overlay(x, y, glyph, color=color or "projectile", attrs=attrs)
             return "projectile"
+        if semantic_key == "entity_drone":
+            self._draw_drone_overlay(x, y, color=color, attrs=attrs)
+            return "entity_drone"
         infra_kind_map = {
             "infra_lamp": "lamp",
             "infra_pole": "pole",
