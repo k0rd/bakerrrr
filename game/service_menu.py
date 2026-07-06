@@ -59,6 +59,7 @@ from game.property_runtime import (
 )
 from game.justice_dispatch_runtime import request_player_justice_dispatch
 from game.service_runtime import (
+    CASINO_CRASH_MAX_MULTIPLIER,
     CASINO_KENO_DRAW_COUNT,
     CASINO_KENO_MAX_PICKS,
     CASINO_KENO_NUMBER_COUNT,
@@ -83,10 +84,16 @@ from game.service_runtime import (
     _casino_craps_resolve,
     _casino_craps_stage_bet,
     _casino_craps_start,
+    _casino_crash_adjust_auto,
+    _casino_crash_advance,
+    _casino_crash_cashout,
+    _casino_crash_cycle_auto_step,
+    _casino_crash_launch,
     _casino_crash_multiplier_for_step,
     _casino_crash_normalize_session,
     _casino_crash_resolve,
-    _casino_crash_start,
+    _casino_crash_setup,
+    _casino_crash_toggle_auto,
     _casino_bloom_cards_cashout,
     _casino_bloom_cards_grow,
     _casino_bloom_cards_normalize_session,
@@ -187,6 +194,28 @@ class ServiceMenuSystem(System):
         self.sim.events.subscribe("banking_action_blocked", self.on_banking_action_blocked)
         self.sim.events.subscribe("insurance_policy_purchased", self.on_insurance_policy_purchased)
         self.sim.events.subscribe("insurance_action_blocked", self.on_insurance_action_blocked)
+
+    def update(self):
+        state = self._casino_ui_state()
+        if not bool(state.get("open")) or str(state.get("service", "")).strip().lower() != "crash":
+            return
+        session = _casino_crash_normalize_session(state.get("session"))
+        if not session or session.get("phase") != "live":
+            return
+        prop = self.sim.properties.get(state.get("property_id"))
+        if not isinstance(prop, dict):
+            prop = {
+                "id": session.get("property_id") or state.get("property_id"),
+                "name": session.get("property_name", "Casino"),
+            }
+        selected = self._selected_casino_row()
+        selected_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
+        next_session, round_result = _casino_crash_advance(session, getattr(self.sim, "tick", 0))
+        if round_result:
+            self._settle_casino_round(prop, "crash", round_result)
+            return
+        if next_session and next_session != session:
+            self._open_crash_table(prop, next_session, selected_id=selected_id)
 
     def _dialog_ui_state(self):
         state = getattr(self.sim, "dialog_ui", None)
@@ -513,6 +542,7 @@ class ServiceMenuSystem(System):
         return_to="",
         return_option_id="",
         selected_id="",
+        pause_time=True,
     ):
         state = self._casino_ui_state()
         dialog_state = self._dialog_ui_state()
@@ -520,7 +550,7 @@ class ServiceMenuSystem(System):
         dialog_state["close_pending"] = False
         dialog_state["machine_action"] = None
         dialog_state["casino_session"] = None
-        self.sim.set_time_paused(True, reason="dialog")
+        self.sim.set_time_paused(bool(pause_time), reason="dialog")
         state.update({
             "open": True,
             "mode": str(mode or "floor").strip().lower() or "floor",
@@ -1772,7 +1802,62 @@ class ServiceMenuSystem(System):
             art=session,
         )
 
-    def _open_crash_table(self, prop, session, *, notice=""):
+    def _crash_auto_label(self, session):
+        auto = float(session.get("auto_cashout_multiplier", 0.0) or 0.0) if isinstance(session, dict) else 0.0
+        return "OFF" if auto <= 0.0 else f"x{auto:.2f}"
+
+    def _open_crash_setup(self, prop, session, *, notice="", selected_id=""):
+        session = _casino_crash_normalize_session(session)
+        if not session:
+            self._present_service_result("Crash", ["That machine lost the live graph.", "Start a fresh round."], property_id=prop.get("id") if isinstance(prop, dict) else None)
+            return
+        wager = int(session.get("wager", 0) or 0)
+        step = float(session.get("auto_step", 0.10) or 0.10)
+        transcript = []
+        notice = str(notice or "").strip()
+        if notice:
+            transcript.append(notice)
+        context = session.get("table_context") if isinstance(session.get("table_context"), dict) else {}
+        table_read = str(context.get("table_read", "")).strip()
+        if table_read:
+            transcript.append(table_read)
+        transcript.extend([
+            f"Stake {_credit_amount_label(wager)} is ready, but not posted yet.",
+            f"Auto cash out: {self._crash_auto_label(session)}.",
+            f"Adjustment step: x{step:.2f}.",
+            f"Auto range: x1.01 to x{CASINO_CRASH_MAX_MULTIPLIER:.2f}.",
+            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+        ])
+        rows = [
+            {"id": "crash:auto", "label": f"Auto cash out {self._crash_auto_label(session)}"},
+            {"id": "crash:step", "label": f"Adjustment step x{step:.2f}"},
+            {"id": "crash:launch", "label": f"Launch {_credit_amount_label(wager)}"},
+        ]
+        state = self._casino_ui_state()
+        host_style = str(state.get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
+        return_to = str(state.get("return_to", "floor" if host_style == "floor" else "service_menu")).strip().lower()
+        self._open_casino_ui(
+            mode="live",
+            prop=prop,
+            host_style=host_style,
+            title=f"Crash: {self._casino_prop_name(prop)}",
+            subtitle="Set the graph",
+            body_lines=transcript,
+            rail_lines=self._casino_common_rail_lines(prop, service="crash", session=session),
+            rows=rows,
+            hint="Left/right adjusts setup. Space toggles auto or launches. Esc backs out.",
+            close_pending=False,
+            floor_page=state.get("floor_page", "games"),
+            service="crash",
+            session=session,
+            art=session,
+            return_to=return_to,
+            return_option_id="crash",
+            selected_id=selected_id or "crash:auto",
+            pause_time=True,
+        )
+
+    def _open_crash_table(self, prop, session, *, notice="", selected_id=""):
         session = _casino_crash_normalize_session(session)
         if not session:
             self._present_service_result("Crash", ["That machine lost the live graph.", "Start a fresh round."], property_id=prop.get("id") if isinstance(prop, dict) else None)
@@ -1784,27 +1869,43 @@ class ServiceMenuSystem(System):
         notice = str(notice or "").strip()
         if notice:
             transcript.append(notice)
+        context = session.get("table_context") if isinstance(session.get("table_context"), dict) else {}
+        table_read = str(context.get("table_read", "")).strip()
+        if table_read:
+            transcript.append(table_read)
         transcript.extend([
             f"Stake {_credit_amount_label(wager)} is posted.",
             f"Current multiplier: x{current:.2f}.",
-            f"Next ride would push toward x{next_multiplier:.2f}.",
-            "Cash out now to take the visible multiplier, or ride one more tick and risk the graph breaking.",
+            f"Next tick pushes toward x{next_multiplier:.2f}.",
+            f"Auto cash out: {self._crash_auto_label(session)}.",
+            "Cash out now to take the visible multiplier. The graph keeps running while the city moves.",
             f"Wallet {_credit_amount_label(self._wallet_credits())}.",
         ])
-        topics = [
-            {"id": "crash:ride", "label": f"Ride toward x{next_multiplier:.2f}"},
+        rows = [
             {"id": "crash:cashout", "label": f"Cash out x{current:.2f}"},
         ]
-        self._open_casino_modal(
-            prop,
-            "crash",
+        state = self._casino_ui_state()
+        host_style = str(state.get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
+        return_to = str(state.get("return_to", "floor" if host_style == "floor" else "service_menu")).strip().lower()
+        self._open_casino_ui(
+            mode="live",
+            prop=prop,
+            host_style=host_style,
+            title=f"Crash: {self._casino_prop_name(prop)}",
             subtitle="Live graph",
-            transcript=transcript,
-            topics=topics,
-            hint="Ride or cash out. Esc walks away and forfeits the posted stake.",
-            mode="casino:crash:live",
+            body_lines=transcript,
+            rail_lines=self._casino_common_rail_lines(prop, service="crash", session=session),
+            rows=rows,
+            hint="Space or Enter cashes out. Esc walks away and forfeits the posted stake.",
+            close_pending=False,
+            floor_page=state.get("floor_page", "games"),
+            service="crash",
             session=session,
             art=session,
+            return_to=return_to,
+            return_option_id="crash",
+            selected_id=selected_id or "crash:cashout",
+            pause_time=False,
         )
 
     def _start_casino_round(self, prop, service, wager):
@@ -1839,16 +1940,16 @@ class ServiceMenuSystem(System):
             return
 
         if service == "crash":
-            ok, credits = self._casino_commit_stake(wager)
-            if not ok:
+            credits = self._wallet_credits()
+            if credits < wager:
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
-            session = _contextual_session(_casino_crash_start(self._casino_round_seed(prop, service, wager), wager))
+            session = _contextual_session(_casino_crash_setup(self._casino_round_seed(prop, service, wager), wager, table_context=table_context))
             session.update({
                 "property_id": prop.get("id"),
                 "property_name": prop_name,
             })
-            self._open_crash_table(prop, session)
+            self._open_crash_setup(prop, session)
             return
 
         if service == "video_poker":
@@ -2016,9 +2117,34 @@ class ServiceMenuSystem(System):
             self._settle_casino_round(prop, service, round_result)
             return True
 
-        if service == "crash" and option_id in {"crash:ride", "crash:cashout"}:
-            action = "cashout" if option_id.endswith(":cashout") else "ride"
-            next_session, round_result = _casino_crash_resolve(session, action)
+        if service == "crash" and option_id in {"crash:auto", "crash:step", "crash:launch", "crash:ride", "crash:cashout"}:
+            current = _casino_crash_normalize_session(session)
+            if not current:
+                self._present_service_result("Crash", ["That live graph lost sync.", "Start a fresh round."], property_id=prop.get("id"))
+                return True
+            phase = str(current.get("phase", "live") or "live").strip().lower()
+            if phase == "setup":
+                if option_id == "crash:auto":
+                    self._open_crash_setup(prop, _casino_crash_toggle_auto(current) or current, selected_id="crash:auto")
+                    return True
+                if option_id == "crash:step":
+                    self._open_crash_setup(prop, _casino_crash_cycle_auto_step(current) or current, selected_id="crash:step")
+                    return True
+                if option_id == "crash:launch":
+                    wager = int(current.get("wager", 0) or 0)
+                    ok, credits = self._casino_commit_stake(wager)
+                    if not ok:
+                        self._open_crash_setup(prop, current, notice=f"You need {_credit_amount_label(wager)} to post that stake. Wallet {_credit_amount_label(credits)}.", selected_id="crash:launch")
+                        return True
+                    launched = _casino_crash_launch(current, getattr(self.sim, "tick", 0)) or current
+                    self._open_crash_table(prop, launched)
+                    return True
+                return True
+            if option_id == "crash:cashout":
+                next_session, round_result = _casino_crash_cashout(current)
+            else:
+                action = "cashout" if option_id.endswith(":cashout") else "ride"
+                next_session, round_result = _casino_crash_resolve(current, action)
             if round_result:
                 self._settle_casino_round(prop, service, round_result)
                 return True
@@ -2239,6 +2365,9 @@ class ServiceMenuSystem(System):
             }
         elif service == "crash":
             current = _casino_crash_normalize_session(session)
+            if isinstance(current, dict) and current.get("phase") == "setup":
+                self._clear_casino_session()
+                return
             multiplier = float(current.get("current_multiplier", 1.0) or 1.0) if isinstance(current, dict) else 1.0
             history = tuple(current.get("history", ()) or ()) if isinstance(current, dict) else (1.0,)
             crash_point = float(current.get("crash_point", 0.0) or 0.0) if isinstance(current, dict) else 0.0
@@ -2548,7 +2677,10 @@ class ServiceMenuSystem(System):
                 "social_gain": 0,
                 "stake_already_paid": True,
             }
-        self._emit_casino_round(prop, service, round_result, show_result=False)
+        if service == "crash":
+            self._settle_casino_round(prop, service, round_result)
+        else:
+            self._emit_casino_round(prop, service, round_result, show_result=False)
 
     def _bank_amount_choices(self, available, step):
         try:
@@ -5166,12 +5298,20 @@ class ServiceMenuSystem(System):
         service = str(state.get("service", "") or "").strip().lower()
         dx = int(event.data.get("dx", 0) or 0)
         dy = int(event.data.get("dy", 0) or 0)
+        crash_session = _casino_crash_normalize_session(state.get("session")) if service == "crash" else None
+        crash_phase = str(crash_session.get("phase", "")).strip().lower() if isinstance(crash_session, dict) else ""
 
         if action == "tab" and host_style == "floor" and mode in {"floor", "services"}:
             self._open_casino_floor(prop, page="services" if mode == "floor" else "games")
             return
 
         if action == "back":
+            if service == "crash" and crash_phase == "setup":
+                if host_style == "floor":
+                    self._open_casino_floor(prop, page=state.get("floor_page", "games"), selected_id=f"game:{service}")
+                else:
+                    self._return_from_casino_host(prop)
+                return
             if mode == "result" or bool(state.get("close_pending")):
                 if host_style == "floor":
                     self._open_casino_floor(prop, page=state.get("floor_page", "games"))
@@ -5193,6 +5333,8 @@ class ServiceMenuSystem(System):
             if mode == "live":
                 if self._casino_session():
                     self._forfeit_active_casino_session()
+                    if service == "crash":
+                        return
                 if host_style == "floor":
                     self._open_casino_floor(prop, page=state.get("floor_page", "games"), selected_id=f"game:{service}")
                 else:
@@ -5200,6 +5342,15 @@ class ServiceMenuSystem(System):
                 return
 
         if action == "move":
+            if service == "crash" and crash_phase == "setup" and dx and not dy:
+                row = self._selected_casino_row()
+                row_id = str(row.get("id", "")).strip().lower() if isinstance(row, dict) else ""
+                if row_id == "crash:auto":
+                    self._open_crash_setup(prop, _casino_crash_adjust_auto(crash_session, dx) or crash_session, selected_id="crash:auto")
+                    return
+                if row_id == "crash:step":
+                    self._open_crash_setup(prop, _casino_crash_cycle_auto_step(crash_session, dx) or crash_session, selected_id="crash:step")
+                    return
             if mode in {"floor", "services", "wager"} or (mode == "live" and list(state.get("rows", ()) or ())):
                 step = dy if dy else dx
                 if step:
@@ -5292,6 +5443,24 @@ class ServiceMenuSystem(System):
 
         if action == "primary":
             session = self._casino_session()
+            if service == "crash":
+                current = _casino_crash_normalize_session(session)
+                if not current:
+                    return
+                if current.get("phase") == "live":
+                    _next_session, round_result = _casino_crash_cashout(current)
+                    if round_result:
+                        self._settle_casino_round(prop, service, round_result)
+                    return
+                row = self._selected_casino_row()
+                if row:
+                    self.on_service_menu_execute_request(Event(
+                        "service_menu_execute_request",
+                        eid=self.player_eid,
+                        property_id=state.get("property_id"),
+                        option_id=row.get("id"),
+                    ))
+                return
             if service == "keno":
                 current = _casino_keno_normalize_session(session)
                 if not current:

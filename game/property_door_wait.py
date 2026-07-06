@@ -35,7 +35,6 @@ from game.property_runtime import (
     property_is_storefront as _property_is_storefront,
 )
 from game.system_support.actor_runtime import _entity_is_downed
-from game.system_support.entity_naming import _entity_display_name
 from game.system_support.interaction_ordering import _manhattan
 
 
@@ -415,23 +414,22 @@ def _door_wait_feedback_text(sim, caller_eid, responder_eid, disposition, *, exi
     if caller_eid != player_eid:
         return ""
 
-    responder_name = _entity_display_name(sim, responder_eid, title_case=True) or "Someone"
     mood = str((disposition or {}).get("mood", "neutral") or "neutral").strip().lower() or "neutral"
     if existing:
-        return f"You knock. {responder_name} is already coming to the door."
+        return "You knock. Someone is already coming to the door."
     if answered_now:
         if mood == "hostile":
-            return f"You knock. {responder_name} takes the doorway with a hard look."
+            return "You knock. Someone takes the doorway with a hard look."
         if mood == "friendly":
-            return f"You knock. {responder_name} answers and opens the door for you."
-        return f"You knock. {responder_name} answers and comes to the door."
+            return "You knock. Someone answers and opens the door for you."
+        return "You knock. Someone answers and comes to the door."
     if mood == "hostile":
-        return f"You knock. {responder_name} stirs inside and does not sound pleased."
+        return "You knock. Someone stirs inside and does not sound pleased."
     if mood == "friendly":
-        return f"You knock. {responder_name} answers from inside and starts for the door."
+        return "You knock. Someone answers from inside and starts for the door."
     if mood == "irritated":
-        return f"You knock. {responder_name} answers from inside, sounding annoyed."
-    return f"You knock. {responder_name} starts for the door."
+        return "You knock. Someone answers from inside, sounding annoyed."
+    return "You knock. Someone starts for the door."
 
 
 def _door_wait_no_answer_text(sim, caller_eid):

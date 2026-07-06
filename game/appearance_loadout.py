@@ -1579,7 +1579,7 @@ def human_live_conversation_presentation(sim, eid, *, identity=None, personal_na
         return {"text": "", "segments": []}
     if identity is None:
         identity = sim.ecs.get(CreatureIdentity).get(eid)
-    resolved_name = personal_name or getattr(identity, "personal_name", "")
+    resolved_name = getattr(identity, "personal_name", "") if personal_name is None else personal_name or ""
     profile = build_human_description_profile(
         getattr(sim, "seed", 0),
         eid=eid,
@@ -1678,7 +1678,7 @@ def human_live_look_description_clause(sim, eid, *, identity=None, personal_name
         return ""
     if identity is None:
         identity = sim.ecs.get(CreatureIdentity).get(eid)
-    resolved_name = personal_name or getattr(identity, "personal_name", "")
+    resolved_name = getattr(identity, "personal_name", "") if personal_name is None else personal_name or ""
     profile = build_human_description_profile(
         getattr(sim, "seed", 0),
         eid=eid,

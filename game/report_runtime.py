@@ -55,7 +55,7 @@ from game.service_runtime import (
     _overworld_travel_profile,
     _overworld_travel_tax_text,
 )
-from game.system_support.entity_naming import _entity_display_name
+from game.system_support.entity_naming import _entity_display_name, _entity_viewer_display_name
 from game.systems_business_reputation import (
     property_business_reputation_designations,
     property_business_reputation_scope_profile,
@@ -1307,7 +1307,12 @@ def _known_person_source_name(sim, player_eid, source_eid, *, exclude_eid=None):
     ledger = sim.ecs.get(ContactLedger).get(player_eid)
     entry = ledger.person_entry(source_key) if ledger else None
     if not _person_name_known(entry):
-        display = _entity_display_name(sim, source_key, title_case=True)
+        display = _entity_viewer_display_name(
+            sim,
+            source_key,
+            viewer_eid=player_eid,
+            title_case=True,
+        )
         return "" if str(display or "").strip().lower() == "entity" else display
     return _known_person_name(sim, player_eid, source_key, entry)
 
@@ -1381,8 +1386,10 @@ def build_known_people_report(sim, player_eid, *, limit=None):
         appearance_summary = "<unknown>"
         appearance_description = "<unknown>"
         if met_directly:
-            personal_name = getattr(identity, "personal_name", "") if identity is not None else (
-                name if name != "<unknown>" else ""
+            personal_name = (
+                getattr(identity, "personal_name", "")
+                if identity is not None and _person_name_known(entry)
+                else (name if name != "<unknown>" else "")
             )
             appearance_summary = str(
                 human_look_description_clause(

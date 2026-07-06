@@ -18,11 +18,173 @@ class ColorWordRow:
     slot_bias: tuple[tuple[str, int], ...] = ()
 
 
+@dataclass(frozen=True)
+class ColorFamilyProfile:
+    word: str
+    primary_hue: str
+    hue_families: tuple[str, ...]
+    temperature: str
+    value: str
+    chroma: str
+    style_families: tuple[str, ...] = ()
+    special_families: tuple[str, ...] = ()
+    native_fallback: str = ""
+
+
 _ACCESSORY_SLOTS = ("earrings", "necklace", "bracelet", "ring_left", "ring_right")
 _METAL_BIAS = tuple((slot, 8) for slot in _ACCESSORY_SLOTS)
 _SHOE_BIAS = (("shoes", 4),)
 _OUTER_BIAS = (("outer", 3),)
 _HAT_BIAS = (("hat", 3),)
+
+COLOR_HUE_FAMILIES: tuple[str, ...] = (
+    "black",
+    "white",
+    "gray",
+    "brown",
+    "red",
+    "orange",
+    "yellow",
+    "green",
+    "cyan",
+    "blue",
+    "purple",
+    "pink",
+)
+COLOR_TEMPERATURE_FAMILIES: tuple[str, ...] = ("warm", "cool", "neutral", "mixed")
+COLOR_VALUE_FAMILIES: tuple[str, ...] = ("dark", "mid", "light")
+COLOR_CHROMA_FAMILIES: tuple[str, ...] = ("muted", "ordinary", "bright", "vivid")
+
+_FAMILY_ALIASES: dict[str, str] = {
+    "grey": "gray",
+}
+
+_COLOR_WORD_TOKEN_FAMILY_HINTS: dict[str, tuple[str, ...]] = {
+    "charcoal": ("gray", "black"),
+    "slate": ("gray", "blue"),
+    "silver": ("gray",),
+    "steel": ("gray", "blue"),
+    "aqua": ("cyan", "blue", "green"),
+    "teal": ("cyan", "blue", "green"),
+    "turquoise": ("cyan", "blue", "green"),
+    "violet": ("purple",),
+    "lavender": ("purple",),
+    "lilac": ("purple",),
+    "plum": ("purple",),
+    "magenta": ("pink", "purple"),
+    "rose": ("pink", "red"),
+    "salmon": ("pink", "red"),
+    "coral": ("orange", "pink", "red"),
+    "peach": ("orange", "pink", "red"),
+    "gold": ("yellow", "brown"),
+    "amber": ("yellow", "brown"),
+    "mustard": ("yellow", "brown"),
+    "brass": ("yellow", "brown"),
+    "bronze": ("brown", "yellow"),
+    "copper": ("brown", "orange"),
+    "tan": ("brown", "yellow"),
+    "khaki": ("brown", "yellow"),
+    "sand": ("brown", "yellow"),
+    "olive": ("green", "brown"),
+    "moss": ("green", "brown"),
+    "sage": ("green", "brown"),
+    "forest": ("green", "brown"),
+    "mint": ("green",),
+    "lime": ("green", "yellow"),
+    "navy": ("blue",),
+    "cobalt": ("blue",),
+    "sky": ("blue", "cyan"),
+    "cerulean": ("blue", "cyan"),
+    "indigo": ("purple", "blue"),
+    "periwinkle": ("purple", "blue"),
+    "burgundy": ("red", "purple"),
+    "maroon": ("red", "purple"),
+    "crimson": ("red",),
+    "wine": ("red", "purple"),
+    "rust": ("brown", "orange", "red"),
+}
+
+_STYLE_FAMILY_TAGS = frozenset(
+    {
+        "practical",
+        "polished",
+        "flashy",
+        "jewelry",
+        "rough",
+        "street",
+        "soft",
+        "earth",
+        "metal",
+        "safety",
+        "high_visibility",
+    }
+)
+_SPECIAL_FAMILY_TAGS = frozenset({"imported", "lookup_only", "render_only", "safety", "high_visibility"})
+
+_CURATED_PRIMARY_HUE_OVERRIDES: dict[str, str] = {
+    "black": "black",
+    "total_black": "black",
+    "charcoal": "gray",
+    "white": "white",
+    "ivory": "white",
+    "cream": "white",
+    "gray": "gray",
+    "slate": "gray",
+    "denim": "blue",
+    "blue": "blue",
+    "navy": "blue",
+    "cobalt": "blue",
+    "olive": "green",
+    "green": "green",
+    "moss": "green",
+    "rust": "brown",
+    "brown": "brown",
+    "tan": "brown",
+    "red": "red",
+    "wine": "red",
+    "coral": "orange",
+    "violet": "purple",
+    "pink": "pink",
+    "gold": "yellow",
+    "brass": "yellow",
+    "silver": "gray",
+    "steel": "gray",
+    "onyx": "black",
+    "teal": "cyan",
+    "maroon": "red",
+    "burgundy": "red",
+    "crimson": "red",
+    "orange": "orange",
+    "safety_orange": "orange",
+    "amber": "yellow",
+    "mustard": "yellow",
+    "yellow": "yellow",
+    "copper": "brown",
+    "bronze": "brown",
+    "khaki": "brown",
+    "sand": "brown",
+    "sage": "green",
+    "forest": "green",
+    "emerald": "green",
+    "mint": "green",
+    "lime": "green",
+    "aqua": "cyan",
+    "turquoise": "cyan",
+    "sky": "blue",
+    "cerulean": "blue",
+    "indigo": "purple",
+    "periwinkle": "purple",
+    "lavender": "purple",
+    "lilac": "purple",
+    "purple": "purple",
+    "plum": "purple",
+    "magenta": "pink",
+    "rose": "pink",
+    "salmon": "pink",
+    "peach": "orange",
+    "smoke": "gray",
+    "ash": "gray",
+}
 
 
 def _row(
@@ -832,16 +994,259 @@ def find_closest_native_color_word(
 find_closest_native_color = find_closest_native_color_word
 
 
-def choose_color_word(rng, *, slots=(), include_reserved: bool = False, include_unweighted: bool = False) -> str:
+def _dedupe_tokens(values) -> tuple[str, ...]:
+    out: list[str] = []
+    for value in tuple(values or ()):
+        token = _clean_word(value)
+        if token and token not in out:
+            out.append(token)
+    return tuple(out)
+
+
+def _normalize_family_token(value: object) -> str:
+    token = _clean_word(value)
+    return _FAMILY_ALIASES.get(token, token)
+
+
+def _hsv_for_rgb(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
+    r, g, b = (max(0, min(255, int(channel))) / 255.0 for channel in rgb[:3])
+    hue, saturation, value = colorsys.rgb_to_hsv(r, g, b)
+    return hue * 360.0, saturation, value
+
+
+def _rgb_primary_hue_family(rgb: tuple[int, int, int]) -> str:
+    hue, saturation, value = _hsv_for_rgb(rgb)
+    if saturation <= 0.12:
+        if value <= 0.20:
+            return "black"
+        if value >= 0.82:
+            return "white"
+        return "gray"
+    if hue < 14 or hue >= 345:
+        if value >= 0.55 and saturation <= 0.65:
+            return "pink"
+        return "red"
+    if hue < 38:
+        return "orange"
+    if hue < 70:
+        return "yellow"
+    if hue < 155:
+        return "green"
+    if hue < 195:
+        return "cyan"
+    if hue < 245:
+        return "blue"
+    if hue < 292:
+        return "purple"
+    if hue < 345:
+        return "pink"
+    return "red"
+
+
+def _family_hues_for_token(token: str) -> tuple[str, ...]:
+    clean = _clean_word(token)
+    if not clean:
+        return ()
+    if clean in _COLOR_WORD_TOKEN_FAMILY_HINTS:
+        return _COLOR_WORD_TOKEN_FAMILY_HINTS[clean]
+    family = _normalize_family_token(clean)
+    if family in COLOR_HUE_FAMILIES:
+        return (family,)
+    return ()
+
+
+def _family_hues_for_tags(tags: set[str]) -> tuple[str, ...]:
+    families: list[str] = []
+    for tag in sorted(tags):
+        families.extend(_family_hues_for_token(tag))
+    return _dedupe_tokens(families)
+
+
+def _primary_hue_family(row: ColorWordRow) -> str:
+    if row.word in _CURATED_PRIMARY_HUE_OVERRIDES:
+        return _CURATED_PRIMARY_HUE_OVERRIDES[row.word]
+    tags = set(row.tags)
+    tokens = tuple(row.word.split("_"))
+    for token in tokens:
+        family = _normalize_family_token(token)
+        if family in COLOR_HUE_FAMILIES:
+            return family
+    for token in tokens:
+        families = _family_hues_for_token(token)
+        if families:
+            return families[0]
+    if "pink" in tags or "rose" in tags:
+        return "pink"
+    if "brown" in tags or "earth" in tags and "green" not in tags:
+        return "brown"
+    for tag in ("black", "white", "gray", "red", "orange", "yellow", "green", "cyan", "blue", "purple"):
+        if tag in tags:
+            return _normalize_family_token(tag)
+    return _rgb_primary_hue_family(row.pygame_rgb)
+
+
+def _value_family(row: ColorWordRow) -> str:
+    tags = set(row.tags)
+    if "dark" in tags:
+        return "dark"
+    if "light" in tags:
+        return "light"
+    _hue, _saturation, value = _hsv_for_rgb(row.pygame_rgb)
+    luminance = _relative_luminance(row.pygame_rgb)
+    if value <= 0.32 or luminance <= 0.14:
+        return "dark"
+    if value >= 0.78 or luminance >= 0.62:
+        return "light"
+    return "mid"
+
+
+def _chroma_family(row: ColorWordRow) -> str:
+    tags = set(row.tags)
+    _hue, saturation, value = _hsv_for_rgb(row.pygame_rgb)
+    if "muted" in tags:
+        return "muted"
+    if saturation >= 0.78 and value >= 0.55:
+        return "vivid"
+    if "bright" in tags or "flashy" in tags or (saturation >= 0.45 and value >= 0.48):
+        return "bright"
+    return "ordinary"
+
+
+def _temperature_family(primary_hue: str, tags: set[str]) -> str:
+    warm = "warm" in tags
+    cool = "cool" in tags
+    if warm and cool:
+        return "mixed"
+    if warm:
+        return "warm"
+    if cool:
+        return "cool"
+    if primary_hue in {"red", "orange", "yellow", "pink", "brown"}:
+        return "warm"
+    if primary_hue in {"green", "cyan", "blue", "purple"}:
+        return "cool"
+    return "neutral"
+
+
+@lru_cache(maxsize=8192)
+def _color_word_family_profile_cached(word: str) -> ColorFamilyProfile | None:
+    row = _ROWS_BY_WORD.get(word)
+    if row is None:
+        return None
+    tags = set(row.tags)
+    primary = _primary_hue_family(row)
+    hue_families = [primary]
+    for token in row.word.split("_"):
+        hue_families.extend(_family_hues_for_token(token))
+    hue_families.extend(_family_hues_for_tags(tags))
+    rgb_family = _rgb_primary_hue_family(row.pygame_rgb)
+    if rgb_family != primary:
+        hue_families.append(rgb_family)
+    style_families = [tag for tag in row.tags if tag in _STYLE_FAMILY_TAGS]
+    special_families = [tag for tag in row.tags if tag in _SPECIAL_FAMILY_TAGS]
+    if int(row.roll_weight) <= 0:
+        special_families.append("unweighted")
+    if row.word in {"total_black", "safety_orange"} or "render_only" in tags:
+        special_families.append("reserved")
+    return ColorFamilyProfile(
+        word=row.word,
+        primary_hue=primary,
+        hue_families=_dedupe_tokens(hue_families),
+        temperature=_temperature_family(primary, tags),
+        value=_value_family(row),
+        chroma=_chroma_family(row),
+        style_families=_dedupe_tokens(style_families),
+        special_families=_dedupe_tokens(special_families),
+        native_fallback=find_closest_native_color_word(row.word, default=""),
+    )
+
+
+def color_word_family_profile(word: object) -> ColorFamilyProfile | None:
+    normalized = normalize_color_word(word)
+    if not normalized:
+        return None
+    return _color_word_family_profile_cached(normalized)
+
+
+def color_word_families(word: object, *, axis: str = "hue") -> tuple[str, ...]:
+    profile = color_word_family_profile(word)
+    if profile is None:
+        return ()
+    axis_key = _clean_word(axis or "hue")
+    if axis_key in {"hue", "color", "colors"}:
+        return profile.hue_families
+    if axis_key in {"primary", "primary_hue"}:
+        return (profile.primary_hue,) if profile.primary_hue else ()
+    if axis_key in {"temperature", "temp"}:
+        return (profile.temperature,) if profile.temperature else ()
+    if axis_key in {"value", "lightness"}:
+        return (profile.value,) if profile.value else ()
+    if axis_key in {"chroma", "saturation"}:
+        return (profile.chroma,) if profile.chroma else ()
+    if axis_key in {"style", "styles", "social"}:
+        return profile.style_families
+    if axis_key in {"special", "specials"}:
+        return profile.special_families
+    if axis_key == "all":
+        return _dedupe_tokens(
+            profile.hue_families
+            + (profile.temperature, profile.value, profile.chroma)
+            + profile.style_families
+            + profile.special_families
+        )
+    return ()
+
+
+def color_word_matches_family(word: object, family: object, *, axis: str = "hue") -> bool:
+    family_key = _normalize_family_token(family)
+    if not family_key:
+        return False
+    return family_key in color_word_families(word, axis=axis)
+
+
+def color_words_for_family(
+    family: object,
+    *,
+    axis: str = "hue",
+    include_reserved: bool = True,
+    include_imported: bool = True,
+) -> tuple[str, ...]:
+    return tuple(
+        word
+        for word in approved_color_words(include_reserved=include_reserved, include_imported=include_imported)
+        if color_word_matches_family(word, family, axis=axis)
+    )
+
+
+def choose_color_word(
+    rng,
+    *,
+    slots=(),
+    include_reserved: bool = False,
+    include_unweighted: bool = False,
+    family: object = "",
+    families=(),
+    family_axis: str = "hue",
+) -> str:
     slot_tokens = {
         str(slot or "").strip().lower()
         for slot in tuple(slots or ())
         if str(slot or "").strip()
     }
+    family_values = []
+    if family:
+        family_values.append(family)
+    if isinstance(families, str):
+        family_values.append(families)
+    else:
+        family_values.extend(tuple(families or ()))
+    family_tokens = tuple(token for token in (_normalize_family_token(value) for value in family_values) if token)
     weighted: list[tuple[str, int]] = []
     for row in COLOR_WORD_PALETTE:
         row_weight = int(row.roll_weight)
         if not include_reserved and row_weight <= 0:
+            continue
+        if family_tokens and not any(color_word_matches_family(row.word, token, axis=family_axis) for token in family_tokens):
             continue
         weight = max(0, row_weight)
         if include_unweighted and weight <= 0:

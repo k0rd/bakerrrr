@@ -8,7 +8,13 @@ from math import copysign
 from engine.visibility import has_line_of_sight
 from game.appearance_palette import appearance_color_words, tags_for_color_word
 from game.appearance_loadout import appearance_loadout_for, appearance_metadata_for_entry, appearance_signal_profile
-from game.color_words import color_word_display_name, curated_color_words, find_closest_native_color_word
+from game.color_words import (
+    color_word_display_name,
+    color_word_family_profile,
+    color_word_matches_family,
+    curated_color_words,
+    find_closest_native_color_word,
+)
 from game.components import (
     AI,
     ArmorLoadout,
@@ -258,6 +264,36 @@ def _preference_color_key(color):
     return find_closest_native_color_word(token, default=token) or token
 
 
+def _color_preference_keys(color):
+    token = _key(color)
+    if not token:
+        return ()
+    keys = []
+    profile = color_word_family_profile(token)
+    if profile is not None:
+        keys.extend(profile.hue_families)
+        if profile.native_fallback:
+            keys.append(profile.native_fallback)
+    fallback = _preference_color_key(token)
+    if fallback:
+        keys.append(fallback)
+    if token in _COLOR_PREFERENCE_WORDS:
+        keys.append(token)
+    return _clean_list(keys)
+
+
+def _dialogue_color_family_key(color):
+    profile = color_word_family_profile(color)
+    if profile is not None and profile.primary_hue:
+        return profile.primary_hue
+    return _preference_color_key(color)
+
+
+def _dialogue_color_display_name(color):
+    family = _dialogue_color_family_key(color)
+    return color_word_display_name(family, default=family or color)
+
+
 def _profile_from_loadout(sim, eid):
     loadout = appearance_loadout_for(sim, eid, create=False)
     if loadout is None:
@@ -347,6 +383,7 @@ def _profile_from_loadout(sim, eid):
     if not items and "armor" not in tags and not appearance_signals.get("tags"):
         return None
     primary = _display_label(colors, labels, tags)
+    dialogue_primary = _dialogue_display_label(colors, labels, tags)
     return {
         "source": "loadout",
         "items": tuple(items),
@@ -358,6 +395,7 @@ def _profile_from_loadout(sim, eid):
         "types": _clean_list(types),
         "labels": _clean_list(labels),
         "display_label": primary,
+        "dialogue_display_label": dialogue_primary,
         "signature": "|".join(signature_parts) or primary,
     }
 
@@ -394,6 +432,7 @@ def _profile_from_seeded_description(sim, eid):
         if color in _FLASHY_COLORS:
             tags.add("flashy")
     display = _key(profile.get("attire_compact")) or "outfit"
+    dialogue_display = _dialogue_display_label(colors, (display,), tags)
     return {
         "source": "seeded_description",
         "items": (),
@@ -405,6 +444,7 @@ def _profile_from_seeded_description(sim, eid):
         "types": (),
         "labels": (display,),
         "display_label": display,
+        "dialogue_display_label": dialogue_display,
         "signature": f"npc:{palette_key}:{display}:{_key(profile.get('accessory_compact'))}",
     }
 
@@ -424,6 +464,48 @@ def _display_label(colors, labels, tags):
     if colors:
         return f"{color_word_display_name(colors[0], default=colors[0])} outfit"
     return "outfit"
+
+
+def _dialogue_display_label(colors, labels, tags):
+    labels = [label for label in labels if label and label not in {"armor"}]
+    colors = [color for color in colors if color]
+    if labels:
+        label = labels[0].replace("_", " ")
+        if colors:
+            return f"{_dialogue_color_display_name(colors[0])} {label}".strip()
+        return label
+    if "armor" in tags:
+        return "armor"
+    if "jewelry" in tags:
+        return "jewelry"
+    if colors:
+        return f"{_dialogue_color_display_name(colors[0])} outfit".strip()
+    return "outfit"
+
+
+def _dialogue_label_for_item(item):
+    if not isinstance(item, dict):
+        return ""
+    color = _key(item.get("color"))
+    label = _key(item.get("label") or item.get("type") or item.get("slot"))
+    if not label:
+        return ""
+    label = label.replace("_", " ")
+    if color:
+        return f"{_dialogue_color_display_name(color)} {label}".strip()
+    return label
+
+
+def _dialogue_display_cue(profile, reason_key):
+    reason = _key(reason_key)
+    if reason.startswith("color:"):
+        family = reason.split(":", 1)[1]
+        for item in tuple(profile.get("items", ()) or ()):
+            if color_word_matches_family(item.get("color"), family):
+                cue = _dialogue_label_for_item(item)
+                if cue:
+                    return cue
+    return str(profile.get("dialogue_display_label") or profile.get("display_label") or "outfit").strip()
 
 
 def actor_outfit_profile(sim, eid) -> dict:
@@ -568,9 +650,14 @@ def _weighted_profile_score(profile, taste, *, shared_org_kinds=()):
         if amount:
             contributions.append((amount, tag))
     for idx, color in enumerate(tuple(profile.get("colors", ()) or ())):
-        preference_color = _preference_color_key(color)
-        amount = _safe_float(color_weights.get(preference_color)) * (1.0 if idx == 0 else 0.45)
-        if amount:
+        color_matches = []
+        for preference_color in _color_preference_keys(color):
+            amount = _safe_float(color_weights.get(preference_color))
+            if amount:
+                color_matches.append((amount, preference_color))
+        if color_matches:
+            amount, preference_color = max(color_matches, key=lambda row: abs(row[0]))
+            amount *= 1.0 if idx == 0 else 0.45
             contributions.append((amount, f"color:{preference_color}"))
 
     score = sum(amount for amount, _reason in contributions)
@@ -617,7 +704,11 @@ def visible_outfit_impression(sim, viewer_eid, subject_eid, context="dialogue") 
         "score": score,
         "polarity": polarity,
         "reason_key": reason,
-        "display_cue": str(profile.get("display_label", "") or "outfit").strip(),
+        "display_cue": (
+            _dialogue_display_cue(profile, reason)
+            if _key(context) == "dialogue"
+            else str(profile.get("display_label", "") or "outfit").strip()
+        ),
         "outfit_signature": str(profile.get("signature", "") or "").strip(),
         "context": _key(context) or "dialogue",
     }

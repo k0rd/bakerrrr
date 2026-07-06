@@ -6150,7 +6150,8 @@ class PygameView:
                     continue
             if not history:
                 history = [1.0]
-            max_mult = max(2.0, max(history), float(payload.get("crash_point", 0.0) or 0.0))
+            auto_target = float(payload.get("auto_cashout_multiplier", 0.0) or 0.0)
+            max_mult = max(2.0, max(history), float(payload.get("crash_point", 0.0) or 0.0), auto_target)
             points = []
             for idx, value in enumerate(history):
                 px = graph.left + int((graph.w - 2) * (idx / max(1, len(history) - 1)))
@@ -6160,13 +6161,24 @@ class PygameView:
                 points.append((graph.left + max(8, graph.w // 8), points[0][1] - max(2, graph.h // 12)))
             if len(points) >= 2:
                 self.pygame.draw.lines(self.surface, cursor, False, points, max(2, self.cell_px // 7))
-            if str(payload.get("outcome_key", "")).strip().lower() == "crash":
+            if auto_target > 0.0:
+                auto_y = graph.bottom - int((graph.h - 2) * ((auto_target - 1.0) / max(0.1, max_mult - 1.0)))
+                auto_y = max(graph.top + 2, min(graph.bottom - 2, auto_y))
+                self.pygame.draw.line(self.surface, gold, (graph.left + 2, auto_y), (graph.right - 2, auto_y), 1)
+                _text(f"auto x{auto_target:.2f}", graph.left + 6, max(graph.top + self.cell_px, auto_y - self.cell_px), gold, self._ui_font)
+            outcome_key = str(payload.get("outcome_key", "")).strip().lower()
+            if outcome_key == "crash":
                 mark = points[-1]
                 self.pygame.draw.line(self.surface, red, (mark[0] - 6, mark[1] - 6), (mark[0] + 6, mark[1] + 6), 2)
                 self.pygame.draw.line(self.surface, red, (mark[0] + 6, mark[1] - 6), (mark[0] - 6, mark[1] + 6), 2)
             current = float(payload.get("current_multiplier", history[-1]) or history[-1])
             cashout = float(payload.get("cashout_multiplier", 0.0) or 0.0)
-            label = f"x{cashout:.2f} cashed" if cashout > 0 else f"x{current:.2f}"
+            if outcome_key == "crash":
+                label = f"x{current:.2f} crashed"
+            elif cashout > 0:
+                label = f"x{cashout:.2f} cashed"
+            else:
+                label = f"x{current:.2f} live"
             _text("CRASH", graph.left + 6, graph.top + 3, gold, self._ui_bold_font)
             _text(label, graph.right - max(self.cell_px * 8, 90), graph.top + 3, cursor, self._ui_bold_font)
 

@@ -322,7 +322,11 @@ from game.dialogue_runtime import (
     _world_trait_claim_text,
     _world_trait_claim_value,
 )
-from game.system_support.entity_naming import _entity_display_name
+from game.system_support.entity_naming import (
+    _entity_display_name,
+    _entity_viewer_display_name,
+    _viewer_knows_entity_name,
+)
 from game.criminal_justice_runtime import _justice_snapshot
 from game.system_support.interaction_ordering import (
     _direction_step,
@@ -2045,7 +2049,6 @@ class NPCInteractionSystem(System):
             property_id=property_id or None,
             introduced=False,
             met_directly=True,
-            benefits={"known_name"},
         )
         self._remember_player_relationship_episode(
             npc_eid,
@@ -2057,7 +2060,6 @@ class NPCInteractionSystem(System):
             relation_kind=relation_kind or "contact",
             standing=standing,
             met_directly=True,
-            benefits={"known_name"},
         )
         return changed
 
@@ -6895,7 +6897,14 @@ class NPCInteractionSystem(System):
             or (door_answering and door_answer_mood in {"hostile", "irritated"})
         )
         peaceful_orders_only = bool(suppression and suppression.surrendered)
-        display_name = _entity_display_name(self.sim, npc_eid, title_case=True)
+        real_display_name = _entity_display_name(self.sim, npc_eid, title_case=True)
+        display_name = _entity_viewer_display_name(
+            self.sim,
+            npc_eid,
+            viewer_eid=self.player_eid,
+            title_case=True,
+        )
+        npc_name_known = _viewer_knows_entity_name(self.sim, self.player_eid, npc_eid)
         career_text = _career_label(occupation)
         role_id = str(getattr(ai, "role", "") or "").strip().lower() or "local"
         role_text = str(getattr(ai, "role", "") or "").replace("_", " ").strip() or "local"
@@ -7008,7 +7017,12 @@ class NPCInteractionSystem(System):
             other_relation = str(primary_social_lead.get("relation_text", "")).strip() or "contact"
         intro_source_name = ""
         if intro_entry and intro_entry.get("source_eid") is not None:
-            intro_source_name = _entity_display_name(self.sim, intro_entry.get("source_eid"), title_case=True)
+            intro_source_name = _entity_viewer_display_name(
+                self.sim,
+                intro_entry.get("source_eid"),
+                viewer_eid=self.player_eid,
+                title_case=True,
+            )
         player_profile = self._player_profile()
         rumor_line = self._memory_line(memory, player_profile)
         objective_eval = evaluate_visible_run_objective(self.sim, self.player_eid)
@@ -7256,6 +7270,8 @@ class NPCInteractionSystem(System):
         context = {
             "npc_eid": npc_eid,
             "npc_name": display_name,
+            "npc_real_name": real_display_name,
+            "npc_name_known": npc_name_known,
             "human": human,
             "identity": identity,
             "ai": ai,
@@ -11939,7 +11955,7 @@ class NPCInteractionSystem(System):
                 getattr(self.sim, "seed", 0),
                 eid=npc_eid,
                 identity=identity,
-                personal_name=getattr(identity, "personal_name", "") or personal_name,
+                personal_name="",
             )
             if color:
                 return color
@@ -12131,7 +12147,7 @@ class NPCInteractionSystem(System):
             self.sim,
             context.get("npc_eid"),
             identity=identity,
-            personal_name=getattr(identity, "personal_name", ""),
+            personal_name="",
         )
         segments = [
             dict(segment)
@@ -12831,7 +12847,33 @@ class NPCInteractionSystem(System):
                 bank_id = "name_guarded"
             else:
                 bank_id = "name_first" if ask_count <= 1 else "name_repeat"
-            return {"npc_lines": [self._say(bank_id, context, topic_id=topic_id, count=ask_count, npc_name=context["npc_name"])]}
+            real_name = str(context.get("npc_real_name", "") or "").strip() or str(context["npc_name"])
+            context["npc_name"] = real_name
+            context["npc_name_known"] = True
+            self._remember_player_person_contact(
+                npc_eid,
+                source_eid=None,
+                relation_kind=None,
+                standing=max(0.2, float(context.get("contact_standing", 0.0) or 0.0)),
+                property_id=(
+                    str(context.get("current_prop", {}).get("id", "") or "").strip()
+                    if isinstance(context.get("current_prop"), dict)
+                    else None
+                ),
+                met_directly=True,
+                benefits={"known_name"},
+            )
+            return {
+                "npc_lines": [
+                    self._say(
+                        bank_id,
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                        npc_name=real_name,
+                    )
+                ]
+            }
         if topic_id == "history":
             summary = self._history_summary(context)
             bank_id = "history" if summary else "history_none"
@@ -14639,6 +14681,7 @@ class NPCInteractionSystem(System):
         if not refreshed:
             self._close_dialog()
             return
+        state["title"] = f"Conversation: {refreshed.get('npc_name', 'Someone')}"
         state["subtitle"] = refreshed.get("subtitle", "")
         pending_street_buy_offer = bool(refreshed.get("street_buy_offer_pending"))
         pending_side_job_offer = bool(refreshed.get("side_job_pending_offer"))

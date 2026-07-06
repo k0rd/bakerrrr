@@ -4333,7 +4333,7 @@ def _pick_property_roam_tile(sim, prop, eid, *, role="", intent=""):
                 if interior_weighted:
                     break
 
-    # Outdoor perimeter: walkable tiles just outside the entrance (radius 1-2)
+    # Outdoor frontage: keep spillover near the business, but off the doormat.
     perimeter_weighted = []
     if entry:
         ex, ey, ez = entry
@@ -4345,7 +4345,7 @@ def _pick_property_roam_tile(sim, prop, eid, *, role="", intent=""):
         elif str(intent or "").strip().lower() == "lounging":
             perimeter_weight += 0.1
         perimeter_weight += perimeter_bonus
-        for radius in range(1, 3):
+        for radius in range(2, 4):
             for ddx, ddy in ((radius, 0), (-radius, 0), (0, radius), (0, -radius)):
                 nx, ny = ex + ddx, ey + ddy
                 if not sim.tilemap.is_walkable(nx, ny, ez):

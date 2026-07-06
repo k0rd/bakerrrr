@@ -58,6 +58,26 @@ def _filter_excluded_observers(observer_eids, excluded_eids=()):
     return tuple(observer_eid for observer_eid in observers if observer_eid not in excluded)
 
 
+def _observer_ignores_offender(sim, observer_eid, offender_eid):
+    if offender_eid is None:
+        return False
+    try:
+        return bool(_observer_support()._observer_is_active_contractor_ally(sim, observer_eid, offender_eid))
+    except AttributeError:
+        return False
+
+
+def _filter_observers_for_offender(sim, observer_eids, excluded_eids=(), *, offender_eid=None):
+    observers = _filter_excluded_observers(observer_eids, excluded_eids)
+    if offender_eid is None:
+        return observers
+    return tuple(
+        observer_eid
+        for observer_eid in observers
+        if not _observer_ignores_offender(sim, observer_eid, offender_eid)
+    )
+
+
 def _event_excluded_observer_eids(data, *, event_type=""):
     if not isinstance(data, dict):
         return ()
@@ -116,7 +136,34 @@ def _observer_is_accountable(sim, observer_eid, *, offender_eid=None, allow_play
             pass
     if not allow_player_accountable and observer_eid == getattr(sim, "player_eid", None):
         return False
+    if _observer_ignores_offender(sim, observer_eid, offender_eid):
+        return False
     return _observer_role(sim, observer_eid) != "wildlife"
+
+
+def _filter_accountable_observers(
+    sim,
+    observer_eids,
+    excluded_eids=(),
+    *,
+    offender_eid=None,
+    allow_player_accountable=False,
+):
+    return tuple(
+        observer_eid
+        for observer_eid in _filter_observers_for_offender(
+            sim,
+            observer_eids,
+            excluded_eids,
+            offender_eid=offender_eid,
+        )
+        if _observer_is_accountable(
+            sim,
+            observer_eid,
+            offender_eid=offender_eid,
+            allow_player_accountable=allow_player_accountable,
+        )
+    )
 
 
 def observation_payload_from_observers(
@@ -129,16 +176,18 @@ def observation_payload_from_observers(
     allow_player_accountable=False,
     max_legacy_witnesses=4,
 ):
-    observers = _filter_excluded_observers(observer_eids, exclude_eids)
-    accountable = tuple(
-        observer_eid
-        for observer_eid in observers
-        if _observer_is_accountable(
-            sim,
-            observer_eid,
-            offender_eid=offender_eid,
-            allow_player_accountable=allow_player_accountable,
-        )
+    observers = _filter_observers_for_offender(
+        sim,
+        observer_eids,
+        exclude_eids,
+        offender_eid=offender_eid,
+    )
+    accountable = _filter_accountable_observers(
+        sim,
+        observers,
+        (),
+        offender_eid=offender_eid,
+        allow_player_accountable=allow_player_accountable,
     )
     channels = _normalize_observation_channels(observation_channels)
     if not channels and observers:
@@ -217,13 +266,15 @@ def event_observation_accountability(
     has_explicit_accountable = "accountable_observer_eids" in data
     excluded_eids = _event_excluded_observer_eids(data, event_type=event_type)
 
-    observers = _filter_excluded_observers(
+    observers = _filter_observers_for_offender(
+        sim,
         (
             tuple(_normalize_observer_eids(data.get("observer_eids"))) + tuple(reporter_observers)
             if has_explicit_observers
             else data.get("witnesses")
         ),
         excluded_eids,
+        offender_eid=offender_eid,
     )
     channels = _normalize_observation_channels(data.get("observation_channels"))
     if not channels and observers:
@@ -233,12 +284,18 @@ def event_observation_accountability(
             channels = _normalize_observation_channels(default_channels) or ("actor_witness",)
 
     if has_explicit_accountable:
-        accountable = _filter_excluded_observers(data.get("accountable_observer_eids"), excluded_eids)
+        accountable = _filter_accountable_observers(
+            sim,
+            data.get("accountable_observer_eids"),
+            excluded_eids,
+            offender_eid=offender_eid,
+        )
     else:
-        accountable = tuple(
-            observer_eid
-            for observer_eid in observers
-            if _observer_is_accountable(sim, observer_eid, offender_eid=offender_eid)
+        accountable = _filter_accountable_observers(
+            sim,
+            observers,
+            (),
+            offender_eid=offender_eid,
         )
 
     legacy_witnessed = bool(data.get("witnessed", False))
@@ -252,8 +309,13 @@ def event_observation_accountability(
         and not accountable
     ):
         channels = channels or (_normalize_observation_channels(default_channels) or ("actor_witness",))
-        accountable = _filter_excluded_observers(data.get("witnesses"), excluded_eids)
-        legacy_fallback = True
+        accountable = _filter_accountable_observers(
+            sim,
+            data.get("witnesses"),
+            excluded_eids,
+            offender_eid=offender_eid,
+        )
+        legacy_fallback = bool(accountable)
     elif (
         allow_position_backfill
         and not has_explicit_observers

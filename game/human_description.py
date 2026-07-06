@@ -342,7 +342,9 @@ def _identity_preview(seed, eid, personal_name, identity):
         return {
             "gender_identity": str(getattr(identity, "gender_identity", "") or "").strip().lower(),
         }
-    resolved_name = str(personal_name or getattr(identity, "personal_name", "") or "").strip()
+    resolved_name = str(
+        getattr(identity, "personal_name", "") if personal_name is None else personal_name or ""
+    ).strip()
     if not resolved_name:
         return {}
     preview = seed_human_identity_profile(
@@ -452,7 +454,9 @@ def _structured_standout_mark(standout_compact, rng):
 def build_human_description_profile(seed, *, eid=None, identity=None, personal_name=None):
     if identity is not None and not is_human_identity(identity):
         return None
-    resolved_name = str(personal_name or getattr(identity, "personal_name", "") or "").strip()
+    resolved_name = str(
+        getattr(identity, "personal_name", "") if personal_name is None else personal_name or ""
+    ).strip()
     resolved_eid = 0 if eid is None else int(eid)
     preview = _identity_preview(seed, resolved_eid, resolved_name, identity)
     gender_identity = normalize_gender_identity(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 
+from engine.sites import site_entry_front_cell
 from engine.events import Event
 from game.components import AI, ArmorLoadout, BehaviorProfile, CriminalDriveState, FinancialProfile, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Occupation, Position, PropertyKnowledge, StatusEffects, Vitality, WeaponLoadout
 from game.item_semantics import (
@@ -29,6 +30,7 @@ from game.systems_business_reputation import business_opinion_profile, social_se
 from game.system_support.container_runtime import _unlink_removed_item_from_gear
 from game.system_support.interaction_ordering import _manhattan
 from game.system_support.item_runtime import _apply_item_effects_to_entity
+from game.movement_runtime import _is_traversable_for
 from game.system_support.opportunity_knowledge_runtime import (
     best_opportunity_lead as _best_opportunity_lead,
     mark_opportunity_failure as _mark_opportunity_failure,
@@ -2101,6 +2103,148 @@ def _social_venue_secret_access(sim, actor_eid, prop):
     }
 
 
+def _venue_aperture_and_front_cells(prop):
+    if not isinstance(prop, dict):
+        return frozenset()
+    metadata = prop.get("metadata", {}) if isinstance(prop.get("metadata"), dict) else {}
+    rows = []
+    entry = metadata.get("entry")
+    if isinstance(entry, dict):
+        rows.append(entry)
+    apertures = metadata.get("apertures", ())
+    if isinstance(apertures, (list, tuple, set, frozenset)):
+        rows.extend(row for row in apertures if isinstance(row, dict))
+
+    blocked = set()
+    for row in rows:
+        try:
+            cell = (
+                int(row.get("x")),
+                int(row.get("y")),
+                int(row.get("z", prop.get("z", 0))),
+            )
+        except (TypeError, ValueError):
+            continue
+        blocked.add(cell)
+        cx, cy, cz = cell
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            blocked.add((int(cx + dx), int(cy + dy), int(cz)))
+        front = site_entry_front_cell(row)
+        if front is not None:
+            front_cell = (int(front[0]), int(front[1]), int(front[2]))
+            blocked.add(front_cell)
+            fx, fy, fz = front_cell
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                blocked.add((int(fx + dx), int(fy + dy), int(fz)))
+    return frozenset(blocked)
+
+
+def _venue_footprint_cells(prop, fallback_z):
+    if not isinstance(prop, dict):
+        return ()
+    metadata = prop.get("metadata", {}) if isinstance(prop.get("metadata"), dict) else {}
+    try:
+        prop_z = int(prop.get("z", fallback_z))
+    except (TypeError, ValueError):
+        prop_z = int(fallback_z)
+
+    configured = metadata.get("footprint_cells")
+    cells = []
+    if isinstance(configured, (list, tuple, set, frozenset)):
+        for cell in configured:
+            try:
+                if isinstance(cell, dict):
+                    cells.append((
+                        int(cell.get("x")),
+                        int(cell.get("y")),
+                        int(cell.get("z", prop_z)),
+                    ))
+                elif isinstance(cell, (list, tuple)) and len(cell) >= 2:
+                    cells.append((
+                        int(cell[0]),
+                        int(cell[1]),
+                        int(cell[2]) if len(cell) >= 3 else prop_z,
+                    ))
+            except (TypeError, ValueError):
+                continue
+        if cells:
+            return tuple(cells)
+
+    footprint = metadata.get("footprint")
+    if isinstance(footprint, dict):
+        try:
+            left = int(footprint.get("left"))
+            right = int(footprint.get("right"))
+            top = int(footprint.get("top"))
+            bottom = int(footprint.get("bottom"))
+            cell_z = int(footprint.get("z", prop_z))
+        except (TypeError, ValueError):
+            pass
+        else:
+            return tuple(
+                (int(cell_x), int(cell_y), int(cell_z))
+                for cell_y in range(top, bottom + 1)
+                for cell_x in range(left, right + 1)
+            )
+
+    try:
+        return ((int(prop.get("x")), int(prop.get("y")), int(prop.get("z", prop_z))),)
+    except (TypeError, ValueError):
+        return ()
+
+
+def _social_venue_settle_target(sim, actor_eid, prop, *, origin_x, origin_y, origin_z, fallback=None):
+    """Pick a place to be at a venue, not the doorway used to enter it."""
+    if sim is None or not isinstance(prop, dict):
+        return fallback
+    property_id = str(prop.get("id", "") or "").strip()
+    blocked = _venue_aperture_and_front_cells(prop)
+    scored = []
+    for cell_x, cell_y, cell_z in _venue_footprint_cells(prop, origin_z):
+        if int(cell_z) != int(origin_z):
+            continue
+        cell = (int(cell_x), int(cell_y), int(cell_z))
+        if cell in blocked:
+            continue
+        covered = _property_covering(sim, int(cell_x), int(cell_y), int(cell_z))
+        if property_id and (
+            not isinstance(covered, dict)
+            or str(covered.get("id", "") or "").strip() != property_id
+        ):
+            continue
+        tile = sim.tilemap.tile_at(int(cell_x), int(cell_y), int(cell_z))
+        if tile is None or not bool(getattr(tile, "walkable", False)):
+            continue
+        semantic = str(getattr(tile, "semantic_id", "") or "").strip().lower()
+        glyph = str(getattr(tile, "glyph", "") or "")[:1]
+        if semantic in {"feature_door", "wall_building", "feature_window"} or glyph in {"+", "#"}:
+            continue
+        traversable, _reason = _is_traversable_for(sim, actor_eid, int(cell_x), int(cell_y), int(cell_z))
+        if not traversable:
+            continue
+        distance = _manhattan(int(origin_x), int(origin_y), int(cell_x), int(cell_y))
+        same_floor_blocked = tuple(
+            (int(bx), int(by))
+            for bx, by, bz in blocked
+            if int(bz) == int(cell_z)
+        )
+        if same_floor_blocked:
+            clearance = min(
+                _manhattan(int(cell_x), int(cell_y), int(bx), int(by))
+                for bx, by in same_floor_blocked
+            )
+        else:
+            clearance = 4
+        door_penalty = max(0, 3 - int(clearance)) * 0.75
+        scored.append((float(distance) + door_penalty, int(cell_x), int(cell_y), int(cell_z)))
+
+    if not scored:
+        return fallback
+    scored.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+    _score, cell_x, cell_y, cell_z = scored[0]
+    return (int(cell_x), int(cell_y), int(cell_z))
+
+
 def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12, nutrition=None):
     """Return a (property, focus_position) pair for a nearby social venue.
 
@@ -2143,7 +2287,18 @@ def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12, nutrition
         focus = _property_focus_position(prop)
         if focus is None:
             continue
-        fx, fy, fz = focus
+        target = _social_venue_settle_target(
+            sim,
+            actor_eid,
+            prop,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            origin_z=origin_z,
+            fallback=(int(focus[0]), int(focus[1]), int(focus[2])),
+        )
+        if target is None:
+            continue
+        fx, fy, fz = target
         if int(fz) != origin_z:
             continue
         distance = _manhattan(origin_x, origin_y, int(fx), int(fy))
@@ -2168,9 +2323,9 @@ def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12, nutrition
             sim,
             actor_eid,
             prop,
-            x=int(fx),
-            y=int(fy),
-            z=int(fz),
+            x=int(focus[0]),
+            y=int(focus[1]),
+            z=int(focus[2]),
         )
         if not access.permitted and not access.can_use_services and not (is_public or is_storefront):
             continue

@@ -54,7 +54,10 @@ from game.system_support.crime_plan_runtime import (
     crime_plan_surface_rows,
     record_crime_plan_observation,
 )
-from game.system_support.entity_naming import _entity_display_name
+from game.system_support.entity_naming import (
+    _entity_viewer_display_name,
+    _viewer_knows_entity_name,
+)
 from game.system_support.interaction_ordering import _manhattan
 
 
@@ -277,13 +280,12 @@ class PlayerLookRuntime:
                 if target_eid == eid:
                     labels.append("you")
                     continue
-                identity = identities.get(target_eid)
-                if identity:
-                    name = str(identity.display_name()).replace("_", " ").strip()
-                    if not name:
-                        name = "entity"
-                else:
-                    name = "entity"
+                name = _entity_viewer_display_name(
+                    self.sim,
+                    target_eid,
+                    viewer_eid=eid,
+                    title_case=False,
+                )
                 name = hallucinated_entity_label(self.sim, eid, target_eid, x, y, z, name)
                 labels.append(f"{name}#{target_eid}")
             remaining = len(entities) - len(labels)
@@ -320,7 +322,11 @@ class PlayerLookRuntime:
                             self.sim,
                             target_eid,
                             identity=identity,
-                            personal_name=getattr(identity, "personal_name", ""),
+                            personal_name=(
+                                getattr(identity, "personal_name", "")
+                                if _viewer_knows_entity_name(self.sim, eid, target_eid)
+                                else ""
+                            ),
                         )
                         if appearance:
                             detail_bits.append(f"appearance:{appearance}")
@@ -627,7 +633,12 @@ class PlayerLookRuntime:
             if npc_identity:
                 taxonomy = str(npc_identity.taxonomy_class).title()
                 species = str(npc_identity.species)
-                type_text = _entity_display_name(self.sim, npc_eid, title_case=True)
+                type_text = _entity_viewer_display_name(
+                    self.sim,
+                    npc_eid,
+                    viewer_eid=eid,
+                    title_case=True,
+                )
                 glyph_code = npc_identity.taxonomy_glyph(fallback="N")
                 coat = str(npc_identity.coat_variant or "").replace("_", " ").strip()
             else:

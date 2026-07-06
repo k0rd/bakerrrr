@@ -247,6 +247,7 @@ THREAT_STATES = {"protecting", "investigating"}
 class CriminalJusticeSystem(System):
 
     DETENTION_QUEUE_WINDOW = 30
+    NPC_WANTED_PICKUP_WINDOW = 180
     DETENTION_RADIUS = 10
     JUSTICE_SITE_SEARCH_RADIUS = 24
     PLAYER_BOOKING_RELEASE_GRACE_TICKS = 18
@@ -464,6 +465,7 @@ class CriminalJusticeSystem(System):
         )
         if change is not None:
             self._emit_change_events(change, source_event=source_event, reason=incident_type)
+            self._queue_npc_wanted_detention(change, reason=incident_type)
         return change
 
     def _event_accountability(self, event, *, offender_eid=None, allow_position_backfill=False):
@@ -507,6 +509,46 @@ class CriminalJusticeSystem(System):
         incident[str(field or "justice_accounted")] = True
         incident["justice_accounted_tick"] = int(getattr(self.sim, "tick", 0))
         return incident
+
+    def _queue_npc_wanted_detention(self, change, *, reason="justice_record"):
+        if not isinstance(change, dict):
+            return False
+        try:
+            offender_eid = int(change.get("eid"))
+        except (TypeError, ValueError):
+            return False
+        if offender_eid <= 0 or offender_eid == self.player_eid:
+            return False
+        positions = self.sim.ecs.get(Position)
+        if positions.get(offender_eid) is None:
+            return False
+        snapshot = _justice_snapshot(self.sim, offender_eid)
+        if bool(snapshot.get("in_custody", False)):
+            return False
+        tier = str(snapshot.get("wanted_tier", change.get("after_tier", "clear")) or "clear").strip().lower()
+        if tier not in {"wanted", "arrest_on_sight"}:
+            return False
+
+        tick = int(getattr(self.sim, "tick", 0))
+        window = max(int(self.DETENTION_QUEUE_WINDOW), int(self.NPC_WANTED_PICKUP_WINDOW))
+        expires_at = tick + window
+        current_expires = self.pending_detentions.get(offender_eid)
+        if current_expires is not None and int(current_expires) >= int(expires_at):
+            return False
+        self.pending_detentions[offender_eid] = int(expires_at)
+        self.sim.emit(Event(
+            "npc_detention_queued",
+            eid=offender_eid,
+            wanted_tier=tier,
+            before_tier=str(change.get("before_tier", "clear") or "clear").strip().lower() or "clear",
+            after_tier=str(change.get("after_tier", tier) or tier).strip().lower() or tier,
+            before_score=int(change.get("before_score", 0) or 0),
+            after_score=int(change.get("after_score", 0) or 0),
+            source_event=str((change.get("incident") or {}).get("source_event", "") or "").strip().lower(),
+            reason=str(reason or "justice_record").strip().lower(),
+            expires_at=int(expires_at),
+        ))
+        return True
 
     def _violent_offense_allowed(self, offender_eid, context):
         if context not in VIOLENT_OFFENSE_CONTEXTS:

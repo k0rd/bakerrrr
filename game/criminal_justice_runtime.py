@@ -41,7 +41,7 @@ def observer_is_active_contractor_ally(sim, observer_eid, offender_eid):
         sim,
         observer_eid,
         ally_eid=offender_eid,
-        jobs={"backup", "party"},
+        jobs={"backup", "party", "bodyguard"},
     ) is not None
 
 

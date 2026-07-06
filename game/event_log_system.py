@@ -195,7 +195,7 @@ from game.system_support.intrusion_runtime import (
     _quiet_unwitnessed_tamper,
     _trespass_label_from_score,
 )
-from game.system_support.entity_naming import _entity_display_name
+from game.system_support.entity_naming import _entity_display_name, _entity_viewer_display_name
 from game.system_support.interaction_ordering import (
     _direction_step,
     _interaction_target_order_key,
@@ -689,7 +689,12 @@ class EventLogSystem(System):
     def _npc_label(self, eid, fallback="NPC"):
         if eid is None:
             return str(fallback or "NPC")
-        name = _entity_display_name(self.sim, eid, title_case=True)
+        name = _entity_viewer_display_name(
+            self.sim,
+            eid,
+            viewer_eid=self.player_eid,
+            title_case=True,
+        )
         if name and str(name).strip().lower() != "entity":
             return name
         return f"NPC {eid}"
@@ -1042,7 +1047,13 @@ class EventLogSystem(System):
             except (TypeError, ValueError):
                 blocker_eid = None
             if blocker_eid is not None:
-                return f"You cannot walk past {_entity_display_name(self.sim, blocker_eid, title_case=False)} here."
+                blocker_name = _entity_viewer_display_name(
+                    self.sim,
+                    blocker_eid,
+                    viewer_eid=self.player_eid,
+                    title_case=False,
+                )
+                return f"You cannot walk past {blocker_name} here."
 
         prop = None
         if x is not None and y is not None and z is not None:
@@ -2447,7 +2458,11 @@ class EventLogSystem(System):
         summary = str(event.data.get("summary", "")).strip()
         detail = str(event.data.get("detail", "")).strip()
         npc_eid = event.data.get("npc_eid")
-        speaker = _entity_display_name(self.sim, npc_eid, title_case=True) if npc_eid is not None else "Someone"
+        speaker = (
+            _entity_viewer_display_name(self.sim, npc_eid, viewer_eid=self.player_eid, title_case=True)
+            if npc_eid is not None
+            else "Someone"
+        )
         if summary:
             self._log(
                 f"Opportunity: {speaker} mentions {summary}.",
@@ -2510,7 +2525,11 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         npc_eid = event.data.get("npc_eid")
-        npc_name = _entity_display_name(self.sim, npc_eid, title_case=True) if npc_eid is not None else "Someone"
+        npc_name = (
+            _entity_viewer_display_name(self.sim, npc_eid, viewer_eid=self.player_eid, title_case=True)
+            if npc_eid is not None
+            else "Someone"
+        )
         tactic = str(event.data.get("tactic", "dialogue")).strip().lower() or "dialogue"
         outcome = str(event.data.get("outcome", "wary")).strip().lower() or "wary"
         if outcome == "deescalated":
@@ -2549,7 +2568,11 @@ class EventLogSystem(System):
             relation_kind = str(event.data.get("relation_kind", "")).replace("_", " ").strip().lower()
             prop = self.sim.properties.get(event.data.get("property_id"))
             source_eid = event.data.get("npc_eid")
-            source_name = _entity_display_name(self.sim, source_eid, title_case=True) if source_eid is not None else "Someone"
+            source_name = (
+                _entity_viewer_display_name(self.sim, source_eid, viewer_eid=self.player_eid, title_case=True)
+                if source_eid is not None
+                else "Someone"
+            )
             if prop:
                 prop_name = str(prop.get("name", prop.get("id", "property"))).strip() or "their place"
                 if relation_kind:
@@ -2566,7 +2589,11 @@ class EventLogSystem(System):
         prop = self.sim.properties.get(event.data.get("property_id"))
         prop_name = str(prop.get("name", prop.get("id", "property"))).strip() if prop else "property"
         source_eid = event.data.get("npc_eid")
-        source_name = _entity_display_name(self.sim, source_eid, title_case=True) if source_eid is not None else "Someone"
+        source_name = (
+            _entity_viewer_display_name(self.sim, source_eid, viewer_eid=self.player_eid, title_case=True)
+            if source_eid is not None
+            else "Someone"
+        )
         labels = _contact_benefit_labels(event.data.get("benefits", ()))
         if labels:
             self.sim.log.add(f"Contact: {source_name} can vouch for you at {prop_name} ({', '.join(labels)}).")
@@ -6609,7 +6636,11 @@ class EventLogSystem(System):
         vehicle_name = str(event.data.get("vehicle_name", "") or "").strip() or "The vehicle"
         fuse_ticks = _int_or_default(event.data.get("fuse_ticks"), 0)
         fuse_text = f" in about {fuse_ticks} ticks" if fuse_ticks > 0 else " soon"
-        self.sim.log.add(f"{vehicle_name} starts cooking off. Get clear; it may blow{fuse_text}.")
+        self.sim.log.add(
+            f"{vehicle_name} starts cooking off. Get clear; it may blow{fuse_text}.",
+            channel="general",
+            priority="high",
+        )
 
     def on_vehicle_exploded(self, event):
         vehicle_id = str(event.data.get("vehicle_id", "") or "").strip()

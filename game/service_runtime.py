@@ -5254,6 +5254,12 @@ def _casino_plinko_resolve(seed_token, wager, drop_lane):
     }
 
 
+CASINO_CRASH_MAX_MULTIPLIER = 30.0
+CASINO_CRASH_STEP_TICKS = 5
+CASINO_CRASH_AUTO_STEPS = (0.01, 0.10, 1.00)
+CASINO_CRASH_AUTO_MIN_MULTIPLIER = 1.01
+
+
 def _casino_crash_target_multiplier(seed_token):
     rng = random.Random(f"{seed_token}:crash:point")
     roll = rng.random()
@@ -5277,18 +5283,53 @@ def _casino_crash_multiplier_for_step(step):
     return round(1.0 + (step * 0.18) + ((step * step) * 0.018), 2)
 
 
-def _casino_crash_start(seed_token, wager):
+def _casino_crash_auto_step_value(value):
+    try:
+        value = round(float(value), 2)
+    except (TypeError, ValueError):
+        value = 0.10
+    for option in CASINO_CRASH_AUTO_STEPS:
+        if abs(value - float(option)) < 0.001:
+            return float(option)
+    return 0.10
+
+
+def _casino_crash_normalize_auto_multiplier(value):
+    try:
+        value = round(float(value), 2)
+    except (TypeError, ValueError):
+        return 0.0
+    if value <= 0.0:
+        return 0.0
+    return round(max(CASINO_CRASH_AUTO_MIN_MULTIPLIER, min(CASINO_CRASH_MAX_MULTIPLIER, value)), 2)
+
+
+def _casino_crash_setup(seed_token, wager, *, table_context=None):
     crash_point = round(float(_casino_crash_target_multiplier(seed_token)), 2)
     return {
         "service": "crash",
+        "phase": "setup",
         "seed_token": str(seed_token),
         "wager": int(wager),
         "stake": int(wager),
         "step": 0,
         "current_multiplier": 1.0,
         "crash_point": crash_point,
+        "auto_cashout_multiplier": 0.0,
+        "auto_step": 0.10,
+        "launched_tick": None,
+        "last_step_tick": None,
         "history": (1.0,),
+        "table_context": dict(table_context) if isinstance(table_context, dict) else {},
     }
+
+
+def _casino_crash_start(seed_token, wager):
+    session = _casino_crash_setup(seed_token, wager)
+    session["phase"] = "live"
+    session["launched_tick"] = 0
+    session["last_step_tick"] = 0
+    return session
 
 
 def _casino_crash_normalize_session(session):
@@ -5316,14 +5357,32 @@ def _casino_crash_normalize_session(session):
         history = [1.0]
     if history[-1] != current_multiplier:
         history.append(current_multiplier)
+    phase = str(session.get("phase", "live") or "live").strip().lower()
+    if phase not in {"setup", "live"}:
+        phase = "live"
+    try:
+        launched_tick = session.get("launched_tick")
+        launched_tick = None if launched_tick is None else int(launched_tick)
+    except (TypeError, ValueError):
+        launched_tick = None
+    try:
+        last_step_tick = session.get("last_step_tick")
+        last_step_tick = None if last_step_tick is None else int(last_step_tick)
+    except (TypeError, ValueError):
+        last_step_tick = None
     return {
         "service": "crash",
+        "phase": phase,
         "seed_token": seed_token,
         "wager": int(session.get("wager", 0)),
         "stake": int(session.get("stake", session.get("wager", 0))),
         "step": int(step),
         "current_multiplier": float(current_multiplier),
         "crash_point": float(crash_point),
+        "auto_cashout_multiplier": _casino_crash_normalize_auto_multiplier(session.get("auto_cashout_multiplier", 0.0)),
+        "auto_step": _casino_crash_auto_step_value(session.get("auto_step", 0.10)),
+        "launched_tick": launched_tick,
+        "last_step_tick": last_step_tick,
         "history": tuple(history[-18:]),
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
@@ -5331,37 +5390,192 @@ def _casino_crash_normalize_session(session):
     }
 
 
+def _casino_crash_adjust_auto(session, direction):
+    current = _casino_crash_normalize_session(session)
+    if not current:
+        return None
+    try:
+        direction = int(direction or 0)
+    except (TypeError, ValueError):
+        direction = 0
+    direction = -1 if direction < 0 else (1 if direction > 0 else 0)
+    if direction == 0:
+        return current
+    value = _casino_crash_normalize_auto_multiplier(current.get("auto_cashout_multiplier", 0.0))
+    step = _casino_crash_auto_step_value(current.get("auto_step", 0.10))
+    if value <= 0.0:
+        value = CASINO_CRASH_AUTO_MIN_MULTIPLIER if direction > 0 else 0.0
+    else:
+        value = _casino_crash_normalize_auto_multiplier(value + (step * direction))
+        if direction < 0 and value <= CASINO_CRASH_AUTO_MIN_MULTIPLIER:
+            value = 0.0
+    current["auto_cashout_multiplier"] = float(value)
+    return current
+
+
+def _casino_crash_cycle_auto_step(session, direction=1):
+    current = _casino_crash_normalize_session(session)
+    if not current:
+        return None
+    steps = list(CASINO_CRASH_AUTO_STEPS)
+    current_step = _casino_crash_auto_step_value(current.get("auto_step", 0.10))
+    try:
+        index = steps.index(current_step)
+    except ValueError:
+        index = 1
+    try:
+        direction = int(direction or 0)
+    except (TypeError, ValueError):
+        direction = 1
+    delta = -1 if direction < 0 else 1
+    current["auto_step"] = float(steps[(index + delta) % len(steps)])
+    return current
+
+
+def _casino_crash_toggle_auto(session):
+    current = _casino_crash_normalize_session(session)
+    if not current:
+        return None
+    value = _casino_crash_normalize_auto_multiplier(current.get("auto_cashout_multiplier", 0.0))
+    current["auto_cashout_multiplier"] = 0.0 if value > 0.0 else 2.0
+    return current
+
+
+def _casino_crash_launch(session, now_tick=0):
+    current = _casino_crash_normalize_session(session)
+    if not current:
+        return None
+    try:
+        now_tick = int(now_tick)
+    except (TypeError, ValueError):
+        now_tick = 0
+    current["phase"] = "live"
+    current["step"] = 0
+    current["current_multiplier"] = 1.0
+    current["history"] = (1.0,)
+    current["launched_tick"] = int(now_tick)
+    current["last_step_tick"] = int(now_tick)
+    return current
+
+
+def _casino_crash_cashout(session, *, reason="manual"):
+    current = _casino_crash_normalize_session(session)
+    if not current:
+        return None, None
+    multiplier = float(current.get("current_multiplier", 1.0) or 1.0)
+    crash_point = float(current.get("crash_point", 1.0) or 1.0)
+    wager = int(current.get("wager", 0))
+    reason = str(reason or "manual").strip().lower()
+    auto = reason == "auto"
+    payout = int(round(float(wager) * multiplier))
+    result_lines = [
+        f"{'Auto cash out' if auto else 'Cash out'}: x{multiplier:.2f}.",
+        f"Crash point: x{crash_point:.2f}.",
+        "The credits are already off the table when the graph keeps climbing." if auto else "You step off the graph before it breaks.",
+    ]
+    return None, {
+        "service": "crash",
+        "wager": int(wager),
+        "stake": int(current.get("stake", wager)),
+        "payout": int(payout),
+        "outcome_key": "auto_cashout" if auto else "cashout",
+        "headline": f"{'Auto cash out' if auto else 'Cash out'} at x{multiplier:.2f}.",
+        "detail": "The line keeps screaming, but your credits are already off the table.",
+        "summary": f"Crash {'auto ' if auto else ''}cashout x{multiplier:.2f} before x{crash_point:.2f}.",
+        "result_lines": result_lines,
+        "cashout_multiplier": float(multiplier),
+        "auto_cashout_multiplier": float(current.get("auto_cashout_multiplier", 0.0) or 0.0),
+        "crash_point": float(crash_point),
+        "history": tuple(current.get("history", ()) or ()),
+        "social_gain": _casino_social_gain("crash", f"{current.get('seed_token', '')}:cashout:{multiplier:.2f}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_crash_crash_result(current, next_multiplier):
+    crash_point = float(current.get("crash_point", 1.0) or 1.0)
+    wager = int(current.get("wager", 0))
+    history = list(current.get("history", ()) or ())
+    if not history or round(float(history[-1]), 2) != round(float(next_multiplier), 2):
+        history.append(round(float(next_multiplier), 2))
+    result_lines = [
+        f"Crash: x{crash_point:.2f}.",
+        f"You were riding x{next_multiplier:.2f}.",
+        "The graph snaps vertical, then drops dead.",
+    ]
+    return {
+        "service": "crash",
+        "wager": int(wager),
+        "stake": int(current.get("stake", wager)),
+        "payout": 0,
+        "outcome_key": "crash",
+        "headline": f"Crash at x{crash_point:.2f}.",
+        "detail": "The multiplier breaks before you can pull the stake off the glass.",
+        "summary": f"Crash point x{crash_point:.2f}; ride reached x{next_multiplier:.2f}.",
+        "result_lines": result_lines,
+        "cashout_multiplier": 0.0,
+        "auto_cashout_multiplier": float(current.get("auto_cashout_multiplier", 0.0) or 0.0),
+        "crash_point": float(crash_point),
+        "history": tuple(history[-18:]),
+        "social_gain": _casino_social_gain("crash", f"{current.get('seed_token', '')}:crash:{crash_point:.2f}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_crash_advance(session, now_tick):
+    current = _casino_crash_normalize_session(session)
+    if not current:
+        return None, None
+    if current.get("phase") != "live":
+        return current, None
+    try:
+        now_tick = int(now_tick)
+    except (TypeError, ValueError):
+        now_tick = int(current.get("last_step_tick", 0) or 0)
+    last_tick = current.get("last_step_tick")
+    if last_tick is None:
+        last_tick = current.get("launched_tick")
+    try:
+        last_tick = int(last_tick)
+    except (TypeError, ValueError):
+        last_tick = int(now_tick)
+    if now_tick - last_tick < CASINO_CRASH_STEP_TICKS:
+        return current, None
+
+    due_steps = max(1, (now_tick - last_tick) // CASINO_CRASH_STEP_TICKS)
+    auto_target = _casino_crash_normalize_auto_multiplier(current.get("auto_cashout_multiplier", 0.0))
+    crash_point = float(current.get("crash_point", 1.0) or 1.0)
+    for _ in range(due_steps):
+        next_step = int(current.get("step", 0)) + 1
+        next_multiplier = float(_casino_crash_multiplier_for_step(next_step))
+        current["last_step_tick"] = int(current.get("last_step_tick", last_tick) or last_tick) + CASINO_CRASH_STEP_TICKS
+        if auto_target > 0.0 and auto_target <= next_multiplier and auto_target < crash_point:
+            current["step"] = int(next_step)
+            current["current_multiplier"] = float(auto_target)
+            history = list(current.get("history", ()) or ())
+            history.append(round(float(auto_target), 2))
+            current["history"] = tuple(history[-18:])
+            return None, _casino_crash_cashout(current, reason="auto")[1]
+        history = list(current.get("history", ()) or ())
+        history.append(round(next_multiplier, 2))
+        if next_multiplier >= crash_point:
+            current["step"] = int(next_step)
+            current["current_multiplier"] = round(next_multiplier, 2)
+            current["history"] = tuple(history[-18:])
+            return None, _casino_crash_crash_result(current, next_multiplier)
+        current["step"] = int(next_step)
+        current["current_multiplier"] = round(next_multiplier, 2)
+        current["history"] = tuple(history[-18:])
+    return current, None
+
+
 def _casino_crash_resolve(session, action):
     current = _casino_crash_normalize_session(session)
     if not current:
         return None, None
     action = str(action or "").strip().lower()
-    multiplier = float(current.get("current_multiplier", 1.0) or 1.0)
-    crash_point = float(current.get("crash_point", 1.0) or 1.0)
-    wager = int(current.get("wager", 0))
     if action == "cashout":
-        payout = int(round(float(wager) * multiplier))
-        result_lines = [
-            f"Cash out: x{multiplier:.2f}.",
-            f"Crash point: x{crash_point:.2f}.",
-            "You step off the graph before it breaks.",
-        ]
-        return None, {
-            "service": "crash",
-            "wager": int(wager),
-            "stake": int(current.get("stake", wager)),
-            "payout": int(payout),
-            "outcome_key": "cashout",
-            "headline": f"Cash out at x{multiplier:.2f}.",
-            "detail": "The line keeps screaming, but your credits are already off the table.",
-            "summary": f"Crash cashout x{multiplier:.2f} before x{crash_point:.2f}.",
-            "result_lines": result_lines,
-            "cashout_multiplier": float(multiplier),
-            "crash_point": float(crash_point),
-            "history": tuple(current.get("history", ()) or ()),
-            "social_gain": _casino_social_gain("crash", f"{current.get('seed_token', '')}:cashout:{multiplier:.2f}"),
-            "stake_already_paid": True,
-        }
+        return _casino_crash_cashout(current)
     if action != "ride":
         return current, None
 
@@ -5369,28 +5583,9 @@ def _casino_crash_resolve(session, action):
     next_multiplier = float(_casino_crash_multiplier_for_step(next_step))
     history = list(current.get("history", ()) or ())
     history.append(round(next_multiplier, 2))
-    if next_multiplier >= crash_point:
-        result_lines = [
-            f"Crash: x{crash_point:.2f}.",
-            f"You were riding x{next_multiplier:.2f}.",
-            "The graph snaps vertical, then drops dead.",
-        ]
-        return None, {
-            "service": "crash",
-            "wager": int(wager),
-            "stake": int(current.get("stake", wager)),
-            "payout": 0,
-            "outcome_key": "crash",
-            "headline": f"Crash at x{crash_point:.2f}.",
-            "detail": "The multiplier breaks before you can pull the stake off the glass.",
-            "summary": f"Crash point x{crash_point:.2f}; ride reached x{next_multiplier:.2f}.",
-            "result_lines": result_lines,
-            "cashout_multiplier": 0.0,
-            "crash_point": float(crash_point),
-            "history": tuple(history[-18:]),
-            "social_gain": _casino_social_gain("crash", f"{current.get('seed_token', '')}:crash:{crash_point:.2f}"),
-            "stake_already_paid": True,
-        }
+    if next_multiplier >= float(current.get("crash_point", 1.0) or 1.0):
+        current["history"] = tuple(history[-18:])
+        return None, _casino_crash_crash_result(current, next_multiplier)
     current["step"] = int(next_step)
     current["current_multiplier"] = round(next_multiplier, 2)
     current["history"] = tuple(history[-18:])
@@ -6170,6 +6365,9 @@ def _credit_amount_label(amount):
 
 __all__ = [
     "CASINO_GAME_SERVICE_IDS",
+    "CASINO_CRASH_AUTO_STEPS",
+    "CASINO_CRASH_MAX_MULTIPLIER",
+    "CASINO_CRASH_STEP_TICKS",
     "CASINO_PLINKO_LANE_COUNT",
     "TRANSIT_SERVICE_IDS",
     "_casino_apply_round_result",
@@ -6184,10 +6382,17 @@ __all__ = [
     "_casino_craps_normalize_session",
     "_casino_craps_resolve",
     "_casino_craps_start",
+    "_casino_crash_adjust_auto",
+    "_casino_crash_advance",
+    "_casino_crash_cashout",
+    "_casino_crash_cycle_auto_step",
+    "_casino_crash_launch",
     "_casino_crash_normalize_session",
     "_casino_crash_multiplier_for_step",
     "_casino_crash_resolve",
+    "_casino_crash_setup",
     "_casino_crash_start",
+    "_casino_crash_toggle_auto",
     "_casino_game_profile",
     "_casino_game_title",
     "_casino_keno_draw",

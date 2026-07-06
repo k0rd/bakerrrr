@@ -224,12 +224,18 @@ def resolve_pronoun_set(value=None, *, default="they", personal_name=None, seed_
         if raw_pronoun:
             raw_value = raw_pronoun
         elif is_human_identity(raw_value):
-            resolved_name = str(personal_name or getattr(raw_value, "personal_name", "") or "").strip()
-            if resolved_name:
-                preview = seed_human_identity_profile(seed_token or resolved_name, resolved_name)
-                raw_value = str(preview.get("pronoun_set", "") or "").strip().lower()
+            raw_gender = str(getattr(raw_value, "gender_identity", "") or "").strip().lower()
+            if raw_gender:
+                raw_value = normalize_gender_identity(raw_gender, default=default_key)
             else:
-                raw_value = ""
+                resolved_name = str(
+                    getattr(raw_value, "personal_name", "") if personal_name is None else personal_name or ""
+                ).strip()
+                if resolved_name:
+                    preview = seed_human_identity_profile(seed_token or resolved_name, resolved_name)
+                    raw_value = str(preview.get("pronoun_set", "") or "").strip().lower()
+                else:
+                    raw_value = ""
 
     text = str(raw_value or "").strip().lower()
     if text in _PRONOUN_FORMS:
