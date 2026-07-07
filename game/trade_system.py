@@ -3607,7 +3607,12 @@ class TradeSystem(System):
                 owner_tag="npc",
                 metadata=removed.get("metadata"),
             )
-            self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="inventory_full", item_id=item_id))
+            self.sim.emit(Event(
+                "trade_buy_blocked",
+                eid=eid,
+                reason="inventory_full",
+                item_id=item_id,
+            ))
             return False
 
         assets.credits -= price

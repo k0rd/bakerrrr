@@ -50,6 +50,19 @@ These are player-facing tools. They are not just flavor; they are how the game r
 - `R` drops the selected item.
 - `E` inspects items in inventory-style panels.
 
+## Drones
+
+Drone parts are ordinary items until you stow them. Pick up or buy loose chassis, power cores, and modules into your backpack, then select the part in inventory and press `U` to move it into the drone workshop.
+
+- `U` on a `packed drone` deploys it nearby when there is room.
+- `,` picks a deployed drone back up when there is no ground item taking pickup priority.
+- `g` opens remote command for a deployed drone with a remote receiver.
+- `G` opens the drone sheet/workshop in local view.
+- In the drone sheet, the Parts tab can move workshop parts back to your backpack or drop them on your tile.
+- Batteries and packed drones stay in your backpack. Shops and street contacts only trade what is in your backpack, so move a part out of the workshop before selling it.
+
+Drone features depend on installed modules. Cameras enable linked looking, cargo modules enable cargo transfer, procedure modules enable autonomy, and weapon modules need their matching ammo or fuel support.
+
 ## Map And Vehicle Basics
 
 - On foot, `X` opens the map for browsing.

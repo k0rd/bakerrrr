@@ -285,7 +285,15 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
     x, y, z = deploy_tile
     sim.ecs.add(drone_eid, Position(x, y, z))
     sim.ecs.add(drone_eid, Render(render_spec["glyph"], render_spec["color"], semantic_id="entity_drone"))
-    sim.ecs.add(drone_eid, CreatureIdentity(taxonomy_class="machine", common_name=f"{state.chassis_class}-class drone"))
+    sim.ecs.add(
+        drone_eid,
+        CreatureIdentity(
+            taxonomy_class="machine",
+            species="drone",
+            creature_type="drone",
+            common_name=f"{state.chassis_class}-class drone",
+        ),
+    )
     sim.ecs.add(drone_eid, Collider(blocks=True))
     sim.ecs.add(drone_eid, Vitality(max_hp=state.hull_hp_max, hp=state.hull_hp))
     sim.ecs.add(drone_eid, state)

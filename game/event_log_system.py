@@ -536,6 +536,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("drone_chassis_swapped", self.on_drone_chassis_swapped)
         self.sim.events.subscribe("drone_power_core_swapped", self.on_drone_power_core_swapped)
         self.sim.events.subscribe("drone_paint_changed", self.on_drone_paint_changed)
+        self.sim.events.subscribe("drone_workshop_part_stowed", self.on_drone_workshop_part_stowed)
+        self.sim.events.subscribe("drone_workshop_part_moved", self.on_drone_workshop_part_moved)
+        self.sim.events.subscribe("drone_workshop_part_dropped", self.on_drone_workshop_part_dropped)
         self.sim.events.subscribe("aerosol_trap_placed", self.on_aerosol_trap_placed)
         self.sim.events.subscribe("aerosol_trap_triggered", self.on_aerosol_trap_triggered)
         self.sim.events.subscribe("report_device_used", self.on_report_device_used)
@@ -4372,6 +4375,12 @@ class EventLogSystem(System):
             if cash_pickup and credits_gained > 0:
                 _log_player_feedback(self.sim, f"Pocketed {credits_gained} credits.", kind="pickup")
                 return
+            if str(event.data.get("storage", "") or "").strip().lower() == "workshop":
+                if qty == 1:
+                    _log_player_feedback(self.sim, f"Stowed {item_name} in the drone workshop.", kind="pickup")
+                else:
+                    _log_player_feedback(self.sim, f"Stowed {item_name} x{qty} in the drone workshop.", kind="pickup")
+                return
             if qty == 1:
                 _log_player_feedback(self.sim, f"Picked up {item_name}.", kind="pickup")
             else:
@@ -4404,6 +4413,12 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, "No item on or next to you to pick up.", kind="pickup")
         elif reason == "inventory_full":
             _log_player_feedback(self.sim, f"Inventory is full. Cannot pick up {item_name}.", kind="pickup")
+        elif reason == "workshop_chassis_full":
+            _log_player_feedback(self.sim, f"Drone workshop chassis bays are full. Cannot stow {item_name}.", kind="pickup")
+        elif reason == "workshop_parts_full":
+            _log_player_feedback(self.sim, f"Drone workshop parts bay is full. Cannot stow {item_name}.", kind="pickup")
+        elif reason == "not_workshop_part":
+            _log_player_feedback(self.sim, f"{item_name} cannot be stowed in the drone workshop.", kind="pickup")
         elif reason == "drone_remove_failed":
             _log_player_feedback(self.sim, f"{item_name} would not pack up cleanly.", kind="pickup")
         else:
@@ -4648,6 +4663,9 @@ class EventLogSystem(System):
         drone_label = self._event_drone_label(event)
         count = _int_or_default(event.data.get("count"), 1)
         suffix = f" ({count} available)" if count > 1 else ""
+        if bool(event.data.get("workshop_only")):
+            _log_player_feedback(self.sim, "Drone workshop opened.", kind="interaction")
+            return
         _log_player_feedback(self.sim, f"Drone sheet opened for {drone_label}{suffix}.", kind="interaction")
 
     def on_drone_sheet_blocked(self, event):
@@ -4663,7 +4681,13 @@ class EventLogSystem(System):
             "not_adjacent": f"Stand next to {drone_label} for physical work.",
             "no_cargo_module": f"{drone_label} has no cargo module.",
             "drone_cargo_full": f"{drone_label}'s cargo is full.",
-            "inventory_full": "Your pack has no room for the removed part or cargo.",
+            "inventory_full": "Your pack has no room for that item.",
+            "workshop_chassis_full": "The drone workshop has no open chassis bay.",
+            "workshop_parts_full": "The drone workshop parts bay is full.",
+            "workshop_part_unavailable": "That workshop part is no longer available.",
+            "workshop_remove_failed": "That workshop part could not be removed.",
+            "missing_position": "Stand in the world before dropping a workshop part.",
+            "not_workshop_part": "That item does not belong in the drone workshop.",
             "missing_inventory": "No usable inventory is available.",
             "item_unavailable": "That item is no longer available.",
             "battery_unavailable": "That spare battery is no longer available.",
@@ -4672,13 +4696,13 @@ class EventLogSystem(System):
             "module_unavailable": "That module is no longer available.",
             "not_module": "That is not a drone module.",
             "invalid_loadout": f"That edit would make {drone_label}'s loadout invalid.",
-            "module_remove_failed": "The module could not be removed from your pack.",
+            "module_remove_failed": "The module could not be removed from the workshop.",
             "chassis_unavailable": "That chassis is no longer available.",
             "not_chassis": "That is not a drone chassis.",
-            "chassis_remove_failed": "The chassis could not be removed from your pack.",
+            "chassis_remove_failed": "The chassis could not be removed from the workshop.",
             "power_center_unavailable": "That power core is no longer available.",
             "not_power_center": "That is not a drone power core.",
-            "power_center_remove_failed": "The power core could not be removed from your pack.",
+            "power_center_remove_failed": "The power core could not be removed from the workshop.",
             "invalid_paint": "That paint color is not available yet.",
             "invalid_paint_key": "That paint channel is not available.",
         }
@@ -4750,6 +4774,37 @@ class EventLogSystem(System):
         paint_key = str(event.data.get("paint_key", "") or "").replace("_", " ").strip() or "paint"
         color = str(event.data.get("paint_color", "") or "").strip() or "new color"
         _log_player_feedback(self.sim, f"Set {drone_label}'s {paint_key} to {color}.", kind="interaction")
+
+    def on_drone_workshop_part_stowed(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "drone part")) or "drone part").strip()
+        qty = _int_or_default(event.data.get("quantity"), 1)
+        suffix = f" x{qty}" if qty != 1 else ""
+        _log_player_feedback(self.sim, f"Stowed {item_name}{suffix} in the drone workshop.", kind="interaction")
+
+    def on_drone_workshop_part_moved(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "drone part")) or "drone part").strip()
+        qty = _int_or_default(event.data.get("quantity"), 1)
+        suffix = f" x{qty}" if qty != 1 else ""
+        direction = str(event.data.get("direction", "") or "").strip().lower()
+        if direction == "to_pack":
+            _log_player_feedback(self.sim, f"Moved {item_name}{suffix} from workshop to backpack.", kind="interaction")
+        else:
+            _log_player_feedback(self.sim, f"Moved {item_name}{suffix} in the drone workshop.", kind="interaction")
+
+    def on_drone_workshop_part_dropped(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "drone part")) or "drone part").strip()
+        qty = _int_or_default(event.data.get("quantity"), 1)
+        suffix = f" x{qty}" if qty != 1 else ""
+        _log_player_feedback(self.sim, f"Dropped {item_name}{suffix} from the drone workshop.", kind="interaction")
 
     def on_item_dropped(self, event):
         eid = event.data.get("eid")
@@ -6448,6 +6503,9 @@ class EventLogSystem(System):
         if bool(event.data.get("owner_transfer")):
             _log_player_feedback(self.sim, f"You withdrew {item_name} from {store} stock.", kind="commerce")
             return
+        if str(event.data.get("storage", "") or "").strip().lower() == "workshop":
+            _log_player_feedback(self.sim, f"You bought {item_name} for {price} cr at {store} and stowed it in the drone workshop.", kind="commerce")
+            return
         if contact_note and price != base_price:
             _log_player_feedback(self.sim, f"You bought {item_name} for {price} cr at {store}. {contact_note}.", kind="commerce")
             return
@@ -6461,6 +6519,9 @@ class EventLogSystem(System):
         npc_name = self._npc_label(event.data.get("npc_eid"), fallback="the street contact")
         risk = str(event.data.get("risk_label", "") or "").strip()
         suffix = f" {risk}." if risk else ""
+        if str(event.data.get("storage", "") or "").strip().lower() == "workshop":
+            _log_player_feedback(self.sim, f"You bought {item_name} for {price} cr from {npc_name} and stowed it in the drone workshop.{suffix}", kind="commerce")
+            return
         _log_player_feedback(self.sim, f"You bought {item_name} for {price} cr from {npc_name}.{suffix}", kind="commerce")
 
     def on_street_buy_transaction(self, event):
@@ -6544,6 +6605,12 @@ class EventLogSystem(System):
             return
         if reason == "inventory_full":
             _log_player_feedback(self.sim, f"Cannot buy {item_name}: inventory is full.", kind="commerce")
+            return
+        if reason == "workshop_chassis_full":
+            _log_player_feedback(self.sim, f"Cannot buy {item_name}: drone workshop chassis bays are full.", kind="commerce")
+            return
+        if reason == "workshop_parts_full":
+            _log_player_feedback(self.sim, f"Cannot buy {item_name}: drone workshop parts bay is full.", kind="commerce")
             return
         _log_player_feedback(self.sim, f"Purchase of {item_name} at {store_name} could not be finalized.", kind="commerce")
 

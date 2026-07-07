@@ -2789,6 +2789,35 @@ class DroneState:
         )
 
 
+class DroneWorkshopState:
+    """Player-owned loose drone part storage.
+
+    Chassis use bounded bay slots. Power cores and modules use a generous
+    point budget so early drone experimentation does not crowd the backpack.
+    """
+
+    def __init__(
+        self,
+        *,
+        chassis_slots=None,
+        parts=None,
+        chassis_capacity=4,
+        parts_capacity_points=60,
+    ):
+        self.chassis_capacity = int(max(1, chassis_capacity or 4))
+        self.parts_capacity_points = int(max(1, parts_capacity_points or 60))
+        self.chassis_slots = [
+            dict(entry)
+            for entry in (chassis_slots or ())
+            if isinstance(entry, dict)
+        ]
+        self.parts = [
+            dict(entry)
+            for entry in (parts or ())
+            if isinstance(entry, dict)
+        ]
+
+
 class VehicleState:
     def __init__(
         self,

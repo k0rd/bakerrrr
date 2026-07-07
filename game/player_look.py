@@ -11,6 +11,7 @@ from game.components import (
     AI,
     CoreStats,
     CreatureIdentity,
+    DroneState,
     InsightStats,
     MovementThrottle,
     NPCMemory,
@@ -19,7 +20,9 @@ from game.components import (
     PlayerControlled,
     Position,
     SkillProfile,
+    Vitality,
 )
+from game.drone_runtime import drone_state_capabilities
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
 from game.flora_runtime import flora_at, flora_look_text
@@ -59,6 +62,51 @@ from game.system_support.entity_naming import (
     _viewer_knows_entity_name,
 )
 from game.system_support.interaction_ordering import _manhattan
+
+
+def _drone_look_detail_bits(sim, drone_eid, state):
+    if state is None:
+        return []
+    bits = []
+    chassis_class = str(getattr(state, "chassis_class", "") or "").strip().upper()
+    if chassis_class:
+        bits.append(f"class:{chassis_class}")
+
+    vitality = sim.ecs.get(Vitality).get(drone_eid) if getattr(sim, "ecs", None) is not None else None
+    hull_hp = int(getattr(vitality, "hp", getattr(state, "hull_hp", 0)) or 0)
+    hull_hp_max = int(getattr(vitality, "max_hp", getattr(state, "hull_hp_max", 0)) or 0)
+    if hull_hp_max > 0:
+        bits.append(f"hull:{hull_hp}/{hull_hp_max}")
+
+    battery_max = int(getattr(state, "battery_charge_max", 0) or 0)
+    if battery_max > 0:
+        battery = int(getattr(state, "battery_charge", 0) or 0)
+        bits.append(f"battery:{battery}/{battery_max}")
+
+    mode = str(getattr(state, "mode", "") or "").strip().lower()
+    if mode:
+        bits.append(f"mode:{mode}")
+    procedure = str(getattr(state, "procedure_key", "") or "").strip().lower()
+    if procedure:
+        bits.append(f"intent:{procedure}")
+
+    capabilities = tuple(drone_state_capabilities(state, item_catalog=ITEM_CATALOG))
+    if capabilities:
+        shown = ",".join(capabilities[:6])
+        if len(capabilities) > 6:
+            shown += f",+{len(capabilities) - 6}"
+        bits.append(f"caps:{shown}")
+
+    paint = getattr(state, "paint", {}) if isinstance(getattr(state, "paint", {}), dict) else {}
+    primary = str(paint.get("primary_color") or "").strip().lower()
+    secondary = str(paint.get("secondary_color") or paint.get("accent_color") or "").strip().lower()
+    if primary or secondary:
+        bits.append(f"paint:{primary or 'bare'}/{secondary or 'none'}")
+
+    errors = tuple(str(error) for error in (getattr(state, "loadout_errors", ()) or ()) if str(error).strip())
+    if errors:
+        bits.append(f"loadout:{';'.join(errors[:2])}")
+    return bits
 
 
 class PlayerLookRuntime:
@@ -297,61 +345,67 @@ class PlayerLookRuntime:
             if len(non_player_entities) == 1:
                 target_eid = non_player_entities[0]
                 identity = identities.get(target_eid)
-                ai = self.sim.ecs.get(AI).get(target_eid)
-                occupation = self.sim.ecs.get(Occupation).get(target_eid)
-                routine = self.sim.ecs.get(NPCRoutine).get(target_eid)
-                detail_bits = []
-                if ai:
-                    role = str(ai.role or "npc").replace("_", " ").strip() or "npc"
-                    state = str(ai.state or "idle").replace("_", " ").strip() or "idle"
-                    detail_bits.append(f"role:{role} state:{state}")
-                    read_text = _crime_read_summary(self.sim, eid, target_eid, mode="look", sentence=False)
-                    if read_text:
-                        detail_bits.append(f"read:{read_text}")
-                if self.observer_has_los_to_position(eid, x, y, z):
-                    condition = self._target_condition_descriptor(
-                        self.sim,
-                        eid,
-                        target_eid,
-                        include_uncertainty=True,
-                    )
-                    if condition:
-                        detail_bits.append(f"condition:{condition}")
-                    if is_human_identity(identity):
-                        appearance = human_live_look_description_clause(
+                drone_state = self.sim.ecs.get(DroneState).get(target_eid)
+                if drone_state is not None:
+                    detail_bits = _drone_look_detail_bits(self.sim, target_eid, drone_state)
+                    if detail_bits:
+                        bits.append("drone:" + " ".join(detail_bits))
+                else:
+                    ai = self.sim.ecs.get(AI).get(target_eid)
+                    occupation = self.sim.ecs.get(Occupation).get(target_eid)
+                    routine = self.sim.ecs.get(NPCRoutine).get(target_eid)
+                    detail_bits = []
+                    if ai:
+                        role = str(ai.role or "npc").replace("_", " ").strip() or "npc"
+                        state = str(ai.state or "idle").replace("_", " ").strip() or "idle"
+                        detail_bits.append(f"role:{role} state:{state}")
+                        read_text = _crime_read_summary(self.sim, eid, target_eid, mode="look", sentence=False)
+                        if read_text:
+                            detail_bits.append(f"read:{read_text}")
+                    if self.observer_has_los_to_position(eid, x, y, z):
+                        condition = self._target_condition_descriptor(
                             self.sim,
+                            eid,
                             target_eid,
-                            identity=identity,
-                            personal_name=(
-                                getattr(identity, "personal_name", "")
-                                if _viewer_knows_entity_name(self.sim, eid, target_eid)
-                                else ""
-                            ),
+                            include_uncertainty=True,
                         )
-                        if appearance:
-                            detail_bits.append(f"appearance:{appearance}")
-                career_text = self._career_label(occupation)
-                if career_text:
-                    detail_bits.append(f"job:{career_text}")
-                workplace_prop = self._workplace_property(self.sim, occupation=occupation, routine=routine)
-                if workplace_prop:
-                    detail_bits.append(f"work:{workplace_prop.get('name', workplace_prop.get('id', 'property'))}")
-                workplace = getattr(occupation, "workplace", None)
-                organization_eid = workplace.get("organization_eid") if isinstance(workplace, dict) else None
-                org_name = organization_name(self.sim, organization_eid)
-                if org_name and (not workplace_prop or org_name.lower() != str(workplace_prop.get("name", "")).strip().lower()):
-                    detail_bits.append(f"org:{org_name}")
-                org_presence = format_actor_org_presence(self.sim, target_eid, include_primary=False)
-                if org_presence:
-                    detail_bits.append(f"orgs:{org_presence}")
-                crew_rows = crime_plan_surface_rows(self.sim, actor_eid=target_eid)
-                if crew_rows:
-                    row = crew_rows[0]
-                    org = str(row.get("organization_name", "") or "").strip()
-                    method = str(row.get("method_label", "") or "").strip()
-                    detail_bits.append(f"crew:{row.get('actor_text')}" + (f" {org}/{method}" if org and method else ""))
-                if detail_bits:
-                    bits.append("npc:" + " ".join(detail_bits))
+                        if condition:
+                            detail_bits.append(f"condition:{condition}")
+                        if is_human_identity(identity):
+                            appearance = human_live_look_description_clause(
+                                self.sim,
+                                target_eid,
+                                identity=identity,
+                                personal_name=(
+                                    getattr(identity, "personal_name", "")
+                                    if _viewer_knows_entity_name(self.sim, eid, target_eid)
+                                    else ""
+                                ),
+                            )
+                            if appearance:
+                                detail_bits.append(f"appearance:{appearance}")
+                    career_text = self._career_label(occupation)
+                    if career_text:
+                        detail_bits.append(f"job:{career_text}")
+                    workplace_prop = self._workplace_property(self.sim, occupation=occupation, routine=routine)
+                    if workplace_prop:
+                        detail_bits.append(f"work:{workplace_prop.get('name', workplace_prop.get('id', 'property'))}")
+                    workplace = getattr(occupation, "workplace", None)
+                    organization_eid = workplace.get("organization_eid") if isinstance(workplace, dict) else None
+                    org_name = organization_name(self.sim, organization_eid)
+                    if org_name and (not workplace_prop or org_name.lower() != str(workplace_prop.get("name", "")).strip().lower()):
+                        detail_bits.append(f"org:{org_name}")
+                    org_presence = format_actor_org_presence(self.sim, target_eid, include_primary=False)
+                    if org_presence:
+                        detail_bits.append(f"orgs:{org_presence}")
+                    crew_rows = crime_plan_surface_rows(self.sim, actor_eid=target_eid)
+                    if crew_rows:
+                        row = crew_rows[0]
+                        org = str(row.get("organization_name", "") or "").strip()
+                        method = str(row.get("method_label", "") or "").strip()
+                        detail_bits.append(f"crew:{row.get('actor_text')}" + (f" {org}/{method}" if org and method else ""))
+                    if detail_bits:
+                        bits.append("npc:" + " ".join(detail_bits))
 
         text = "  ".join(bits)
 

@@ -2106,6 +2106,8 @@ class RenderSystem(System):
         tab = str(drone_sheet_ui.get("tab", "status") or "status").strip().lower() or "status"
         cargo_side = str(drone_sheet_ui.get("cargo_side", "pack") or "pack").strip().lower() or "pack"
         module_side = str(drone_sheet_ui.get("module_side", "drone") or "drone").strip().lower() or "drone"
+        if module_side == "pack":
+            module_side = "bay"
         title = " Drone Sheet "
         self.view.draw_text(panel_x + 2, panel_y, _local_clip(title, body_w), color=self._theme_color(modal_theme, "title", "objective"))
         tab_labels = []
@@ -2117,7 +2119,7 @@ class RenderSystem(System):
         if tab == "cargo":
             tab_line += f" | side {cargo_side}"
         if tab == "modules":
-            tab_line += f" | side {module_side}"
+            tab_line += f" | side {'workshop' if module_side == 'bay' else module_side}"
         self.view.draw_text(panel_x + 2, panel_y + 1, _local_clip(tab_line, body_w), color=self._theme_color(modal_theme, "muted"))
 
         eligible = list(drone_sheet_ui.get("eligible", ()) or ())
@@ -2162,7 +2164,8 @@ class RenderSystem(System):
         feedback = str(drone_sheet_ui.get("feedback", "") or "").strip()
         if feedback:
             self._draw_display_line(panel_x + 2, footer_y - 1, _clip_display_line(feedback, body_w), body_cell_w)
-        hint = "1-5 tabs  [/] drone  Arrows select/side  Enter/U edit  G/Esc close"
+        tab_hint = f"1-{len(tab_ids)} tabs" if len(tab_ids) > 1 else "1 tab"
+        hint = f"{tab_hint}  [/] drone  Arrows select/side  Enter/U edit  R drop part  G/Esc close"
         self.view.draw_text(panel_x + 2, footer_y, _local_clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
         return True
 

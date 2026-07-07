@@ -12,10 +12,21 @@ from game.drone_runtime import (
     packed_drone_metadata_from_state,
 )
 from game.drone_distribution import drone_paint_palette, normalize_drone_paint_word
+from game.drone_workshop import (
+    drop_workshop_part,
+    drone_workshop_add_entry,
+    drone_workshop_can_accept_entry,
+    drone_workshop_entries,
+    drone_workshop_for_actor,
+    drone_workshop_part_points,
+    drone_workshop_remove_entry,
+    drone_workshop_summary,
+    move_workshop_part_to_inventory,
+)
 from game.items import item_display_name, item_inventory_slot_cost
 
 
-DRONE_SHEET_TABS = ("status", "cargo", "battery", "modules", "schematic")
+DRONE_SHEET_TABS = ("status", "cargo", "battery", "parts", "modules", "schematic")
 DRONE_SHEET_VISIBLE_SLOTS = 4
 DRONE_CARGO_SLOTS_PER_MODULE = 4
 DRONE_PAINT_KEYS = drone_paint_palette()
@@ -213,6 +224,16 @@ def _part_return_entry(item_id, *, player_eid=None, instance_factory=None, sourc
     }
 
 
+def _workshop_add_or_block(sim, player_eid, entry, *, item_catalog=None):
+    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+    return drone_workshop_add_entry(workshop, entry, item_catalog=item_catalog)
+
+
+def _workshop_remove_entry(sim, player_eid, instance_id, *, item_catalog=None):
+    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+    return drone_workshop_remove_entry(workshop, instance_id, item_catalog=item_catalog)
+
+
 def drone_sheet_label(state):
     chassis_class = _clean(getattr(state, "chassis_class", "")).upper()
     return f"{chassis_class}-class drone" if chassis_class else "deployed drone"
@@ -317,6 +338,44 @@ def _candidate_error_suffix(errors):
     return f" | blocks: {'; '.join(errors)}" if errors else ""
 
 
+def drone_sheet_parts_rows(sim, player_eid, *, item_catalog=None):
+    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+    summary = drone_workshop_summary(workshop, item_catalog=item_catalog)
+    rows = [{
+        "id": "workshop-summary",
+        "label": (
+            f"Workshop: chassis {summary.get('chassis_used', 0)}/{summary.get('chassis_capacity', 0)} | "
+            f"loose parts {summary.get('parts_used', 0)}/{summary.get('parts_capacity', 0)} pts"
+        ),
+        "actionable": False,
+    }]
+    entries = drone_workshop_entries(workshop, item_catalog=item_catalog)
+    for entry in entries:
+        item_id = str(entry.get("item_id", "") or "").strip().lower()
+        kind = drone_profile_for_item(item_id, item_catalog=item_catalog).get("kind", "part")
+        points = drone_workshop_part_points(item_id, item_catalog=item_catalog)
+        points_text = "slot" if kind == "chassis" else f"{points} pt"
+        rows.append({
+            "id": str(entry.get("instance_id", "") or item_id),
+            "instance_id": str(entry.get("instance_id", "") or ""),
+            "label": f"{_item_name(item_id, item_catalog=item_catalog)} | {kind.replace('_', ' ')} | {points_text} | Enter pack, R drop",
+            "entry": dict(entry),
+            "action": "workshop_part",
+            "actionable": True,
+        })
+    if len(rows) == 1:
+        rows.append({"id": "empty", "label": "(workshop empty)", "actionable": False})
+    return rows
+
+
+def move_drone_workshop_part_to_pack(sim, player_eid, instance_id, *, item_catalog=None):
+    return move_workshop_part_to_inventory(sim, player_eid, instance_id, item_catalog=item_catalog)
+
+
+def drop_drone_workshop_part(sim, player_eid, instance_id, *, item_catalog=None):
+    return drop_workshop_part(sim, player_eid, instance_id, item_catalog=item_catalog)
+
+
 def drone_sheet_module_rows(sim, player_eid, record, *, side="drone", item_catalog=None):
     summary = record.get("summary", {}) if isinstance(record, dict) else {}
     state = record.get("state") if isinstance(record, dict) else None
@@ -329,9 +388,9 @@ def drone_sheet_module_rows(sim, player_eid, record, *, side="drone", item_catal
     )
     rows.append({"id": "budget", "label": budget, "actionable": False})
     side = str(side or "drone").strip().lower()
-    if side == "pack":
-        inventory = sim.ecs.get(Inventory).get(player_eid)
-        for entry in tuple(getattr(inventory, "items", ()) or ()):
+    if side in {"pack", "bay", "workshop"}:
+        workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+        for entry in tuple(drone_workshop_entries(workshop, kind="module", item_catalog=item_catalog)):
             if not isinstance(entry, dict):
                 continue
             item_id = str(entry.get("item_id", "") or "").strip().lower()
@@ -409,8 +468,8 @@ def drone_sheet_schematic_rows(sim, player_eid, state, *, item_catalog=None):
                 "paint_color": color_key,
                 "actionable": True,
             })
-    inventory = sim.ecs.get(Inventory).get(player_eid)
-    for entry in tuple(getattr(inventory, "items", ()) or ()):
+    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+    for entry in tuple(drone_workshop_entries(workshop, item_catalog=item_catalog)):
         if not isinstance(entry, dict):
             continue
         item_id = str(entry.get("item_id", "") or "").strip().lower()
@@ -505,6 +564,8 @@ def drone_sheet_tab_rows(sim, player_eid, record, *, tab="status", cargo_side="p
     tab = str(tab or "status").strip().lower()
     if tab not in DRONE_SHEET_TABS:
         tab = "status"
+    if tab == "parts":
+        return drone_sheet_parts_rows(sim, player_eid, item_catalog=item_catalog)
     state = record.get("state") if isinstance(record, dict) else None
     if state is None:
         return [{"id": "empty", "label": "No drone selected.", "actionable": False}]
@@ -669,10 +730,15 @@ def install_drone_module(sim, player_eid, drone_eid, module_instance_id, *, item
         return {"ok": False, "reason": "selected_unavailable"}
     if not _same_floor_adjacent(sim, player_eid, drone_eid):
         return {"ok": False, "reason": "not_adjacent", "drone_eid": drone_eid}
-    inventory = sim.ecs.get(Inventory).get(player_eid)
-    if inventory is None:
-        return {"ok": False, "reason": "missing_inventory", "drone_eid": drone_eid}
-    entry = inventory.find(instance_id=module_instance_id)
+    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+    entry = next(
+        (
+            candidate
+            for candidate in drone_workshop_entries(workshop, kind="module", item_catalog=item_catalog)
+            if str(candidate.get("instance_id", "") or "") == str(module_instance_id or "")
+        ),
+        None,
+    )
     if entry is None:
         return {"ok": False, "reason": "module_unavailable", "drone_eid": drone_eid}
     module = _entry_to_module(entry)
@@ -683,7 +749,7 @@ def install_drone_module(sim, player_eid, drone_eid, module_instance_id, *, item
     errors, summary = _loadout_errors_for_candidate(state, item_catalog=item_catalog, modules=candidate_modules)
     if errors:
         return {"ok": False, "reason": "invalid_loadout", "drone_eid": drone_eid, "errors": errors, "summary": summary}
-    removed = inventory.remove_item(instance_id=module_instance_id, quantity=1)
+    removed = _workshop_remove_entry(sim, player_eid, module_instance_id, item_catalog=item_catalog)
     if removed is None:
         return {"ok": False, "reason": "module_remove_failed", "drone_eid": drone_eid}
     installed = _entry_to_module(removed)
@@ -706,9 +772,6 @@ def remove_drone_module(sim, player_eid, drone_eid, module_index, *, item_catalo
         return {"ok": False, "reason": "selected_unavailable"}
     if not _same_floor_adjacent(sim, player_eid, drone_eid):
         return {"ok": False, "reason": "not_adjacent", "drone_eid": drone_eid}
-    inventory = sim.ecs.get(Inventory).get(player_eid)
-    if inventory is None:
-        return {"ok": False, "reason": "missing_inventory", "drone_eid": drone_eid}
     modules = list(getattr(state, "modules", ()) or ())
     try:
         index = int(module_index)
@@ -720,8 +783,10 @@ def remove_drone_module(sim, player_eid, drone_eid, module_index, *, item_catalo
     return_entry = _module_to_inventory_entry(module, player_eid=player_eid, instance_factory=None)
     if return_entry is None:
         return {"ok": False, "reason": "not_module", "drone_eid": drone_eid}
-    if not _inventory_can_accept_exact_entry(inventory, return_entry):
-        return {"ok": False, "reason": "inventory_full", "drone_eid": drone_eid}
+    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+    can_accept, reason = drone_workshop_can_accept_entry(workshop, return_entry, item_catalog=item_catalog)
+    if not can_accept:
+        return {"ok": False, "reason": reason or "workshop_full", "drone_eid": drone_eid}
     candidate_modules = modules[:index] + modules[index + 1:]
     errors, summary = _loadout_errors_for_candidate(state, item_catalog=item_catalog, modules=candidate_modules)
     if errors:
@@ -733,7 +798,11 @@ def remove_drone_module(sim, player_eid, drone_eid, module_index, *, item_catalo
         player_eid=player_eid,
         instance_factory=getattr(sim, "new_item_instance_id", None),
     )
-    _append_exact_inventory_entry(inventory, return_entry)
+    result = _workshop_add_or_block(sim, player_eid, return_entry, item_catalog=item_catalog)
+    if not result.get("ok"):
+        state.modules = list(getattr(state, "modules", ()) or ())
+        state.modules.insert(index, removed)
+        return {"ok": False, "reason": result.get("reason", "workshop_full"), "drone_eid": drone_eid}
     summary = _sync_drone_runtime_shape(sim, drone_eid, state, item_catalog=item_catalog)
     return {
         "ok": True,
@@ -752,10 +821,15 @@ def swap_drone_chassis(sim, player_eid, drone_eid, chassis_instance_id, *, item_
         return {"ok": False, "reason": "selected_unavailable"}
     if not _same_floor_adjacent(sim, player_eid, drone_eid):
         return {"ok": False, "reason": "not_adjacent", "drone_eid": drone_eid}
-    inventory = sim.ecs.get(Inventory).get(player_eid)
-    if inventory is None:
-        return {"ok": False, "reason": "missing_inventory", "drone_eid": drone_eid}
-    replacement = inventory.find(instance_id=chassis_instance_id)
+    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+    replacement = next(
+        (
+            candidate
+            for candidate in drone_workshop_entries(workshop, kind="chassis", item_catalog=item_catalog)
+            if str(candidate.get("instance_id", "") or "") == str(chassis_instance_id or "")
+        ),
+        None,
+    )
     if replacement is None:
         return {"ok": False, "reason": "chassis_unavailable", "drone_eid": drone_eid}
     replacement_item_id = str(replacement.get("item_id", "") or "").strip().lower()
@@ -767,14 +841,15 @@ def swap_drone_chassis(sim, player_eid, drone_eid, chassis_instance_id, *, item_
         return {"ok": False, "reason": "invalid_loadout", "drone_eid": drone_eid, "errors": errors, "summary": summary}
     old_item_id = str(getattr(state, "chassis_item_id", "") or "").strip().lower()
     old_entry = _part_return_entry(old_item_id, player_eid=player_eid, source_context="drone_chassis_swap")
-    if old_entry and not _inventory_can_accept_exact_entry(inventory, old_entry):
-        return {"ok": False, "reason": "inventory_full", "drone_eid": drone_eid}
-    removed = inventory.remove_item(instance_id=chassis_instance_id, quantity=1)
+    removed = _workshop_remove_entry(sim, player_eid, chassis_instance_id, item_catalog=item_catalog)
     if removed is None:
         return {"ok": False, "reason": "chassis_remove_failed", "drone_eid": drone_eid}
     if old_entry:
         old_entry["instance_id"] = sim.new_item_instance_id() if callable(getattr(sim, "new_item_instance_id", None)) else ""
-        _append_exact_inventory_entry(inventory, old_entry)
+        result = _workshop_add_or_block(sim, player_eid, old_entry, item_catalog=item_catalog)
+        if not result.get("ok"):
+            _workshop_add_or_block(sim, player_eid, removed, item_catalog=item_catalog)
+            return {"ok": False, "reason": result.get("reason", "workshop_full"), "drone_eid": drone_eid}
     state.chassis_item_id = replacement_item_id
     state.chassis_class = str(profile.get("chassis_class", "") or "").strip().upper() or state.chassis_class
     summary = _sync_drone_runtime_shape(sim, drone_eid, state, item_catalog=item_catalog)
@@ -796,10 +871,15 @@ def swap_drone_power_center(sim, player_eid, drone_eid, power_instance_id, *, it
         return {"ok": False, "reason": "selected_unavailable"}
     if not _same_floor_adjacent(sim, player_eid, drone_eid):
         return {"ok": False, "reason": "not_adjacent", "drone_eid": drone_eid}
-    inventory = sim.ecs.get(Inventory).get(player_eid)
-    if inventory is None:
-        return {"ok": False, "reason": "missing_inventory", "drone_eid": drone_eid}
-    replacement = inventory.find(instance_id=power_instance_id)
+    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+    replacement = next(
+        (
+            candidate
+            for candidate in drone_workshop_entries(workshop, kind="power_center", item_catalog=item_catalog)
+            if str(candidate.get("instance_id", "") or "") == str(power_instance_id or "")
+        ),
+        None,
+    )
     if replacement is None:
         return {"ok": False, "reason": "power_center_unavailable", "drone_eid": drone_eid}
     replacement_item_id = str(replacement.get("item_id", "") or "").strip().lower()
@@ -811,14 +891,15 @@ def swap_drone_power_center(sim, player_eid, drone_eid, power_instance_id, *, it
         return {"ok": False, "reason": "invalid_loadout", "drone_eid": drone_eid, "errors": errors, "summary": summary}
     old_item_id = str(getattr(state, "power_center_item_id", "") or "").strip().lower()
     old_entry = _part_return_entry(old_item_id, player_eid=player_eid, source_context="drone_power_core_swap")
-    if old_entry and not _inventory_can_accept_exact_entry(inventory, old_entry):
-        return {"ok": False, "reason": "inventory_full", "drone_eid": drone_eid}
-    removed = inventory.remove_item(instance_id=power_instance_id, quantity=1)
+    removed = _workshop_remove_entry(sim, player_eid, power_instance_id, item_catalog=item_catalog)
     if removed is None:
         return {"ok": False, "reason": "power_center_remove_failed", "drone_eid": drone_eid}
     if old_entry:
         old_entry["instance_id"] = sim.new_item_instance_id() if callable(getattr(sim, "new_item_instance_id", None)) else ""
-        _append_exact_inventory_entry(inventory, old_entry)
+        result = _workshop_add_or_block(sim, player_eid, old_entry, item_catalog=item_catalog)
+        if not result.get("ok"):
+            _workshop_add_or_block(sim, player_eid, removed, item_catalog=item_catalog)
+            return {"ok": False, "reason": result.get("reason", "workshop_full"), "drone_eid": drone_eid}
     state.power_center_item_id = replacement_item_id
     summary = _sync_drone_runtime_shape(sim, drone_eid, state, item_catalog=item_catalog)
     return {
