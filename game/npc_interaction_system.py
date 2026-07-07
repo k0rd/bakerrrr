@@ -519,6 +519,7 @@ class NPCInteractionSystem(System):
         "service_agency",
         "service_bounty",
         "service_trade",
+        "service_drone_parts",
         "service_herbal",
         "service_butcher",
         "service_appearance",
@@ -648,6 +649,7 @@ class NPCInteractionSystem(System):
     SOCIAL_KNOWLEDGE_TOPIC_IDS = frozenset({"street_talk", *SOCIAL_KNOWLEDGE_TOPICS.keys()})
     SOCIAL_KNOWLEDGE_SHARE_COOLDOWN_TICKS = 180
     OUTFITTER_LOCATOR_ARCHETYPES = ("outfitter", "surplus_store")
+    DRONE_PARTS_LOCATOR_ARCHETYPES = ("electronics_shop", "comms_shop", "drone_shop")
     JUSTICE_LOCATOR_ARCHETYPES = ("jail", "courthouse", "prison")
     JUSTICE_LOCATOR_ROLE_TOKENS = ("guard", "corrections", "deputy", "bailiff", "sergeant")
     SERVICE_LOCATOR_TOPICS = {
@@ -840,6 +842,15 @@ class NPCInteractionSystem(System):
             "offer_label": "gear and clothing",
             "lead_kind": "service_outfitter",
             "archetypes": OUTFITTER_LOCATOR_ARCHETYPES,
+        },
+        "service_drone_parts": {
+            "services": (),
+            "service_label": "drone parts counter",
+            "offer_label": "drone parts and electronics",
+            "lead_kind": "service_drone_parts",
+            "archetypes": DRONE_PARTS_LOCATOR_ARCHETYPES,
+            "local_summary": "In this chunk, {names_text} sells drone parts, radios, or electronics.",
+            "near_summary": "Nearest drone or electronics counter I know is {distance_phrase} at {names_text}.",
         },
         "service_justice": {
             "services": (),

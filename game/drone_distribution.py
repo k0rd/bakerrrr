@@ -123,6 +123,68 @@ DRONE_PACKED_PRESET_LOADOUTS = {
 }
 
 DRONE_STORE_POOL_EXTRAS = {
+    "electronics_shop": (
+        ("drone_battery_light", 8),
+        ("drone_battery_standard", 7),
+        ("drone_chassis_a", 4),
+        ("drone_chassis_b", 3),
+        ("drone_power_core_mk1", 5),
+        ("drone_power_core_mk2", 4),
+        ("drone_camera_module", 5),
+        ("drone_radio_module", 5),
+        ("drone_remote_receiver_module", 4),
+        ("drone_sonar_module", 4),
+        ("drone_lidar_module", 3),
+        ("drone_radar_module", 1),
+        ("drone_light_module", 4),
+        ("drone_speaker_module", 3),
+        ("drone_cargo_clamp_module", 2),
+        (PACKED_DRONE_ITEM_ID, 1),
+    ),
+    "comms_shop": (
+        ("drone_battery_light", 6),
+        ("drone_battery_standard", 6),
+        ("drone_chassis_a", 3),
+        ("drone_power_core_mk1", 4),
+        ("drone_power_core_mk2", 3),
+        ("drone_camera_module", 4),
+        ("drone_radio_module", 6),
+        ("drone_remote_receiver_module", 5),
+        ("drone_radar_module", 2),
+        ("drone_ir_module", 1),
+        ("drone_lidar_module", 3),
+        ("drone_sonar_module", 3),
+        ("drone_mapping_procedure_module", 3),
+        (PACKED_DRONE_ITEM_ID, 1),
+    ),
+    "drone_shop": (
+        ("drone_battery_light", 8),
+        ("drone_battery_standard", 8),
+        ("drone_battery_heavy", 5),
+        ("drone_battery_industrial", 1),
+        ("drone_chassis_a", 6),
+        ("drone_chassis_b", 5),
+        ("drone_chassis_c", 4),
+        ("drone_chassis_d", 1),
+        ("drone_power_core_mk1", 6),
+        ("drone_power_core_mk2", 5),
+        ("drone_power_core_mk3", 4),
+        ("drone_power_core_mk4", 1),
+        ("drone_camera_module", 6),
+        ("drone_radio_module", 6),
+        ("drone_remote_receiver_module", 6),
+        ("drone_sonar_module", 5),
+        ("drone_lidar_module", 4),
+        ("drone_radar_module", 2),
+        ("drone_ir_module", 2),
+        ("drone_cargo_clamp_module", 4),
+        ("drone_light_module", 4),
+        ("drone_speaker_module", 3),
+        ("drone_armor_shell_module", 2),
+        ("drone_mapping_procedure_module", 4),
+        ("drone_follow_procedure_module", 4),
+        (PACKED_DRONE_ITEM_ID, 2),
+    ),
     "hardware_store": (
         ("drone_battery_light", 8),
         ("drone_battery_standard", 7),
@@ -512,6 +574,10 @@ def _preset_for_context(distribution_context, *, seed_token=""):
     context = str(distribution_context or "").strip().lower()
     if context in {"surplus_store", "armory", "checkpoint", "vehicle_gun_vendor"}:
         choices = ("security_d_no_radio", "cargo_c", "rough_c")
+    elif context in {"drone_shop"}:
+        choices = ("cargo_c", "scout_b", "utility_a")
+    elif context in {"electronics_shop", "comms_shop"}:
+        choices = ("scout_b", "utility_a", "cargo_c")
     elif context in {"gang_fence", "alley_market", "backroom_market", "chop_shop"}:
         choices = ("rough_c", "cargo_c", "scout_b")
     elif context in {"ranger_hut", "field_camp", "dock_shack", "ferry_post", "tide_station", "bait_shop"}:

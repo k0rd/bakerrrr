@@ -59,6 +59,7 @@ TACTICAL_BUYER_ARCHETYPES = {
     "hardware_store",
     "tool_depot",
     "auto_garage",
+    "drone_shop",
     "chop_shop",
     "pawn_shop",
     "backroom_market",
@@ -210,6 +211,20 @@ def _profile_for_archetype(archetype):
             "summary": "tools, parts, batteries, circuits, work gear, and practical repair supplies",
             "wanted": {"tool", "device", "communication", "phone", "battery", "circuit", "scrap", "armor", "wearable", "safety"},
             "adjacent": {"medical", "food", "drink", "ammo", "throwable", "tactical"},
+            "refuse_dangerous": False,
+        })
+    elif archetype in {"electronics_shop", "comms_shop"}:
+        profile.update({
+            "summary": "phones, radios, electronics, drone sensors, batteries, and small device parts",
+            "wanted": {"device", "communication", "phone", "battery", "circuit", "drone", "drone_part", "drone_module", "tool"},
+            "adjacent": {"paper", "token", "cash", "credit", "medical", "survival"},
+            "refuse_dangerous": True,
+        })
+    elif archetype == "drone_shop":
+        profile.update({
+            "summary": "drone chassis, modules, power centers, batteries, sensors, and repairable device parts",
+            "wanted": {"drone", "drone_part", "drone_module", "drone_assembly", "device", "battery", "circuit", "tool", "communication", "phone"},
+            "adjacent": {"armor", "tactical", "survival", "medical", "cash", "credit"},
             "refuse_dangerous": False,
         })
     elif archetype in STYLE_BUYER_ARCHETYPES:

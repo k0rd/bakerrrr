@@ -896,6 +896,7 @@ def _known_location_summary_bits(sim, prop, known):
         "service_intel": "intel lead",
         "service_trade": "trade lead",
         "service_outfitter": "outfitter lead",
+        "service_drone_parts": "drone/electronics lead",
         "service_justice": "justice lead",
         "service_used_cars": "used-vehicle lead",
         "service_vehicle_fetch": "vehicle-retrieval lead",

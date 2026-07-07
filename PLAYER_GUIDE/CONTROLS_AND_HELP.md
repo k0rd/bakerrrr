@@ -54,6 +54,7 @@ These are player-facing tools. They are not just flavor; they are how the game r
 
 Drone parts are ordinary items until you stow them. Pick up or buy loose chassis, power cores, and modules into your backpack, then select the part in inventory and press `U` to move it into the drone workshop.
 
+- Electronics, comms, and drone shops are the cleanest legal sources for drone parts. Surplus, backroom, street, salvage, and field sources can still carry rougher or restricted gear.
 - `U` on a `packed drone` deploys it nearby when there is room.
 - `,` picks a deployed drone back up when there is no ground item taking pickup priority.
 - `g` opens remote command for a deployed drone with a remote receiver.

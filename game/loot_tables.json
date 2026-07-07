@@ -3918,6 +3918,256 @@
       "weight": 1
     }
   ],
+  "archetype:electronics_shop": [
+    {
+      "item_id": "phone",
+      "weight": 18
+    },
+    {
+      "item_id": "two_way_radio",
+      "weight": 14
+    },
+    {
+      "item_id": "battery_pack",
+      "weight": 16
+    },
+    {
+      "item_id": "scrap_circuit",
+      "weight": 16
+    },
+    {
+      "item_id": "signal_jammer",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 12
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 10
+    },
+    {
+      "item_id": "drone_chassis_a",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_chassis_b",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_power_core_mk1",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_power_core_mk2",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 7
+    },
+    {
+      "item_id": "drone_remote_receiver_module",
+      "weight": 7
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 4
+    },
+    {
+      "item_id": "packed_drone",
+      "weight": 2
+    }
+  ],
+  "archetype:comms_shop": [
+    {
+      "item_id": "phone",
+      "weight": 16
+    },
+    {
+      "item_id": "two_way_radio",
+      "weight": 18
+    },
+    {
+      "item_id": "signal_jammer",
+      "weight": 10
+    },
+    {
+      "item_id": "battery_pack",
+      "weight": 12
+    },
+    {
+      "item_id": "scrap_circuit",
+      "weight": 12
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 10
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 7
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 10
+    },
+    {
+      "item_id": "drone_remote_receiver_module",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_radar_module",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_ir_module",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 5
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 5
+    },
+    {
+      "item_id": "drone_mapping_procedure_module",
+      "weight": 4
+    },
+    {
+      "item_id": "packed_drone",
+      "weight": 2
+    }
+  ],
+  "archetype:drone_shop": [
+    {
+      "item_id": "battery_pack",
+      "weight": 16
+    },
+    {
+      "item_id": "scrap_circuit",
+      "weight": 16
+    },
+    {
+      "item_id": "two_way_radio",
+      "weight": 10
+    },
+    {
+      "item_id": "drone_battery_light",
+      "weight": 14
+    },
+    {
+      "item_id": "drone_battery_standard",
+      "weight": 14
+    },
+    {
+      "item_id": "drone_battery_heavy",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_chassis_a",
+      "weight": 10
+    },
+    {
+      "item_id": "drone_chassis_b",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_chassis_c",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_chassis_d",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_power_core_mk1",
+      "weight": 10
+    },
+    {
+      "item_id": "drone_power_core_mk2",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_power_core_mk3",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_power_core_mk4",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_camera_module",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_radio_module",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_remote_receiver_module",
+      "weight": 8
+    },
+    {
+      "item_id": "drone_cargo_clamp_module",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_light_module",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_speaker_module",
+      "weight": 5
+    },
+    {
+      "item_id": "drone_armor_shell_module",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_mapping_procedure_module",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_follow_procedure_module",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_radar_module",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_ir_module",
+      "weight": 4
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 5
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 6
+    },
+    {
+      "item_id": "packed_drone",
+      "weight": 4
+    }
+  ],
   "archetype:field_camp": [
     {
       "item_id": "street_ration",

@@ -215,16 +215,19 @@ class World:
             "butcher_shop",
             "outfitter",
             "surplus_store",
+            "comms_shop",
             "salvage_camp",
             "pump_house",
             "work_shed",
             "truck_stop",
             "breaker_yard",
+            "drone_shop",
         ),
         "wilderness": (
             "field_camp",
             "survey_post",
             "ranger_hut",
+            "comms_shop",
             "butcher_shop",
             "outfitter",
             "ruin_shelter",
@@ -237,6 +240,7 @@ class World:
             "net_house",
             "beacon_house",
             "bait_shop",
+            "comms_shop",
             "butcher_shop",
             "drydock_yard",
             "coast_watch",
@@ -248,6 +252,8 @@ class World:
         "roadhouse": "Roadhouse",
         "outfitter": "Outfitter",
         "surplus_store": "Surplus Store",
+        "comms_shop": "Comms Shop",
+        "drone_shop": "Drone Shop",
         "truck_stop": "Truck Stop",
         "inspection_shed": "Inspection Shed",
         "breaker_yard": "Breaker Yard",
@@ -279,6 +285,8 @@ class World:
         "roadhouse": "H",
         "outfitter": "O",
         "surplus_store": "S",
+        "comms_shop": "C",
+        "drone_shop": "D",
         "truck_stop": "T",
         "inspection_shed": "I",
         "breaker_yard": "B",
@@ -310,6 +318,8 @@ class World:
         "roadhouse": "cat_orange",
         "outfitter": "cat_orange",
         "surplus_store": "item_tool",
+        "comms_shop": "player",
+        "drone_shop": "item_tool",
         "truck_stop": "cat_orange",
         "inspection_shed": "guard",
         "breaker_yard": "item_tool",
@@ -341,6 +351,8 @@ class World:
         "roadhouse",
         "outfitter",
         "surplus_store",
+        "comms_shop",
+        "drone_shop",
         "truck_stop",
         "inspection_shed",
         "ranger_hut",
@@ -889,13 +901,13 @@ class World:
     }
 
     OPTIONAL_BUILDINGS_BY_DISTRICT = {
-        "industrial": ("recycling_plant", "auto_garage", "freight_depot", "cold_storage", "tool_depot", "contractor_office", "service_station", "outerwear_shop"),
-        "residential": ("daycare", "laundromat", "pharmacy", "herbalist_shop", "bookshop", "hardware_store", "outfitter", "outfitter", "surplus_store", "thrift_store", "service_station", "barbershop", "salon", "top_shop", "bottom_shop", "shoe_shop", "hair_studio", "clothing_superstore", "employment_agency", "butcher_shop"),
-        "downtown": ("hotel", "courthouse", "jail", "jail", "metro_exchange", "courier_office", "employment_agency", "bounty_office", "gallery", "casino", "tavern", "outfitter", "herbalist_shop", "clothing_superstore", "salon", "barbershop", "top_shop", "dress_shop", "shoe_shop", "outerwear_shop", "headwear_shop", "jewelry_shop", "accessory_shop", "hair_studio", "makeup_counter", "tattoo_parlor", "butcher_shop"),
+        "industrial": ("recycling_plant", "auto_garage", "freight_depot", "cold_storage", "tool_depot", "electronics_shop", "comms_shop", "drone_shop", "contractor_office", "service_station", "outerwear_shop"),
+        "residential": ("daycare", "laundromat", "pharmacy", "herbalist_shop", "bookshop", "hardware_store", "electronics_shop", "comms_shop", "drone_shop", "outfitter", "outfitter", "surplus_store", "thrift_store", "service_station", "barbershop", "salon", "top_shop", "bottom_shop", "shoe_shop", "hair_studio", "clothing_superstore", "employment_agency", "butcher_shop"),
+        "downtown": ("hotel", "courthouse", "jail", "jail", "metro_exchange", "courier_office", "employment_agency", "bounty_office", "gallery", "casino", "tavern", "electronics_shop", "comms_shop", "outfitter", "herbalist_shop", "clothing_superstore", "salon", "barbershop", "top_shop", "dress_shop", "shoe_shop", "outerwear_shop", "headwear_shop", "jewelry_shop", "accessory_shop", "hair_studio", "makeup_counter", "tattoo_parlor", "butcher_shop"),
         "slums": ("chop_shop", "junk_market", "soup_kitchen", "flophouse", "street_kitchen", "jail", "thrift_store", "barbershop", "tattoo_parlor", "accessory_shop", "shoe_shop", "herbalist_shop", "butcher_shop"),
-        "corporate": ("data_center", "co_working_hub", "biotech_clinic", "brokerage", "media_lab", "employment_agency", "salon", "jewelry_shop", "makeup_counter", "dress_shop", "clothing_superstore", "herbalist_shop"),
-        "military": ("command_center", "motor_pool", "field_hospital", "recruitment_office", "bounty_office", "supply_bunker", "prison", "surplus_store"),
-        "entertainment": ("theater", "music_venue", "gaming_hall", "karaoke_box", "pool_hall", "casino", "bounty_office", "clothing_superstore", "salon", "barbershop", "hair_studio", "makeup_counter", "tattoo_parlor", "jewelry_shop", "accessory_shop", "dress_shop"),
+        "corporate": ("data_center", "co_working_hub", "biotech_clinic", "brokerage", "media_lab", "electronics_shop", "comms_shop", "drone_shop", "employment_agency", "salon", "jewelry_shop", "makeup_counter", "dress_shop", "clothing_superstore", "herbalist_shop"),
+        "military": ("command_center", "motor_pool", "field_hospital", "recruitment_office", "bounty_office", "supply_bunker", "prison", "comms_shop", "drone_shop", "surplus_store"),
+        "entertainment": ("theater", "music_venue", "gaming_hall", "karaoke_box", "pool_hall", "casino", "electronics_shop", "bounty_office", "clothing_superstore", "salon", "barbershop", "hair_studio", "makeup_counter", "tattoo_parlor", "jewelry_shop", "accessory_shop", "dress_shop"),
     }
 
     # Optional archetypes stay seed-available; city variation should come from
@@ -938,6 +950,9 @@ class World:
         "herbalist_shop": ("front_counter", "drying_shelves", "remedy_room", "back_stock"),
         "bookshop": ("front_table", "shelves", "reading_nook", "back_stock"),
         "hardware_store": ("counter", "aisles", "stock_room", "repair_bench"),
+        "electronics_shop": ("showroom", "counter", "repair_bench", "stock_room"),
+        "comms_shop": ("front_counter", "radio_wall", "service_bench", "stock_room"),
+        "drone_shop": ("showroom", "module_wall", "test_bay", "parts_cage", "service_counter"),
         "outfitter": ("counter", "aisles", "stock_room", "storage"),
         "top_shop": ("front_rack", "fitting_room", "counter", "stock_room"),
         "bottom_shop": ("front_rack", "fitting_room", "counter", "stock_room"),
@@ -1101,8 +1116,11 @@ class World:
         "tavern",
         "top_shop",
         "corner_store",
+        "comms_shop",
         "daycare",
         "dock_shack",
+        "drone_shop",
+        "electronics_shop",
         "hardware_store",
         "house",
         "inspection_shed",
@@ -1250,6 +1268,9 @@ class World:
         "pharmacy": ("pharmacist", "pharmacy_technician", "inventory_pharmacist", "front_counter_clerk", "insurance_biller"),
         "bookshop": ("bookseller", "inventory_clerk", "reading_host", "small_press_buyer"),
         "hardware_store": ("hardware_clerk", "repair_advisor", "stock_runner", "paint_mixer", "key_cutter"),
+        "electronics_shop": ("electronics_clerk", "bench_technician", "parts_buyer", "repair_tech", "device_specialist"),
+        "comms_shop": ("radio_clerk", "signal_tech", "antenna_runner", "comms_buyer", "field_installer"),
+        "drone_shop": ("drone_counter_clerk", "drone_technician", "module_fitter", "battery_runner", "sensor_specialist"),
         "outfitter": ("outfitter_clerk", "trail_supplier", "sporting_buyer", "stock_runner"),
         "top_shop": ("shirt_seller", "rack_runner", "fitting_room_attendant", "stock_runner"),
         "bottom_shop": ("pants_seller", "rack_runner", "fitting_room_attendant", "stock_runner"),
@@ -1335,8 +1356,11 @@ class World:
         "gaming_hall",
         "casino",
         "auto_garage",
+        "comms_shop",
         "tool_depot",
         "bookshop",
+        "drone_shop",
+        "electronics_shop",
         "hardware_store",
         "accessory_shop",
         "barbershop",
@@ -1394,7 +1418,10 @@ class World:
         "laundromat",
         "pharmacy",
         "bookshop",
+        "comms_shop",
         "hardware_store",
+        "drone_shop",
+        "electronics_shop",
         "accessory_shop",
         "barbershop",
         "bottom_shop",
@@ -1462,6 +1489,9 @@ class World:
         "pharmacy": ("Pharmacy", "Apothecary", "Drugstore"),
         "bookshop": ("Bookshop", "Books", "Reading Room"),
         "hardware_store": ("Hardware", "Fix-It", "Supply"),
+        "electronics_shop": ("Electronics", "Device Shop", "Repair Counter"),
+        "comms_shop": ("Comms", "Radio Supply", "Signal Shop"),
+        "drone_shop": ("Drone Shop", "Drone Workshop", "Module Bay"),
         "accessory_shop": ("Accessories", "Finds", "Little Goods"),
         "barbershop": ("Barber", "Cuts", "Chair"),
         "bottom_shop": ("Trousers", "Bottoms", "Rack"),
@@ -1954,15 +1984,15 @@ class World:
 
         options = list(self.NON_CITY_SITE_POOLS.get(area_type, ()))
         if area_type == "frontier":
-            options.extend(("outfitter", "surplus_store"))
+            options.extend(("outfitter", "surplus_store", "comms_shop"))
             if path in {"road", "freeway"}:
-                options.extend(("relay_post", "roadhouse", "truck_stop", "outfitter", "surplus_store"))
+                options.extend(("relay_post", "roadhouse", "truck_stop", "outfitter", "surplus_store", "comms_shop", "drone_shop"))
             if path == "freeway" or (path == "road" and district_type in {"industrial", "military"}):
-                options.append("inspection_shed")
+                options.extend(("inspection_shed", "drone_shop"))
             if terrain in {"badlands", "dunes", "ruins"}:
                 options.extend(("salvage_camp", "work_shed", "breaker_yard", "surplus_store"))
             if terrain in {"forest", "hills"}:
-                options.append("outfitter")
+                options.extend(("outfitter", "comms_shop"))
         elif area_type == "wilderness":
             if terrain in {"ruins"} or landmark_id == "shatter_ruins":
                 options.extend(("ruin_shelter", "survey_post", "weather_station"))
@@ -1973,12 +2003,12 @@ class World:
             if landmark_id in {"ancient_grove", "glass_marsh"}:
                 options.extend(("field_camp", "ranger_hut", "herbalist_camp", "herbalist_camp", "outfitter"))
             if terrain in {"hills"} or landmark_id == "radio_spire":
-                options.extend(("firewatch_tower", "weather_station", "outfitter"))
+                options.extend(("firewatch_tower", "weather_station", "outfitter", "comms_shop"))
         elif area_type == "coastal":
             if terrain in {"shore", "shoals", "lake", "island", "ocean", "waterway"}:
                 options.extend(("dock_shack", "ferry_post", "net_house", "bait_shop", "drydock_yard"))
             if path:
-                options.extend(("ferry_post", "tide_station", "coast_watch"))
+                options.extend(("ferry_post", "tide_station", "coast_watch", "comms_shop"))
 
         return tuple(options or self.NON_CITY_SITE_POOLS["frontier"])
 

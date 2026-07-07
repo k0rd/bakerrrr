@@ -57,6 +57,7 @@ TOPIC_ORDER = (
     "service_butcher",
     "service_appearance",
     "service_outfitter",
+    "service_drone_parts",
     "service_justice",
     "service_vehicle_sales",
     "service_used_cars",
@@ -269,6 +270,7 @@ TOPIC_DEFS = {
             "service_butcher",
             "service_appearance",
             "service_outfitter",
+            "service_drone_parts",
             "service_justice",
             "service_vehicle_sales",
             "service_used_cars",
@@ -403,6 +405,11 @@ TOPIC_DEFS = {
         "root": False,
         "unlocks": (),
     },
+    "service_drone_parts": {
+        "label": "Any drone parts nearby?",
+        "root": False,
+        "unlocks": (),
+    },
     "service_justice": {
         "label": "Where's the nearest jail or courthouse?",
         "root": False,
@@ -512,6 +519,7 @@ TOPIC_DEFS = {
             "service_butcher",
             "service_appearance",
             "service_outfitter",
+            "service_drone_parts",
             "service_justice",
             "service_vehicle_sales",
             "service_used_cars",
@@ -1415,6 +1423,12 @@ PLAYER_TOPIC_BANKS = {
         "Where do people gear up around here?",
         "Who sells field-ready kit close by?",
         "If I need equipment, who is nearby?",
+    ),
+    "service_drone_parts": (
+        "Any drone parts nearby?",
+        "Who sells drone modules or sensors around here?",
+        "Where would I find radios, batteries, or drone stock?",
+        "If I need drone parts, who is close?",
     ),
     "service_justice": (
         "Where is the nearest jail or courthouse?",
@@ -5207,6 +5221,8 @@ def topic_label(topic_id, context=None):
         return "Anywhere for hair, makeup, or tattoos?"
     if topic_id == "service_outfitter":
         return "Any outfitter nearby?"
+    if topic_id == "service_drone_parts":
+        return "Any drone parts nearby?"
     if topic_id == "service_justice":
         return "Where's the nearest jail or courthouse?"
     if topic_id == "service_vehicle_sales":
