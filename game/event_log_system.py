@@ -539,6 +539,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("drone_workshop_part_stowed", self.on_drone_workshop_part_stowed)
         self.sim.events.subscribe("drone_workshop_part_moved", self.on_drone_workshop_part_moved)
         self.sim.events.subscribe("drone_workshop_part_dropped", self.on_drone_workshop_part_dropped)
+        self.sim.events.subscribe("drone_workshop_drone_packed", self.on_drone_workshop_drone_packed)
         self.sim.events.subscribe("aerosol_trap_placed", self.on_aerosol_trap_placed)
         self.sim.events.subscribe("aerosol_trap_triggered", self.on_aerosol_trap_triggered)
         self.sim.events.subscribe("report_device_used", self.on_report_device_used)
@@ -4703,6 +4704,8 @@ class EventLogSystem(System):
             "power_center_unavailable": "That power core is no longer available.",
             "not_power_center": "That is not a drone power core.",
             "power_center_remove_failed": "The power core could not be removed from the workshop.",
+            "battery_remove_failed": "That battery could not be removed from your pack.",
+            "chassis_remove_failed": "That chassis could not be removed from the workshop.",
             "invalid_paint": "That paint color is not available yet.",
             "invalid_paint_key": "That paint channel is not available.",
         }
@@ -4805,6 +4808,13 @@ class EventLogSystem(System):
         qty = _int_or_default(event.data.get("quantity"), 1)
         suffix = f" x{qty}" if qty != 1 else ""
         _log_player_feedback(self.sim, f"Dropped {item_name}{suffix} from the drone workshop.", kind="interaction")
+
+    def on_drone_workshop_drone_packed(self, event):
+        eid = event.data.get("eid") or event.data.get("controller_eid")
+        if eid != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "packed drone")) or "packed drone").strip()
+        _log_player_feedback(self.sim, f"Packed {item_name} from the drone workshop.", kind="interaction")
 
     def on_item_dropped(self, event):
         eid = event.data.get("eid")

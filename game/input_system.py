@@ -109,6 +109,7 @@ from game.dialogue_runtime import (
     _disguise_role_label,
 )
 from game.drone_runtime import (
+    drone_profile_for_item,
     drone_state_capabilities,
     drone_state_controlled_by_actor,
     drone_state_has_capability,
@@ -132,14 +133,20 @@ from game.drone_sheet import (
     drone_sheet_records,
     drone_sheet_status_lines,
     drone_sheet_tab_rows,
+    drone_workshop_chassis_records,
     drop_drone_workshop_part,
+    install_workshop_drone_module,
     install_drone_module,
     move_drone_workshop_part_to_pack,
+    pack_workshop_drone,
+    paint_workshop_drone,
     paint_drone,
+    remove_workshop_drone_module,
     remove_drone_module,
     swap_drone_battery,
     swap_drone_chassis,
     swap_drone_power_center,
+    swap_workshop_drone_power_center,
     transfer_drone_cargo_to_player,
     transfer_player_cargo_to_drone,
 )
@@ -525,6 +532,7 @@ class InputSystem(System):
             self.sim.drone_sheet_ui = {
                 "open": False,
                 "selected_drone_eid": None,
+                "workshop_chassis_instance_id": None,
                 "eligible": [],
                 "tab": "status",
                 "selected_index": 0,
@@ -836,6 +844,7 @@ class InputSystem(System):
             self.sim.drone_command_ui = state
         state.setdefault("open", False)
         state.setdefault("selected_drone_eid", None)
+        state.setdefault("workshop_chassis_instance_id", None)
         state.setdefault("eligible", [])
         state.setdefault("status_lines", [])
         state.setdefault("feedback", "")
@@ -1495,6 +1504,9 @@ class InputSystem(System):
     def _drone_sheet_records(self):
         return drone_sheet_records(self.sim, self.player_eid, item_catalog=self.catalog)
 
+    def _drone_workshop_chassis_records(self):
+        return drone_workshop_chassis_records(self.sim, self.player_eid, item_catalog=self.catalog)
+
     def _drone_workshop_has_entries(self):
         workshop = drone_workshop_for_actor(
             self.sim,
@@ -1509,6 +1521,57 @@ class InputSystem(System):
         state = self._drone_sheet_state()
         has_workshop_entries = self._drone_workshop_has_entries()
         records = self._drone_sheet_records()
+        workshop_records = self._drone_workshop_chassis_records()
+        selected_workshop_chassis = str(state.get("workshop_chassis_instance_id", "") or "").strip()
+        if selected_workshop_chassis:
+            selected_workshop_record = next(
+                (
+                    record
+                    for record in workshop_records
+                    if str(record.get("workshop_chassis_instance_id", "") or "") == selected_workshop_chassis
+                ),
+                None,
+            )
+            if selected_workshop_record is not None:
+                state["selected_drone_eid"] = None
+                state["eligible"] = [{
+                    "eid": "bench",
+                    "label": selected_workshop_record.get("label", "workshop chassis"),
+                    "distance": 0,
+                    "accessible": True,
+                    "selected": True,
+                }]
+                state["visible_start"] = 0
+                state["tabs"] = tuple(DRONE_SHEET_TABS)
+                tab = str(state.get("tab", "status") or "status").strip().lower()
+                if tab not in DRONE_SHEET_TABS:
+                    tab = "status"
+                    state["tab"] = tab
+                if tab == "cargo":
+                    state["cargo_side"] = "pack"
+                if tab == "modules" and str(state.get("module_side", "bay")).strip().lower() not in {"bay", "drone"}:
+                    state["module_side"] = "bay"
+                rows = list(drone_sheet_tab_rows(
+                    self.sim,
+                    self.player_eid,
+                    selected_workshop_record,
+                    tab=tab,
+                    cargo_side=state.get("cargo_side", "pack"),
+                    module_side=state.get("module_side", "bay"),
+                    item_catalog=self.catalog,
+                ))
+                state["rows"] = rows
+                state["status_lines"] = list(drone_sheet_status_lines(selected_workshop_record, item_catalog=self.catalog))
+                if rows:
+                    state["selected_index"] = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
+                else:
+                    state["selected_index"] = 0
+                state["scroll"] = max(0, min(int(state.get("scroll", 0) or 0), max(0, len(rows) - 1)))
+                return selected_workshop_record
+            state["workshop_chassis_instance_id"] = None
+            if bool(state.get("open")) and announce_unavailable:
+                state["feedback"] = "Workbench chassis unavailable; returned to workshop parts."
+
         selected = state.get("selected_drone_eid")
         selected_record = next((record for record in records if record.get("eid") == selected), None)
         if selected_record is None and records:
@@ -1635,6 +1698,7 @@ class InputSystem(System):
         selected = state.get("selected_drone_eid")
         index = next((idx for idx, record in enumerate(records) if record.get("eid") == selected), 0)
         index = (int(index) + int(step)) % len(records)
+        state["workshop_chassis_instance_id"] = None
         state["selected_drone_eid"] = records[index].get("eid")
         state["selected_index"] = 0
         state["scroll"] = 0
@@ -1701,7 +1765,7 @@ class InputSystem(System):
         item_id = result.get("new_battery_item_id") if isinstance(result, dict) else None
         return item_display_name(item_id, item_catalog=self.catalog) if item_id else "item"
 
-    def _activate_selected_drone_sheet_row(self):
+    def _activate_selected_drone_sheet_row(self, *, prefer_workbench=False):
         state = self._drone_sheet_state()
         record = self._selected_drone_sheet_record()
         row = self._selected_drone_sheet_row()
@@ -1716,6 +1780,20 @@ class InputSystem(System):
             instance_id = str(row.get("instance_id", "") or "").strip()
             if not instance_id:
                 state["feedback"] = "No workshop part selected."
+                return True
+            entry = row.get("entry") if isinstance(row.get("entry"), dict) else {}
+            item_id = str(entry.get("item_id", "") or "").strip().lower()
+            profile_kind = str(drone_profile_for_item(item_id, item_catalog=self.catalog).get("kind", "") or "").strip().lower()
+            if prefer_workbench and profile_kind == "chassis":
+                state["workshop_chassis_instance_id"] = instance_id
+                state["selected_drone_eid"] = None
+                state["tab"] = "modules"
+                state["module_side"] = "bay"
+                state["selected_index"] = 0
+                state["scroll"] = 0
+                item_name = self._drone_sheet_item_name({"entry": entry})
+                state["feedback"] = f"Workbench selected: {item_name}."
+                self._refresh_drone_sheet_ui(announce_unavailable=True)
                 return True
             result = move_drone_workshop_part_to_pack(
                 self.sim,
@@ -1751,7 +1829,13 @@ class InputSystem(System):
             state["feedback"] = "That drone sheet row is read-only."
             return True
 
+        is_workbench = bool(record.get("workshop_chassis")) if isinstance(record, dict) else False
+        workbench_chassis_id = str((record or {}).get("workshop_chassis_instance_id", "") or "").strip()
+
         if tab == "cargo":
+            if is_workbench:
+                state["feedback"] = "Pack and deploy the chassis before using cargo."
+                return True
             instance_id = str(row.get("instance_id", "") or "").strip()
             if not instance_id:
                 state["feedback"] = "No cargo row selected."
@@ -1801,32 +1885,56 @@ class InputSystem(System):
             if not instance_id:
                 state["feedback"] = "No spare battery selected."
                 return True
-            result = swap_drone_battery(
-                self.sim,
-                self.player_eid,
-                record.get("eid"),
-                instance_id,
-                item_catalog=self.catalog,
-            )
+            if is_workbench:
+                result = pack_workshop_drone(
+                    self.sim,
+                    self.player_eid,
+                    workbench_chassis_id,
+                    instance_id,
+                    item_catalog=self.catalog,
+                )
+            else:
+                result = swap_drone_battery(
+                    self.sim,
+                    self.player_eid,
+                    record.get("eid"),
+                    instance_id,
+                    item_catalog=self.catalog,
+                )
             if bool(result.get("ok")):
                 item_name = self._drone_sheet_item_name(result)
-                state["feedback"] = f"Swapped in {item_name}."
-                self.sim.emit(Event(
-                    "drone_battery_swapped",
-                    eid=self.player_eid,
-                    controller_eid=self.player_eid,
-                    drone_eid=record.get("eid"),
-                    chassis_class=getattr(record.get("state"), "chassis_class", None),
-                    new_battery_item_id=result.get("new_battery_item_id"),
-                    old_battery_item_id=result.get("old_battery_item_id"),
-                    item_name=item_name,
-                    battery_charge=result.get("battery_charge"),
-                    battery_charge_max=result.get("battery_charge_max"),
-                    previous=result.get("previous"),
-                ))
+                if is_workbench:
+                    state["workshop_chassis_instance_id"] = None
+                    state["tab"] = "parts"
+                    state["feedback"] = f"Packed {item_name}."
+                    self.sim.emit(Event(
+                        "drone_workshop_drone_packed",
+                        eid=self.player_eid,
+                        controller_eid=self.player_eid,
+                        item_id=(result.get("entry") or {}).get("item_id") if isinstance(result.get("entry"), dict) else "packed_drone",
+                        item_name=item_name,
+                        instance_id=result.get("instance_id"),
+                        battery_item_id=(result.get("battery_entry") or {}).get("item_id") if isinstance(result.get("battery_entry"), dict) else None,
+                    ))
+                else:
+                    state["feedback"] = f"Swapped in {item_name}."
+                    self.sim.emit(Event(
+                        "drone_battery_swapped",
+                        eid=self.player_eid,
+                        controller_eid=self.player_eid,
+                        drone_eid=record.get("eid"),
+                        chassis_class=getattr(record.get("state"), "chassis_class", None),
+                        new_battery_item_id=result.get("new_battery_item_id"),
+                        old_battery_item_id=result.get("old_battery_item_id"),
+                        item_name=item_name,
+                        battery_charge=result.get("battery_charge"),
+                        battery_charge_max=result.get("battery_charge_max"),
+                        previous=result.get("previous"),
+                    ))
             else:
                 reason = result.get("reason", "blocked")
-                state["feedback"] = f"Battery swap blocked: {str(reason).replace('_', ' ')}."
+                details = "; ".join(str(error) for error in result.get("errors", ()) if str(error).strip())
+                state["feedback"] = f"{'Pack' if is_workbench else 'Battery swap'} blocked: {str(reason).replace('_', ' ')}{(': ' + details) if details else ''}."
                 self._emit_drone_sheet_blocked(record, reason, action="battery")
             self._refresh_drone_sheet_ui(announce_unavailable=True)
             return True
@@ -1835,22 +1943,40 @@ class InputSystem(System):
             action = str(row.get("action", "") or "").strip().lower()
             if action == "install_module":
                 instance_id = str(row.get("instance_id", "") or "").strip()
-                result = install_drone_module(
-                    self.sim,
-                    self.player_eid,
-                    record.get("eid"),
-                    instance_id,
-                    item_catalog=self.catalog,
-                )
+                if is_workbench:
+                    result = install_workshop_drone_module(
+                        self.sim,
+                        self.player_eid,
+                        workbench_chassis_id,
+                        instance_id,
+                        item_catalog=self.catalog,
+                    )
+                else:
+                    result = install_drone_module(
+                        self.sim,
+                        self.player_eid,
+                        record.get("eid"),
+                        instance_id,
+                        item_catalog=self.catalog,
+                    )
                 event_name = "drone_module_installed"
             elif action == "remove_module":
-                result = remove_drone_module(
-                    self.sim,
-                    self.player_eid,
-                    record.get("eid"),
-                    row.get("module_index"),
-                    item_catalog=self.catalog,
-                )
+                if is_workbench:
+                    result = remove_workshop_drone_module(
+                        self.sim,
+                        self.player_eid,
+                        workbench_chassis_id,
+                        row.get("module_index"),
+                        item_catalog=self.catalog,
+                    )
+                else:
+                    result = remove_drone_module(
+                        self.sim,
+                        self.player_eid,
+                        record.get("eid"),
+                        row.get("module_index"),
+                        item_catalog=self.catalog,
+                    )
                 event_name = "drone_module_removed"
             else:
                 state["feedback"] = "No module edit selected."
@@ -1864,6 +1990,7 @@ class InputSystem(System):
                     controller_eid=self.player_eid,
                     drone_eid=record.get("eid"),
                     chassis_class=getattr(record.get("state"), "chassis_class", None),
+                    workshop_chassis=is_workbench,
                     item_id=(result.get("entry") or {}).get("item_id") if isinstance(result.get("entry"), dict) else None,
                     item_name=item_name,
                     errors=tuple(result.get("errors", ()) or ()),
@@ -1878,7 +2005,7 @@ class InputSystem(System):
 
         if tab == "schematic":
             action = str(row.get("action", "") or "").strip().lower()
-            if action == "swap_chassis":
+            if action == "swap_chassis" and not is_workbench:
                 result = swap_drone_chassis(
                     self.sim,
                     self.player_eid,
@@ -1888,23 +2015,42 @@ class InputSystem(System):
                 )
                 event_name = "drone_chassis_swapped"
             elif action == "swap_power_center":
-                result = swap_drone_power_center(
-                    self.sim,
-                    self.player_eid,
-                    record.get("eid"),
-                    str(row.get("instance_id", "") or "").strip(),
-                    item_catalog=self.catalog,
-                )
+                if is_workbench:
+                    result = swap_workshop_drone_power_center(
+                        self.sim,
+                        self.player_eid,
+                        workbench_chassis_id,
+                        str(row.get("instance_id", "") or "").strip(),
+                        item_catalog=self.catalog,
+                    )
+                else:
+                    result = swap_drone_power_center(
+                        self.sim,
+                        self.player_eid,
+                        record.get("eid"),
+                        str(row.get("instance_id", "") or "").strip(),
+                        item_catalog=self.catalog,
+                    )
                 event_name = "drone_power_core_swapped"
             elif action == "paint":
-                result = paint_drone(
-                    self.sim,
-                    self.player_eid,
-                    record.get("eid"),
-                    row.get("paint_key"),
-                    row.get("paint_color"),
-                    item_catalog=self.catalog,
-                )
+                if is_workbench:
+                    result = paint_workshop_drone(
+                        self.sim,
+                        self.player_eid,
+                        workbench_chassis_id,
+                        row.get("paint_key"),
+                        row.get("paint_color"),
+                        item_catalog=self.catalog,
+                    )
+                else:
+                    result = paint_drone(
+                        self.sim,
+                        self.player_eid,
+                        record.get("eid"),
+                        row.get("paint_key"),
+                        row.get("paint_color"),
+                        item_catalog=self.catalog,
+                    )
                 event_name = "drone_paint_changed"
             else:
                 state["feedback"] = "No schematic edit selected."
@@ -1922,6 +2068,7 @@ class InputSystem(System):
                     controller_eid=self.player_eid,
                     drone_eid=record.get("eid"),
                     chassis_class=getattr(record.get("state"), "chassis_class", None),
+                    workshop_chassis=is_workbench,
                     item_id=result.get("new_item_id"),
                     item_name=item_name,
                     paint_key=result.get("paint_key"),
@@ -2028,8 +2175,10 @@ class InputSystem(System):
         if key in (KEY_DOWN, ord("j"), ord("J")):
             state["selected_index"] = min(max(0, len(rows) - 1), int(state.get("selected_index", 0) or 0) + 1)
             return True
-        if key in ENTER_KEYS or key in (ord("u"), ord("U")):
-            return self._activate_selected_drone_sheet_row()
+        if key in ENTER_KEYS:
+            return self._activate_selected_drone_sheet_row(prefer_workbench=True)
+        if key in (ord("u"), ord("U")):
+            return self._activate_selected_drone_sheet_row(prefer_workbench=False)
         self._refresh_drone_sheet_ui(announce_unavailable=True)
         return True
 
