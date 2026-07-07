@@ -764,6 +764,18 @@
       "weight": 3
     },
     {
+      "item_id": "drone_radar_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_ir_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
+    },
+    {
       "item_id": "drone_radio_module",
       "weight": 2
     },
@@ -1084,6 +1096,18 @@
     {
       "item_id": "drone_power_core_mk4",
       "weight": 2
+    },
+    {
+      "item_id": "drone_radar_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_ir_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
     },
     {
       "item_id": "drone_armor_shell_module",
@@ -1423,6 +1447,18 @@
     },
     {
       "item_id": "drone_camera_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_radar_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_ir_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_lidar_module",
       "weight": 2
     },
     {
@@ -2220,6 +2256,14 @@
     {
       "item_id": "drone_cargo_clamp_module",
       "weight": 2
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
     }
   ],
   "archetype:factory": [
@@ -2306,6 +2350,14 @@
     {
       "item_id": "drone_armor_shell_module",
       "weight": 1
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_radar_module",
+      "weight": 1
     }
   ],
   "archetype:machine_shop": [
@@ -2384,6 +2436,14 @@
     {
       "item_id": "drone_light_module",
       "weight": 2
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
     }
   ],
   "archetype:auto_garage": [
@@ -2478,6 +2538,18 @@
     {
       "item_id": "drone_cargo_clamp_module",
       "weight": 1
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_radar_module",
+      "weight": 1
     }
   ],
   "archetype:freight_depot": [
@@ -2543,6 +2615,18 @@
     },
     {
       "item_id": "drone_radio_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_radar_module",
       "weight": 1
     }
   ],
@@ -2900,6 +2984,14 @@
       "weight": 2
     },
     {
+      "item_id": "drone_lidar_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 1
+    },
+    {
       "item_id": "drone_remote_receiver_module",
       "weight": 2
     },
@@ -3110,6 +3202,14 @@
       "weight": 2
     },
     {
+      "item_id": "drone_ir_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
+    },
+    {
       "item_id": "drone_pistol_module",
       "weight": 1
     },
@@ -3229,6 +3329,10 @@
     },
     {
       "item_id": "drone_radio_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_sonar_module",
       "weight": 1
     },
     {
@@ -3362,6 +3466,18 @@
     {
       "item_id": "drone_mapping_procedure_module",
       "weight": 2
+    },
+    {
+      "item_id": "drone_radar_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 1
     }
   ],
   "archetype:roadhouse": [
@@ -3482,6 +3598,14 @@
     {
       "item_id": "drone_mapping_procedure_module",
       "weight": 1
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
     }
   ],
   "archetype:ferry_post": [
@@ -3520,6 +3644,14 @@
     {
       "item_id": "drone_camera_module",
       "weight": 1
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_radar_module",
+      "weight": 1
     }
   ],
   "archetype:tide_station": [
@@ -3557,6 +3689,14 @@
     },
     {
       "item_id": "drone_mapping_procedure_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_lidar_module",
       "weight": 1
     }
   ],
@@ -3638,6 +3778,14 @@
       "weight": 2
     },
     {
+      "item_id": "drone_sonar_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_lidar_module",
+      "weight": 1
+    },
+    {
       "item_id": "packed_drone",
       "weight": 1
     }
@@ -3700,6 +3848,10 @@
       "weight": 2
     },
     {
+      "item_id": "drone_sonar_module",
+      "weight": 1
+    },
+    {
       "item_id": "drone_chassis_a",
       "weight": 1
     }
@@ -3756,6 +3908,10 @@
     {
       "item_id": "drone_light_module",
       "weight": 2
+    },
+    {
+      "item_id": "drone_sonar_module",
+      "weight": 1
     },
     {
       "item_id": "drone_power_core_mk1",
@@ -3821,6 +3977,14 @@
     },
     {
       "item_id": "drone_mapping_procedure_module",
+      "weight": 2
+    },
+    {
+      "item_id": "drone_radar_module",
+      "weight": 1
+    },
+    {
+      "item_id": "drone_sonar_module",
       "weight": 2
     },
     {

@@ -158,15 +158,20 @@ def normalize_drone_profile(profile=None, *, item_id=None):
         module_kind = _clean_text(profile.get("module_kind")).lower()
         if not module_kind:
             errors.append("module profile requires module_kind")
+        active_draw = _safe_int(profile.get("active_draw"), 0, minimum=0)
         normalized.update({
             "module_kind": module_kind,
             "slot_cost": _safe_int(profile.get("slot_cost"), 1, minimum=1),
             "weight": _safe_int(profile.get("weight"), 0, minimum=0),
             "standby_draw": _safe_int(profile.get("standby_draw"), 0, minimum=0),
-            "active_draw": _safe_int(profile.get("active_draw"), 0, minimum=0),
+            "active_draw": active_draw,
             "capabilities": _string_tuple(profile.get("capabilities")),
             "visible_overlay": _visible_overlay(profile.get("visible_overlay")),
             "compatible_chassis": _chassis_tuple(profile.get("compatible_chassis")),
+            "sensor_kind": _clean_text(profile.get("sensor_kind")).lower(),
+            "sensor_range": _safe_int(profile.get("sensor_range"), 0, minimum=0),
+            "sensor_power_cost": _safe_int(profile.get("sensor_power_cost"), active_draw, minimum=0),
+            "sensor_occlusion_depth": _safe_int(profile.get("sensor_occlusion_depth"), 0, minimum=0),
         })
     elif kind == "assembly":
         normalized.update({

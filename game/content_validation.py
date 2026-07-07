@@ -546,6 +546,11 @@ def _validate_drone_profile(report, source, item_path, profile):
             if key in profile:
                 minimum = 1 if key == "slot_cost" else 0
                 _validate_int(report, source, profile_path + [key], profile.get(key), minimum=minimum, field_name=key)
+        if "sensor_kind" in profile:
+            _validate_identifier(report, source, profile_path + ["sensor_kind"], profile.get("sensor_kind"), field_name="sensor_kind")
+        for key in ("sensor_range", "sensor_power_cost", "sensor_occlusion_depth"):
+            if key in profile:
+                _validate_int(report, source, profile_path + [key], profile.get(key), minimum=0, field_name=key)
         if "capabilities" in profile:
             _validate_string_list(
                 report,

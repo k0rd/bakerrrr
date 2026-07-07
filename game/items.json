@@ -3092,12 +3092,204 @@
       "capabilities": [
         "camera",
         "sensor",
-        "linked_vision"
+        "linked_vision",
+        "linked_sensor",
+        "mapping_sensor",
+        "visual_identity_sensor"
       ],
+      "sensor_kind": "camera",
+      "sensor_range": 8,
+      "sensor_power_cost": 2,
+      "sensor_occlusion_depth": 0,
       "visible_overlay": {
         "glyph": "c",
         "color": "item_restricted",
         "label": "camera"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_radar_module": {
+    "name": "Drone Radar Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "radar",
+      "sensor",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "radar",
+      "slot_cost": 1,
+      "weight": 2,
+      "standby_draw": 1,
+      "active_draw": 3,
+      "capabilities": [
+        "radar",
+        "linked_sensor",
+        "mapping_sensor",
+        "threat_sensor",
+        "motion_sensor",
+        "metal_sensor"
+      ],
+      "sensor_kind": "radar",
+      "sensor_range": 14,
+      "sensor_power_cost": 3,
+      "sensor_occlusion_depth": 0,
+      "visible_overlay": {
+        "glyph": "R",
+        "color": "item_restricted",
+        "label": "radar"
+      },
+      "compatible_chassis": [
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_ir_module": {
+    "name": "Drone IR Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "ir",
+      "thermal",
+      "sensor",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "ir",
+      "slot_cost": 1,
+      "weight": 1,
+      "standby_draw": 1,
+      "active_draw": 2,
+      "capabilities": [
+        "ir",
+        "thermal",
+        "linked_sensor",
+        "threat_sensor",
+        "heat_sensor"
+      ],
+      "sensor_kind": "ir",
+      "sensor_range": 6,
+      "sensor_power_cost": 2,
+      "sensor_occlusion_depth": 1,
+      "visible_overlay": {
+        "glyph": "t",
+        "color": "item_restricted",
+        "label": "thermal"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_sonar_module": {
+    "name": "Drone Sonar Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "sonar",
+      "sensor",
+      "tool",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "sonar",
+      "slot_cost": 1,
+      "weight": 1,
+      "standby_draw": 0,
+      "active_draw": 1,
+      "capabilities": [
+        "sonar",
+        "linked_sensor",
+        "mapping_sensor",
+        "navigation_sensor"
+      ],
+      "sensor_kind": "sonar",
+      "sensor_range": 6,
+      "sensor_power_cost": 1,
+      "sensor_occlusion_depth": 0,
+      "visible_overlay": {
+        "glyph": "s",
+        "color": "item_legal",
+        "label": "sonar"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
+  "drone_lidar_module": {
+    "name": "Drone Lidar Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "lidar",
+      "sensor",
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "lidar",
+      "slot_cost": 1,
+      "weight": 1,
+      "standby_draw": 1,
+      "active_draw": 2,
+      "capabilities": [
+        "lidar",
+        "linked_sensor",
+        "mapping_sensor",
+        "navigation_sensor"
+      ],
+      "sensor_kind": "lidar",
+      "sensor_range": 8,
+      "sensor_power_cost": 2,
+      "sensor_occlusion_depth": 0,
+      "visible_overlay": {
+        "glyph": "L",
+        "color": "item_restricted",
+        "label": "lidar"
       },
       "compatible_chassis": [
         "A",

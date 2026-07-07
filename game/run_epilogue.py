@@ -34,7 +34,7 @@ from game.property_runtime import property_covering as _property_covering
 from game.run_echoes import archive_run_echoes
 from game.run_rewards import export_success_reward_bundle
 from game.run_pressure import pressure_snapshot
-from game.system_support.entity_naming import _entity_display_name
+from game.system_support.entity_naming import _display_label_phrase, _entity_display_name, _entity_display_phrase
 from game.weapons import weapon_by_id
 
 try:  # Incident runtime is present in current BAKERRRR, but keep this module soft.
@@ -212,6 +212,13 @@ class RunEpilogueLedgerSystem(System):
                 return common
         return fallback
 
+    def _eid_phrase(self, eid, fallback="someone"):
+        try:
+            eid = int(eid)
+        except (TypeError, ValueError):
+            return fallback
+        return _entity_display_phrase(self.sim, eid, title_case=False, article=True, fallback=fallback)
+
     def _player_component(self, component_cls):
         try:
             return self.sim.ecs.get(component_cls).get(self.player_eid)
@@ -275,6 +282,14 @@ class RunEpilogueLedgerSystem(System):
             return name
         return self._eid_name(incident.get("victim_eid"), "")
 
+    def _incident_participant_phrase(self, incident):
+        if not isinstance(incident, dict):
+            return ""
+        phrase = self._eid_phrase(incident.get("victim_eid"), "")
+        if phrase:
+            return phrase
+        return _display_label_phrase(self._incident_participant_name(incident), article=True)
+
     def _action_offense_subject(self, incident):
         note = str((incident or {}).get("note", "") or "").strip().lower()
         action, _, context = note.partition("/")
@@ -291,7 +306,7 @@ class RunEpilogueLedgerSystem(System):
             "use_item": "item use",
         }
         base = labels.get(context) or labels.get(action) or context.replace("_", " ").strip() or action.replace("_", " ").strip() or "violence"
-        victim = self._incident_participant_name(incident)
+        victim = self._incident_participant_phrase(incident)
         place = self._incident_place_label(incident)
         if victim:
             linker = "involving" if base == "visible contraband use" else "against"
@@ -481,7 +496,7 @@ class RunEpilogueLedgerSystem(System):
     def on_melee_attack(self, event):
         if event.data.get("eid") != self.player_eid and event.data.get("actor_eid") != self.player_eid:
             return
-        target = self._eid_name(event.data.get("target_eid"), "target")
+        target = self._eid_phrase(event.data.get("target_eid"), "a target")
         self._record("melee_attack", f"You attacked {target} up close.", event, weight=0.55)
 
     def on_explosion_triggered(self, event):

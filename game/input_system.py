@@ -117,9 +117,13 @@ from game.drone_combat import drone_weapon_status
 from game.drone_recon import (
     DRONE_LINKED_CAMERA_RADIUS,
     apply_linked_camera_knowledge,
+    apply_linked_sensor_knowledge,
     clear_linked_camera_view,
     describe_drone_camera_cell,
+    describe_drone_sensor_cell,
+    drone_sensor_modes,
     linked_camera_status,
+    linked_sensor_status,
 )
 from game.drone_sheet import (
     DRONE_SHEET_TABS,
@@ -513,6 +517,8 @@ class InputSystem(System):
                 "camera_cursor_z": 0,
                 "camera_visible": set(),
                 "camera_radius": DRONE_LINKED_CAMERA_RADIUS,
+                "camera_sensor_mode": "camera",
+                "camera_contacts": tuple(),
                 "camera_inspect_text": "",
             }
         if not hasattr(self.sim, "drone_sheet_ui"):
@@ -841,6 +847,8 @@ class InputSystem(System):
         state.setdefault("camera_cursor_z", 0)
         state.setdefault("camera_visible", set())
         state.setdefault("camera_radius", DRONE_LINKED_CAMERA_RADIUS)
+        state.setdefault("camera_sensor_mode", "camera")
+        state.setdefault("camera_contacts", tuple())
         state.setdefault("camera_inspect_text", "")
         return state
 
@@ -935,14 +943,29 @@ class InputSystem(System):
 
     def _drone_camera_status_line(self, camera):
         if not isinstance(camera, dict):
-            return "Camera: unavailable"
+            return "Sensor: unavailable"
         if not bool(camera.get("ok")):
             reason = str(camera.get("reason", "") or "unavailable").replace("_", " ")
-            return f"Camera: unavailable ({reason})"
+            return f"Sensor: unavailable ({reason})"
+        sensor_kind = str(camera.get("sensor_kind", "camera") or "camera").strip().lower() or "camera"
+        label = str(camera.get("sensor_label", sensor_kind) or sensor_kind).strip().lower() or sensor_kind
         report = "report gate ready" if bool(camera.get("can_live_report")) else "local view only"
+        mode = camera.get("sensor_mode") if isinstance(camera.get("sensor_mode"), dict) else {}
+        flags = []
+        if bool(mode.get("mapping")):
+            flags.append("mapping")
+        if bool(mode.get("threat")):
+            flags.append("threat")
+        if bool(mode.get("visual_identity")):
+            flags.append("visual")
+        flag_text = ",".join(flags) if flags else report
         visible = len(camera.get("visible", ()) or ())
         radius = int(camera.get("radius", DRONE_LINKED_CAMERA_RADIUS) or DRONE_LINKED_CAMERA_RADIUS)
-        return f"Camera: linked r{radius} | {visible} cells | {report}"
+        if sensor_kind == "camera":
+            return f"Camera: linked r{radius} | {visible} cells | {report}"
+        contacts = len(tuple(camera.get("contacts", ()) or ()))
+        contact_text = f" | {contacts} contacts" if contacts else ""
+        return f"Sensor: {label} r{radius} | {visible} cells{contact_text} | {flag_text}"
 
     def _drone_weapon_status_line(self, state):
         status = drone_weapon_status(state, item_catalog=self.catalog, tick=int(getattr(self.sim, "tick", 0) or 0))
@@ -1010,11 +1033,13 @@ class InputSystem(System):
         state["camera_mode"] = "inspect"
         state["camera_drone_eid"] = None
         state["camera_visible"] = set()
+        state["camera_sensor_mode"] = "camera"
+        state["camera_contacts"] = tuple()
         state["camera_inspect_text"] = ""
         clear_linked_camera_view(self.sim)
         return True
 
-    def _sync_linked_drone_camera(self, record, *, announce_unavailable=False):
+    def _sync_linked_drone_camera(self, record, *, announce_unavailable=False, visual_only=False):
         state = self._drone_command_state()
         if not isinstance(record, dict):
             if bool(state.get("camera_open")):
@@ -1023,18 +1048,28 @@ class InputSystem(System):
                 clear_linked_camera_view(self.sim)
             return {"ok": False, "reason": "selected_unavailable", "visible": set()}
 
-        camera = apply_linked_camera_knowledge(
-            self.sim,
-            self.player_eid,
-            record.get("eid"),
-            radius=DRONE_LINKED_CAMERA_RADIUS,
-            item_catalog=self.catalog,
-        )
+        if visual_only:
+            camera = apply_linked_camera_knowledge(
+                self.sim,
+                self.player_eid,
+                record.get("eid"),
+                radius=DRONE_LINKED_CAMERA_RADIUS,
+                item_catalog=self.catalog,
+            )
+        else:
+            camera = apply_linked_sensor_knowledge(
+                self.sim,
+                self.player_eid,
+                record.get("eid"),
+                preferred_sensor=state.get("camera_sensor_mode"),
+                item_catalog=self.catalog,
+            )
         record["camera"] = camera
         if not bool(camera.get("ok")):
             if bool(state.get("camera_open")):
                 reason = str(camera.get("reason", "unavailable") or "unavailable").replace("_", " ")
-                state["feedback"] = f"Drone camera link lost: {reason}."
+                noun = "camera" if visual_only or str(state.get("camera_mode", "")).lower() == "attack" else "sensor"
+                state["feedback"] = f"Drone {noun} link lost: {reason}."
                 self._close_drone_camera_ui()
             return camera
 
@@ -1042,17 +1077,34 @@ class InputSystem(System):
         pos = camera.get("position")
         state["camera_visible"] = visible
         state["camera_radius"] = int(camera.get("radius", DRONE_LINKED_CAMERA_RADIUS) or DRONE_LINKED_CAMERA_RADIUS)
+        sensor_kind = str(camera.get("sensor_kind", "camera") or "camera").strip().lower() or "camera"
+        state["camera_sensor_mode"] = sensor_kind
+        state["camera_contacts"] = tuple(camera.get("contacts", ()) or ())
         if bool(state.get("camera_open")):
             if state.get("camera_drone_eid") != record.get("eid") and pos is not None:
                 self._set_drone_camera_cursor(pos.x, pos.y, pos.z)
-                state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, pos.x, pos.y, pos.z)
+                state["camera_inspect_text"] = describe_drone_sensor_cell(
+                    self.sim,
+                    pos.x,
+                    pos.y,
+                    pos.z,
+                    sensor_kind=sensor_kind,
+                    contacts=state.get("camera_contacts"),
+                )
             state["camera_drone_eid"] = record.get("eid")
             cursor = self._drone_camera_cursor_tuple()
             if cursor not in visible and pos is not None:
                 self._set_drone_camera_cursor(pos.x, pos.y, pos.z)
-                state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, pos.x, pos.y, pos.z)
+                state["camera_inspect_text"] = describe_drone_sensor_cell(
+                    self.sim,
+                    pos.x,
+                    pos.y,
+                    pos.z,
+                    sensor_kind=sensor_kind,
+                    contacts=state.get("camera_contacts"),
+                )
                 if announce_unavailable:
-                    state["feedback"] = "Drone camera cursor returned to the link origin."
+                    state["feedback"] = "Drone sensor cursor returned to the link origin."
         return camera
 
     def _drone_command_records(self):
@@ -1073,11 +1125,10 @@ class InputSystem(System):
                 continue
             distance = _manhattan(player_pos.x, player_pos.y, pos.x, pos.y)
             capabilities = drone_state_capabilities(state, item_catalog=self.catalog)
-            camera = linked_camera_status(
+            camera = linked_sensor_status(
                 self.sim,
                 self.player_eid,
                 drone_eid,
-                radius=DRONE_LINKED_CAMERA_RADIUS,
                 item_catalog=self.catalog,
             )
             records.append({
@@ -1139,7 +1190,7 @@ class InputSystem(System):
         state["open"] = True
         self._sync_linked_drone_camera(record)
         state["status_lines"] = self._drone_status_lines(record)
-        state["feedback"] = "Movement keys command the selected drone. [/] cycles. X links camera."
+        state["feedback"] = "Movement keys command the selected drone. [/] cycles. X links sensors."
         self.sim.emit(Event(
             "drone_command_opened",
             eid=self.player_eid,
@@ -1202,23 +1253,33 @@ class InputSystem(System):
         camera = self._sync_linked_drone_camera(record, announce_unavailable=True)
         if not bool(camera.get("ok")):
             reason = str(camera.get("reason", "unavailable") or "unavailable").replace("_", " ")
-            state["feedback"] = f"Drone camera unavailable: {reason}."
+            state["feedback"] = f"Drone sensor unavailable: {reason}."
             self.sim.emit(Event(
                 "drone_command_blocked",
                 eid=self.player_eid,
                 controller_eid=self.player_eid,
                 drone_eid=(record or {}).get("eid") if isinstance(record, dict) else None,
-                reason="camera_unavailable",
+                reason="sensor_unavailable",
             ))
             return True
         pos = camera.get("position")
         state["camera_open"] = True
         state["camera_mode"] = "inspect"
         state["camera_drone_eid"] = record.get("eid")
+        sensor_kind = str(camera.get("sensor_kind", "camera") or "camera").strip().lower() or "camera"
+        state["camera_sensor_mode"] = sensor_kind
+        state["camera_contacts"] = tuple(camera.get("contacts", ()) or ())
         if pos is not None:
             self._set_drone_camera_cursor(pos.x, pos.y, pos.z)
-            state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, pos.x, pos.y, pos.z)
-        state["feedback"] = "Linked drone camera active."
+            state["camera_inspect_text"] = describe_drone_sensor_cell(
+                self.sim,
+                pos.x,
+                pos.y,
+                pos.z,
+                sensor_kind=sensor_kind,
+                contacts=state.get("camera_contacts"),
+            )
+        state["feedback"] = f"Linked drone {sensor_kind if sensor_kind != 'camera' else 'camera'} active."
         return True
 
     def _open_drone_attack_ui(self, record):
@@ -1237,7 +1298,7 @@ class InputSystem(System):
                 reason="missing_weapon",
             ))
             return True
-        camera = self._sync_linked_drone_camera(record, announce_unavailable=True)
+        camera = self._sync_linked_drone_camera(record, announce_unavailable=True, visual_only=True)
         if not bool(camera.get("ok")):
             reason = str(camera.get("reason", "unavailable") or "unavailable").replace("_", " ")
             state["feedback"] = f"Attack camera unavailable: {reason}."
@@ -1271,10 +1332,19 @@ class InputSystem(System):
         state = self._drone_command_state()
         x, y, z = self._drone_camera_cursor_tuple()
         if not self._drone_camera_cursor_visible(x, y, z):
-            state["feedback"] = "Drone camera has no line of sight there."
+            noun = "camera" if str(state.get("camera_sensor_mode", "camera")).lower() == "camera" else "sensor"
+            state["feedback"] = "Drone camera has no line of sight there." if noun == "camera" else "Drone sensor cannot read there."
             return True
-        state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, x, y, z)
-        state["feedback"] = "Drone camera examined the cursor."
+        state["camera_inspect_text"] = describe_drone_sensor_cell(
+            self.sim,
+            x,
+            y,
+            z,
+            sensor_kind=state.get("camera_sensor_mode"),
+            contacts=state.get("camera_contacts"),
+        )
+        noun = "camera" if str(state.get("camera_sensor_mode", "camera")).lower() == "camera" else "sensor"
+        state["feedback"] = f"Drone {noun} examined the cursor."
         return True
 
     def _fire_drone_attack_cursor(self):
@@ -1308,14 +1378,42 @@ class InputSystem(System):
         nx = int(x) + int(dx)
         ny = int(y) + int(dy)
         if not self.sim.tilemap.in_bounds(nx, ny):
-            state["feedback"] = "Drone camera cursor hit the map edge."
+            state["feedback"] = "Drone sensor cursor hit the map edge."
             return True
         if not self._drone_camera_cursor_visible(nx, ny, z):
-            state["feedback"] = "Drone camera LOS does not reach there."
+            noun = "camera LOS" if str(state.get("camera_sensor_mode", "camera")).lower() == "camera" else "sensor sweep"
+            state["feedback"] = f"Drone {noun} does not reach there."
             return True
         self._set_drone_camera_cursor(nx, ny, z)
-        state["camera_inspect_text"] = describe_drone_camera_cell(self.sim, nx, ny, z)
-        state["feedback"] = "Drone camera cursor moved."
+        state["camera_inspect_text"] = describe_drone_sensor_cell(
+            self.sim,
+            nx,
+            ny,
+            z,
+            sensor_kind=state.get("camera_sensor_mode"),
+            contacts=state.get("camera_contacts"),
+        )
+        state["feedback"] = "Drone sensor cursor moved."
+        return True
+
+    def _cycle_drone_sensor_mode(self, step=1):
+        state = self._drone_command_state()
+        if str(state.get("camera_mode", "inspect") or "inspect").strip().lower() == "attack":
+            state["feedback"] = "Attack mode requires the camera."
+            return True
+        record = self._selected_drone_command_record()
+        drone_state = (record or {}).get("state") if isinstance(record, dict) else None
+        modes = list(drone_sensor_modes(drone_state, item_catalog=self.catalog))
+        if len(modes) <= 1:
+            state["feedback"] = "No alternate sensor mode installed."
+            return True
+        current = str(state.get("camera_sensor_mode", "") or "").strip().lower()
+        index = next((idx for idx, mode in enumerate(modes) if str(mode.get("sensor_kind", "")) == current), 0)
+        index = (index + int(step)) % len(modes)
+        state["camera_sensor_mode"] = str(modes[index].get("sensor_kind", "") or "").strip().lower()
+        status = self._sync_linked_drone_camera(record, announce_unavailable=True)
+        label = str(status.get("sensor_label", state.get("camera_sensor_mode", "sensor")) or "sensor").strip().lower()
+        state["feedback"] = f"Sensor mode: {label}."
         return True
 
     def _handle_drone_camera_input(self, physical_input, zoom_mode):
@@ -1336,6 +1434,8 @@ class InputSystem(System):
             return True
         if str(state.get("camera_mode", "inspect") or "inspect").strip().lower() == "attack" and key in ENTER_KEYS + (ord("a"), ord("A")):
             return self._fire_drone_attack_cursor()
+        if key in (ord("s"), ord("S")):
+            return self._cycle_drone_sensor_mode(1)
         if key in ENTER_KEYS or key in (ord("x"), ord("X")):
             return self._examine_drone_camera_cursor()
         movement_delta = self._input_movement_delta(physical_input)

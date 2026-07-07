@@ -11,6 +11,7 @@ from engine.events import Event
 from engine.systems import System
 
 from game.components import AI, IncidentKnowledge, Inventory, JusticeProfile, NPCTraits, Occupation, Position
+from game.drone_incident_reporting import drone_incident_report_rows
 from game.incident_runtime import (
     create_or_merge_incident,
     incident_linked_item_counts,
@@ -691,6 +692,81 @@ class IncidentKnowledgeSystem(System):
                 queue=queue,
             )
 
+    def _learn_drone_incident_reports(self, incident, event):
+        if not isinstance(incident, dict):
+            return ()
+        report_rows = drone_incident_report_rows(self.sim, incident, event)
+        if not report_rows:
+            return ()
+        incident_id = int(incident.get("id", 0) or 0)
+        existing_observers = {
+            int(eid)
+            for eid in tuple(incident.get("observer_eids", ()) or ())
+            if eid is not None
+        }
+        existing_accountable = {
+            int(eid)
+            for eid in tuple(incident.get("accountable_observer_eids", ()) or ())
+            if eid is not None
+        }
+        channels = {
+            str(channel or "").strip().lower()
+            for channel in tuple(incident.get("observation_channels", ()) or ())
+            if str(channel or "").strip()
+        }
+        learned = []
+        for row in report_rows:
+            recipient_eid = row.get("recipient_eid")
+            drone_eid = row.get("drone_eid")
+            if recipient_eid is None or drone_eid is None:
+                continue
+            try:
+                recipient_eid = int(recipient_eid)
+                drone_eid = int(drone_eid)
+            except (TypeError, ValueError):
+                continue
+            existing_observers.add(recipient_eid)
+            if bool(row.get("radio_report")):
+                channels.add("drone_radio_feed")
+            if bool(row.get("active_player_link")):
+                channels.add("linked_drone_camera")
+            learned_record = self._learn_incident(
+                recipient_eid,
+                incident_id,
+                source_kind="camera",
+                source_eid=drone_eid,
+                firsthand=True,
+                confidence=0.98 if bool(row.get("active_player_link")) else 0.92,
+                propagation_depth=0,
+                queue=False,
+            )
+            if learned_record is None:
+                continue
+            learned.append({
+                "recipient_eid": recipient_eid,
+                "drone_eid": drone_eid,
+                "active_player_link": bool(row.get("active_player_link")),
+                "radio_report": bool(row.get("radio_report")),
+            })
+            self.sim.emit(Event(
+                "drone_incident_reported",
+                eid=recipient_eid,
+                recipient_eid=recipient_eid,
+                drone_eid=drone_eid,
+                incident_id=incident_id,
+                source_kind="linked_drone_camera" if bool(row.get("active_player_link")) else "drone_radio_feed",
+                active_player_link=bool(row.get("active_player_link")),
+                radio_report=bool(row.get("radio_report")),
+                observed_coord=row.get("observed_coord"),
+            ))
+        if learned:
+            incident["observer_eids"] = tuple(sorted(existing_observers))
+            incident["accountable_observer_eids"] = tuple(sorted(existing_accountable))
+            incident["observation_channels"] = tuple(sorted(channels))
+            incident["accountable_observed"] = bool(incident.get("accountable_observed"))
+            incident["witnessed"] = bool(incident.get("witnessed"))
+        return tuple(learned)
+
     def _create_incident(self, event, *, kind, severity, merge_subject="", official_reportable=False, note="", tags=()):
         incident, merged = create_or_merge_incident(
             self.sim,
@@ -904,6 +980,7 @@ class IncidentKnowledgeSystem(System):
         if context in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge"} and event.data.get("victim_eid") is not None:
             incident = self._capture_violent_scene_items(incident, event) or incident
             self._record_player_witnessed_area_warmth(incident, event, reason="witnessed_event", score_delta=0.85)
+        self._learn_drone_incident_reports(incident, event)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
         if context in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge"}:
@@ -948,6 +1025,7 @@ class IncidentKnowledgeSystem(System):
             tags=tuple(tag for tag in tags if _text(tag)),
         )
         self._record_player_witnessed_area_warmth(incident, event, reason="witnessed_event", score_delta=1.05)
+        self._learn_drone_incident_reports(incident, event)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
@@ -977,6 +1055,7 @@ class IncidentKnowledgeSystem(System):
             note=f"street deal/{item_name}",
             tags=("street_deal", "contraband", "drug_deal", vendor_kind, item_id),
         )
+        self._learn_drone_incident_reports(incident, event)
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
         if seller_eid is not None and seller_eid != buyer_eid:
             self._learn_incident(
@@ -1011,6 +1090,7 @@ class IncidentKnowledgeSystem(System):
                 event.data.get("ingress_method"),
             ),
         )
+        self._learn_drone_incident_reports(incident, event)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
@@ -1034,6 +1114,7 @@ class IncidentKnowledgeSystem(System):
                 event.data.get("ingress_method"),
             ),
         )
+        self._learn_drone_incident_reports(incident, event)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
@@ -1051,6 +1132,7 @@ class IncidentKnowledgeSystem(System):
             note=item_name,
             tags=("theft", event.data.get("item_id")),
         )
+        self._learn_drone_incident_reports(incident, event)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
@@ -1153,6 +1235,7 @@ class IncidentKnowledgeSystem(System):
         )
         observation = self._event_accountability(event)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
+        self._learn_drone_incident_reports(incident, event)
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
     def on_rumor_shared(self, event):

@@ -3,6 +3,58 @@
 from game.components import AI, ContactLedger, CreatureIdentity
 
 
+_ARTICLE_SKIP_WORDS = {"a", "an", "the", "some", "someone", "somebody", "you"}
+_AN_LETTER_SOUNDS = set("AEFHILMNORSX")
+
+
+def _clean_display_label(value):
+    return str(value or "").replace("_", " ").strip()
+
+
+def _looks_like_specific_person_name(label):
+    parts = [part for part in str(label or "").replace("#", " ").split() if part]
+    if len(parts) < 2:
+        return False
+    proper = 0
+    for part in parts[:3]:
+        token = part.strip(".,:;()[]{}")
+        if not token:
+            continue
+        if token[:1].isupper() and token[1:].islower() and "-" not in token:
+            proper += 1
+    return proper >= 2
+
+
+def _indefinite_article_for(label):
+    text = _clean_display_label(label)
+    if not text:
+        return "a"
+    first = text.split()[0].strip("\"'([{")
+    if not first:
+        return "a"
+    first_upper = first[:1].upper()
+    if len(first) == 1 and first_upper in _AN_LETTER_SOUNDS:
+        return "an"
+    if len(first) >= 2 and first[1:2] in {"-", "."} and first_upper in _AN_LETTER_SOUNDS:
+        return "an"
+    lowered = first.lower()
+    if lowered.startswith(("honest", "hour", "heir")):
+        return "an"
+    if lowered.startswith(("uni", "use", "user", "u-")):
+        return "a"
+    return "an" if lowered[:1] in {"a", "e", "i", "o"} else "a"
+
+
+def _display_label_phrase(label, *, article=True):
+    label = _clean_display_label(label)
+    if not label:
+        return ""
+    first_word = label.split()[0].strip("\"'([{").lower()
+    if not article or first_word in _ARTICLE_SKIP_WORDS or _looks_like_specific_person_name(label):
+        return label
+    return f"{_indefinite_article_for(label)} {label}"
+
+
 def _entity_display_name_from_record(record):
     if not isinstance(record, dict):
         return ""
@@ -53,6 +105,17 @@ def _entity_display_name(sim, eid, title_case=False):
     if not label:
         label = "entity"
     return label.title() if title_case else label
+
+
+def _entity_display_phrase(sim, eid, *, title_case=False, article=True, fallback="entity"):
+    identities = sim.ecs.get(CreatureIdentity) if getattr(sim, "ecs", None) is not None else None
+    identity = identities.get(eid) if identities is not None else None
+    label = _entity_display_name(sim, eid, title_case=title_case)
+    if not label or str(label).strip().lower() in {"entity", "someone"}:
+        label = fallback
+    if identity is not None and _clean_display_label(getattr(identity, "personal_name", "")):
+        return _clean_display_label(label)
+    return _display_label_phrase(label, article=article)
 
 
 def _person_name_known_from_entry(entry):

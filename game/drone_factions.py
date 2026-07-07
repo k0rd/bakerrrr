@@ -30,10 +30,23 @@ from game.items import ITEM_CATALOG
 from game.system_support.combat_targeting_runtime import _entity_is_weapon_targetable
 
 
-DRONE_FACTION_MAX_PER_CHUNK = 2
+DRONE_FACTION_MAX_PER_CHUNK = 1
 DRONE_FACTION_SOURCE_CONTEXT = "npc_faction_seed"
 ARMED_SECURITY_KINDS = frozenset({"justice", "security", "corporate", "gang", "cult", "bodyguard", "enforcer"})
 UTILITY_KINDS = frozenset({"scout", "rural", "civic", "utility"})
+DRONE_FACTION_SEED_CHANCE_BY_KIND = {
+    "justice": 0.45,
+    "security": 0.35,
+    "corporate": 0.35,
+    "gang": 0.25,
+    "cult": 0.20,
+    "bodyguard": 0.30,
+    "enforcer": 0.25,
+    "scout": 0.16,
+    "rural": 0.10,
+    "civic": 0.14,
+    "utility": 0.12,
+}
 
 
 def _int(value, default=0):
@@ -159,31 +172,29 @@ def _loadout_for_kind(kind, rng):
     kind = _clean(kind)
     if kind in {"justice", "security", "corporate"}:
         return {
-            "chassis_item_id": "drone_chassis_e",
-            "power_center_item_id": "drone_power_core_mk5",
-            "battery_item_id": "drone_battery_industrial",
-            "modules": [
-                "drone_camera_module",
-                "drone_remote_receiver_module",
-                "drone_follow_procedure_module",
-                "drone_pistol_module",
-                "drone_ammo_rack_module",
-            ],
-            "procedure_key": "follow",
-        }
-    if kind in {"gang", "cult", "bodyguard", "enforcer"}:
-        return {
-            "chassis_item_id": "drone_chassis_e",
-            "power_center_item_id": "drone_power_core_mk5",
+            "chassis_item_id": "drone_chassis_d",
+            "power_center_item_id": "drone_power_core_mk4",
             "battery_item_id": "drone_battery_heavy",
             "modules": [
                 "drone_camera_module",
                 "drone_remote_receiver_module",
-                "drone_follow_procedure_module",
                 "drone_pistol_module",
                 "drone_ammo_rack_module",
             ],
-            "procedure_key": "follow",
+            "procedure_key": "hold",
+        }
+    if kind in {"gang", "cult", "bodyguard", "enforcer"}:
+        return {
+            "chassis_item_id": "drone_chassis_d",
+            "power_center_item_id": "drone_power_core_mk4",
+            "battery_item_id": "drone_battery_heavy",
+            "modules": [
+                "drone_camera_module",
+                "drone_remote_receiver_module",
+                "drone_pistol_module",
+                "drone_ammo_rack_module",
+            ],
+            "procedure_key": "hold",
         }
     chassis = "drone_chassis_b"
     procedure = "mapping" if rng.randint(0, 1) else "follow"
@@ -228,6 +239,17 @@ def _faction_drone_count_in_chunk(sim, chunk):
         if pos is not None and sim.chunk_coords(pos.x, pos.y) == chunk:
             count += 1
     return count
+
+
+def _should_seed_owner_drone(sim, chunk, owner_eid, kind):
+    kind = _clean(kind)
+    chance = float(DRONE_FACTION_SEED_CHANCE_BY_KIND.get(kind, 0.0))
+    if chance <= 0.0:
+        return False
+    if chance >= 1.0:
+        return True
+    rng = random.Random(f"{getattr(sim, 'seed', 0)}:drone-faction-seed:{chunk}:{owner_eid}:{kind}")
+    return rng.random() < chance
 
 
 def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
@@ -325,13 +347,19 @@ def seed_loaded_faction_drones(sim):
             seeded.add(chunk)
             continue
         owner_candidates = []
+        eligible_seen = False
         for eid in sorted(sim.entity_ids_in_chunk(chunk) if hasattr(sim, "entity_ids_in_chunk") else sim.ecs.get(Position).keys()):
             if not owner_drone_seed_eligible(sim, eid):
                 continue
+            eligible_seen = True
             if _existing_seeded_drone_for_owner(sim, eid):
                 continue
-            owner_candidates.append(eid)
+            kind = _owner_kind(sim, eid)
+            if _should_seed_owner_drone(sim, chunk, eid, kind):
+                owner_candidates.append(eid)
         if not owner_candidates:
+            if eligible_seen:
+                seeded.add(chunk)
             continue
         spawned = 0
         for ordinal, owner_eid in enumerate(owner_candidates):
