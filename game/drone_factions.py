@@ -132,14 +132,18 @@ def _owner_kind(sim, eid):
 
     if justice is not None or any(token in text for token in ("cop", "police", "peace_officer", "justice", "sheriff")):
         return "justice"
-    if any(token in text for token in ("security", "guard", "corporate", "corp")):
-        return "security"
     if "bodyguard" in text:
         return "bodyguard"
-    if any(token in text for token in ("enforcer", "gang")):
+    if "enforcer" in text:
+        return "enforcer"
+    if "gang" in text:
         return "gang"
     if "cult" in text:
         return "cult"
+    if any(token in text for token in ("corporate", "corp")):
+        return "corporate"
+    if any(token in text for token in ("security", "guard", "corporate", "corp")):
+        return "security"
     if "scout" in text:
         return "scout"
     if any(token in text for token in ("rural", "ranch", "farm", "hunter")):
@@ -168,42 +172,139 @@ def _owner_tag_for_kind(kind):
     return "private_security"
 
 
+def _roll_weighted_choice(rng, choices):
+    total = sum(max(0, int(weight)) for weight, _value in choices)
+    if total <= 0:
+        return choices[-1][1]
+    roll = rng.randrange(total)
+    cursor = 0
+    for weight, value in choices:
+        cursor += max(0, int(weight))
+        if roll < cursor:
+            return value
+    return choices[-1][1]
+
+
+def _observer_loadout(chassis="a", *, procedure="hold"):
+    chassis = _clean(chassis) or "a"
+    if chassis == "b":
+        return {
+            "chassis_item_id": "drone_chassis_b",
+            "power_center_item_id": "drone_power_core_mk2",
+            "battery_item_id": "drone_battery_standard",
+            "modules": [
+                "drone_camera_module",
+                "drone_radio_module",
+                "drone_follow_procedure_module" if procedure == "follow" else "drone_mapping_procedure_module",
+            ],
+            "procedure_key": "follow" if procedure == "follow" else "mapping",
+        }
+    return {
+        "chassis_item_id": "drone_chassis_a",
+        "power_center_item_id": "drone_power_core_mk1",
+        "battery_item_id": "drone_battery_light",
+        "modules": [
+            "drone_camera_module",
+            "drone_remote_receiver_module",
+        ],
+        "procedure_key": "hold",
+    }
+
+
+def _armed_loadout(chassis="c", *, armor=False, radio=False, elite_sensor=False):
+    chassis = _clean(chassis) or "c"
+    if chassis == "d":
+        modules = [
+            "drone_camera_module",
+            "drone_remote_receiver_module",
+            "drone_pistol_module",
+            "drone_ammo_rack_module",
+        ]
+        if radio:
+            modules.insert(1, "drone_radio_module")
+        if armor:
+            modules.append("drone_armor_shell_module")
+        return {
+            "chassis_item_id": "drone_chassis_d",
+            "power_center_item_id": "drone_power_core_mk4",
+            "battery_item_id": "drone_battery_heavy",
+            "modules": modules,
+            "procedure_key": "hold",
+        }
+    if chassis == "e":
+        modules = [
+            "drone_camera_module",
+            "drone_radio_module",
+            "drone_remote_receiver_module",
+            "drone_pistol_module",
+            "drone_ammo_rack_module",
+            "drone_armor_shell_module",
+        ]
+        if elite_sensor:
+            modules.append("drone_radar_module")
+        return {
+            "chassis_item_id": "drone_chassis_e",
+            "power_center_item_id": "drone_power_core_mk5",
+            "battery_item_id": "drone_battery_industrial",
+            "modules": modules,
+            "procedure_key": "hold",
+        }
+    return {
+        "chassis_item_id": "drone_chassis_c",
+        "power_center_item_id": "drone_power_core_mk3",
+        "battery_item_id": "drone_battery_standard",
+        "modules": [
+            "drone_camera_module",
+            "drone_remote_receiver_module",
+            "drone_pistol_module",
+            "drone_ammo_rack_module",
+        ],
+        "procedure_key": "hold",
+    }
+
+
 def _loadout_for_kind(kind, rng):
     kind = _clean(kind)
-    if kind in {"justice", "security", "corporate"}:
-        return {
-            "chassis_item_id": "drone_chassis_d",
-            "power_center_item_id": "drone_power_core_mk4",
-            "battery_item_id": "drone_battery_heavy",
-            "modules": [
-                "drone_camera_module",
-                "drone_remote_receiver_module",
-                "drone_pistol_module",
-                "drone_ammo_rack_module",
-            ],
-            "procedure_key": "hold",
-        }
+    if kind == "justice":
+        tier = _roll_weighted_choice(rng, ((52, "b"), (34, "c"), (13, "d"), (1, "e")))
+        if tier == "b":
+            return _observer_loadout("b", procedure="follow")
+        if tier == "d":
+            return _armed_loadout("d", armor=True, radio=True)
+        if tier == "e":
+            return _armed_loadout("e", elite_sensor=True)
+        return _armed_loadout("c")
+    if kind in {"security", "corporate"}:
+        tier = _roll_weighted_choice(rng, ((42, "a"), (36, "b"), (19, "c"), (3, "d")))
+        if tier == "a":
+            return _observer_loadout("a")
+        if tier == "b":
+            return _observer_loadout("b", procedure="follow")
+        if tier == "d":
+            return _armed_loadout("d", armor=True, radio=(kind == "corporate"))
+        return _armed_loadout("c")
     if kind in {"gang", "cult", "bodyguard", "enforcer"}:
-        return {
-            "chassis_item_id": "drone_chassis_d",
-            "power_center_item_id": "drone_power_core_mk4",
-            "battery_item_id": "drone_battery_heavy",
-            "modules": [
-                "drone_camera_module",
-                "drone_remote_receiver_module",
-                "drone_pistol_module",
-                "drone_ammo_rack_module",
-            ],
-            "procedure_key": "hold",
-        }
-    chassis = "drone_chassis_b"
+        tier = _roll_weighted_choice(rng, ((35, "a"), (42, "b"), (21, "c"), (2, "d")))
+        if kind in {"bodyguard", "enforcer"}:
+            tier = _roll_weighted_choice(rng, ((20, "b"), (72, "c"), (8, "d")))
+        if tier == "a":
+            return _observer_loadout("a")
+        if tier == "b":
+            return _observer_loadout("b", procedure="follow")
+        if tier == "d":
+            return _armed_loadout("d", armor=(kind in {"bodyguard", "enforcer"}))
+        return _armed_loadout("c")
+    chassis = "drone_chassis_a" if rng.random() < 0.62 else "drone_chassis_b"
+    core = "drone_power_core_mk1" if chassis == "drone_chassis_a" else "drone_power_core_mk2"
+    battery = "drone_battery_light" if chassis == "drone_chassis_a" else "drone_battery_standard"
     procedure = "mapping" if rng.randint(0, 1) else "follow"
     modules = [
-        "drone_camera_module",
-        "drone_radio_module",
-        "drone_mapping_procedure_module",
+        "drone_sonar_module" if chassis == "drone_chassis_a" else "drone_camera_module",
+        "drone_remote_receiver_module" if chassis == "drone_chassis_a" else "drone_radio_module",
     ]
-    if procedure == "follow":
+    if chassis == "drone_chassis_b":
+        modules.append("drone_mapping_procedure_module")
+    if procedure == "follow" and chassis == "drone_chassis_b":
         modules = [
             "drone_camera_module",
             "drone_radio_module",
@@ -211,10 +312,10 @@ def _loadout_for_kind(kind, rng):
         ]
     return {
         "chassis_item_id": chassis,
-        "power_center_item_id": "drone_power_core_mk2",
-        "battery_item_id": "drone_battery_standard",
+        "power_center_item_id": core,
+        "battery_item_id": battery,
         "modules": modules,
-        "procedure_key": procedure,
+        "procedure_key": procedure if chassis == "drone_chassis_b" else "hold",
     }
 
 

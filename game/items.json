@@ -2787,9 +2787,9 @@
     "drone_profile": {
       "kind": "chassis",
       "chassis_class": "C",
-      "slot_limit": 4,
-      "weight_limit": 11,
-      "base_hp": 25,
+      "slot_limit": 5,
+      "weight_limit": 14,
+      "base_hp": 38,
       "base_range": 14,
       "base_glyph": "d",
       "base_color": "item_restricted"
@@ -2811,9 +2811,9 @@
     "drone_profile": {
       "kind": "chassis",
       "chassis_class": "D",
-      "slot_limit": 5,
-      "weight_limit": 16,
-      "base_hp": 34,
+      "slot_limit": 7,
+      "weight_limit": 22,
+      "base_hp": 68,
       "base_range": 14,
       "base_glyph": "d",
       "base_color": "item_restricted"
@@ -2835,9 +2835,9 @@
     "drone_profile": {
       "kind": "chassis",
       "chassis_class": "E",
-      "slot_limit": 6,
-      "weight_limit": 24,
-      "base_hp": 45,
+      "slot_limit": 9,
+      "weight_limit": 34,
+      "base_hp": 110,
       "base_range": 12,
       "base_glyph": "d",
       "base_color": "item_restricted"

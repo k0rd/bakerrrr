@@ -18,6 +18,21 @@ DRONE_DEPLOY_TILE_OFFSETS = (
     (-1, 1),
     (-1, -1),
 )
+DRONE_HULL_ABSORB_BY_CLASS = {
+    "A": 0.10,
+    "B": 0.20,
+    "C": 0.34,
+    "D": 0.55,
+    "E": 0.70,
+}
+DRONE_UNARMED_ABSORB_BY_CLASS = {
+    "A": 0.30,
+    "B": 0.45,
+    "C": 0.62,
+    "D": 0.78,
+    "E": 0.86,
+}
+DRONE_ARMOR_SHELL_ABSORB_BONUS = 0.12
 
 DEFAULT_PACKED_DRONE_LOADOUT = {
     "chassis_item_id": "drone_chassis_c",
@@ -493,6 +508,26 @@ def drone_state_has_capability(state, capability, *, item_catalog=None):
     return needle in set(drone_state_capabilities(state, item_catalog=item_catalog))
 
 
+def drone_hull_damage_absorb(state, *, weapon_id="", damage_kind=""):
+    if state is None:
+        return 0.0
+    kind = _clean_text(damage_kind).lower()
+    if any(token in kind for token in ("emp", "electric", "shock")):
+        return 0.0
+    chassis_class = _clean_text(getattr(state, "chassis_class", "")).upper()
+    absorb = float(DRONE_HULL_ABSORB_BY_CLASS.get(chassis_class, 0.0))
+    if _clean_text(weapon_id).lower() == "unarmed" and "melee" in kind:
+        absorb = max(absorb, float(DRONE_UNARMED_ABSORB_BY_CLASS.get(chassis_class, absorb)))
+    modules = tuple(getattr(state, "modules", ()) or ())
+    if any(
+        isinstance(module, dict)
+        and _clean_item_id(module.get("item_id") or module.get("module_item_id")) == "drone_armor_shell_module"
+        for module in modules
+    ):
+        absorb += DRONE_ARMOR_SHELL_ABSORB_BONUS
+    return max(0.0, min(0.88, absorb))
+
+
 def validate_packed_drone_deploy_entry(entry, *, item_catalog=None):
     """Return normalized deploy data for a packed drone inventory entry."""
 
@@ -628,13 +663,38 @@ def drone_deploy_tile_open(sim, x, y, z=0):
     return True
 
 
+def drone_deploy_tile_is_threshold(sim, x, y, z=0):
+    tilemap = getattr(sim, "tilemap", None)
+    tile_at = getattr(tilemap, "tile_at", None)
+    tile = tile_at(int(x), int(y), int(z)) if callable(tile_at) else None
+    if tile is None:
+        return False
+    semantic = _clean_text(getattr(tile, "semantic_id", "")).lower()
+    glyph = _clean_text(getattr(tile, "glyph", ""))
+    if "door" in semantic or "threshold" in semantic:
+        return True
+    door_state_at = getattr(sim, "door_state_at", None)
+    door_state = door_state_at(int(x), int(y), int(z)) if callable(door_state_at) else None
+    if isinstance(door_state, dict):
+        kind = _clean_text(door_state.get("kind"), "door").lower()
+        if kind in {"door", "side_door", "service_door", "employee_door"}:
+            return True
+    return glyph in {"+", "'"}
+
+
 def first_open_drone_deploy_tile(sim, x, y, z=0):
+    threshold_fallback = None
     for dx, dy in DRONE_DEPLOY_TILE_OFFSETS:
         nx = int(x) + int(dx)
         ny = int(y) + int(dy)
         if drone_deploy_tile_open(sim, nx, ny, z):
-            return (nx, ny, int(z))
-    return None
+            candidate = (nx, ny, int(z))
+            if drone_deploy_tile_is_threshold(sim, nx, ny, z):
+                if threshold_fallback is None:
+                    threshold_fallback = candidate
+                continue
+            return candidate
+    return threshold_fallback
 
 
 def _same_entity_id(left, right):

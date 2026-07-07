@@ -6,6 +6,8 @@ from engine.systems import System
 from game.aerosol_trap_runtime import armed_aerosol_traps_at
 from game.components import DroneState, Position, Vitality
 from game.drone_runtime import (
+    drone_deploy_tile_is_threshold,
+    drone_deploy_tile_open,
     drone_destroyed_drop_resolution,
     drone_state_controlled_by_actor,
     drone_state_has_capability,
@@ -23,6 +25,12 @@ from game.system_support.fire_runtime import fire_cell_state
 
 
 DRONE_MOVE_BATTERY_COST = 1
+DRONE_HOLD_CLEAR_OFFSETS = (
+    (0, -1),
+    (1, 0),
+    (0, 1),
+    (-1, 0),
+)
 
 
 def _int(value, default=0):
@@ -235,7 +243,51 @@ class DroneSystem(System):
         payload.update(extra)
         return payload
 
+    def _hold_threshold_clear_step(self, state, pos):
+        if pos is None:
+            return None
+        if int(getattr(state, "battery_charge", 0) or 0) < DRONE_MOVE_BATTERY_COST:
+            return None
+        if not drone_deploy_tile_is_threshold(self.sim, pos.x, pos.y, pos.z):
+            return None
+        anchor = _range_anchor(self.sim, state)
+        range_limit = int(max(0, getattr(state, "range_limit", 0) or 0))
+        for dx, dy in DRONE_HOLD_CLEAR_OFFSETS:
+            nx = int(pos.x) + int(dx)
+            ny = int(pos.y) + int(dy)
+            nz = int(pos.z)
+            if not drone_deploy_tile_open(self.sim, nx, ny, nz):
+                continue
+            if drone_deploy_tile_is_threshold(self.sim, nx, ny, nz):
+                continue
+            if anchor is None or range_limit <= 0:
+                continue
+            if int(anchor[2]) != nz or abs(nx - int(anchor[0])) + abs(ny - int(anchor[1])) > range_limit:
+                continue
+            fire_cell = fire_cell_state(self.sim, nx, ny, nz)
+            if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
+                continue
+            if armed_aerosol_traps_at(self.sim, nx, ny, nz):
+                continue
+            return dx, dy
+        return None
+
     def _run_hold_procedure(self, controller_eid, drone_eid, state, pos, procedure_key):
+        clear_step = self._hold_threshold_clear_step(state, pos)
+        if clear_step is not None:
+            result = self.move_drone(controller_eid, drone_eid, clear_step[0], clear_step[1])
+            if result.get("ok"):
+                state.last_command = procedure_key
+                self._sync_procedure_metadata(state, procedure_key=procedure_key)
+                return self._procedure_ran(
+                    controller_eid,
+                    drone_eid,
+                    state,
+                    procedure_key,
+                    action="clear_threshold",
+                    dx=clear_step[0],
+                    dy=clear_step[1],
+                )
         if pos is not None:
             state.target = (int(pos.x), int(pos.y), int(pos.z))
         state.last_command = procedure_key

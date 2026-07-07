@@ -39,6 +39,7 @@ from game.checks import (
     justice_level as _justice_level,
 )
 from game.dialogue_runtime import active_contractor_record
+from game.drone_runtime import drone_hull_damage_absorb
 from game.drone_system import destroy_deployed_drone
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import (
@@ -927,6 +928,7 @@ class WeaponSystem(System):
                 setattr(vitality, "death_reason", "executed_while_downed")
                 return True
 
+        drone_state = self.sim.ecs.get(DroneState).get(target_eid)
         source_pos = positions.get(source_eid)
         target_pos = positions.get(target_eid)
         cover_absorb = 0.0
@@ -962,6 +964,12 @@ class WeaponSystem(System):
                 armor_absorb + _status_modifier_total(self.sim, target_eid, "armor_absorb_bonus", default=0.0),
             ),
         )
+        hull_absorb = drone_hull_damage_absorb(drone_state, weapon_id=weapon_id, damage_kind=damage_kind)
+        if hull_absorb > 0.0:
+            armor_absorb = max(armor_absorb, hull_absorb)
+            if armor_name is None:
+                chassis = str(getattr(drone_state, "chassis_class", "") or "").strip().upper()
+                armor_name = f"{chassis}-class hull" if chassis else "drone hull"
 
         previous_hp = int(max(0, getattr(vitality, "hp", 0) or 0))
         raw_damage = int(max(1, raw_damage))
@@ -997,7 +1005,6 @@ class WeaponSystem(System):
         if vitality.hp > 0:
             return True
 
-        drone_state = self.sim.ecs.get(DroneState).get(target_eid)
         if drone_state is not None and str(getattr(drone_state, "mode", "") or "").strip().lower() == "deployed":
             destroy_deployed_drone(
                 self.sim,

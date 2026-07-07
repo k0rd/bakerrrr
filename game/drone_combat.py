@@ -15,6 +15,7 @@ from game.components import (
 )
 from game.drone_recon import drone_has_camera_sensor, linked_camera_status
 from game.drone_runtime import (
+    drone_hull_damage_absorb,
     drone_profile_for_item,
     drone_state_controlled_by_actor,
     drone_state_has_capability,
@@ -53,7 +54,7 @@ DRONE_WEAPON_SPECS = {
         "resource_default": 6,
         "resource_max": 6,
         "range": 5,
-        "damage": 5,
+        "damage": 7,
         "cooldown": 2,
         "battery_cost": 4,
         "damage_kind": "ballistic",
@@ -329,6 +330,13 @@ def _damage_entity_from_drone(sim, target_eid, source_eid, weapon_id, raw_damage
         armor_absorb = max(0.0, min(0.85, float(armor.damage_reduction)))
         armor_name = _clean(armor.equipped_name or armor.equipped_item_id) or None
     armor_absorb = max(0.0, min(0.9, armor_absorb + _status_modifier_total(sim, target_eid, "armor_absorb_bonus", default=0.0)))
+    drone_state = sim.ecs.get(DroneState).get(target_eid)
+    hull_absorb = drone_hull_damage_absorb(drone_state, weapon_id=weapon_id, damage_kind=damage_kind)
+    if hull_absorb > 0.0:
+        armor_absorb = max(armor_absorb, hull_absorb)
+        if armor_name is None:
+            chassis = _clean(getattr(drone_state, "chassis_class", "")).upper()
+            armor_name = f"{chassis}-class hull" if chassis else "drone hull"
 
     previous_hp = int(max(0, getattr(vitality, "hp", 0) or 0))
     raw_damage = int(max(1, raw_damage))
@@ -357,7 +365,6 @@ def _damage_entity_from_drone(sim, target_eid, source_eid, weapon_id, raw_damage
     if vitality.hp > 0:
         return True
 
-    drone_state = sim.ecs.get(DroneState).get(target_eid)
     if drone_state is not None and str(getattr(drone_state, "mode", "") or "").strip().lower() == "deployed":
         from game.drone_system import destroy_deployed_drone
 
