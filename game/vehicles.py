@@ -64,6 +64,9 @@ DEFAULT_CATALOG = {
             "relay_post",
             "roadhouse",
             "service_station",
+            "electronics_shop",
+            "comms_shop",
+            "drone_shop",
             "dock_shack",
             "pump_house",
             "survey_post",
@@ -71,6 +74,8 @@ DEFAULT_CATALOG = {
             "ferry_post",
             "tide_station",
             "beacon_house",
+            "truck_stop",
+            "drydock_yard",
         ),
         "repair": (
             "auto_garage",

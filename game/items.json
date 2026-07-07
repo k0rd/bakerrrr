@@ -3641,6 +3641,84 @@
     },
     "effects": []
   },
+  "blank_procedure_flash": {
+    "name": "Blank Procedure Flash",
+    "glyph": ")",
+    "stack_max": 3,
+    "category": "device",
+    "tags": [
+      "drone",
+      "procedure",
+      "blank_media",
+      "electronics"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "drone_programmer": {
+    "name": "Drone Programmer",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "tool",
+    "tags": [
+      "drone",
+      "procedure",
+      "programmer",
+      "electronics",
+      "tool"
+    ],
+    "legal_status": "legal",
+    "tool_profiles": [
+      {
+        "contexts": [
+          "drone_programming"
+        ],
+        "intrusion_bonus": 0.35,
+        "mechanics_bonus": 0.65
+      }
+    ],
+    "effects": []
+  },
+  "drone_custom_procedure_module": {
+    "name": "Custom Drone Procedure Module",
+    "glyph": ")",
+    "stack_max": 1,
+    "category": "drone_part",
+    "tags": [
+      "drone",
+      "drone_module",
+      "procedure",
+      "custom_procedure",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "drone_profile": {
+      "kind": "module",
+      "module_kind": "procedure_custom",
+      "slot_cost": 1,
+      "weight": 0,
+      "standby_draw": 0,
+      "active_draw": 1,
+      "capabilities": [
+        "procedure",
+        "autonomy",
+        "custom_procedure"
+      ],
+      "visible_overlay": {
+        "glyph": "p",
+        "color": "item_restricted",
+        "label": "program"
+      },
+      "compatible_chassis": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "effects": []
+  },
   "drone_pistol_module": {
     "name": "Drone Pistol Module",
     "glyph": ")",

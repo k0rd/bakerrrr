@@ -14,6 +14,7 @@ from game.drone_runtime import (
     packed_drone_metadata_from_state,
 )
 from game.drone_distribution import drone_paint_palette, normalize_drone_paint_word
+from game.drone_programs import drone_program_sheet_rows
 from game.drone_workshop import (
     drop_workshop_part,
     drone_workshop_add_entry,
@@ -28,7 +29,7 @@ from game.drone_workshop import (
 from game.items import item_display_name, item_inventory_slot_cost
 
 
-DRONE_SHEET_TABS = ("status", "cargo", "battery", "parts", "modules", "schematic")
+DRONE_SHEET_TABS = ("status", "cargo", "battery", "parts", "modules", "procedures", "schematic")
 DRONE_SHEET_VISIBLE_SLOTS = 4
 DRONE_CARGO_SLOTS_PER_MODULE = 4
 DRONE_PAINT_KEYS = drone_paint_palette()
@@ -571,6 +572,45 @@ def drone_sheet_schematic_rows(sim, player_eid, state, *, item_catalog=None):
         ),
         "actionable": False,
     })
+    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+    power_rows = []
+    chassis_rows = []
+    for entry in tuple(drone_workshop_entries(workshop, item_catalog=item_catalog)):
+        if not isinstance(entry, dict):
+            continue
+        item_id = str(entry.get("item_id", "") or "").strip().lower()
+        profile = drone_profile_for_item(item_id, item_catalog=item_catalog)
+        kind = profile.get("kind")
+        if kind == "chassis" and not is_workbench:
+            errors, _summary = _loadout_errors_for_candidate(state, item_catalog=item_catalog, chassis_item_id=item_id)
+            chassis_rows.append({
+                "id": str(entry.get("instance_id", "") or ""),
+                "instance_id": str(entry.get("instance_id", "") or ""),
+                "label": f"Swap chassis: {_item_name(item_id, item_catalog=item_catalog)}{_candidate_error_suffix(errors)}",
+                "entry": dict(entry),
+                "action": "swap_chassis",
+                "actionable": True,
+            })
+        elif kind == "power_center":
+            errors, _summary = _loadout_errors_for_candidate(state, item_catalog=item_catalog, power_center_item_id=item_id)
+            display_errors = _workbench_blocking_errors(errors) if is_workbench else errors
+            power_rows.append({
+                "id": str(entry.get("instance_id", "") or ""),
+                "instance_id": str(entry.get("instance_id", "") or ""),
+                "label": f"{'Install' if is_workbench and not getattr(state, 'power_center_item_id', None) else 'Swap'} power core: {_item_name(item_id, item_catalog=item_catalog)}{_candidate_error_suffix(display_errors)}",
+                "entry": dict(entry),
+                "action": "swap_power_center",
+                "actionable": True,
+            })
+    if power_rows:
+        rows.append({"id": "section:power_core", "label": "Power cores", "actionable": False})
+        rows.extend(power_rows)
+    elif is_workbench and not getattr(state, "power_center_item_id", None):
+        rows.append({"id": "section:power_core_empty", "label": "Power cores: none in workshop bay", "actionable": False})
+    if chassis_rows:
+        rows.append({"id": "section:chassis", "label": "Chassis", "actionable": False})
+        rows.extend(chassis_rows)
+    rows.append({"id": "section:paint", "label": "Paint", "actionable": False})
     for target in ("primary_color", "secondary_color"):
         current = str((paint.get(target) or (paint.get("accent_color") if target == "secondary_color" else "")) or "").strip().lower()
         paint_keys = tuple(drone_paint_palette())
@@ -584,34 +624,6 @@ def drone_sheet_schematic_rows(sim, player_eid, state, *, item_catalog=None):
                 "action": "paint",
                 "paint_key": target,
                 "paint_color": color_key,
-                "actionable": True,
-            })
-    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
-    for entry in tuple(drone_workshop_entries(workshop, item_catalog=item_catalog)):
-        if not isinstance(entry, dict):
-            continue
-        item_id = str(entry.get("item_id", "") or "").strip().lower()
-        profile = drone_profile_for_item(item_id, item_catalog=item_catalog)
-        kind = profile.get("kind")
-        if kind == "chassis" and not is_workbench:
-            errors, _summary = _loadout_errors_for_candidate(state, item_catalog=item_catalog, chassis_item_id=item_id)
-            rows.append({
-                "id": str(entry.get("instance_id", "") or ""),
-                "instance_id": str(entry.get("instance_id", "") or ""),
-                "label": f"Swap chassis: {_item_name(item_id, item_catalog=item_catalog)}{_candidate_error_suffix(errors)}",
-                "entry": dict(entry),
-                "action": "swap_chassis",
-                "actionable": True,
-            })
-        elif kind == "power_center":
-            errors, _summary = _loadout_errors_for_candidate(state, item_catalog=item_catalog, power_center_item_id=item_id)
-            display_errors = _workbench_blocking_errors(errors) if is_workbench else errors
-            rows.append({
-                "id": str(entry.get("instance_id", "") or ""),
-                "instance_id": str(entry.get("instance_id", "") or ""),
-                "label": f"{'Install' if is_workbench and not getattr(state, 'power_center_item_id', None) else 'Swap'} power core: {_item_name(item_id, item_catalog=item_catalog)}{_candidate_error_suffix(display_errors)}",
-                "entry": dict(entry),
-                "action": "swap_power_center",
                 "actionable": True,
             })
     return rows
@@ -691,7 +703,7 @@ def drone_sheet_battery_rows(sim, player_eid, state, *, item_catalog=None):
     return rows or [{"id": "empty", "label": "(no spare drone batteries)", "actionable": False}]
 
 
-def drone_sheet_tab_rows(sim, player_eid, record, *, tab="status", cargo_side="pack", module_side="drone", item_catalog=None):
+def drone_sheet_tab_rows(sim, player_eid, record, *, tab="status", cargo_side="pack", module_side="drone", item_catalog=None, procedure_editor=None):
     tab = str(tab or "status").strip().lower()
     if tab not in DRONE_SHEET_TABS:
         tab = "status"
@@ -706,6 +718,8 @@ def drone_sheet_tab_rows(sim, player_eid, record, *, tab="status", cargo_side="p
         return drone_sheet_battery_rows(sim, player_eid, state, item_catalog=item_catalog)
     if tab == "modules":
         return drone_sheet_module_rows(sim, player_eid, record, side=module_side, item_catalog=item_catalog)
+    if tab == "procedures":
+        return drone_program_sheet_rows(sim, player_eid, record, item_catalog=item_catalog, editor_state=procedure_editor)
     if tab == "schematic":
         return drone_sheet_schematic_rows(sim, player_eid, state, item_catalog=item_catalog)
     return [{"id": f"status:{idx}", "label": line, "actionable": False} for idx, line in enumerate(drone_sheet_status_lines(record, item_catalog=item_catalog))]

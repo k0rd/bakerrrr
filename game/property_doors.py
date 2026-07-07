@@ -252,12 +252,13 @@ def _door_interaction_candidate(sim, pos, *, preferred_dir=None, target=None):
         (int(pos.x) - 1, int(pos.y) + 1, int(pos.z)),
     ]
     ranked = []
+    same_tile_ranked = []
     for index, (x, y, z) in enumerate(candidates):
         state = _operable_door_state_at(sim, x, y, z)
         if state is None:
             continue
         open_penalty = 1 if bool(state.get("open", False)) else 0
-        ranked.append((
+        row = (
             _interaction_target_order_key(
                 pos.x,
                 pos.y,
@@ -273,11 +274,18 @@ def _door_interaction_candidate(sim, pos, *, preferred_dir=None, target=None):
                 "state": state,
                 "prop": _door_property_at(sim, x, y, z, state=state),
             },
-        ))
-    if not ranked:
-        return None
+        )
+        if int(x) == int(pos.x) and int(y) == int(pos.y):
+            same_tile_ranked.append(row)
+        else:
+            ranked.append(row)
     ranked.sort(key=lambda row: row[0])
-    return ranked[0][1]
+    if ranked:
+        return ranked[0][1]
+    same_tile_ranked.sort(key=lambda row: row[0])
+    if same_tile_ranked:
+        return same_tile_ranked[0][1]
+    return None
 
 
 def _door_action_text(reason, *, opening=False):

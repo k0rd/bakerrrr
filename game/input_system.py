@@ -150,6 +150,17 @@ from game.drone_sheet import (
     transfer_drone_cargo_to_player,
     transfer_player_cargo_to_drone,
 )
+from game.drone_programs import (
+    activate_drone_program,
+    stop_drone_program,
+    write_custom_drone_program_module,
+)
+from game.drone_program_editor import (
+    EDITOR_ACTION_PREFIX,
+    clear_program_editor,
+    editor_feedback_for_result,
+    handle_program_editor_action,
+)
 from game.drone_workshop import (
     drone_workshop_for_actor,
     drone_workshop_summary,
@@ -1559,6 +1570,7 @@ class InputSystem(System):
                     cargo_side=state.get("cargo_side", "pack"),
                     module_side=state.get("module_side", "bay"),
                     item_catalog=self.catalog,
+                    procedure_editor=state.get("procedure_editor"),
                 ))
                 state["rows"] = rows
                 state["status_lines"] = list(drone_sheet_status_lines(selected_workshop_record, item_catalog=self.catalog))
@@ -1577,9 +1589,11 @@ class InputSystem(System):
         if selected_record is None and records:
             selected_record = records[0]
             state["selected_drone_eid"] = selected_record.get("eid")
+            clear_program_editor(state.setdefault("procedure_editor", {}))
             if bool(state.get("open")) and announce_unavailable:
                 state["feedback"] = "Selected drone unavailable; switched to nearest manageable drone."
         if selected_record is None:
+            clear_program_editor(state.setdefault("procedure_editor", {}))
             state["selected_drone_eid"] = None
             state["eligible"] = []
             state["status_lines"] = []
@@ -1595,6 +1609,7 @@ class InputSystem(System):
                     cargo_side=state.get("cargo_side", "pack"),
                     module_side=state.get("module_side", "drone"),
                     item_catalog=self.catalog,
+                    procedure_editor=state.get("procedure_editor"),
                 ))
                 state["rows"] = rows
                 if rows:
@@ -1645,6 +1660,7 @@ class InputSystem(System):
             cargo_side=state.get("cargo_side", "pack"),
             module_side=state.get("module_side", "drone"),
             item_catalog=self.catalog,
+            procedure_editor=state.get("procedure_editor"),
         ))
         state["rows"] = rows
         state["status_lines"] = list(drone_sheet_status_lines(selected_record, item_catalog=self.catalog))
@@ -1687,6 +1703,7 @@ class InputSystem(System):
         state = self._drone_sheet_state()
         state["open"] = False
         state["feedback"] = ""
+        clear_program_editor(state.setdefault("procedure_editor", {}))
         return True
 
     def _cycle_drone_sheet_selection(self, step):
@@ -1710,6 +1727,8 @@ class InputSystem(System):
         tab = str(tab or "").strip().lower()
         if tab not in DRONE_SHEET_TABS:
             return False
+        if tab != "procedures":
+            clear_program_editor(state.setdefault("procedure_editor", {}))
         state["tab"] = tab
         state["selected_index"] = 0
         state["scroll"] = 0
@@ -2003,6 +2022,147 @@ class InputSystem(System):
             self._refresh_drone_sheet_ui(announce_unavailable=True)
             return True
 
+        if tab == "procedures":
+            action = str(row.get("action", "") or "").strip().lower()
+            if action.startswith(EDITOR_ACTION_PREFIX):
+                editor_state = state.setdefault("procedure_editor", {})
+                result = handle_program_editor_action(
+                    self.sim,
+                    self.player_eid,
+                    record,
+                    editor_state,
+                    row,
+                    item_catalog=self.catalog,
+                )
+                if action == "program_editor:activate" and bool(result.get("ok")):
+                    if is_workbench:
+                        state["feedback"] = "Deploy the drone before activating a routine."
+                    else:
+                        program = editor_state.get("draft") if isinstance(editor_state, dict) else None
+                        bindings = dict(editor_state.get("bindings") or {}) if isinstance(editor_state, dict) else {}
+                        activation = activate_drone_program(
+                            record.get("state"),
+                            program,
+                            bindings=bindings,
+                            sim=self.sim,
+                            controller_eid=self.player_eid,
+                            drone_eid=record.get("eid"),
+                        )
+                        if bool(activation.get("ok")):
+                            label = str((activation.get("program") or {}).get("label") or "routine")
+                            state["feedback"] = f"Activated {label}."
+                            self.sim.emit(Event(
+                                "drone_program_activated",
+                                eid=self.player_eid,
+                                controller_eid=self.player_eid,
+                                drone_eid=record.get("eid"),
+                                chassis_class=getattr(record.get("state"), "chassis_class", None),
+                                program_id=(activation.get("program") or {}).get("id"),
+                                program_label=label,
+                            ))
+                        else:
+                            state["feedback"] = editor_feedback_for_result(activation, item_catalog=self.catalog)
+                            self._emit_drone_sheet_blocked(record, activation.get("reason", "blocked"), action="procedures")
+                    self._refresh_drone_sheet_ui(announce_unavailable=True)
+                    return True
+                state["feedback"] = editor_feedback_for_result(result, item_catalog=self.catalog)
+                if bool(result.get("ok")) and action == "program_editor:save":
+                    entry = result.get("entry") if isinstance(result.get("entry"), dict) else {}
+                    program = result.get("program") if isinstance(result.get("program"), dict) else {}
+                    self.sim.emit(Event(
+                        "drone_program_module_written",
+                        eid=self.player_eid,
+                        controller_eid=self.player_eid,
+                        item_id=entry.get("item_id"),
+                        item_name=self._drone_sheet_item_name(result),
+                        instance_id=entry.get("instance_id") or entry.get("source_instance_id"),
+                        program_id=program.get("id"),
+                        program_label=program.get("label"),
+                    ))
+                if not bool(result.get("ok")):
+                    self._emit_drone_sheet_blocked(record, result.get("reason", "blocked"), action="procedures")
+                self._refresh_drone_sheet_ui(announce_unavailable=True)
+                return True
+            if action == "stop_program":
+                result = stop_drone_program(record.get("state"), reason="player_stopped")
+                if bool(result.get("ok")):
+                    state["feedback"] = "Routine stopped."
+                    self.sim.emit(Event(
+                        "drone_program_stopped",
+                        eid=self.player_eid,
+                        controller_eid=self.player_eid,
+                        drone_eid=record.get("eid"),
+                        chassis_class=getattr(record.get("state"), "chassis_class", None),
+                    ))
+                else:
+                    reason = result.get("reason", "blocked")
+                    state["feedback"] = f"Routine stop blocked: {str(reason).replace('_', ' ')}."
+                    self._emit_drone_sheet_blocked(record, reason, action="procedures")
+                self._refresh_drone_sheet_ui(announce_unavailable=True)
+                return True
+            if action == "activate_program":
+                if is_workbench:
+                    state["feedback"] = "Deploy the drone before activating a routine."
+                    return True
+                result = activate_drone_program(
+                    record.get("state"),
+                    row.get("program"),
+                    sim=self.sim,
+                    controller_eid=self.player_eid,
+                    drone_eid=record.get("eid"),
+                )
+                if bool(result.get("ok")):
+                    program = result.get("program") if isinstance(result.get("program"), dict) else {}
+                    label = str(program.get("label") or row.get("program_id") or "routine")
+                    state["feedback"] = f"Activated {label}."
+                    self.sim.emit(Event(
+                        "drone_program_activated",
+                        eid=self.player_eid,
+                        controller_eid=self.player_eid,
+                        drone_eid=record.get("eid"),
+                        chassis_class=getattr(record.get("state"), "chassis_class", None),
+                        program_id=program.get("id"),
+                        program_label=label,
+                    ))
+                else:
+                    reason = result.get("reason", "blocked")
+                    details = "; ".join(str(error) for error in result.get("errors", ()) if str(error).strip())
+                    state["feedback"] = f"Routine activation blocked: {str(reason).replace('_', ' ')}{(': ' + details) if details else ''}."
+                    self._emit_drone_sheet_blocked(record, reason, action="procedures")
+                self._refresh_drone_sheet_ui(announce_unavailable=True)
+                return True
+            if action == "write_program":
+                result = write_custom_drone_program_module(
+                    self.sim,
+                    self.player_eid,
+                    row.get("program"),
+                    item_catalog=self.catalog,
+                )
+                if bool(result.get("ok")):
+                    item_name = self._drone_sheet_item_name(result)
+                    state["feedback"] = f"Wrote {item_name}."
+                    entry = result.get("entry") if isinstance(result.get("entry"), dict) else {}
+                    program = result.get("program") if isinstance(result.get("program"), dict) else {}
+                    self.sim.emit(Event(
+                        "drone_program_module_written",
+                        eid=self.player_eid,
+                        controller_eid=self.player_eid,
+                        item_id=entry.get("item_id"),
+                        item_name=item_name,
+                        instance_id=entry.get("instance_id"),
+                        program_id=program.get("id"),
+                        program_label=program.get("label"),
+                    ))
+                else:
+                    reason = result.get("reason", "blocked")
+                    details = "; ".join(str(error) for error in result.get("errors", ()) if str(error).strip())
+                    state["feedback"] = f"Flash write blocked: {str(reason).replace('_', ' ')}{(': ' + details) if details else ''}."
+                    self._emit_drone_sheet_blocked(record, reason, action="procedures")
+                self._refresh_drone_sheet_ui(announce_unavailable=True)
+                return True
+            state["feedback"] = "No procedure action selected."
+            return True
+
         if tab == "schematic":
             action = str(row.get("action", "") or "").strip().lower()
             if action == "swap_chassis" and not is_workbench:
@@ -2135,8 +2295,30 @@ class InputSystem(System):
         if str(zoom_mode).strip().lower() == "overworld":
             self._close_drone_sheet_ui()
             return True
+        editor_state = state.setdefault("procedure_editor", {})
+        editor_open = str(state.get("tab", "")).strip().lower() == "procedures" and bool(editor_state.get("open"))
+        if key == 27 and editor_open:
+            fake_row = {"action": "program_editor:back"}
+            record = self._selected_drone_sheet_record()
+            result = handle_program_editor_action(
+                self.sim,
+                self.player_eid,
+                record,
+                editor_state,
+                fake_row,
+                item_catalog=self.catalog,
+            )
+            state["feedback"] = editor_feedback_for_result(result, item_catalog=self.catalog)
+            self._refresh_drone_sheet_ui(announce_unavailable=True)
+            return True
         if key in (27, ord("q"), ord("Q"), ord("G")):
             self._close_drone_sheet_ui()
+            return True
+        if editor_open and key in (ord("["), ord("{"), ord("]"), ord("}")):
+            state["feedback"] = "Close the procedure editor before switching drones."
+            return True
+        if editor_open and key in (KEY_LEFT, ord("h"), ord("H"), KEY_RIGHT, ord("l"), ord("L")):
+            state["feedback"] = "Close the procedure editor before switching tabs."
             return True
         if key in (ord("["), ord("{")):
             self._cycle_drone_sheet_selection(-1)

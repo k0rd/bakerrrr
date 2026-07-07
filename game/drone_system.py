@@ -19,6 +19,7 @@ from game.drone_procedures import (
     drone_procedure_missing_capability,
     normalize_drone_procedure_key,
 )
+from game.drone_programs import active_drone_program, run_drone_program_step, sync_drone_program_metadata
 from game.drone_recon import apply_autonomous_mapping_knowledge
 from game.movement_runtime import try_move_entity
 from game.system_support.fire_runtime import fire_cell_state
@@ -195,11 +196,21 @@ class DroneSystem(System):
             metadata["target"] = tuple(target)
         else:
             metadata.pop("target", None)
-        metadata["procedure_last_tick"] = int(getattr(self.sim, "tick", 0) or 0)
+        tick = int(getattr(self.sim, "tick", 0) or 0)
+        metadata["procedure_last_tick"] = tick
+        if hasattr(state, "procedure_last_tick"):
+            state.procedure_last_tick = tick
         if reason:
             metadata["procedure_last_reason"] = str(reason)
+            if hasattr(state, "procedure_last_reason"):
+                state.procedure_last_reason = str(reason)
+            if hasattr(state, "procedure_last_result"):
+                state.procedure_last_result = "blocked"
         else:
             metadata.pop("procedure_last_reason", None)
+            if hasattr(state, "procedure_last_reason"):
+                state.procedure_last_reason = None
+        sync_drone_program_metadata(state)
 
     def _procedure_blocked(self, controller_eid, drone_eid, state, procedure_key, reason, **extra):
         reason = str(reason or "blocked").strip().lower() or "blocked"
@@ -355,6 +366,12 @@ class DroneSystem(System):
         state = _deployed_drone_state(self.sim, drone_eid)
         if state is None:
             return {"ok": False, "reason": "not_deployed"}
+        program = active_drone_program(state)
+        if program is not None and str(getattr(state, "procedure_status", "") or "").strip().lower() in {"", "running", "blocked"}:
+            controller_eid = self._controller_for_state(state)
+            if controller_eid is None:
+                return self._procedure_blocked(None, drone_eid, state, program.get("id"), "missing_controller")
+            return run_drone_program_step(self, controller_eid, drone_eid, state)
         procedure_key = normalize_drone_procedure_key(getattr(state, "procedure_key", None))
         if not procedure_key:
             return {"ok": True, "reason": None, "procedure_key": ""}

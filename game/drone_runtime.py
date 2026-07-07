@@ -582,10 +582,26 @@ def packed_drone_metadata_from_state(state, *, item_catalog=None):
         ("procedure_key", "procedure_key"),
         ("last_command", "last_command"),
         ("target_eid", "target_eid"),
+        ("procedure_program_id", "procedure_program_id"),
+        ("procedure_pc", "procedure_pc"),
+        ("procedure_status", "procedure_status"),
+        ("procedure_last_result", "procedure_last_result"),
+        ("procedure_last_reason", "procedure_last_reason"),
+        ("procedure_last_tick", "procedure_last_tick"),
     ):
         value = getattr(state, attr, None)
         if value is not None:
             metadata[key] = value
+    procedure_program = getattr(state, "procedure_program", None)
+    if isinstance(procedure_program, dict):
+        metadata["procedure_program"] = dict(procedure_program)
+    else:
+        metadata.pop("procedure_program", None)
+    procedure_bindings = getattr(state, "procedure_bindings", None)
+    if isinstance(procedure_bindings, dict):
+        metadata["procedure_bindings"] = dict(procedure_bindings)
+    else:
+        metadata.pop("procedure_bindings", None)
     metadata["modules"] = [
         dict(module)
         for module in (getattr(state, "modules", None) or ())

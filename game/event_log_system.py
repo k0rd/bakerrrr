@@ -4623,6 +4623,12 @@ class EventLogSystem(System):
             if learned > 0:
                 _log_player_feedback(self.sim, f"{drone_label} maps {learned} new cells.", kind="interaction")
             return
+        if action == "distract":
+            _log_player_feedback(self.sim, f"{drone_label} throws a noisy distraction.", kind="interaction")
+            return
+        if action == "disable_alarm":
+            _log_player_feedback(self.sim, f"{drone_label} cuts a nearby alarm panel.", kind="interaction")
+            return
         if procedure == "return" and bool(event.data.get("arrived")):
             _log_player_feedback(self.sim, f"{drone_label} is back at its home point.", kind="interaction")
             return
@@ -4654,6 +4660,17 @@ class EventLogSystem(System):
             "no_range_anchor": f"{drone_label} has no range anchor.",
             "no_range": f"{drone_label} has no usable range.",
             "out_of_range": f"{drone_label} is out of range.",
+            "missing_binding": f"{drone_label} needs a bound target for {procedure_label}.",
+            "invalid_binding": f"{drone_label}'s binding for {procedure_label} is invalid.",
+            "unknown_binding": f"{drone_label}'s bound target is not known anymore.",
+            "stale_binding": f"{drone_label}'s bound target is not currently reachable.",
+            "no_speaker": f"{drone_label} needs a speaker module for {procedure_label}.",
+            "no_alarm_probe": f"{drone_label} needs an alarm probe for {procedure_label}.",
+            "no_alarm_target": f"{drone_label} needs an adjacent alarm panel for {procedure_label}.",
+            "no_cargo_module": f"{drone_label} needs cargo hardware for {procedure_label}.",
+            "cargo_full": f"{drone_label}'s cargo is full.",
+            "cargo_empty": f"{drone_label}'s cargo is empty.",
+            "item_unavailable": f"{drone_label} cannot reach that item for {procedure_label}.",
         }
         _log_player_feedback(self.sim, messages.get(reason, f"{drone_label} cannot run {procedure_label}."), kind="interaction")
 
