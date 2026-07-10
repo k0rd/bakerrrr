@@ -492,6 +492,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("hunter_party_carcass_dressed", self.on_hunter_party_carcass_dressed)
         self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
         self.sim.events.subscribe("vehicle_delivered", self.on_vehicle_delivered)
+        self.sim.events.subscribe("vehicle_delivery_failed", self.on_vehicle_delivery_failed)
         self.sim.events.subscribe("property_closing_time_warning", self.on_property_closing_time_warning)
         self.sim.events.subscribe("npc_investigate", self.on_npc_investigate)
         self.sim.events.subscribe("npc_warn_property", self.on_npc_warn_property)
@@ -3872,6 +3873,13 @@ class EventLogSystem(System):
         vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
         site_name = str(event.data.get("site_prop_name", "site")).strip() or "site"
         self.sim.log.add(f"Delivery: your {vehicle_name} has arrived (courtesy of {site_name}).")
+
+    def on_vehicle_delivery_failed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
+        site_name = str(event.data.get("site_prop_name", "site")).strip() or "site"
+        self.sim.log.add(f"Delivery: {site_name} could not locate your {vehicle_name}.")
 
     def on_property_closing_time_warning(self, event):
         if event.data.get("eid") != self.player_eid:

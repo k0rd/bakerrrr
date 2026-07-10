@@ -1,3 +1,4 @@
+import copy
 import random
 
 from engine.events import Event
@@ -3208,11 +3209,98 @@ class SiteServiceSystem(System):
         if not assets:
             return []
         vehicles = []
+        seen = set()
         for pid in assets.owned_property_ids:
-            prop = self.sim.properties.get(pid)
+            prop = self._vehicle_property_for_id(pid, restore=False)
             if prop and _property_is_vehicle(prop):
+                prop_id = str(prop.get("id", pid) or pid)
+                if prop_id in seen:
+                    continue
+                seen.add(prop_id)
                 vehicles.append(prop)
         return vehicles
+
+    @staticmethod
+    def _remove_property_record_rows(rows, property_id):
+        property_id = str(property_id or "").strip()
+        if not property_id:
+            return list(tuple(rows or ()))
+        return [
+            copy.deepcopy(row)
+            for row in tuple(rows or ())
+            if not (isinstance(row, dict) and str(row.get("id", "") or "").strip() == property_id)
+        ]
+
+    def _saved_vehicle_property_entry(self, vehicle_id):
+        vehicle_id = str(vehicle_id or "").strip()
+        if not vehicle_id:
+            return None
+        saved_states = getattr(self.sim, "chunk_saved_states", None)
+        if not isinstance(saved_states, dict):
+            return None
+        for chunk_key, snapshot in tuple(saved_states.items()):
+            if not isinstance(snapshot, dict):
+                continue
+            properties = snapshot.get("properties")
+            if isinstance(properties, dict) and vehicle_id in properties:
+                prop = properties.get(vehicle_id)
+                if isinstance(prop, dict) and _property_is_vehicle(prop):
+                    return chunk_key, snapshot, prop
+        return None
+
+    def _vehicle_property_for_id(self, vehicle_id, *, restore=False):
+        vehicle_id = str(vehicle_id or "").strip()
+        if not vehicle_id:
+            return None
+        live = self.sim.properties.get(vehicle_id)
+        if isinstance(live, dict):
+            return live
+
+        saved = self._saved_vehicle_property_entry(vehicle_id)
+        if saved is None:
+            return None
+        if not restore:
+            return copy.deepcopy(saved[2])
+
+        chunk_key, snapshot, saved_prop = saved
+        prop = copy.deepcopy(saved_prop)
+        self.sim.properties[vehicle_id] = prop
+
+        properties = snapshot.get("properties")
+        if isinstance(properties, dict):
+            properties.pop(vehicle_id, None)
+        stores = snapshot.get("stores")
+        if isinstance(stores, dict) and vehicle_id in stores:
+            self.sim.stores[vehicle_id] = copy.deepcopy(stores.pop(vehicle_id))
+        if isinstance(snapshot.get("property_records"), list):
+            snapshot["property_records"] = self._remove_property_record_rows(
+                snapshot.get("property_records"),
+                vehicle_id,
+            )
+
+        chunk_records = getattr(self.sim, "chunk_property_records", None)
+        if isinstance(chunk_records, dict):
+            for key, rows in tuple(chunk_records.items()):
+                cleaned = self._remove_property_record_rows(rows, vehicle_id)
+                if len(cleaned) == len(tuple(rows or ())):
+                    continue
+                if cleaned:
+                    chunk_records[key] = cleaned
+                else:
+                    chunk_records.pop(key, None)
+        if isinstance(chunk_key, tuple):
+            saved_records = getattr(self.sim, "chunk_property_records", None)
+            if isinstance(saved_records, dict) and chunk_key in saved_records:
+                cleaned = self._remove_property_record_rows(saved_records.get(chunk_key), vehicle_id)
+                if cleaned:
+                    saved_records[chunk_key] = cleaned
+                else:
+                    saved_records.pop(chunk_key, None)
+
+        self.sim.property_registry_dirty = True
+        if hasattr(self.sim, "rebuild_spatial_indexes"):
+            self.sim.rebuild_spatial_indexes()
+        return self.sim.properties.get(vehicle_id)
 
     def _apply_vehicle_fetch(self, eid, prop, pos):
         vehicles = self._player_vehicle_properties(eid)
@@ -3324,8 +3412,16 @@ class SiteServiceSystem(System):
         for idx, delivery in enumerate(deliveries):
             if int(self.sim.tick) < int(delivery.get("ready_at_tick", 0)):
                 continue
-            vehicle_prop = self.sim.properties.get(delivery.get("vehicle_id"))
+            vehicle_prop = self._vehicle_property_for_id(delivery.get("vehicle_id"), restore=True)
             if not vehicle_prop:
+                self.sim.emit(Event(
+                    "vehicle_delivery_failed",
+                    eid=delivery.get("eid"),
+                    vehicle_id=delivery.get("vehicle_id"),
+                    vehicle_name=delivery.get("vehicle_name", "vehicle"),
+                    site_prop_name=delivery.get("site_prop_name", "site"),
+                    reason="missing_vehicle",
+                ))
                 completed.append(idx)
                 continue
             tx = int(delivery.get("target_x", 0))
