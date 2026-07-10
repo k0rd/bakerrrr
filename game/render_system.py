@@ -978,8 +978,14 @@ def _vehicle_appearance_with_heading(appearance, state):
         effects=effects,
     )
 
-def _clip(*args, **kwargs):
-    return _facade()._clip(*args, **kwargs)
+def _clip(text, width):
+    text = str(text)
+    width = int(max(0, width))
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return text[: width - 3] + "..."
 
 def _cover_source_label(*args, **kwargs):
     return _facade()._cover_source_label(*args, **kwargs)
