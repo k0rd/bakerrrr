@@ -8,6 +8,7 @@ from engine.sites import site_entry_front_cell
 from engine.events import Event
 from game.components import AI, ArmorLoadout, BehaviorProfile, CriminalDriveState, FinancialProfile, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Occupation, Position, PropertyKnowledge, StatusEffects, Vitality, WeaponLoadout
 from game.drone_distribution import drone_item_base_value
+from game.wire_distribution import wire_item_base_value
 from game.item_semantics import (
     appraise_item_for_actor,
     identify_item_for_actor,
@@ -1400,6 +1401,9 @@ def _street_item_value(item_id):
     drone_value = drone_item_base_value(item_id, default=0)
     if drone_value > 0:
         return int(drone_value)
+    wire_value = wire_item_base_value(item_id, default=0)
+    if wire_value > 0:
+        return int(wire_value)
     item_def = ITEM_CATALOG.get(item_id, {})
     tags = {
         str(tag).strip().lower()

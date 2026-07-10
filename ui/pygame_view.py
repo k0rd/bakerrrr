@@ -4794,6 +4794,177 @@ class PygameView:
         self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 210), down)
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _wire_variant(self, x, y, kind=""):
+        total = (int(x) * 37) + (int(y) * 73)
+        for ch in str(kind or ""):
+            total = (total * 31 + ord(ch)) & 0xFFFFFFFF
+        return total % 11
+
+    def _draw_wire_route_base(self, overlay, frame, variant, *, strong=False):
+        inset = max(2, self.cell_px // 8)
+        mid_x = self.cell_px // 2
+        mid_y = self.cell_px // 2
+        stroke_w = max(1, self.cell_px // (9 if strong else 13))
+        glow = (frame[0], frame[1], frame[2], 54 if strong else 34)
+        line = (frame[0], frame[1], frame[2], 188 if strong else 130)
+        self.pygame.draw.line(overlay, glow, (inset, mid_y), (self.cell_px - inset - 1, mid_y), stroke_w + 3)
+        self.pygame.draw.line(overlay, line, (inset, mid_y), (self.cell_px - inset - 1, mid_y), stroke_w)
+        if variant in {1, 4, 8}:
+            self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 92), (mid_x, inset), (mid_x, self.cell_px - inset - 1), max(1, stroke_w - 1))
+        if variant in {2, 5, 9}:
+            self.pygame.draw.arc(
+                overlay,
+                (frame[0], frame[1], frame[2], 84),
+                self.pygame.Rect(inset, inset, self.cell_px - (inset * 2), self.cell_px - (inset * 2)),
+                0.2,
+                2.8,
+                max(1, stroke_w - 1),
+            )
+
+    def _draw_wire_overlay(self, x, y, color=None, attrs=0, *, kind="void", glyph=" "):
+        kind_key = str(kind or "void").strip().lower() or "void"
+        frame = self._styled_overlay_color(color or "feature_window", attrs=attrs, bold_scale=1.08)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+        variant = self._wire_variant(x, y, kind_key)
+        dark = (6, 8, 15, 226)
+        faint = (frame[0], frame[1], frame[2], 38)
+        overlay.fill(dark)
+
+        inset = max(2, self.cell_px // 8)
+        mid_x = self.cell_px // 2
+        mid_y = self.cell_px // 2
+        stroke_w = max(1, self.cell_px // 14)
+
+        if kind_key == "void":
+            if variant in {0, 3, 7}:
+                px = inset + ((variant * max(2, self.cell_px // 7)) % max(3, self.cell_px - (inset * 2)))
+                self.pygame.draw.circle(overlay, faint, (px, mid_y), max(1, self.cell_px // 28))
+            self.surface.blit(overlay, (cell_x, cell_y))
+            return
+
+        if kind_key == "boundary":
+            self.pygame.draw.rect(overlay, (frame[0], frame[1], frame[2], 58), (0, 0, self.cell_px, self.cell_px))
+            self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 126), (0, 0), (self.cell_px - 1, self.cell_px - 1), stroke_w)
+            self.pygame.draw.line(overlay, (8, 10, 18, 150), (0, self.cell_px - 1), (self.cell_px - 1, 0), max(1, stroke_w - 1))
+            self.surface.blit(overlay, (cell_x, cell_y))
+            return
+
+        if kind_key == "noise_residue":
+            self._draw_wire_route_base(overlay, frame, variant, strong=False)
+            for idx in range(2):
+                px = inset + ((variant + idx * 3) * max(2, self.cell_px // 9)) % max(3, self.cell_px - (inset * 2))
+                py = inset + ((variant + idx * 5) * max(2, self.cell_px // 11)) % max(3, self.cell_px - (inset * 2))
+                self.pygame.draw.circle(overlay, (frame[0], frame[1], frame[2], 92), (px, py), max(1, self.cell_px // 24))
+            self.surface.blit(overlay, (cell_x, cell_y))
+            return
+
+        if kind_key == "walkable_route":
+            self._draw_wire_route_base(overlay, frame, variant, strong=True)
+            self.surface.blit(overlay, (cell_x, cell_y))
+            return
+
+        if kind_key == "avatar":
+            self._draw_wire_route_base(overlay, frame, variant, strong=True)
+            points = [
+                (mid_x, inset),
+                (self.cell_px - inset - 1, mid_y),
+                (mid_x, self.cell_px - inset - 1),
+                (inset, mid_y),
+            ]
+            glow = (frame[0], frame[1], frame[2], 76)
+            self.pygame.draw.polygon(overlay, glow, points)
+            self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 224), points, stroke_w + 1)
+            self.pygame.draw.circle(overlay, (236, 250, 255, 220), (mid_x, mid_y), max(2, self.cell_px // 8))
+            self.surface.blit(overlay, (cell_x, cell_y))
+            return
+
+        node_like = {
+            "entry_jack",
+            "diagnostic",
+            "controller",
+            "door_alarm_relay",
+            "service_index",
+            "records",
+            "exit",
+        }
+        item_like = {
+            "data_packet",
+            "credential_access_key",
+            "license",
+            "backup",
+            "trace",
+            "corrupted_file",
+        }
+        is_program = kind_key.startswith("program_")
+        is_ice = kind_key.startswith("ice_")
+        is_effect = kind_key.startswith("effect_")
+        if kind_key in node_like or kind_key in item_like or is_program or is_ice or is_effect:
+            if kind_key in node_like:
+                self._draw_wire_route_base(overlay, frame, variant, strong=True)
+            plate = self.pygame.Rect(inset, inset, max(2, self.cell_px - (inset * 2)), max(2, self.cell_px - (inset * 2)))
+            self.pygame.draw.rect(overlay, (frame[0], frame[1], frame[2], 46), plate.inflate(max(2, self.cell_px // 8), max(2, self.cell_px // 8)), border_radius=max(1, self.cell_px // 8))
+            if is_ice:
+                shield = [
+                    (mid_x, inset),
+                    (self.cell_px - inset - 1, inset + max(3, self.cell_px // 5)),
+                    (mid_x, self.cell_px - inset - 1),
+                    (inset, inset + max(3, self.cell_px // 5)),
+                ]
+                self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 92), shield)
+                self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 218), shield, stroke_w)
+            elif is_program:
+                tri = [
+                    (mid_x, inset),
+                    (self.cell_px - inset - 1, self.cell_px - inset - 1),
+                    (inset, self.cell_px - inset - 1),
+                ]
+                self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 86), tri)
+                self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 212), tri, stroke_w)
+            elif is_effect:
+                self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 210), (inset, mid_y), (self.cell_px - inset - 1, mid_y), stroke_w + 1)
+                self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 168), (mid_x, inset), (mid_x, self.cell_px - inset - 1), stroke_w)
+            else:
+                self.pygame.draw.rect(overlay, (frame[0], frame[1], frame[2], 78), plate, border_radius=max(1, self.cell_px // 10))
+                self.pygame.draw.rect(overlay, (frame[0], frame[1], frame[2], 218), plate, stroke_w, border_radius=max(1, self.cell_px // 10))
+                if kind_key in {"entry_jack", "exit"}:
+                    direction = 1 if kind_key == "entry_jack" else -1
+                    chevron = [
+                        (mid_x + direction * max(4, self.cell_px // 5), mid_y),
+                        (mid_x - direction * max(2, self.cell_px // 9), inset + max(2, self.cell_px // 7)),
+                        (mid_x - direction * max(2, self.cell_px // 9), self.cell_px - inset - max(2, self.cell_px // 7)),
+                    ]
+                    self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 210), chevron)
+                elif kind_key == "diagnostic":
+                    self.pygame.draw.circle(overlay, (frame[0], frame[1], frame[2], 202), (mid_x, mid_y), max(3, self.cell_px // 5), stroke_w)
+                    self.pygame.draw.circle(overlay, (frame[0], frame[1], frame[2], 142), (mid_x, mid_y), max(2, self.cell_px // 10))
+                elif kind_key == "controller":
+                    self.pygame.draw.rect(overlay, (frame[0], frame[1], frame[2], 156), plate.inflate(-max(3, self.cell_px // 4), -max(3, self.cell_px // 4)), stroke_w)
+                    self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 168), (mid_x, inset), (mid_x, self.cell_px - inset - 1), max(1, stroke_w - 1))
+                elif kind_key == "door_alarm_relay":
+                    self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 192), (inset + 2, mid_y), (self.cell_px - inset - 3, mid_y), stroke_w)
+                    self.pygame.draw.circle(overlay, (frame[0], frame[1], frame[2], 196), (inset + max(3, self.cell_px // 5), mid_y), max(2, self.cell_px // 10))
+                    self.pygame.draw.circle(overlay, (frame[0], frame[1], frame[2], 196), (self.cell_px - inset - max(3, self.cell_px // 5), mid_y), max(2, self.cell_px // 10))
+                elif kind_key == "service_index":
+                    for idx in range(3):
+                        py = inset + max(3, self.cell_px // 6) + idx * max(3, self.cell_px // 5)
+                        self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 182), (inset + 3, py), (self.cell_px - inset - 3, py), max(1, stroke_w - 1))
+                elif kind_key == "records":
+                    for idx in range(3):
+                        py = inset + max(4, self.cell_px // 5) + idx * max(2, self.cell_px // 7)
+                        self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 174), (inset + 4, py), (self.cell_px - inset - 4, py), max(1, stroke_w - 1))
+            glyph_text = str(glyph or "")[:1]
+            if glyph_text and glyph_text != " " and self.cell_px >= 18 and not is_effect:
+                text_surface = self._marker_font.render(glyph_text, True, (238, 246, 250))
+                text_rect = text_surface.get_rect(center=(mid_x, mid_y))
+                overlay.blit(text_surface, text_rect)
+            self.surface.blit(overlay, (cell_x, cell_y))
+            return
+
+        self._draw_wire_route_base(overlay, frame, variant, strong=False)
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _draw_procedural_shape(self, x, y, ch, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, light_tint=None):
         glyph = str(ch)[:1] or " "
         color_key = str(color or "").strip().lower()
@@ -4804,6 +4975,16 @@ class PygameView:
             for effect in (effects or ())
             if str(effect).strip()
         }
+        if semantic_key.startswith("wire_"):
+            self._draw_wire_overlay(
+                x,
+                y,
+                color=color,
+                attrs=attrs,
+                kind=semantic_key.removeprefix("wire_") or "void",
+                glyph=glyph,
+            )
+            return semantic_key
         if semantic_key.startswith("overworld_fill_city_"):
             self._draw_overworld_fill_overlay(
                 x,

@@ -167,6 +167,47 @@ from game.drone_workshop import (
     is_drone_workshop_part,
     move_inventory_part_to_workshop,
 )
+from game.wire_kit import (
+    WIRE_KIT_TABS,
+    load_inventory_entry_to_wire_kit,
+    unload_wire_kit_entry_to_inventory,
+    wire_kit_rows,
+    wire_kit_status_lines,
+    wire_state_for_actor,
+)
+from game.wire_connection import (
+    active_wire_connection_stale,
+    close_wire_connection_shell,
+    connect_wire_target,
+    disconnect_wire_connection,
+    open_wire_connection_shell,
+    refresh_wire_connection_ui,
+    set_preferred_wire_interface,
+    wire_target_class_for_property,
+)
+from game.wire_combat import (
+    load_wire_program_to_ram,
+    request_clean_wire_exit,
+    run_wire_program,
+    unload_wire_ram_slot,
+    wire_program_rows,
+    wire_program_target_rows,
+)
+from game.wire_scene import (
+    active_wire_scene,
+    active_wire_scene_stale,
+    close_wire_scene,
+    move_wire_avatar,
+    open_wire_scene,
+    panic_exit_wire_scene,
+    read_wire_scene_node,
+    wait_wire_scene,
+    wire_scene_current_read,
+    wire_scene_status_lines,
+)
+from game.wire_consequences import wire_recovery_status
+from game.wire_runtime import is_wire_interface_item
+from game.wire_users import handle_wire_dialogue_choice, wire_dialogue_rows, wire_dialogue_state
 from game.property_doors import (
     _door_action_text,
     _door_close_attempt,
@@ -554,6 +595,46 @@ class InputSystem(System):
                 "status_lines": [],
                 "feedback": "",
             }
+        if not hasattr(self.sim, "wire_kit_ui"):
+            self.sim.wire_kit_ui = {
+                "open": False,
+                "tab": "kit",
+                "selected_index": 0,
+                "scroll": 0,
+                "tabs": WIRE_KIT_TABS,
+                "rows": [],
+                "status_lines": [],
+                "feedback": "",
+            }
+        if not hasattr(self.sim, "wire_connection_ui"):
+            self.sim.wire_connection_ui = {
+                "open": False,
+                "property_id": "",
+                "interaction_mode": "physical",
+                "target_class": "",
+                "selected_index": 0,
+                "scroll": 0,
+                "rows": [],
+                "status_lines": [],
+                "feedback": "",
+                "preflight": {},
+            }
+        if not hasattr(self.sim, "wire_scene_ui"):
+            self.sim.wire_scene_ui = {
+                "open": False,
+                "selected_node_id": "",
+                "scroll": 0,
+                "status_lines": [],
+                "read_lines": [],
+                "feedback": "",
+                "program_panel": False,
+                "wire_dialogue": {},
+                "selected_dialogue_index": 0,
+                "selected_program_index": 0,
+                "selected_target_index": 0,
+                "program_rows": [],
+                "target_rows": [],
+            }
 
         self.sim.events.subscribe("move_blocked", self.on_move_blocked)
         self.sim.events.subscribe("zoom_mode_changed", self.on_zoom_mode_changed)
@@ -899,6 +980,60 @@ class InputSystem(System):
         state.setdefault("feedback", "")
         return state
 
+    def _wire_kit_state(self):
+        state = getattr(self.sim, "wire_kit_ui", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.wire_kit_ui = state
+        state.setdefault("open", False)
+        state.setdefault("tab", "kit")
+        if str(state.get("tab", "") or "").strip().lower() not in WIRE_KIT_TABS:
+            state["tab"] = "kit"
+        state.setdefault("selected_index", 0)
+        state.setdefault("scroll", 0)
+        state.setdefault("tabs", WIRE_KIT_TABS)
+        state.setdefault("rows", [])
+        state.setdefault("status_lines", [])
+        state.setdefault("feedback", "")
+        return state
+
+    def _wire_connection_state(self):
+        state = getattr(self.sim, "wire_connection_ui", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.wire_connection_ui = state
+        state.setdefault("open", False)
+        state.setdefault("property_id", "")
+        state.setdefault("interaction_mode", "physical")
+        state.setdefault("target_class", "")
+        state.setdefault("selected_index", 0)
+        state.setdefault("scroll", 0)
+        state.setdefault("rows", [])
+        state.setdefault("status_lines", [])
+        state.setdefault("feedback", "")
+        state.setdefault("preflight", {})
+        return state
+
+    def _wire_scene_state(self):
+        state = getattr(self.sim, "wire_scene_ui", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.wire_scene_ui = state
+        state.setdefault("open", False)
+        state.setdefault("selected_node_id", "")
+        state.setdefault("scroll", 0)
+        state.setdefault("status_lines", [])
+        state.setdefault("read_lines", [])
+        state.setdefault("feedback", "")
+        state.setdefault("program_panel", False)
+        state.setdefault("wire_dialogue", {})
+        state.setdefault("selected_dialogue_index", 0)
+        state.setdefault("selected_program_index", 0)
+        state.setdefault("selected_target_index", 0)
+        state.setdefault("program_rows", [])
+        state.setdefault("target_rows", [])
+        return state
+
     def _drone_command_modal_open(self):
         aim_state = self._aim_lock_state()
         if bool(aim_state.get("active")) or aim_state.get("target_eid") is not None:
@@ -919,6 +1054,9 @@ class InputSystem(System):
                 self._debug_state(),
                 self._action_menu_state(),
                 self._drone_sheet_state(),
+                self._wire_kit_state(),
+                self._wire_connection_state(),
+                self._wire_scene_state(),
             )
             if isinstance(state, dict)
         ) or bool(self._look_state().get("active"))
@@ -927,6 +1065,33 @@ class InputSystem(System):
         if self._drone_command_modal_open():
             return True
         return bool(self._drone_command_state().get("open"))
+
+    def _wire_kit_modal_blocked(self):
+        aim_state = self._aim_lock_state()
+        if bool(aim_state.get("active")) or aim_state.get("target_eid") is not None:
+            return True
+        if self._overworld_view_only_for_player():
+            return True
+        return any(
+            bool(state.get("open"))
+            for state in (
+                self._inventory_state(),
+                self._trade_state(),
+                self._casino_state(),
+                self._dialog_state(),
+                self._help_state(),
+                self._character_state(),
+                self._report_state(),
+                self._log_state(),
+                self._debug_state(),
+                self._action_menu_state(),
+                self._drone_command_state(),
+                self._drone_sheet_state(),
+                self._wire_connection_state(),
+                self._wire_scene_state(),
+            )
+            if isinstance(state, dict)
+        ) or bool(self._look_state().get("active"))
 
     def _drone_command_label(self, state):
         chassis_class = str(getattr(state, "chassis_class", "") or "").strip().upper()
@@ -2364,6 +2529,606 @@ class InputSystem(System):
         self._refresh_drone_sheet_ui(announce_unavailable=True)
         return True
 
+    def _refresh_wire_kit_ui(self):
+        state = self._wire_kit_state()
+        wire_state = wire_state_for_actor(self.sim, self.player_eid, create=True)
+        tab = str(state.get("tab", "kit") or "kit").strip().lower()
+        if tab not in WIRE_KIT_TABS:
+            tab = "kit"
+            state["tab"] = tab
+        rows = list(wire_kit_rows(self.sim, self.player_eid, tab=tab, item_catalog=self.catalog))
+        state["rows"] = rows
+        state["status_lines"] = list(wire_kit_status_lines(wire_state, item_catalog=self.catalog))
+        if rows:
+            state["selected_index"] = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
+        else:
+            state["selected_index"] = 0
+            state["scroll"] = 0
+        return rows
+
+    def _open_wire_kit_ui(self, zoom_mode=None):
+        state = self._wire_kit_state()
+        if str(zoom_mode or "").strip().lower() == "overworld" or self._wire_kit_modal_blocked():
+            state["feedback"] = "Wire kit is blocked while another mode is open."
+            self.sim.emit(Event("wire_kit_blocked", eid=self.player_eid, reason="ui_busy"))
+            return True
+        wire_state_for_actor(self.sim, self.player_eid, create=True)
+        state["open"] = True
+        state["feedback"] = ""
+        self._refresh_wire_kit_ui()
+        self.sim.emit(Event("wire_kit_opened", eid=self.player_eid))
+        return True
+
+    def _wire_connection_target_candidates(self):
+        pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if pos is None:
+            return []
+        candidates = []
+        seen = set()
+        for candidate in self.sim.properties_in_radius(int(pos.x), int(pos.y), int(pos.z), r=1):
+            if not isinstance(candidate, dict):
+                continue
+            prop_id = str(candidate.get("id", "") or "").strip()
+            if not prop_id or prop_id in seen:
+                continue
+            seen.add(prop_id)
+            target_class = wire_target_class_for_property(candidate, deliberate=True)
+            if not target_class:
+                continue
+            try:
+                x = int(candidate.get("x", pos.x))
+                y = int(candidate.get("y", pos.y))
+                z = int(candidate.get("z", pos.z))
+            except (TypeError, ValueError):
+                continue
+            if z != int(pos.z):
+                continue
+            metadata = _property_metadata(candidate) or {}
+            linked = bool(_property_linked_property_id(candidate))
+            marked = bool(metadata.get("wire_capable"))
+            same_tile = x == int(pos.x) and y == int(pos.y)
+            normal_wire = target_class == "access_panel" or linked or marked
+            rank = 0 if normal_wire else 1
+            if same_tile:
+                rank -= 1
+            stable = (
+                rank,
+                _interaction_target_order_key(
+                    int(pos.x),
+                    int(pos.y),
+                    x,
+                    y,
+                    stable_tiebreaker=(target_class, str(candidate.get("name", "")), prop_id),
+                ),
+            )
+            candidates.append((stable, candidate))
+        candidates.sort(key=lambda row: row[0])
+        return [candidate for _stable, candidate in candidates]
+
+    def _open_wire_connection_ui(self, zoom_mode=None):
+        if str(zoom_mode or "").strip().lower() == "overworld" or self._wire_kit_modal_blocked():
+            _log_player_feedback(
+                self.sim,
+                "Wire connection is blocked while another mode is open.",
+                kind="warning",
+                dedupe_window=2,
+                dedupe_key="wire_connect:ui_busy",
+            )
+            self.sim.emit(Event("wire_connection_blocked", eid=self.player_eid, reason="ui_busy"))
+            return True
+        candidates = self._wire_connection_target_candidates()
+        if not candidates:
+            _log_player_feedback(
+                self.sim,
+                "No wire-capable panel or service terminal is close enough.",
+                kind="interaction",
+                dedupe_window=2,
+                dedupe_key="wire_connect:no_target",
+            )
+            self.sim.emit(Event("wire_connection_blocked", eid=self.player_eid, reason="no_wire_target"))
+            return True
+        prop = candidates[0]
+        if open_wire_connection_shell(
+            self.sim,
+            self.player_eid,
+            prop,
+            interaction_mode="wire",
+            item_catalog=self.catalog,
+            deliberate=True,
+        ):
+            return True
+        _log_player_feedback(
+            self.sim,
+            "That surface will not accept a wire connection.",
+            kind="interaction",
+            dedupe_window=2,
+            dedupe_key="wire_connect:blocked",
+        )
+        self.sim.emit(Event("wire_connection_blocked", eid=self.player_eid, reason="blocked"))
+        return True
+
+    def _close_wire_kit_ui(self):
+        state = self._wire_kit_state()
+        state["open"] = False
+        state["scroll"] = 0
+        return True
+
+    def _set_wire_kit_tab(self, tab):
+        state = self._wire_kit_state()
+        tab = str(tab or "kit").strip().lower()
+        if tab not in WIRE_KIT_TABS:
+            return False
+        state["tab"] = tab
+        state["selected_index"] = 0
+        state["scroll"] = 0
+        state["feedback"] = ""
+        self._refresh_wire_kit_ui()
+        return True
+
+    def _selected_wire_kit_row(self):
+        rows = self._refresh_wire_kit_ui()
+        if not rows:
+            return None
+        state = self._wire_kit_state()
+        index = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
+        state["selected_index"] = index
+        return rows[index]
+
+    def _wire_kit_item_name(self, result):
+        entry = result.get("entry") if isinstance(result, dict) else None
+        if isinstance(entry, dict):
+            return item_display_name(entry.get("item_id"), metadata=entry.get("metadata"), item_catalog=self.catalog)
+        return "wire entry"
+
+    def _activate_selected_wire_kit_row(self):
+        state = self._wire_kit_state()
+        row = self._selected_wire_kit_row()
+        if not row:
+            state["feedback"] = "Nothing selected."
+            return True
+        action = str(row.get("action", "") or "").strip().lower()
+        instance_id = str(row.get("instance_id", "") or "").strip()
+        if action == "load":
+            result = load_inventory_entry_to_wire_kit(self.sim, self.player_eid, instance_id, item_catalog=self.catalog)
+            if result.get("ok"):
+                state["feedback"] = f"Loaded {self._wire_kit_item_name(result)} into the wire kit."
+                self.sim.emit(Event("wire_kit_loaded", eid=self.player_eid, item_name=self._wire_kit_item_name(result)))
+            else:
+                state["feedback"] = f"Cannot load: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+                self.sim.emit(Event("wire_kit_blocked", eid=self.player_eid, reason=result.get("reason", "blocked")))
+            self._refresh_wire_kit_ui()
+            return True
+        if action == "unload":
+            result = unload_wire_kit_entry_to_inventory(self.sim, self.player_eid, instance_id, item_catalog=self.catalog)
+            if result.get("ok"):
+                state["feedback"] = f"Moved {self._wire_kit_item_name(result)} back to backpack."
+                self.sim.emit(Event("wire_kit_unloaded", eid=self.player_eid, item_name=self._wire_kit_item_name(result)))
+            else:
+                state["feedback"] = f"Cannot unload: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+                self.sim.emit(Event("wire_kit_blocked", eid=self.player_eid, reason=result.get("reason", "blocked")))
+            self._refresh_wire_kit_ui()
+            return True
+        state["feedback"] = "Wire entries are not executable in this slice."
+        return True
+
+    def _handle_wire_kit_input(self, physical_input, zoom_mode):
+        del zoom_mode
+        state = self._wire_kit_state()
+        if not state.get("open"):
+            return False
+        key = self._input_key_code(physical_input)
+        if key in (27, ord("q"), ord("Q")):
+            return self._close_wire_kit_ui()
+        if key in (KEY_UP, ord("k"), ord("K")):
+            rows = self._refresh_wire_kit_ui()
+            if rows:
+                state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 1)
+            return True
+        if key in (KEY_DOWN, ord("j"), ord("J")):
+            rows = self._refresh_wire_kit_ui()
+            if rows:
+                state["selected_index"] = min(len(rows) - 1, int(state.get("selected_index", 0) or 0) + 1)
+            return True
+        if key == KEY_PAGE_UP:
+            state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 6)
+            self._refresh_wire_kit_ui()
+            return True
+        if key == KEY_PAGE_DOWN:
+            rows = self._refresh_wire_kit_ui()
+            state["selected_index"] = min(max(0, len(rows) - 1), int(state.get("selected_index", 0) or 0) + 6)
+            return True
+        if key == KEY_HOME:
+            state["selected_index"] = 0
+            self._refresh_wire_kit_ui()
+            return True
+        if key == KEY_END:
+            rows = self._refresh_wire_kit_ui()
+            state["selected_index"] = max(0, len(rows) - 1)
+            return True
+        if key in (KEY_LEFT, ord("h"), ord("H"), ord("[")):
+            current = WIRE_KIT_TABS.index(str(state.get("tab", "kit") or "kit"))
+            return self._set_wire_kit_tab(WIRE_KIT_TABS[(current - 1) % len(WIRE_KIT_TABS)])
+        if key in (KEY_RIGHT, ord("l"), ord("L"), ord("]")):
+            current = WIRE_KIT_TABS.index(str(state.get("tab", "kit") or "kit"))
+            return self._set_wire_kit_tab(WIRE_KIT_TABS[(current + 1) % len(WIRE_KIT_TABS)])
+        if key is not None and ord("1") <= key <= ord("9"):
+            idx = key - ord("1")
+            if idx < len(WIRE_KIT_TABS):
+                return self._set_wire_kit_tab(WIRE_KIT_TABS[idx])
+        if key in ENTER_KEYS or key in (ord("u"), ord("U")):
+            return self._activate_selected_wire_kit_row()
+        self._refresh_wire_kit_ui()
+        return True
+
+    def _refresh_wire_connection_ui(self):
+        state = self._wire_connection_state()
+        if not state.get("open"):
+            return []
+        rows = list(refresh_wire_connection_ui(self.sim, self.player_eid, item_catalog=self.catalog))
+        state = self._wire_connection_state()
+        if rows:
+            state["selected_index"] = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
+        else:
+            state["selected_index"] = 0
+            state["scroll"] = 0
+        return rows
+
+    def _close_wire_connection_ui(self):
+        return close_wire_connection_shell(self.sim)
+
+    def _selected_wire_connection_row(self):
+        rows = self._refresh_wire_connection_ui()
+        if not rows:
+            return None
+        state = self._wire_connection_state()
+        index = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
+        state["selected_index"] = index
+        return rows[index]
+
+    def _wire_connection_property(self):
+        state = self._wire_connection_state()
+        return getattr(self.sim, "properties", {}).get(str(state.get("property_id", "") or ""))
+
+    def _emit_wire_connection_normal_use(self):
+        state = self._wire_connection_state()
+        prop = self._wire_connection_property()
+        if not isinstance(prop, dict):
+            state["feedback"] = "Fixture is no longer here."
+            return True
+        payload = {
+            "eid": self.player_eid,
+            "property_id": prop.get("id"),
+            "x": prop.get("x"),
+            "y": prop.get("y"),
+            "z": prop.get("z"),
+            "interaction_mode": str(state.get("interaction_mode", "physical") or "physical").strip().lower() or "physical",
+            "wire_shell_passthrough": True,
+        }
+        self._close_wire_connection_ui()
+        self.sim.emit(Event("property_interact", **payload))
+        return True
+
+    def _cycle_wire_connection_interface(self):
+        state = self._wire_connection_state()
+        preflight = state.get("preflight") if isinstance(state.get("preflight"), dict) else {}
+        records = list(preflight.get("compatible_interfaces", ()) or ())
+        if not records:
+            state["feedback"] = "No compatible interface in backpack."
+            return True
+        wire_state = wire_state_for_actor(self.sim, self.player_eid, create=True)
+        current = str(getattr(wire_state, "equipped_interface_instance_id", "") or "")
+        current_index = -1
+        for idx, record in enumerate(records):
+            if str(record.get("instance_id", "") or "") == current:
+                current_index = idx
+                break
+        chosen = records[(current_index + 1) % len(records)]
+        result = set_preferred_wire_interface(
+            self.sim,
+            self.player_eid,
+            chosen.get("instance_id"),
+            item_catalog=self.catalog,
+        )
+        if result.get("ok"):
+            state["feedback"] = f"Preferred interface: {chosen.get('name', 'interface')}."
+        else:
+            state["feedback"] = f"Interface preference blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+        self._refresh_wire_connection_ui()
+        return True
+
+    def _activate_selected_wire_connection_row(self):
+        state = self._wire_connection_state()
+        row = self._selected_wire_connection_row()
+        if not row:
+            state["feedback"] = "No wire shell row selected."
+            return True
+        action = str(row.get("action", "") or "").strip().lower()
+        prop = self._wire_connection_property()
+        if action == "normal_use":
+            return self._emit_wire_connection_normal_use()
+        if action == "preview":
+            lines = list(state.get("status_lines", ()) or ())
+            state["feedback"] = lines[0] if lines else "No preview available."
+            return True
+        if action == "connect":
+            if not isinstance(prop, dict):
+                state["feedback"] = "Fixture is no longer here."
+                return True
+            result = connect_wire_target(
+                self.sim,
+                self.player_eid,
+                prop,
+                item_catalog=self.catalog,
+                deliberate=bool(state.get("deliberate")),
+            )
+            if result.get("ok"):
+                state["feedback"] = "Wire shell connected. No wire scene is entered yet."
+            else:
+                state["feedback"] = f"Connection blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_connection_ui()
+            return True
+        if action == "enter_wire_scene":
+            return self._open_wire_scene_from_connection()
+        if action == "disconnect":
+            result = disconnect_wire_connection(self.sim, self.player_eid, reason="manual")
+            state["feedback"] = "Disconnected." if result.get("ok") else "No active connection."
+            self._refresh_wire_connection_ui()
+            return True
+        if action == "cycle_interface":
+            return self._cycle_wire_connection_interface()
+        if action == "close":
+            return self._close_wire_connection_ui()
+        state["feedback"] = "That wire shell row is informational."
+        return True
+
+    def _handle_wire_connection_input(self, physical_input, zoom_mode):
+        del zoom_mode
+        state = self._wire_connection_state()
+        if not state.get("open"):
+            return False
+        key = self._input_key_code(physical_input)
+        if key in (27, ord("q"), ord("Q")):
+            return self._close_wire_connection_ui()
+        rows = list(state.get("rows", ()) or [])
+        if key in (KEY_UP, ord("k"), ord("K")):
+            self._refresh_wire_connection_ui()
+            if rows:
+                state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 1)
+            return True
+        if key in (KEY_DOWN, ord("j"), ord("J")):
+            self._refresh_wire_connection_ui()
+            rows = list(state.get("rows", ()) or [])
+            if rows:
+                state["selected_index"] = min(len(rows) - 1, int(state.get("selected_index", 0) or 0) + 1)
+            return True
+        if key == KEY_HOME:
+            state["selected_index"] = 0
+            self._refresh_wire_connection_ui()
+            return True
+        if key == KEY_END:
+            rows = self._refresh_wire_connection_ui()
+            state["selected_index"] = max(0, len(rows) - 1)
+            return True
+        if key in ENTER_KEYS or key in (ord("u"), ord("U")):
+            return self._activate_selected_wire_connection_row()
+        self._refresh_wire_connection_ui()
+        return True
+
+    def _refresh_wire_scene_ui(self):
+        state = self._wire_scene_state()
+        if not state.get("open"):
+            return False
+        scene = active_wire_scene(self.sim, self.player_eid)
+        if not scene:
+            state["open"] = False
+            state["feedback"] = "Wire layer closed."
+            return False
+        stale, reason = active_wire_scene_stale(self.sim, self.player_eid)
+        if stale:
+            close_wire_scene(self.sim, self.player_eid, reason=reason, disconnect=True)
+            state["feedback"] = f"Wire link dropped: {str(reason).replace('_', ' ')}."
+            return False
+        state["status_lines"] = wire_scene_status_lines(scene)
+        state["read_lines"] = wire_scene_current_read(scene)
+        state["program_rows"] = wire_program_rows(self.sim, self.player_eid, item_catalog=self.catalog)
+        state["target_rows"] = wire_program_target_rows(self.sim, self.player_eid)
+        dialogue = wire_dialogue_state(scene)
+        state["wire_dialogue"] = dialogue
+        if dialogue:
+            rows = wire_dialogue_rows(scene)
+            state["wire_dialogue"]["rows"] = rows
+            if rows:
+                state["selected_dialogue_index"] = max(0, min(int(state.get("selected_dialogue_index", 0) or 0), len(rows) - 1))
+            else:
+                state["selected_dialogue_index"] = 0
+        if state["program_rows"]:
+            state["selected_program_index"] = max(0, min(int(state.get("selected_program_index", 0) or 0), len(state["program_rows"]) - 1))
+        else:
+            state["selected_program_index"] = 0
+        if state["target_rows"]:
+            state["selected_target_index"] = max(0, min(int(state.get("selected_target_index", 0) or 0), len(state["target_rows"]) - 1))
+        else:
+            state["selected_target_index"] = 0
+        state["feedback"] = str(scene.get("last_feedback", state.get("feedback", "")) or "")
+        return True
+
+    def _open_wire_scene_from_connection(self):
+        state = self._wire_connection_state()
+        prop = self._wire_connection_property()
+        if not isinstance(prop, dict):
+            state["feedback"] = "Fixture is no longer here."
+            return True
+        result = open_wire_scene(self.sim, self.player_eid, prop, item_catalog=self.catalog)
+        if result.get("ok"):
+            scene_state = self._wire_scene_state()
+            scene_state["open"] = True
+            self._refresh_wire_scene_ui()
+        else:
+            state["feedback"] = f"Wire layer blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_connection_ui()
+        return True
+
+    def _handle_wire_dialogue_input(self, physical_input):
+        state = self._wire_scene_state()
+        key = self._input_key_code(physical_input)
+        movement_delta = self._input_movement_delta(physical_input)
+        dialogue = state.get("wire_dialogue") if isinstance(state.get("wire_dialogue"), dict) else {}
+        rows = list(dialogue.get("rows", ()) or [])
+        if key in (27,):
+            wire_state = wire_state_for_actor(self.sim, self.player_eid, create=False)
+            scene = getattr(wire_state, "active_scene", None) if wire_state is not None else None
+            if isinstance(scene, dict):
+                active = scene.get("wire_dialogue") if isinstance(scene.get("wire_dialogue"), dict) else {}
+                active["open"] = False
+                scene["wire_dialogue"] = active
+                scene["last_feedback"] = "Wire dialogue closed."
+                wire_state.active_scene = dict(scene)
+            state["wire_dialogue"] = {}
+            state["feedback"] = "Wire dialogue closed."
+            self._refresh_wire_scene_ui()
+            return True
+        if movement_delta is not None and rows:
+            _dx, dy = movement_delta
+            if dy:
+                state["selected_dialogue_index"] = (int(state.get("selected_dialogue_index", 0) or 0) + (1 if dy > 0 else -1)) % len(rows)
+            self._refresh_wire_scene_ui()
+            return True
+        if key in ENTER_KEYS:
+            index = int(state.get("selected_dialogue_index", 0) or 0)
+            result = handle_wire_dialogue_choice(self.sim, self.player_eid, row_index=index)
+            if result.get("ok"):
+                state["feedback"] = str(result.get("feedback", "Dialogue updated.") or "Dialogue updated.")
+            else:
+                state["feedback"] = f"Dialogue blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_scene_ui()
+            return True
+        self._refresh_wire_scene_ui()
+        return True
+
+    def _handle_wire_program_panel_input(self, physical_input):
+        state = self._wire_scene_state()
+        key = self._input_key_code(physical_input)
+        movement_delta = self._input_movement_delta(physical_input)
+        if key in (27,):
+            state["program_panel"] = False
+            state["feedback"] = "Program panel closed."
+            self._refresh_wire_scene_ui()
+            return True
+        if key in (ord("l"), ord("L")) and movement_delta is None:
+            result = load_wire_program_to_ram(self.sim, self.player_eid, item_catalog=self.catalog)
+            state["feedback"] = (
+                "Program loaded into RAM."
+                if result.get("ok")
+                else f"Load blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            )
+            self._refresh_wire_scene_ui()
+            return True
+        if key in (ord("u"), ord("U")):
+            result = unload_wire_ram_slot(
+                self.sim,
+                self.player_eid,
+                index=int(state.get("selected_program_index", 0) or 0),
+                item_catalog=self.catalog,
+            )
+            state["feedback"] = (
+                "Program unloaded from RAM."
+                if result.get("ok")
+                else f"Unload blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            )
+            self._refresh_wire_scene_ui()
+            return True
+        if movement_delta is not None:
+            dx, dy = movement_delta
+            if dy and state.get("program_rows"):
+                rows = list(state.get("program_rows", ()) or ())
+                state["selected_program_index"] = (int(state.get("selected_program_index", 0) or 0) + (1 if dy > 0 else -1)) % len(rows)
+            elif dx and state.get("target_rows"):
+                rows = list(state.get("target_rows", ()) or ())
+                state["selected_target_index"] = (int(state.get("selected_target_index", 0) or 0) + (1 if dx > 0 else -1)) % len(rows)
+            self._refresh_wire_scene_ui()
+            return True
+        if key in ENTER_KEYS or key in (ord("r"), ord("R")):
+            rows = list(state.get("program_rows", ()) or ())
+            targets = list(state.get("target_rows", ()) or ())
+            program_index = int(state.get("selected_program_index", 0) or 0)
+            target_index = int(state.get("selected_target_index", 0) or 0)
+            target = targets[target_index] if 0 <= target_index < len(targets) else None
+            result = run_wire_program(
+                self.sim,
+                self.player_eid,
+                program_index=program_index if rows else None,
+                target=target,
+                item_catalog=self.catalog,
+            )
+            if result.get("ok"):
+                self.sim.turn_advance_requested = True
+                state["feedback"] = str(result.get("feedback", "Program ran.") or "Program ran.")
+                refreshed_scene = active_wire_scene(self.sim, self.player_eid)
+                if wire_dialogue_state(refreshed_scene):
+                    state["program_panel"] = False
+                    state["selected_dialogue_index"] = 0
+            else:
+                state["feedback"] = f"Program blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_scene_ui()
+            return True
+        self._refresh_wire_scene_ui()
+        return True
+
+    def _handle_wire_scene_input(self, physical_input, zoom_mode):
+        del zoom_mode
+        state = self._wire_scene_state()
+        if not state.get("open"):
+            return False
+        key = self._input_key_code(physical_input)
+        movement_delta = self._input_movement_delta(physical_input)
+        if wire_dialogue_state(active_wire_scene(self.sim, self.player_eid)):
+            return self._handle_wire_dialogue_input(physical_input)
+        if bool(state.get("program_panel")):
+            return self._handle_wire_program_panel_input(physical_input)
+        if key in (27, ord("q"), ord("Q")):
+            result = request_clean_wire_exit(self.sim, self.player_eid)
+            state["feedback"] = "Wire layer closed." if result.get("ok") else f"Disconnect blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            return True
+        if key in (ord("r"), ord("R")):
+            state["program_panel"] = True
+            state["feedback"] = "Program panel open."
+            self._refresh_wire_scene_ui()
+            return True
+        if key in (ord("p"), ord("P")):
+            panic_exit_wire_scene(self.sim, self.player_eid)
+            state["feedback"] = "Panic exit complete."
+            return True
+        if key in ENTER_KEYS or key in (ord("i"), ord("I"), ord("x"), ord("X")):
+            result = read_wire_scene_node(self.sim, self.player_eid)
+            if result.get("ok"):
+                state["read_lines"] = list(result.get("lines", ()) or ())
+                state["feedback"] = "Node read."
+            else:
+                state["feedback"] = f"Read blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_scene_ui()
+            return True
+        if key in self.wait_keys:
+            result = wait_wire_scene(self.sim, self.player_eid)
+            if result.get("ok"):
+                self.sim.turn_advance_requested = True
+                state["feedback"] = "Connection held."
+            else:
+                state["feedback"] = f"Wait blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_scene_ui()
+            return True
+        if movement_delta is not None:
+            dx, dy = movement_delta
+            result = move_wire_avatar(self.sim, self.player_eid, dx, dy)
+            if result.get("ok"):
+                self.sim.turn_advance_requested = True
+                state["feedback"] = str(result.get("scene", {}).get("last_feedback", "Moved.") or "Moved.")
+            else:
+                state["feedback"] = f"Move blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_scene_ui()
+            return True
+        self._refresh_wire_scene_ui()
+        return True
+
     def _normalize_input_event(self, raw):
         physical = normalize_physical_input(raw)
         if physical:
@@ -3074,6 +3839,7 @@ class InputSystem(System):
         inventory_state=None,
         trade_state=None,
         drone_sheet_state=None,
+        wire_kit_state=None,
     ):
         state = self._auto_walk_state()
         if not state.get("active"):
@@ -3089,6 +3855,7 @@ class InputSystem(System):
             or (inventory_state and inventory_state.get("open"))
             or (trade_state and trade_state.get("open"))
             or (drone_sheet_state and drone_sheet_state.get("open"))
+            or (wire_kit_state and wire_kit_state.get("open"))
             or (look_state and look_state.get("active"))
         ):
             return False
@@ -3169,6 +3936,7 @@ class InputSystem(System):
         inventory_state=None,
         trade_state=None,
         drone_sheet_state=None,
+        wire_kit_state=None,
     ):
         state = self._auto_drive_state()
         if not state.get("active"):
@@ -3184,6 +3952,7 @@ class InputSystem(System):
             or (inventory_state and inventory_state.get("open"))
             or (trade_state and trade_state.get("open"))
             or (drone_sheet_state and drone_sheet_state.get("open"))
+            or (wire_kit_state and wire_kit_state.get("open"))
             or (look_state and look_state.get("active"))
         ):
             return False
@@ -3243,6 +4012,7 @@ class InputSystem(System):
         inventory_state=None,
         trade_state=None,
         drone_sheet_state=None,
+        wire_kit_state=None,
     ):
         state = self._local_drive_state()
         if not state.get("active"):
@@ -3258,6 +4028,7 @@ class InputSystem(System):
             or (inventory_state and inventory_state.get("open"))
             or (trade_state and trade_state.get("open"))
             or (drone_sheet_state and drone_sheet_state.get("open"))
+            or (wire_kit_state and wire_kit_state.get("open"))
             or (look_state and look_state.get("active"))
         ):
             return False
@@ -5128,12 +5899,22 @@ class InputSystem(System):
         if action_id == "help":
             self._help_state()["open"] = True
             return True
-        if action_id == "action_menu":
-            return self._open_action_menu(zoom_mode)
         if action_id == "quit":
             self.sim.running = False
             self.sim.emit(Event("quit_requested", eid=self.player_eid))
             return True
+        recovery = wire_recovery_status(self.sim, self.player_eid)
+        if recovery.get("active") and action_id not in {"event_log", "look", "wait"}:
+            _log_player_feedback(
+                self.sim,
+                f"Wire disruption needs {int(recovery.get('remaining', 0))} ticks to clear.",
+                kind="warning",
+                dedupe_window=2,
+                dedupe_key="wire_recovery:block",
+            )
+            return True
+        if action_id == "action_menu":
+            return self._open_action_menu(zoom_mode)
 
         state = self._inventory_state()
         trade_state = self._trade_state()
@@ -5197,6 +5978,10 @@ class InputSystem(System):
             return self._open_drone_command_ui(zoom_mode)
         if action_id == "drone_sheet":
             return self._open_drone_sheet_ui(zoom_mode)
+        if action_id == "wire_connect":
+            return self._open_wire_connection_ui(zoom_mode)
+        if action_id == "wire_kit":
+            return self._open_wire_kit_ui(zoom_mode)
         if action_id == "look":
             self._activate_look_mode(zoom_mode=zoom_mode, purpose="inspect")
             return True
@@ -6101,6 +6886,37 @@ class InputSystem(System):
                         ))
                     self._normalize_inventory_selection()
                     return True
+                if (
+                    panel_kind != "container"
+                    and is_wire_interface_item(selected.get("item_id"), item_catalog=self.catalog)
+                ):
+                    result = set_preferred_wire_interface(
+                        self.sim,
+                        self.player_eid,
+                        selected.get("instance_id"),
+                        item_catalog=self.catalog,
+                    )
+                    item_name = item_display_name_for_actor(
+                        self.sim,
+                        self.player_eid,
+                        selected,
+                        item_catalog=self.catalog,
+                    )
+                    if bool(result.get("ok")):
+                        state["inspect_text"] = f"Preferred wire interface set to {item_name}."
+                        self.sim.emit(Event(
+                            "wire_interface_preferred",
+                            eid=self.player_eid,
+                            item_id=selected.get("item_id"),
+                            item_name=item_name,
+                            instance_id=selected.get("instance_id"),
+                        ))
+                    else:
+                        reason = str(result.get("reason", "blocked") or "blocked").replace("_", " ")
+                        state["inspect_text"] = f"Wire interface blocked: {reason}."
+                        self.sim.emit(Event("wire_connection_blocked", eid=self.player_eid, reason=result.get("reason", "blocked")))
+                    self._normalize_inventory_selection()
+                    return True
                 item_def = self.catalog.get(selected.get("item_id"), {})
                 if isinstance(item_def.get("throw_profile"), dict):
                     self._activate_throw_item_targeting(selected)
@@ -6309,7 +7125,7 @@ class InputSystem(System):
         state["last_repeat_at"] = float(now)
         return key
 
-    def _should_collapse_input_burst(self, *, look_state=None, help_state=None, dialog_state=None, character_state=None, report_state=None, log_state=None, debug_state=None, inventory_state=None, trade_state=None, drone_sheet_state=None):
+    def _should_collapse_input_burst(self, *, look_state=None, help_state=None, dialog_state=None, character_state=None, report_state=None, log_state=None, debug_state=None, inventory_state=None, trade_state=None, drone_sheet_state=None, wire_kit_state=None, wire_connection_state=None, wire_scene_state=None):
         if help_state and help_state.get("open"):
             return False
         if dialog_state and dialog_state.get("open"):
@@ -6327,6 +7143,12 @@ class InputSystem(System):
         if trade_state and trade_state.get("open"):
             return False
         if drone_sheet_state and drone_sheet_state.get("open"):
+            return False
+        if wire_kit_state and wire_kit_state.get("open"):
+            return False
+        if wire_connection_state and wire_connection_state.get("open"):
+            return False
+        if wire_scene_state and wire_scene_state.get("open"):
             return False
 
         if look_state and look_state.get("active"):
@@ -6434,6 +7256,14 @@ class InputSystem(System):
         action_menu_state = self._action_menu_state()
         drone_command_state = self._drone_command_state()
         drone_sheet_state = self._drone_sheet_state()
+        wire_kit_state = self._wire_kit_state()
+        wire_connection_state = self._wire_connection_state()
+        wire_scene_state = self._wire_scene_state()
+        scene_stale, scene_stale_reason = active_wire_scene_stale(self.sim, self.player_eid)
+        if scene_stale:
+            close_wire_scene(self.sim, self.player_eid, reason=scene_stale_reason, disconnect=True)
+        elif active_wire_connection_stale(self.sim, self.player_eid):
+            disconnect_wire_connection(self.sim, self.player_eid, reason="stale")
         zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
         physical_input = self._next_input_event(
             collapse_burst=self._should_collapse_input_burst(
@@ -6447,6 +7277,9 @@ class InputSystem(System):
                 inventory_state=state,
                 trade_state=trade_state,
                 drone_sheet_state=drone_sheet_state,
+                wire_kit_state=wire_kit_state,
+                wire_connection_state=wire_connection_state,
+                wire_scene_state=wire_scene_state,
             )
         )
         key = self._input_key_code(physical_input)
@@ -6459,6 +7292,15 @@ class InputSystem(System):
                 return
             if drone_sheet_state.get("open"):
                 self._refresh_drone_sheet_ui(announce_unavailable=True)
+                return
+            if wire_kit_state.get("open"):
+                self._refresh_wire_kit_ui()
+                return
+            if wire_connection_state.get("open"):
+                self._refresh_wire_connection_ui()
+                return
+            if wire_scene_state.get("open"):
+                self._refresh_wire_scene_ui()
                 return
             if action_menu_state.get("open"):
                 return
@@ -6474,6 +7316,7 @@ class InputSystem(System):
                 inventory_state=state,
                 trade_state=trade_state,
                 drone_sheet_state=drone_sheet_state,
+                wire_kit_state=wire_kit_state,
             ):
                 return
             if self._maybe_continue_local_drive(
@@ -6488,6 +7331,7 @@ class InputSystem(System):
                 inventory_state=state,
                 trade_state=trade_state,
                 drone_sheet_state=drone_sheet_state,
+                wire_kit_state=wire_kit_state,
             ):
                 return
             if self._maybe_continue_auto_drive(
@@ -6502,6 +7346,7 @@ class InputSystem(System):
                 inventory_state=state,
                 trade_state=trade_state,
                 drone_sheet_state=drone_sheet_state,
+                wire_kit_state=wire_kit_state,
             ):
                 return
             return
@@ -6540,6 +7385,10 @@ class InputSystem(System):
                 help_state["scroll"] = int(help_state.get("scroll", 0)) + 6
             return
 
+        if wire_scene_state.get("open"):
+            self._handle_wire_scene_input(physical_input, zoom_mode)
+            return
+
         if action_menu_state.get("open"):
             self._handle_action_menu_input(physical_input, zoom_mode)
             return
@@ -6554,6 +7403,14 @@ class InputSystem(System):
 
         if drone_sheet_state.get("open"):
             self._handle_drone_sheet_input(physical_input, zoom_mode)
+            return
+
+        if wire_kit_state.get("open"):
+            self._handle_wire_kit_input(physical_input, zoom_mode)
+            return
+
+        if wire_connection_state.get("open"):
+            self._handle_wire_connection_input(physical_input, zoom_mode)
             return
 
         if look_state.get("active"):

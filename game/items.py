@@ -6,6 +6,14 @@ from game.content_warnings import warn_content_fallback
 from game.drone_runtime import PACKED_DRONE_ITEM_ID, normalize_drone_profile, normalize_packed_drone_metadata
 from game.json_metadata import split_object_document
 from game.object_profile_runtime import normalize_object_profile, object_profile_display_text
+from game.wire_runtime import (
+    is_wire_interface_item,
+    is_wire_item,
+    normalize_wire_entry_metadata,
+    normalize_wire_interface_metadata,
+    normalize_wire_interface_profile,
+    normalize_wire_profile,
+)
 
 
 ITEMS_PATH = Path(__file__).resolve().parent / "items.json"
@@ -1234,6 +1242,11 @@ def _normalize_item_catalog_source(source):
             "substance_profile": _normalize_substance_profile(item.get("substance_profile")),
             "lead_profile": _normalize_lead_profile(item.get("lead_profile")),
             "drone_profile": normalize_drone_profile(item.get("drone_profile"), item_id=item_id),
+            "wire_profile": normalize_wire_profile(item.get("wire_profile"), item_id=item_id),
+            "wire_interface_profile": normalize_wire_interface_profile(
+                item.get("wire_interface_profile"),
+                item_id=item_id,
+            ),
             "object_profile": normalize_object_profile(
                 item.get("object_profile"),
                 item_id=item_id,
@@ -1472,6 +1485,18 @@ def normalize_item_instance_metadata(item_id, metadata=None, item_catalog=None):
         merged = _normalize_scratch_ticket_metadata(merged, quantity=1, item_catalog=catalog)
     if str(item_id or "").strip().lower() == PACKED_DRONE_ITEM_ID:
         merged = normalize_packed_drone_metadata(merged, item_catalog=catalog)
+    if is_wire_item(item_id, item_catalog=catalog):
+        merged = normalize_wire_entry_metadata(
+            merged,
+            item_id=item_id,
+            profile=catalog.get(str(item_id or "").strip().lower(), {}).get("wire_profile", {}),
+        )
+    if is_wire_interface_item(item_id, item_catalog=catalog):
+        merged = normalize_wire_interface_metadata(
+            merged,
+            item_id=item_id,
+            profile=catalog.get(str(item_id or "").strip().lower(), {}).get("wire_interface_profile", {}),
+        )
     return merged
 
 

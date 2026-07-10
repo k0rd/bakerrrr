@@ -11,6 +11,12 @@ from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_docume
 from game.lighting import LIGHT_COLOR_PROFILES
 from game.object_profile_runtime import object_profile_validation_errors
 from game.public_content import PUBLIC_STATUS_MODIFIERS
+from game.wire_runtime import (
+    WIRE_INTERFACE_KINDS,
+    WIRE_PROFILE_KINDS,
+    WIRE_QUALITY_TIERS,
+    WIRE_TARGET_CLASSES,
+)
 from game.world_palette import world_palette_keys
 
 
@@ -571,6 +577,174 @@ def _validate_drone_profile(report, source, item_path, profile):
         return
 
 
+def _validate_wire_profile(report, source, item_path, profile):
+    profile_path = item_path + ["wire_profile"]
+    if not _expect_type(report, source, profile_path, profile, dict, "an object"):
+        return
+    kind = profile.get("kind")
+    if not _validate_non_empty_string(report, source, profile_path + ["kind"], kind, field_name="kind"):
+        return
+    kind = str(kind).strip().lower()
+    if kind not in WIRE_PROFILE_KINDS:
+        report.error(source, profile_path + ["kind"], f"kind must be one of {list(WIRE_PROFILE_KINDS)}")
+        return
+
+    if "storage_points" in profile:
+        _validate_int(report, source, profile_path + ["storage_points"], profile.get("storage_points"), minimum=0, field_name="storage_points")
+    if "loadable" in profile and not isinstance(profile.get("loadable"), bool):
+        report.error(source, profile_path + ["loadable"], "loadable must be boolean")
+    if "display_family" in profile:
+        _validate_identifier(report, source, profile_path + ["display_family"], profile.get("display_family"), field_name="display_family")
+    if "default_quality" in profile:
+        quality = str(profile.get("default_quality", "") or "").strip().lower()
+        if quality not in WIRE_QUALITY_TIERS:
+            report.error(source, profile_path + ["default_quality"], f"default_quality must be one of {list(WIRE_QUALITY_TIERS)}")
+
+    if kind == "program":
+        if "program_key" not in profile:
+            report.error(source, profile_path + ["program_key"], "program profile requires program_key")
+        else:
+            _validate_identifier(report, source, profile_path + ["program_key"], profile.get("program_key"), field_name="program_key")
+        if "program_family" in profile:
+            _validate_identifier(report, source, profile_path + ["program_family"], profile.get("program_family"), field_name="program_family")
+        for key in ("ram_cost", "durability_max"):
+            if key in profile:
+                _validate_int(report, source, profile_path + [key], profile.get(key), minimum=1, field_name=key)
+        for key in ("reload_ticks", "noise", "trace_cost", "runs_max"):
+            if key in profile:
+                _validate_int(report, source, profile_path + [key], profile.get(key), minimum=0, field_name=key)
+        if "dangerous" in profile and not isinstance(profile.get("dangerous"), bool):
+            report.error(source, profile_path + ["dangerous"], "dangerous must be boolean")
+        if "capabilities" in profile:
+            _validate_string_list(
+                report,
+                source,
+                profile_path + ["capabilities"],
+                profile.get("capabilities"),
+                field_name="capabilities",
+                allow_scalar=False,
+                require_non_empty=False,
+            )
+        return
+
+    if kind == "data_packet":
+        if "data_family" in profile:
+            _validate_identifier(report, source, profile_path + ["data_family"], profile.get("data_family"), field_name="data_family")
+        if "legality" in profile:
+            _validate_identifier(report, source, profile_path + ["legality"], profile.get("legality"), field_name="legality")
+        if "buyer_tags" in profile:
+            _validate_string_list(
+                report,
+                source,
+                profile_path + ["buyer_tags"],
+                profile.get("buyer_tags"),
+                field_name="buyer_tags",
+                allow_scalar=False,
+                require_non_empty=False,
+            )
+        for key in ("sensitivity", "freshness", "heat_risk"):
+            if key in profile:
+                _validate_int(report, source, profile_path + [key], profile.get(key), minimum=0, field_name=key)
+        return
+
+    if kind == "credential":
+        if "credential_scope" in profile:
+            _validate_identifier(report, source, profile_path + ["credential_scope"], profile.get("credential_scope"), field_name="credential_scope")
+        if "burnable" in profile and not isinstance(profile.get("burnable"), bool):
+            report.error(source, profile_path + ["burnable"], "burnable must be boolean")
+        if "runs_max" in profile:
+            _validate_int(report, source, profile_path + ["runs_max"], profile.get("runs_max"), minimum=0, field_name="runs_max")
+        return
+
+    if kind == "license":
+        if "license_scope" in profile:
+            _validate_identifier(report, source, profile_path + ["license_scope"], profile.get("license_scope"), field_name="license_scope")
+        if "license_source" in profile:
+            _validate_non_empty_string(report, source, profile_path + ["license_source"], profile.get("license_source"), field_name="license_source")
+        return
+
+    if kind == "backup":
+        if "backup_family" in profile:
+            _validate_identifier(report, source, profile_path + ["backup_family"], profile.get("backup_family"), field_name="backup_family")
+        if "restores_corruption" in profile and not isinstance(profile.get("restores_corruption"), bool):
+            report.error(source, profile_path + ["restores_corruption"], "restores_corruption must be boolean")
+        return
+
+    if kind == "trace":
+        if "trace_strength" in profile:
+            _validate_int(report, source, profile_path + ["trace_strength"], profile.get("trace_strength"), minimum=1, field_name="trace_strength")
+        if "source_context" in profile:
+            _validate_non_empty_string(report, source, profile_path + ["source_context"], profile.get("source_context"), field_name="source_context")
+        return
+
+    if kind == "corrupted_file":
+        if "corruption_tags" in profile:
+            _validate_string_list(
+                report,
+                source,
+                profile_path + ["corruption_tags"],
+                profile.get("corruption_tags"),
+                field_name="corruption_tags",
+                allow_scalar=False,
+                require_non_empty=False,
+            )
+        if "source_context" in profile:
+            _validate_non_empty_string(report, source, profile_path + ["source_context"], profile.get("source_context"), field_name="source_context")
+        return
+
+
+def _validate_wire_interface_profile(report, source, item_path, profile):
+    profile_path = item_path + ["wire_interface_profile"]
+    if not _expect_type(report, source, profile_path, profile, dict, "an object"):
+        return
+    kind = profile.get("kind")
+    if not _validate_non_empty_string(report, source, profile_path + ["kind"], kind, field_name="kind"):
+        return
+    kind = str(kind).strip().lower()
+    if kind not in WIRE_INTERFACE_KINDS:
+        report.error(source, profile_path + ["kind"], f"kind must be one of {list(WIRE_INTERFACE_KINDS)}")
+        return
+
+    if "manufacturer" in profile:
+        _validate_non_empty_string(report, source, profile_path + ["manufacturer"], profile.get("manufacturer"), field_name="manufacturer")
+    if "style" in profile:
+        _validate_identifier(report, source, profile_path + ["style"], profile.get("style"), field_name="style")
+    if "supported_target_classes" not in profile:
+        report.error(source, profile_path + ["supported_target_classes"], "interface profile requires supported_target_classes")
+    else:
+        _validate_string_list(
+            report,
+            source,
+            profile_path + ["supported_target_classes"],
+            profile.get("supported_target_classes"),
+            field_name="supported_target_classes",
+            allow_scalar=False,
+            require_non_empty=True,
+        )
+        for idx, target_class in enumerate(profile.get("supported_target_classes") or ()):
+            target_key = str(target_class or "").strip().lower()
+            if target_key not in WIRE_TARGET_CLASSES:
+                report.error(
+                    source,
+                    profile_path + ["supported_target_classes", idx],
+                    f"target class must be one of {list(WIRE_TARGET_CLASSES)}",
+                )
+    for key in ("program_slots", "buffer_size", "range", "panic_eject_delay", "recovery_delay"):
+        if key in profile:
+            _validate_int(report, source, profile_path + [key], profile.get(key), minimum=0, field_name=key)
+    for key in ("warning_rating", "trace_resistance", "signature_leakage", "noise_floor"):
+        if key in profile:
+            _validate_int(report, source, profile_path + [key], profile.get(key), minimum=0, maximum=5, field_name=key)
+    if "shock_risk" in profile:
+        _validate_number(report, source, profile_path + ["shock_risk"], profile.get("shock_risk"), minimum=0, field_name="shock_risk")
+    if "safe_yank" in profile and not isinstance(profile.get("safe_yank"), bool):
+        report.error(source, profile_path + ["safe_yank"], "safe_yank must be boolean")
+    if "default_quality" in profile:
+        quality = str(profile.get("default_quality", "") or "").strip().lower()
+        if quality not in WIRE_QUALITY_TIERS:
+            report.error(source, profile_path + ["default_quality"], f"default_quality must be one of {list(WIRE_QUALITY_TIERS)}")
+
+
 def _validate_items(path, report):
     data, source = _load_object_document(path, report, "an object keyed by item id")
     if data is None:
@@ -610,6 +784,12 @@ def _validate_items(path, report):
 
         if "drone_profile" in item:
             _validate_drone_profile(report, source, item_path, item["drone_profile"])
+
+        if "wire_profile" in item:
+            _validate_wire_profile(report, source, item_path, item["wire_profile"])
+
+        if "wire_interface_profile" in item:
+            _validate_wire_interface_profile(report, source, item_path, item["wire_interface_profile"])
 
         if "object_profile" in item:
             for path_suffix, message in object_profile_validation_errors(item.get("object_profile"), stack_max=stack_max_for_profile):

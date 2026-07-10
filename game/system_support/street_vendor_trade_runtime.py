@@ -12,6 +12,8 @@ from collections.abc import Mapping
 
 from game.components import BehaviorProfile, CreatureIdentity, Inventory, Occupation, OrganizationAffiliations, Position
 from game.drone_distribution import drone_distribution_metadata, drone_street_vendor_item_pool
+from game.wire_distribution import wire_distribution_metadata, wire_street_vendor_item_pool
+from game.wire_data_market import wire_data_street_sell_rows
 from game.item_semantics import item_entry_is_critical_quest_item, item_legal_status as _item_legal_status, item_tags as _item_tags
 from game.items import ITEM_CATALOG, is_credstick_item, item_display_name
 from game.organizations import actor_org_memberships
@@ -284,9 +286,9 @@ def _stock_pool_for_kind(vendor_kind):
     if kind == "drug_pusher":
         return DRUG_STOCK_POOL
     if kind == "vehicle_gun_vendor":
-        return GUN_STOCK_POOL + drone_street_vendor_item_pool(kind)
+        return GUN_STOCK_POOL + drone_street_vendor_item_pool(kind) + wire_street_vendor_item_pool(kind)
     if kind == "gang_fence":
-        return GANG_STOCK_POOL + drone_street_vendor_item_pool(kind)
+        return GANG_STOCK_POOL + drone_street_vendor_item_pool(kind) + wire_street_vendor_item_pool(kind)
     if kind == "alley_market":
         return (
             "lockpick_kit",
@@ -298,7 +300,7 @@ def _stock_pool_for_kind(vendor_kind):
             "tear_gas_canister",
             "holdout_pistol",
             "rust_revolver",
-        ) + drone_street_vendor_item_pool(kind)
+        ) + drone_street_vendor_item_pool(kind) + wire_street_vendor_item_pool(kind)
     if kind == "friend_of_friend":
         return (
             "smoke_tab",
@@ -459,6 +461,7 @@ def street_vendor_sell_rows(sim, contact_eid, player_eid, profile=None):
             "risk_label": "contraband risk" if illegal else "",
             "source_kind": STREET_TRADE_SOURCE_KIND,
         })
+    out.extend(wire_data_street_sell_rows(sim, contact_eid, player_eid, profile=profile))
     return out
 
 
@@ -680,6 +683,14 @@ def ensure_street_vendor_stock(sim, contact_eid, player_eid, profile=None):
                 "stolen": True,
             })
         metadata = drone_distribution_metadata(
+            item_id,
+            metadata,
+            source_context="street_vendor_stock",
+            distribution_context=vendor_kind,
+            seed_token=f"{getattr(sim, 'seed', 0)}:{contact_eid}:{idx}",
+            item_catalog=ITEM_CATALOG,
+        )
+        metadata = wire_distribution_metadata(
             item_id,
             metadata,
             source_context="street_vendor_stock",

@@ -27,6 +27,7 @@ STOREFRONT_ARCHETYPE_HINTS = {
     "clothing_superstore",
     "comms_shop",
     "corner_store",
+    "contractor_office",
     "restaurant",
     "pawn_shop",
     "backroom_clinic",

@@ -2842,6 +2842,49 @@ class DroneWorkshopState:
         ]
 
 
+class WireState:
+    """Player-owned wireware/data storage and future active rig state."""
+
+    def __init__(
+        self,
+        *,
+        kit_entries=None,
+        capacity_points=24,
+        program_slots=2,
+        ram_slots=None,
+        equipped_interface_instance_id=None,
+        active_connection=None,
+        active_scene=None,
+        connection_status="offline",
+        last_wire_feedback="",
+        last_ejection_state=None,
+        schema_version=1,
+    ):
+        self.schema_version = int(schema_version or 1)
+        self.capacity_points = int(max(1, capacity_points or 24))
+        self.program_slots = int(max(0, program_slots or 0))
+        self.kit_entries = [
+            dict(entry)
+            for entry in (kit_entries or ())
+            if isinstance(entry, dict)
+        ]
+        self.ram_slots = [
+            dict(entry)
+            for entry in (ram_slots or ())
+            if isinstance(entry, dict)
+        ][: self.program_slots]
+        self.equipped_interface_instance_id = (
+            str(equipped_interface_instance_id).strip()
+            if equipped_interface_instance_id
+            else None
+        )
+        self.active_connection = dict(active_connection) if isinstance(active_connection, dict) else None
+        self.active_scene = dict(active_scene) if isinstance(active_scene, dict) else None
+        self.connection_status = str(connection_status or "offline").strip().lower() or "offline"
+        self.last_wire_feedback = str(last_wire_feedback or "")
+        self.last_ejection_state = dict(last_ejection_state) if isinstance(last_ejection_state, dict) else None
+
+
 class VehicleState:
     def __init__(
         self,

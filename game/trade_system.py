@@ -20,6 +20,15 @@ from game.drone_distribution import (
     drone_store_item_pool,
     drone_item_base_value,
 )
+from game.wire_distribution import (
+    wire_distribution_metadata,
+    wire_item_base_value,
+    wire_store_item_pool,
+)
+from game.wire_data_market import (
+    sell_wire_data_entry,
+    wire_data_store_sell_rows,
+)
 from game.economy import item_market_bias, item_trade_pressure_bias, store_supply_profile
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor, item_entry_is_critical_quest_item
 from game.items import ITEM_CATALOG
@@ -715,6 +724,26 @@ class TradeSystem(System):
                 ("caff_shot", 10),
                 ("city_pass_token", 12),
                 ("street_ration", 10),
+            ),
+        },
+        "contractor_office": {
+            "min_slots": 3,
+            "max_slots": 6,
+            "buy_mult_lo": 1.0,
+            "buy_mult_hi": 1.36,
+            "sell_ratio": 0.46,
+            "item_pool": (
+                ("pocket_multitool", 18),
+                ("battery_pack", 14),
+                ("scrap_circuit", 14),
+                ("inspection_mirror", 10),
+                ("lockpick_kit", 8),
+                ("glass_cutter", 8),
+                ("hotwire_leads", 6),
+                ("contractor_badge_lanyard", 5),
+                ("city_pass_token", 10),
+                ("caff_shot", 8),
+                ("street_ration", 8),
             ),
         },
         "daycare": {
@@ -1973,6 +2002,10 @@ class TradeSystem(System):
         if drone_pool:
             profile["item_pool"] = tuple(profile.get("item_pool", ())) + tuple(drone_pool)
             profile["max_slots"] = int(max(profile.get("max_slots", 5), min(9, int(profile.get("max_slots", 5)) + 1)))
+        wire_pool = wire_store_item_pool(archetype)
+        if wire_pool:
+            profile["item_pool"] = tuple(profile.get("item_pool", ())) + tuple(wire_pool)
+            profile["max_slots"] = int(max(profile.get("max_slots", 5), min(9, int(profile.get("max_slots", 5)) + 1)))
         return profile
 
     def _is_storefront(self, prop):
@@ -2460,9 +2493,20 @@ class TradeSystem(System):
                 seed_token=seed_token,
                 item_catalog=ITEM_CATALOG,
             )
+            entry_metadata = wire_distribution_metadata(
+                item_id,
+                entry_metadata,
+                source_context="store_stock",
+                distribution_context=archetype,
+                seed_token=seed_token,
+                item_catalog=ITEM_CATALOG,
+            )
             bias = item_market_bias(item_id, market_profile)
             pressure_bias = item_trade_pressure_bias(self.sim, prop, item_id)
-            base = int(max(1, self.ITEM_BASE_VALUES.get(item_id, drone_item_base_value(item_id, default=10))))
+            base = int(max(1, self.ITEM_BASE_VALUES.get(
+                item_id,
+                wire_item_base_value(item_id, default=drone_item_base_value(item_id, default=10)),
+            )))
             buy_price = max(
                 1,
                 int(round(
@@ -2712,12 +2756,10 @@ class TradeSystem(System):
 
     def _trade_sell_candidates(self, inventory, store, terms=None, owner_transfer=False, actor_eid=None, service_eid=None):
         candidates = []
-        if not inventory:
-            return candidates
         store_prop = self.sim.properties.get(store.get("property_id")) if isinstance(store, dict) else None
         actor_eid = self.player_eid if actor_eid is None else actor_eid
 
-        for entry in inventory.items:
+        for entry in getattr(inventory, "items", ()) or ():
             item_id = entry.get("item_id")
             action_label = self._credential_sell_action(
                 entry,
@@ -2778,6 +2820,16 @@ class TradeSystem(System):
                 "trade_pressure_note": interest.get("trade_pressure_note", ""),
                 "trade_pressure_value": float(interest.get("trade_pressure_value", 0.0) or 0.0),
             })
+        if not owner_transfer:
+            candidates.extend(
+                wire_data_store_sell_rows(
+                    self.sim,
+                    actor_eid,
+                    store_prop,
+                    store,
+                    terms=terms,
+                )
+            )
 
         if owner_transfer:
             candidates.sort(key=lambda row: (row["item_id"], row["instance_id"]))
@@ -2848,6 +2900,10 @@ class TradeSystem(System):
                 "trade_pressure_label": row.get("trade_pressure_label", ""),
                 "trade_pressure_note": row.get("trade_pressure_note", ""),
                 "trade_pressure_value": float(row.get("trade_pressure_value", 0.0) or 0.0),
+                "source_container": row.get("source_container", "inventory"),
+                "base_price": row.get("base_price"),
+                "wire_data_family": row.get("wire_data_family", ""),
+                "wire_data_org_context": row.get("wire_data_org_context", ""),
             })
         return rows
 
@@ -3775,6 +3831,59 @@ class TradeSystem(System):
             return False
 
         quantity = int(max(1, choice.get("quantity", 1) or 1))
+        if str(choice.get("source_container", "inventory") or "inventory").strip().lower() == "wire_kit":
+            payout = int(max(1, choice.get("price", 1) or 1))
+            result = sell_wire_data_entry(
+                self.sim,
+                eid,
+                choice.get("instance_id"),
+                price=payout,
+                buyer_context=str(choice.get("trade_pressure_note", "") or choice.get("wire_data_org_context", "") or ""),
+            )
+            if not result.get("ok"):
+                self.sim.emit(Event("trade_sell_blocked", eid=eid, reason=result.get("reason", "remove_failed")))
+                return False
+            removed = dict(result.get("entry") or choice.get("entry") or {})
+            illegal_units = quantity if bool(choice.get("illegal")) else 0
+            if illegal_units > 0:
+                pos = self._position_for(eid)
+                if pos:
+                    score = min(28, 10 + (illegal_units * 4) + (6 if bool(choice.get("desired")) else 0))
+                    _emit_action_offense_event(
+                        self.sim,
+                        eid,
+                        "trade_sell",
+                        pos.x,
+                        pos.y,
+                        pos.z,
+                        context="contraband_use",
+                        score=score,
+                        excluded_observer_eids=(contact_eid,),
+                    )
+            item_id = str(removed.get("item_id", choice.get("item_id", "")) or "").strip().lower()
+            item_name = str(choice.get("item_name") or (removed.get("metadata") or {}).get("display_name") or item_id or "data cache")
+            self.sim.emit(Event(
+                "street_buy_transaction",
+                eid=eid,
+                npc_eid=contact_eid,
+                payout=payout,
+                item_count=1,
+                item_id=item_id,
+                item_name=item_name,
+                illegal_units=int(illegal_units),
+                desired_item_id=str((profile.get("sell_terms") or {}).get("desired_item_id", "") or "").strip().lower(),
+                sold_items=({
+                    "item_id": item_id,
+                    "item_name": item_name,
+                    "quantity": 1,
+                },),
+                credits=int(getattr(assets, "credits", 0) or 0),
+                identified_by_trade=False,
+                source_container="wire_kit",
+                wire_data_family=choice.get("wire_data_family", ""),
+                wire_data_org_context=choice.get("wire_data_org_context", ""),
+            ))
+            return True
         removed = inventory.remove_item(instance_id=choice.get("instance_id"), quantity=quantity)
         if not removed:
             self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="remove_failed"))
@@ -4195,9 +4304,6 @@ class TradeSystem(System):
         if not inventory:
             self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="no_inventory"))
             return False
-        if not inventory.items:
-            self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="inventory_empty"))
-            return False
 
         state = self._trade_ui_state()
         store_prop, service = self._resolve_store(pos, preferred_property_id=state.get("property_id"), radius=2)
@@ -4269,6 +4375,44 @@ class TradeSystem(System):
                 best.get("entry") or {},
                 terms=terms,
             )
+
+        if str(best.get("source_container", "inventory") or "inventory").strip().lower() == "wire_kit":
+            payout = 0 if owner_transfer else int(max(1, best["price"]))
+            result = sell_wire_data_entry(
+                self.sim,
+                eid,
+                best.get("instance_id"),
+                price=payout,
+                buyer_context=str(best.get("trade_pressure_note", "") or ""),
+            )
+            if not result.get("ok"):
+                self.sim.emit(Event("trade_sell_blocked", eid=eid, reason=result.get("reason", "remove_failed")))
+                return False
+            removed = dict(result.get("entry") or best.get("entry") or {})
+            item_name = best.get("item_name") or str((removed.get("metadata") or {}).get("display_name", "") or "Data Cache")
+            self.sim.emit(Event(
+                "trade_sold",
+                eid=eid,
+                property_id=store_prop["id"],
+                store_name=store_prop.get("name", store_prop["id"]),
+                item_id=removed.get("item_id", best.get("item_id", "")),
+                item_name=item_name,
+                quantity=1,
+                price=payout,
+                base_price=int(max(1, best.get("base_price") or payout or 1)),
+                listed=False,
+                stock_now=0,
+                credits=int(getattr(assets, "credits", 0) or 0),
+                owner_transfer=False,
+                transfer_mode="wire_data",
+                contact_source_eid=terms.get("source_eid"),
+                contact_note=terms.get("note", ""),
+                identified_by_trade=False,
+                source_container="wire_kit",
+                wire_data_family=best.get("wire_data_family", ""),
+                wire_data_org_context=best.get("wire_data_org_context", ""),
+            ))
+            return True
 
         removed = inventory.remove_item(instance_id=best["instance_id"], quantity=1)
         if not removed:

@@ -58,6 +58,7 @@ from game.components import (
     Vitality,
     WildlifeSocialState,
     WildlifeBehavior,
+    WireState,
     WeaponLoadout,
     WeaponUseProfile,
 )
@@ -86,6 +87,7 @@ from game.hunting_runtime import hunting_carcasses_at
 from game.flora_runtime import flora_records_in_rect, flora_render_data
 from game.vision_scene_runtime import dream_residue_state, vision_scene_render_state
 from game.ui_theme_runtime import draw_modal_frame, resolve_modal_theme, theme_token
+from game.wire_visuals import wire_scene_theme, wire_visual_for_cell, wire_visual_for_kind
 from ui.text_attrs import A_BOLD, A_DIM, A_REVERSE, A_UNDERLINE
 from game.item_semantics import (
     appraise_item_for_actor,
@@ -2169,6 +2171,351 @@ class RenderSystem(System):
         self.view.draw_text(panel_x + 2, footer_y, _local_clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
         return True
 
+    def _draw_wire_kit_modal(self, wire_kit_ui, *, screen_w, map_h, modal_theme):
+        if not isinstance(wire_kit_ui, dict) or not bool(wire_kit_ui.get("open")):
+            return False
+        screen_w = int(screen_w)
+        map_h = int(map_h)
+        if screen_w < 48 or map_h < 12:
+            return False
+
+        def _local_clip(text, width):
+            text = str(text)
+            width = int(max(0, width))
+            if len(text) <= width:
+                return text
+            if width <= 3:
+                return text[:width]
+            return text[: width - 3] + "..."
+
+        panel_w = min(screen_w - 4, _modal_panel_width(screen_w, fraction=0.72, min_width=58))
+        panel_x = max(0, (screen_w - panel_w) // 2)
+        panel_h = max(12, min(map_h, int(round(map_h * 0.74))))
+        panel_y = max(0, (map_h - panel_h) // 2)
+        body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
+        row_cell_w, row_w = _modal_body_widths(self.view, panel_w, horizontal_padding=4)
+        self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
+
+        self.view.draw_text(panel_x + 2, panel_y, _local_clip(" Wire Kit ", body_w), color=self._theme_color(modal_theme, "title", "objective"))
+        tab = str(wire_kit_ui.get("tab", "kit") or "kit").strip().lower() or "kit"
+        tab_ids = tuple(wire_kit_ui.get("tabs", ()) or ("kit", "pack", "programs", "data", "credentials", "backups", "corrupted"))
+        tab_labels = []
+        for idx, tab_id in enumerate(tab_ids, start=1):
+            label = tab_id.upper() if tab_id == tab else tab_id
+            tab_labels.append(f"{idx}:{label}")
+        self.view.draw_text(panel_x + 2, panel_y + 1, _local_clip("Tabs " + "  ".join(tab_labels), body_w), color=self._theme_color(modal_theme, "muted"))
+
+        status_lines = list(wire_kit_ui.get("status_lines", ()) or ())
+        status_y = panel_y + 2
+        for idx, line in enumerate(status_lines[:3]):
+            self._draw_display_line(panel_x + 2, status_y + idx, _clip_display_line(str(line), body_w), body_cell_w)
+
+        rows = list(wire_kit_ui.get("rows", ()) or [])
+        selected_index = max(0, min(int(wire_kit_ui.get("selected_index", 0) or 0), len(rows) - 1)) if rows else 0
+        body_top = panel_y + 6
+        footer_y = panel_y + panel_h - 2
+        list_h = max(1, footer_y - body_top - 1)
+        display_rows = []
+        row_anchors = []
+        for idx, row in enumerate(rows):
+            label = str(row.get("label", row) if isinstance(row, dict) else row)
+            prefix = "> " if idx == selected_index else "  "
+            row_anchors.append(len(display_rows))
+            wrapped = _wrap_display_lines(prefix + label, row_w, max_lines=2) if label.strip() else [prefix.strip()]
+            display_rows.extend(wrapped)
+        scroll = max(0, int(wire_kit_ui.get("scroll", 0) or 0))
+        if row_anchors and selected_index < len(row_anchors):
+            anchor = row_anchors[selected_index]
+            if anchor < scroll:
+                scroll = anchor
+            elif anchor >= scroll + list_h:
+                scroll = max(0, anchor - list_h + 1)
+        max_scroll = max(0, len(display_rows) - list_h)
+        scroll = max(0, min(scroll, max_scroll))
+        wire_kit_ui["scroll"] = scroll
+        for idx, line in enumerate(display_rows[scroll: scroll + list_h]):
+            self._draw_display_line(panel_x + 2, body_top + idx, _clip_display_line(line, row_w), row_cell_w)
+        if not display_rows:
+            empty = "No wire entries here." if tab != "pack" else "No wireware or data in backpack."
+            self.view.draw_text(panel_x + 2, body_top, _local_clip(empty, body_w), color=self._theme_color(modal_theme, "muted"))
+
+        feedback = str(wire_kit_ui.get("feedback", "") or "").strip()
+        if feedback:
+            self._draw_display_line(panel_x + 2, footer_y - 1, _clip_display_line(feedback, body_w), body_cell_w)
+        hint = f"1-{len(tab_ids)} tabs  Arrows select  Enter/U load-unload  Esc/Q close"
+        self.view.draw_text(panel_x + 2, footer_y, _local_clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
+        return True
+
+    def _draw_wire_connection_modal(self, wire_connection_ui, *, screen_w, map_h, modal_theme):
+        if not isinstance(wire_connection_ui, dict) or not bool(wire_connection_ui.get("open")):
+            return False
+        screen_w = int(screen_w)
+        map_h = int(map_h)
+        if screen_w < 48 or map_h < 12:
+            return False
+
+        def _local_clip(text, width):
+            text = str(text)
+            width = int(max(0, width))
+            if len(text) <= width:
+                return text
+            if width <= 3:
+                return text[:width]
+            return text[: width - 3] + "..."
+
+        panel_w = min(screen_w - 4, _modal_panel_width(screen_w, fraction=0.72, min_width=58))
+        panel_x = max(0, (screen_w - panel_w) // 2)
+        panel_h = max(12, min(map_h, int(round(map_h * 0.68))))
+        panel_y = max(0, (map_h - panel_h) // 2)
+        body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
+        row_cell_w, row_w = _modal_body_widths(self.view, panel_w, horizontal_padding=4)
+        self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
+
+        target_class = str(wire_connection_ui.get("target_class", "wire") or "wire").replace("_", " ")
+        self.view.draw_text(panel_x + 2, panel_y, _local_clip(f" Wire Connection: {target_class} ", body_w), color=self._theme_color(modal_theme, "title", "objective"))
+
+        status_lines = list(wire_connection_ui.get("status_lines", ()) or ())
+        status_y = panel_y + 1
+        for idx, line in enumerate(status_lines[:4]):
+            wrapped = _wrap_display_lines(str(line), body_w, max_lines=1)
+            self._draw_display_line(panel_x + 2, status_y + idx, _clip_display_line(wrapped[0], body_w), body_cell_w)
+
+        rows = list(wire_connection_ui.get("rows", ()) or [])
+        selected_index = max(0, min(int(wire_connection_ui.get("selected_index", 0) or 0), len(rows) - 1)) if rows else 0
+        body_top = panel_y + 6
+        footer_y = panel_y + panel_h - 2
+        list_h = max(1, footer_y - body_top - 1)
+        display_rows = []
+        row_anchors = []
+        for idx, row in enumerate(rows):
+            label = str(row.get("label", row) if isinstance(row, dict) else row)
+            prefix = "> " if idx == selected_index else "  "
+            row_anchors.append(len(display_rows))
+            display_rows.extend(_wrap_display_lines(prefix + label, row_w, max_lines=2))
+        scroll = max(0, int(wire_connection_ui.get("scroll", 0) or 0))
+        if row_anchors and selected_index < len(row_anchors):
+            anchor = row_anchors[selected_index]
+            if anchor < scroll:
+                scroll = anchor
+            elif anchor >= scroll + list_h:
+                scroll = max(0, anchor - list_h + 1)
+        max_scroll = max(0, len(display_rows) - list_h)
+        scroll = max(0, min(scroll, max_scroll))
+        wire_connection_ui["scroll"] = scroll
+        for idx, line in enumerate(display_rows[scroll: scroll + list_h]):
+            self._draw_display_line(panel_x + 2, body_top + idx, _clip_display_line(line, row_w), row_cell_w)
+        if not display_rows:
+            self.view.draw_text(panel_x + 2, body_top, _local_clip("No wire connection rows.", body_w), color=self._theme_color(modal_theme, "muted"))
+
+        feedback = str(wire_connection_ui.get("feedback", "") or "").strip()
+        if feedback:
+            self._draw_display_line(panel_x + 2, footer_y - 1, _clip_display_line(feedback, body_w), body_cell_w)
+        hint = "Arrows select  Enter/U choose  Esc/Q close"
+        self.view.draw_text(panel_x + 2, footer_y, _local_clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
+        return True
+
+    def _draw_wire_scene_modal(self, wire_scene_ui, *, screen_w, map_h, modal_theme):
+        if not isinstance(wire_scene_ui, dict) or not bool(wire_scene_ui.get("open")):
+            return False
+        wire_state = self.sim.ecs.get(WireState).get(self.player_eid)
+        scene = getattr(wire_state, "active_scene", None) if wire_state is not None else None
+        if not isinstance(scene, dict):
+            return False
+        screen_w = int(screen_w)
+        map_h = int(map_h)
+        if screen_w < 54 or map_h < 16:
+            return False
+
+        def _local_clip(text, width):
+            text = str(text)
+            width = int(max(0, width))
+            if len(text) <= width:
+                return text
+            if width <= 3:
+                return text[:width]
+            return text[: width - 3] + "..."
+
+        scene_theme = wire_scene_theme(scene, modal_theme)
+        panel_w = min(screen_w - 4, _modal_panel_width(screen_w, fraction=0.82, min_width=68))
+        panel_x = max(0, (screen_w - panel_w) // 2)
+        panel_h = max(16, min(map_h, int(round(map_h * 0.82))))
+        panel_y = max(0, (map_h - panel_h) // 2)
+        body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
+        self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, scene_theme)
+
+        title = f" Wire Layer: {scene.get('target_name', 'wire target')} "
+        self.view.draw_text(panel_x + 2, panel_y, _local_clip(title, body_w), color=self._theme_color(scene_theme, "title", "objective"))
+
+        bounds = scene.get("bounds") if isinstance(scene.get("bounds"), dict) else {}
+        grid_w = max(1, int(bounds.get("width", 27) or 27))
+        grid_h = max(1, int(bounds.get("height", 15) or 15))
+        map_w = min(grid_w, max(18, body_w // 2))
+        map_top = panel_y + 2
+        map_left = panel_x + 2
+        side_x = map_left + map_w + 3
+        side_w = max(18, body_w - map_w - 3)
+        footer_y = panel_y + panel_h - 2
+        map_rows = min(grid_h, max(1, footer_y - map_top - 1))
+        walkable = {
+            (int(point[0]), int(point[1]))
+            for point in (scene.get("walkable") or ())
+            if isinstance(point, (list, tuple)) and len(point) >= 2
+        }
+        node_by_pos = {}
+        for node in scene.get("nodes", ()) or ():
+            if isinstance(node, dict):
+                node_by_pos[(int(node.get("x", -1)), int(node.get("y", -1)))] = node
+        entity_by_pos = {}
+        for entity in scene.get("wire_entities", ()) or ():
+            if not isinstance(entity, dict) or bool(entity.get("destroyed")):
+                continue
+            try:
+                hp = int(entity.get("hp", 0) or 0)
+                point = (int(entity.get("x", -1)), int(entity.get("y", -1)))
+            except (TypeError, ValueError):
+                continue
+            if hp > 0:
+                entity_by_pos[point] = entity
+        user_by_pos = {}
+        for user in scene.get("wire_users", ()) or ():
+            if not isinstance(user, dict) or not bool(user.get("available", True)):
+                continue
+            try:
+                point = (int(user.get("x", -1)), int(user.get("y", -1)))
+            except (TypeError, ValueError):
+                continue
+            user_by_pos.setdefault(point, user)
+        avatar = scene.get("avatar") if isinstance(scene.get("avatar"), dict) else {}
+        avatar_pos = (int(avatar.get("x", -999)), int(avatar.get("y", -999)))
+
+        def _draw_wire_cell(cell_x, cell_y, visual):
+            glyph = str(visual.get("glyph", " ") or " ")[:1]
+            color = visual.get("color", "default")
+            semantic_id = visual.get("semantic_id")
+            if hasattr(self.view, "draw"):
+                self._draw(cell_x, cell_y, glyph, color=color, semantic_id=semantic_id, layer="ui_overlay", priority=55)
+            else:
+                self.view.draw_text(cell_x, cell_y, glyph, color=color)
+
+        for gy in range(map_rows):
+            for gx in range(map_w):
+                point = (gx, gy)
+                node = node_by_pos.get(point)
+                entity = entity_by_pos.get(point)
+                user = user_by_pos.get(point)
+                if entity and point != avatar_pos:
+                    visual = wire_visual_for_kind(entity.get("visual_kind", "ice_trace_sentinel"))
+                elif user and point != avatar_pos:
+                    visual = wire_visual_for_kind(user.get("visual_kind", "wire_user"))
+                else:
+                    visual = wire_visual_for_cell(
+                        scene,
+                        gx,
+                        gy,
+                        walkable=(point in walkable),
+                        node=node,
+                        avatar=(point == avatar_pos),
+                        width=grid_w,
+                        height=grid_h,
+                    )
+                _draw_wire_cell(map_left + gx, map_top + gy, visual)
+
+        status_lines = list(wire_scene_ui.get("status_lines", ()) or [])
+        if not status_lines:
+            status_lines = [
+                f"Layer: {scene.get('target_class', 'wire').replace('_', ' ')}",
+                f"Interface: {scene.get('interface_name', 'interface')}",
+            ]
+        side_y = map_top
+        theme_label = "wire"
+        interface_theme = scene.get("interface_theme") if isinstance(scene.get("interface_theme"), dict) else {}
+        if interface_theme:
+            theme_label = str(interface_theme.get("label", theme_label) or theme_label)
+        dialogue = wire_scene_ui.get("wire_dialogue") if isinstance(wire_scene_ui.get("wire_dialogue"), dict) else {}
+        dialogue_open = bool(dialogue.get("open"))
+        if dialogue_open:
+            panel_label = "WIRE DIALOGUE"
+        else:
+            panel_label = "PROGRAMS" if bool(wire_scene_ui.get("program_panel")) else f"{theme_label} HUD"
+        self.view.draw_text(side_x, side_y, _local_clip(panel_label, side_w), color=self._theme_color(scene_theme, "title", "objective"))
+        side_y += 1
+        if dialogue_open:
+            header = f"{dialogue.get('user_label', 'wire user')} / {dialogue.get('wire_handle', 'handle')}"
+            for line in (
+                header,
+                f"Link: {dialogue.get('provenance_kind', 'unknown')} / {dialogue.get('link_state', 'unknown')}",
+                str(dialogue.get("last_response", "")),
+            ):
+                if not line:
+                    continue
+                wrapped = _wrap_display_lines(str(line), side_w, max_lines=2)
+                for part in wrapped:
+                    if side_y >= footer_y - 2:
+                        break
+                    self._draw_display_line(side_x, side_y, _clip_display_line(part, side_w), body_cell_w)
+                    side_y += 1
+            side_y += 1
+            rows = list(dialogue.get("rows", ()) or [])
+            selected_dialogue = int(wire_scene_ui.get("selected_dialogue_index", 0) or 0)
+            max_rows = max(1, footer_y - side_y - 2)
+            for idx, row in enumerate(rows[:max_rows]):
+                prefix = "> " if idx == selected_dialogue else "  "
+                wrapped = _wrap_display_lines(prefix + str(row.get("label", "topic")), side_w, max_lines=1)
+                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), body_cell_w)
+                side_y += 1
+        elif bool(wire_scene_ui.get("program_panel")):
+            program_rows = list(wire_scene_ui.get("program_rows", ()) or [])
+            target_rows = list(wire_scene_ui.get("target_rows", ()) or [])
+            selected_program = int(wire_scene_ui.get("selected_program_index", 0) or 0)
+            selected_target = int(wire_scene_ui.get("selected_target_index", 0) or 0)
+            self.view.draw_text(side_x, side_y, _local_clip("RAM", side_w), color=self._theme_color(scene_theme, "title", "objective"))
+            side_y += 1
+            max_program_rows = max(1, min(5, footer_y - side_y - 6))
+            if not program_rows:
+                self._draw_display_line(side_x, side_y, "L loads the first fitting kit program", body_cell_w)
+                side_y += 1
+            for idx, row in enumerate(program_rows[:max_program_rows]):
+                prefix = "> " if idx == selected_program else "  "
+                wrapped = _wrap_display_lines(prefix + str(row.get("label", "program")), side_w, max_lines=1)
+                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), body_cell_w)
+                side_y += 1
+            side_y += 1
+            self.view.draw_text(side_x, side_y, _local_clip("Target", side_w), color=self._theme_color(scene_theme, "title", "objective"))
+            side_y += 1
+            max_target_rows = max(1, min(5, footer_y - side_y - 2))
+            for idx, row in enumerate(target_rows[:max_target_rows]):
+                prefix = "> " if idx == selected_target else "  "
+                wrapped = _wrap_display_lines(prefix + str(row.get("label", "target")), side_w, max_lines=1)
+                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), body_cell_w)
+                side_y += 1
+        else:
+            for line in status_lines[:7]:
+                wrapped = _wrap_display_lines(str(line), side_w, max_lines=1)
+                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), body_cell_w)
+                side_y += 1
+            side_y += 1
+            self.view.draw_text(side_x, side_y, _local_clip("Read", side_w), color=self._theme_color(scene_theme, "title", "objective"))
+            side_y += 1
+            read_lines = list(wire_scene_ui.get("read_lines", ()) or scene.get("last_read_lines", ()) or ())
+            max_read_lines = max(1, footer_y - side_y - 2)
+            display_lines = []
+            for raw in read_lines:
+                display_lines.extend(_wrap_display_lines(str(raw), side_w, max_lines=2))
+            for idx, line in enumerate(display_lines[:max_read_lines]):
+                self._draw_display_line(side_x, side_y + idx, _clip_display_line(line, side_w), body_cell_w)
+
+        feedback = str(wire_scene_ui.get("feedback", "") or scene.get("last_feedback", "") or "").strip()
+        if feedback:
+            self._draw_display_line(panel_x + 2, footer_y - 1, _clip_display_line(feedback, body_w), body_cell_w)
+        if dialogue_open:
+            hint = "Up/Down topic  Enter choose  Esc back"
+        elif bool(wire_scene_ui.get("program_panel")):
+            hint = "Up/Down program  Left/Right target  Enter/R run  L load  U unload  Esc back"
+        else:
+            hint = "Move avatar  5/Space wait  Enter/I/X read  R programs  P panic  Esc/Q disconnect"
+        self.view.draw_text(panel_x + 2, footer_y, _local_clip(hint, body_w), color=self._theme_color(scene_theme, "footer"))
+        return True
+
     def _dialog_header_line(self, dialog_ui):
         dialog_ui = dialog_ui if isinstance(dialog_ui, dict) else {}
         title = str(dialog_ui.get("title", "Conversation")).strip() or "Conversation"
@@ -2325,6 +2672,25 @@ class RenderSystem(System):
             "rows": [],
             "feedback": "",
         })
+        wire_kit_ui = getattr(self.sim, "wire_kit_ui", {
+            "open": False,
+            "tab": "kit",
+            "rows": [],
+            "status_lines": [],
+            "feedback": "",
+        })
+        wire_connection_ui = getattr(self.sim, "wire_connection_ui", {
+            "open": False,
+            "rows": [],
+            "status_lines": [],
+            "feedback": "",
+        })
+        wire_scene_ui = getattr(self.sim, "wire_scene_ui", {
+            "open": False,
+            "status_lines": [],
+            "read_lines": [],
+            "feedback": "",
+        })
         character_ui = getattr(self.sim, "character_ui", {
             "open": False,
             "title": "Character Sheet",
@@ -2353,6 +2719,9 @@ class RenderSystem(System):
                 action_menu_ui,
                 drone_command_ui,
                 drone_sheet_ui,
+                wire_kit_ui,
+                wire_connection_ui,
+                wire_scene_ui,
                 help_ui,
                 character_ui,
                 report_ui,
@@ -4179,6 +4548,24 @@ class RenderSystem(System):
         )
         self._draw_drone_sheet_modal(
             drone_sheet_ui,
+            screen_w=screen_w,
+            map_h=map_h,
+            modal_theme=modal_theme,
+        )
+        self._draw_wire_kit_modal(
+            wire_kit_ui,
+            screen_w=screen_w,
+            map_h=map_h,
+            modal_theme=modal_theme,
+        )
+        self._draw_wire_connection_modal(
+            wire_connection_ui,
+            screen_w=screen_w,
+            map_h=map_h,
+            modal_theme=modal_theme,
+        )
+        self._draw_wire_scene_modal(
+            wire_scene_ui,
             screen_w=screen_w,
             map_h=map_h,
             modal_theme=modal_theme,

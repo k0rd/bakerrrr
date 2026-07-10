@@ -3875,6 +3875,717 @@
     },
     "effects": []
   },
+  "cheap_deck": {
+    "name": "Cheap Deck",
+    "glyph": "=",
+    "stack_max": 1,
+    "category": "wire_interface",
+    "tags": [
+      "wire",
+      "interface",
+      "deck",
+      "electronics",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "wire_interface_profile": {
+      "kind": "deck",
+      "manufacturer": "streetline",
+      "style": "plain",
+      "supported_target_classes": [
+        "access_panel",
+        "service_terminal",
+        "generic_wire"
+      ],
+      "program_slots": 2,
+      "buffer_size": 6,
+      "warning_rating": 2,
+      "trace_resistance": 1,
+      "signature_leakage": 2,
+      "range": 1,
+      "safe_yank": true,
+      "panic_eject_delay": 2,
+      "recovery_delay": 2,
+      "shock_risk": 1,
+      "noise_floor": 2,
+      "default_quality": "standard"
+    },
+    "effects": []
+  },
+  "wetwire_jack": {
+    "name": "Wetwire Jack",
+    "glyph": "=",
+    "stack_max": 1,
+    "category": "wire_interface",
+    "tags": [
+      "wire",
+      "interface",
+      "wetwire",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_interface_profile": {
+      "kind": "wetwire",
+      "manufacturer": "neuroline",
+      "style": "immersive",
+      "supported_target_classes": [
+        "access_panel",
+        "service_terminal",
+        "generic_wire"
+      ],
+      "program_slots": 3,
+      "buffer_size": 8,
+      "warning_rating": 3,
+      "trace_resistance": 2,
+      "signature_leakage": 2,
+      "range": 1,
+      "safe_yank": false,
+      "panic_eject_delay": 1,
+      "recovery_delay": 3,
+      "shock_risk": 2,
+      "noise_floor": 1,
+      "default_quality": "good"
+    },
+    "effects": []
+  },
+  "skin_contact_rig": {
+    "name": "Skin Contact Rig",
+    "glyph": "=",
+    "stack_max": 1,
+    "category": "wire_interface",
+    "tags": [
+      "wire",
+      "interface",
+      "rig",
+      "electronics",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "wire_interface_profile": {
+      "kind": "skin_rig",
+      "manufacturer": "civictek",
+      "style": "skin",
+      "supported_target_classes": [
+        "access_panel",
+        "service_terminal"
+      ],
+      "program_slots": 2,
+      "buffer_size": 5,
+      "warning_rating": 2,
+      "trace_resistance": 1,
+      "signature_leakage": 1,
+      "range": 1,
+      "safe_yank": true,
+      "panic_eject_delay": 1,
+      "recovery_delay": 1,
+      "shock_risk": 1,
+      "noise_floor": 2,
+      "default_quality": "standard"
+    },
+    "effects": []
+  },
+  "corp_interface_cable": {
+    "name": "Corp Interface Cable",
+    "glyph": "=",
+    "stack_max": 1,
+    "category": "wire_interface",
+    "tags": [
+      "wire",
+      "interface",
+      "cable",
+      "corporate",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_interface_profile": {
+      "kind": "interface_cable",
+      "manufacturer": "omnicorp",
+      "style": "corporate",
+      "supported_target_classes": [
+        "access_panel",
+        "service_terminal",
+        "generic_wire"
+      ],
+      "program_slots": 4,
+      "buffer_size": 10,
+      "warning_rating": 4,
+      "trace_resistance": 3,
+      "signature_leakage": 4,
+      "range": 1,
+      "safe_yank": true,
+      "panic_eject_delay": 1,
+      "recovery_delay": 1,
+      "shock_risk": 1,
+      "noise_floor": 0,
+      "default_quality": "good"
+    },
+    "effects": []
+  },
+  "cracked_service_dongle": {
+    "name": "Cracked Service Dongle",
+    "glyph": "=",
+    "stack_max": 1,
+    "category": "wire_interface",
+    "tags": [
+      "wire",
+      "interface",
+      "dongle",
+      "service",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "wire_interface_profile": {
+      "kind": "service_dongle",
+      "manufacturer": "unknown",
+      "style": "cracked",
+      "supported_target_classes": [
+        "access_panel",
+        "service_terminal"
+      ],
+      "program_slots": 2,
+      "buffer_size": 4,
+      "warning_rating": 1,
+      "trace_resistance": 1,
+      "signature_leakage": 3,
+      "range": 1,
+      "safe_yank": false,
+      "panic_eject_delay": 3,
+      "recovery_delay": 3,
+      "shock_risk": 2,
+      "noise_floor": 4,
+      "default_quality": "poor"
+    },
+    "effects": []
+  },
+  "drone_radio_bridge": {
+    "name": "Drone Radio Bridge",
+    "glyph": "=",
+    "stack_max": 1,
+    "category": "wire_interface",
+    "tags": [
+      "wire",
+      "interface",
+      "drone",
+      "radio",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_interface_profile": {
+      "kind": "drone_bridge",
+      "manufacturer": "relaytech",
+      "style": "radio",
+      "supported_target_classes": [
+        "drone_radio"
+      ],
+      "program_slots": 2,
+      "buffer_size": 6,
+      "warning_rating": 2,
+      "trace_resistance": 1,
+      "signature_leakage": 3,
+      "range": 8,
+      "safe_yank": true,
+      "panic_eject_delay": 2,
+      "recovery_delay": 2,
+      "shock_risk": 0,
+      "noise_floor": 3,
+      "default_quality": "standard"
+    },
+    "effects": []
+  },
+  "wire_talk_program": {
+    "name": "Talk Program",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "communication",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "talk",
+      "program_family": "social",
+      "storage_points": 2,
+      "ram_cost": 1,
+      "reload_ticks": 1,
+      "noise": 1,
+      "trace_cost": 1,
+      "durability_max": 8,
+      "runs_max": 0,
+      "capabilities": [
+        "talk",
+        "wire_dialogue"
+      ]
+    },
+    "effects": []
+  },
+  "wire_route_probe_program": {
+    "name": "Route Probe",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "scanner",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "route_probe",
+      "program_family": "scanner",
+      "storage_points": 3,
+      "ram_cost": 1,
+      "reload_ticks": 2,
+      "noise": 2,
+      "trace_cost": 2,
+      "durability_max": 6,
+      "runs_max": 0,
+      "capabilities": [
+        "scan",
+        "route_probe"
+      ]
+    },
+    "effects": []
+  },
+  "wire_door_latch_program": {
+    "name": "Door Latch Program",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "access",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "door_latch",
+      "program_family": "access",
+      "storage_points": 4,
+      "ram_cost": 2,
+      "reload_ticks": 3,
+      "noise": 4,
+      "trace_cost": 5,
+      "durability_max": 5,
+      "runs_max": 0,
+      "dangerous": true,
+      "capabilities": [
+        "door_access",
+        "tamper"
+      ]
+    },
+    "effects": []
+  },
+  "wire_camera_loop_program": {
+    "name": "Camera Loop Program",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "surveillance",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "camera_loop",
+      "program_family": "surveillance",
+      "storage_points": 4,
+      "ram_cost": 2,
+      "reload_ticks": 3,
+      "noise": 3,
+      "trace_cost": 4,
+      "durability_max": 5,
+      "runs_max": 0,
+      "dangerous": true,
+      "capabilities": [
+        "camera",
+        "loop"
+      ]
+    },
+    "effects": []
+  },
+  "wire_data_siphon_shell_program": {
+    "name": "Data Siphon Shell",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "data",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "data_siphon_shell",
+      "program_family": "data",
+      "storage_points": 4,
+      "ram_cost": 2,
+      "reload_ticks": 3,
+      "noise": 4,
+      "trace_cost": 5,
+      "durability_max": 5,
+      "runs_max": 0,
+      "dangerous": true,
+      "capabilities": [
+        "data",
+        "siphon"
+      ]
+    },
+    "effects": []
+  },
+  "wire_spike_program": {
+    "name": "Spike Program",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "attack",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "spike",
+      "program_family": "attack",
+      "storage_points": 3,
+      "ram_cost": 1,
+      "reload_ticks": 2,
+      "noise": 3,
+      "trace_cost": 3,
+      "durability_max": 6,
+      "runs_max": 0,
+      "dangerous": true,
+      "capabilities": [
+        "attack",
+        "ice_damage"
+      ]
+    },
+    "effects": []
+  },
+  "wire_ice_cutter_program": {
+    "name": "ICE Cutter",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "attack",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "ice_cutter",
+      "program_family": "attack",
+      "storage_points": 4,
+      "ram_cost": 2,
+      "reload_ticks": 3,
+      "noise": 3,
+      "trace_cost": 3,
+      "durability_max": 6,
+      "runs_max": 0,
+      "dangerous": true,
+      "capabilities": [
+        "attack",
+        "ice_cutter"
+      ]
+    },
+    "effects": []
+  },
+  "wire_signal_cloak_program": {
+    "name": "Signal Cloak",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "defense",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "signal_cloak",
+      "program_family": "defense",
+      "storage_points": 3,
+      "ram_cost": 1,
+      "reload_ticks": 4,
+      "noise": 1,
+      "trace_cost": 1,
+      "durability_max": 6,
+      "runs_max": 0,
+      "capabilities": [
+        "cloak",
+        "trace_reduction"
+      ]
+    },
+    "effects": []
+  },
+  "wire_panic_eject_program": {
+    "name": "Panic Eject",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "defense",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "panic_eject",
+      "program_family": "defense",
+      "storage_points": 2,
+      "ram_cost": 1,
+      "reload_ticks": 1,
+      "noise": 1,
+      "trace_cost": 1,
+      "durability_max": 4,
+      "runs_max": 0,
+      "capabilities": [
+        "panic_eject",
+        "defense"
+      ]
+    },
+    "effects": []
+  },
+  "wire_checksum_ward_program": {
+    "name": "Checksum Ward",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "defense",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "checksum_ward",
+      "program_family": "defense",
+      "storage_points": 3,
+      "ram_cost": 1,
+      "reload_ticks": 3,
+      "noise": 1,
+      "trace_cost": 1,
+      "durability_max": 5,
+      "runs_max": 0,
+      "capabilities": [
+        "checksum",
+        "corruption_defense"
+      ]
+    },
+    "effects": []
+  },
+  "wire_trace_scrubber_program": {
+    "name": "Trace Scrubber",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "defense",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "trace_scrubber",
+      "program_family": "defense",
+      "storage_points": 3,
+      "ram_cost": 1,
+      "reload_ticks": 2,
+      "noise": 1,
+      "trace_cost": 0,
+      "durability_max": 6,
+      "runs_max": 0,
+      "capabilities": [
+        "trace_reduction",
+        "defense"
+      ]
+    },
+    "effects": []
+  },
+  "wire_sacrificial_shell_program": {
+    "name": "Sacrificial Shell",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "disposable",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "sacrificial_shell",
+      "program_family": "defense",
+      "storage_points": 2,
+      "ram_cost": 1,
+      "reload_ticks": 1,
+      "noise": 2,
+      "trace_cost": 1,
+      "durability_max": 2,
+      "runs_max": 1,
+      "capabilities": [
+        "decoy",
+        "corruptor_bait"
+      ]
+    },
+    "effects": []
+  },
+  "wire_data_cache": {
+    "name": "Data Cache",
+    "glyph": ":",
+    "stack_max": 1,
+    "category": "wire_data",
+    "tags": [
+      "wire",
+      "data",
+      "packet",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_profile": {
+      "kind": "data_packet",
+      "data_family": "general",
+      "storage_points": 2,
+      "sensitivity": 1,
+      "freshness": 1,
+      "heat_risk": 1,
+      "legality": "restricted",
+      "buyer_tags": [
+        "illicit_buyer"
+      ]
+    },
+    "effects": []
+  },
+  "wire_access_key": {
+    "name": "Wire Access Key",
+    "glyph": "=",
+    "stack_max": 1,
+    "category": "credential",
+    "tags": [
+      "wire",
+      "credential",
+      "access",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_profile": {
+      "kind": "credential",
+      "credential_scope": "local",
+      "storage_points": 1,
+      "burnable": true,
+      "runs_max": 1
+    },
+    "effects": []
+  },
+  "wire_license_key": {
+    "name": "Wire License Key",
+    "glyph": "=",
+    "stack_max": 1,
+    "category": "credential",
+    "tags": [
+      "wire",
+      "license",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "wire_profile": {
+      "kind": "license",
+      "license_scope": "program",
+      "license_source": "unknown",
+      "storage_points": 1
+    },
+    "effects": []
+  },
+  "wire_backup_image": {
+    "name": "Wire Backup Image",
+    "glyph": ":",
+    "stack_max": 1,
+    "category": "wire_data",
+    "tags": [
+      "wire",
+      "backup",
+      "data",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "wire_profile": {
+      "kind": "backup",
+      "backup_family": "program",
+      "storage_points": 3,
+      "restores_corruption": true
+    },
+    "effects": []
+  },
+  "wire_trace_fragment": {
+    "name": "Trace Fragment",
+    "glyph": ":",
+    "stack_max": 1,
+    "category": "wire_data",
+    "tags": [
+      "wire",
+      "trace",
+      "data",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "wire_profile": {
+      "kind": "trace",
+      "storage_points": 1,
+      "trace_strength": 1,
+      "source_context": "trace_fragment"
+    },
+    "effects": []
+  },
+  "wire_corrupted_file": {
+    "name": "Corrupted File",
+    "glyph": ":",
+    "stack_max": 1,
+    "category": "wire_data",
+    "tags": [
+      "wire",
+      "corrupted",
+      "data",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "wire_profile": {
+      "kind": "corrupted_file",
+      "storage_points": 1,
+      "corruption_tags": [
+        "unknown",
+        "unstable"
+      ],
+      "source_context": "corruption"
+    },
+    "effects": []
+  },
   "cheap_whiskey": {
     "name": "Cheap Whiskey",
     "glyph": "!",

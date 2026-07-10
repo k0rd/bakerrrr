@@ -538,6 +538,32 @@ class EventLogSystem(System):
         self.sim.events.subscribe("drone_paint_changed", self.on_drone_paint_changed)
         self.sim.events.subscribe("drone_workshop_part_stowed", self.on_drone_workshop_part_stowed)
         self.sim.events.subscribe("drone_workshop_part_moved", self.on_drone_workshop_part_moved)
+        self.sim.events.subscribe("wire_scene_entered", self.on_wire_scene_entered)
+        self.sim.events.subscribe("wire_scene_moved", self.on_wire_scene_moved)
+        self.sim.events.subscribe("wire_scene_move_blocked", self.on_wire_scene_move_blocked)
+        self.sim.events.subscribe("wire_scene_read", self.on_wire_scene_read)
+        self.sim.events.subscribe("wire_scene_waited", self.on_wire_scene_waited)
+        self.sim.events.subscribe("wire_scene_panic_exit", self.on_wire_scene_panic_exit)
+        self.sim.events.subscribe("wire_scene_exited", self.on_wire_scene_exited)
+        self.sim.events.subscribe("wire_program_loaded", self.on_wire_program_loaded)
+        self.sim.events.subscribe("wire_program_unloaded", self.on_wire_program_unloaded)
+        self.sim.events.subscribe("wire_program_run", self.on_wire_program_run)
+        self.sim.events.subscribe("wire_program_blocked", self.on_wire_program_blocked)
+        self.sim.events.subscribe("wire_ice_acted", self.on_wire_ice_acted)
+        self.sim.events.subscribe("wire_ice_damaged", self.on_wire_ice_damaged)
+        self.sim.events.subscribe("wire_ice_destroyed", self.on_wire_ice_destroyed)
+        self.sim.events.subscribe("wire_trace_changed", self.on_wire_trace_changed)
+        self.sim.events.subscribe("wire_forced_eject", self.on_wire_forced_eject)
+        self.sim.events.subscribe("wire_panic_eject", self.on_wire_panic_eject)
+        self.sim.events.subscribe("wire_program_corrupted", self.on_wire_program_corrupted)
+        self.sim.events.subscribe("wire_ram_reset", self.on_wire_ram_reset)
+        self.sim.events.subscribe("wire_physical_effect_applied", self.on_wire_physical_effect_applied)
+        self.sim.events.subscribe("wire_security_logged", self.on_wire_security_logged)
+        self.sim.events.subscribe("wire_security_reported", self.on_wire_security_reported)
+        self.sim.events.subscribe("wire_network_locked", self.on_wire_network_locked)
+        self.sim.events.subscribe("wire_recovery_started", self.on_wire_recovery_started)
+        self.sim.events.subscribe("wire_body_damage_interrupt", self.on_wire_body_damage_interrupt)
+        self.sim.events.subscribe("wire_player_woke", self.on_wire_player_woke)
         self.sim.events.subscribe("drone_workshop_part_dropped", self.on_drone_workshop_part_dropped)
         self.sim.events.subscribe("drone_workshop_drone_packed", self.on_drone_workshop_drone_packed)
         self.sim.events.subscribe("aerosol_trap_placed", self.on_aerosol_trap_placed)
@@ -4727,6 +4753,213 @@ class EventLogSystem(System):
             "invalid_paint_key": "That paint channel is not available.",
         }
         _log_player_feedback(self.sim, messages.get(reason, f"{drone_label} cannot be managed right now."), kind="interaction")
+
+    def on_wire_scene_entered(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        target = str(event.data.get("target_name", "wire target") or "wire target").strip()
+        _log_player_feedback(self.sim, f"Wire layer opened for {target}.", kind="interaction")
+
+    def on_wire_scene_moved(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        node_label = str(event.data.get("node_label", "") or "").strip()
+        if node_label:
+            _log_player_feedback(self.sim, f"Wire avatar reaches {node_label}.", kind="interaction", dedupe_window=2)
+        else:
+            _log_player_feedback(self.sim, "Wire avatar moves through the local layer.", kind="interaction", dedupe_window=2)
+
+    def on_wire_scene_move_blocked(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        reason = str(event.data.get("reason", "blocked") or "blocked").strip().lower()
+        messages = {
+            "bounds": "The local layer ends there.",
+            "closed_route": "No wire route resolves there.",
+            "invalid_step": "The wire avatar needs one cardinal step.",
+            "missing_scene": "No active wire layer responds.",
+            "body_moved_away": "The connection is too far from your body.",
+            "body_floor_changed": "The connection drops as your body changes floors.",
+            "target_unloaded": "The target fixture drops out of signal.",
+            "connection_lost": "The wire connection is gone.",
+        }
+        _log_player_feedback(self.sim, messages.get(reason, "Wire movement blocked."), kind="interaction")
+
+    def on_wire_scene_read(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        node_label = str(event.data.get("node_label", "node") or "node").strip()
+        _log_player_feedback(self.sim, f"Wire read: {node_label}.", kind="interaction", dedupe_window=2)
+
+    def on_wire_scene_waited(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        _log_player_feedback(self.sim, "You hold the wire connection open.", kind="interaction", dedupe_window=2)
+
+    def on_wire_scene_panic_exit(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        _log_player_feedback(self.sim, "Panic exit dumps the wire layer.", kind="danger")
+
+    def on_wire_scene_exited(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        reason = str(event.data.get("reason", "manual") or "manual").strip().lower()
+        if reason == "panic":
+            return
+        if reason in {"manual", "disconnect"}:
+            _log_player_feedback(self.sim, "Wire layer closed.", kind="interaction")
+        else:
+            _log_player_feedback(self.sim, f"Wire layer closed: {reason.replace('_', ' ')}.", kind="interaction")
+
+    def on_wire_program_loaded(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        name = str(event.data.get("program_name", "program") or "program").strip()
+        _log_player_feedback(self.sim, f"Loaded {name} into RAM.", kind="interaction")
+
+    def on_wire_program_unloaded(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        name = str(event.data.get("program_name", "program") or "program").strip()
+        _log_player_feedback(self.sim, f"Unloaded {name} from RAM.", kind="interaction")
+
+    def on_wire_program_run(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        feedback = str(event.data.get("feedback", "") or "").strip()
+        name = str(event.data.get("program_name", "program") or "program").strip()
+        _log_player_feedback(self.sim, feedback or f"{name} runs.", kind="interaction")
+
+    def on_wire_program_blocked(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        reason = str(event.data.get("reason", "blocked") or "blocked").strip().lower()
+        messages = {
+            "no_loaded_program": "No program is loaded in RAM.",
+            "program_reloading": "That program is still reloading.",
+            "program_corrupted": "That program is too corrupted to run.",
+            "program_spent": "That program image is spent.",
+            "missing_ice_target": "No ICE target is selected.",
+            "missing_node_target": "No node target is selected.",
+            "wrong_node_type": "That program cannot use this node.",
+            "target_out_of_range": "That ICE is out of program range.",
+            "clean_exit_blocked": "Quarantine ICE blocks a clean disconnect.",
+            "ram_full": "No RAM room is available for that program.",
+            "no_program_available": "No unloaded wire program is available.",
+        }
+        _log_player_feedback(self.sim, messages.get(reason, f"Wire program blocked: {reason.replace('_', ' ')}."), kind="warning")
+
+    def on_wire_ice_acted(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        label = str(event.data.get("ice_label", "ICE") or "ICE").strip()
+        _log_player_feedback(self.sim, f"{label} acts in the wire.", kind="warning", dedupe_window=2)
+
+    def on_wire_ice_damaged(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        label = str(event.data.get("ice_label", "ICE") or "ICE").strip()
+        damage = _int_or_default(event.data.get("damage"), 0)
+        hp = _int_or_default(event.data.get("hp"), 0)
+        _log_player_feedback(self.sim, f"{label} takes {damage} signal damage ({hp} integrity).", kind="interaction")
+
+    def on_wire_ice_destroyed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        label = str(event.data.get("ice_label", "ICE") or "ICE").strip()
+        _log_player_feedback(self.sim, f"{label} collapses out of the layer.", kind="interaction")
+
+    def on_wire_trace_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        delta = _int_or_default(event.data.get("delta"), 0)
+        after = _int_or_default(event.data.get("after"), 0)
+        if delta > 0:
+            _log_player_feedback(self.sim, f"Trace rises to {after}.", kind="warning", dedupe_window=2)
+
+    def on_wire_forced_eject(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        reason = str(event.data.get("reason", "trace") or "trace").strip().lower()
+        _log_player_feedback(self.sim, f"Wire layer forces eject: {reason}.", kind="danger")
+
+    def on_wire_panic_eject(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        _log_player_feedback(self.sim, "Panic eject program throws the link clear.", kind="danger")
+
+    def on_wire_program_corrupted(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if bool(event.data.get("absorbed")):
+            _log_player_feedback(self.sim, "Checksum ward absorbs the corruption.", kind="interaction")
+            return
+        name = str(event.data.get("program_name", "program") or "program").strip()
+        _log_player_feedback(self.sim, f"{name} is scarred by ICE corruption.", kind="warning")
+
+    def on_wire_ram_reset(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if bool(event.data.get("absorbed")):
+            _log_player_feedback(self.sim, "Checksum ward absorbs the RAM reset.", kind="interaction")
+            return
+        name = str(event.data.get("program_name", "program") or "program").strip()
+        _log_player_feedback(self.sim, f"{name} is forced back into reload.", kind="warning")
+
+    def on_wire_physical_effect_applied(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        feedback = str(event.data.get("feedback", "") or "").strip()
+        program = str(event.data.get("program_key", "program") or "program").replace("_", " ")
+        _log_player_feedback(self.sim, feedback or f"{program.title()} touches the real site.", kind="warning")
+
+    def on_wire_security_logged(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        label = str(event.data.get("label", "logged") or "logged").strip()
+        after = _int_or_default(event.data.get("after"), 1)
+        _log_player_feedback(self.sim, f"Network security rises to {after} {label}.", kind="warning", dedupe_window=2)
+
+    def on_wire_security_reported(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        _log_player_feedback(self.sim, "Trace report reaches the network owner.", kind="danger")
+
+    def on_wire_network_locked(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        remaining = _int_or_default(event.data.get("remaining"), 0)
+        suffix = f" for {remaining} ticks" if remaining > 0 else ""
+        _log_player_feedback(self.sim, f"Network locks out the interface{suffix}.", kind="danger")
+
+    def on_wire_recovery_started(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        delay = _int_or_default(event.data.get("delay"), 0)
+        _log_player_feedback(self.sim, f"Wire disruption needs {delay} ticks to clear.", kind="danger")
+
+    def on_wire_body_damage_interrupt(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        multiplier = _int_or_default(event.data.get("damage_multiplier"), 2)
+        extra = _int_or_default(event.data.get("extra_damage"), 0)
+        _log_player_feedback(self.sim, f"Physical damage yanks the wire link ({multiplier}x total hit, +{extra} disruption).", kind="danger")
+
+    def on_wire_player_woke(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        source = str(event.data.get("source_kind", "signal") or "signal").replace("_", " ")
+        damage = _int_or_default(event.data.get("damage"), 0)
+        suffix = f" with {damage} disruption damage" if damage > 0 else ""
+        _log_player_feedback(self.sim, f"{source.title()} wakes you out of the wire{suffix}.", kind="danger")
 
     def on_drone_cargo_transferred(self, event):
         eid = event.data.get("eid") or event.data.get("controller_eid")

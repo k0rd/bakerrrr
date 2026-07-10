@@ -13,6 +13,7 @@ from game.components import NPCSocial, PlayerAssets
 from game.drone_runtime import drone_profile_for_item
 from game.economy import item_trade_pressure_bias
 from game.items import ITEM_CATALOG
+from game.wire_runtime import wire_profile_for_item
 
 
 INTEREST_WANTED = "wanted"
@@ -164,6 +165,21 @@ def item_purchase_tags(item_id, entry=None):
         tags.add("illegal")
     if bool(metadata.get("stolen")):
         tags.add("stolen")
+    wire_profile = wire_profile_for_item(item_id, item_catalog=ITEM_CATALOG)
+    wire_kind = str(wire_profile.get("kind", "") or "").strip().lower()
+    if wire_kind:
+        tags.update({"wire", "device"})
+        if wire_kind == "data_packet":
+            family = str((metadata.get("data_family") or wire_profile.get("data_family") or "general") or "general").strip().lower()
+            tags.update({"wire_data", "data", "data_packet", family})
+            for tag in metadata.get("buyer_tags") or wire_profile.get("buyer_tags") or ():
+                text = str(tag or "").strip().lower()
+                if text:
+                    tags.add(text)
+        elif wire_kind == "program":
+            tags.update({"wire_program", "software", "tool"})
+        elif wire_kind in {"credential", "license"}:
+            tags.update({"wire_access", "credential"})
     return tags
 
 
@@ -226,6 +242,20 @@ def _profile_for_archetype(archetype):
             "wanted": {"drone", "drone_part", "drone_module", "drone_assembly", "device", "battery", "circuit", "tool", "communication", "phone"},
             "adjacent": {"armor", "tactical", "survival", "medical", "cash", "credit"},
             "refuse_dangerous": False,
+        })
+    elif archetype in {"bank", "brokerage"}:
+        profile.update({
+            "summary": "finance records, payroll packets, procurement traces, and clean wire tools",
+            "wanted": {"wire_data", "data", "payroll", "procurement", "finance_broker", "wire_program", "software"},
+            "adjacent": {"device", "communication", "credential", "customer_habits", "prototype_telemetry"},
+            "refuse_dangerous": True,
+        })
+    elif archetype in {"office", "tower", "data_center", "media_lab"}:
+        profile.update({
+            "summary": "wire software, brokerable data, records tooling, and technical devices",
+            "wanted": {"wire_data", "data", "prototype_telemetry", "procurement", "customer_habits", "camera_fragment", "wire_program", "software", "device"},
+            "adjacent": {"communication", "credential", "payroll", "blackmail", "tool"},
+            "refuse_dangerous": archetype != "data_center",
         })
     elif archetype in STYLE_BUYER_ARCHETYPES:
         profile.update({

@@ -243,6 +243,16 @@ class PropertyActionRuntime:
         return None
 
     def _emit_property_interact(self, eid, prop, *, interaction_mode=None, **extra):
+        if not bool((extra or {}).get("wire_shell_passthrough")):
+            from game.wire_connection import open_wire_connection_shell
+
+            if open_wire_connection_shell(
+                self.sim,
+                eid,
+                prop,
+                interaction_mode=interaction_mode or "physical",
+            ):
+                return
         payload = {
             "eid": eid,
             "property_id": prop["id"],
