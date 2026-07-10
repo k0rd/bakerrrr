@@ -4,7 +4,10 @@ from engine.events import Event
 from engine.systems import System
 from engine.visibility import update_player_visibility as _update_player_visibility
 from game.checks import crime_sensitivity as _crime_sensitivity, justice_level as _justice_level
-from game.lighting import update_lighting_state as _update_lighting_state
+from game.lighting import (
+    glare_strength as _lighting_glare_strength,
+    update_lighting_state as _update_lighting_state,
+)
 from game.components import (
     AI,
     CoverState,
@@ -492,6 +495,10 @@ class VisibilitySystem(System):
 
         # Minimum visibility is never below a small baseline to avoid full blindness.
         scale = (0.28 + (ambient * 0.72)) * perception_scale
+        glare = _lighting_glare_strength(self.sim)
+        if glare > 0.0:
+            darkness = max(0.0, 0.62 - ambient) / 0.62
+            scale *= max(0.54, 1.0 - (0.36 * float(glare) * darkness))
         radius = int(round(radius * scale))
 
         return max(4, min(36, radius))

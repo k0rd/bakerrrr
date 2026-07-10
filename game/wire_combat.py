@@ -8,7 +8,7 @@ from hashlib import blake2b
 from engine.events import Event
 from game.components import Inventory
 from game.items import ITEM_CATALOG, item_display_name
-from game.wire_kit import wire_state_for_actor
+from game.wire_kit import refresh_wire_state_interface_capacity, wire_state_for_actor
 from game.wire_runtime import (
     normalize_wire_entry_metadata,
     normalize_wire_interface_metadata,
@@ -394,6 +394,7 @@ def load_wire_program_to_ram(sim, actor_eid, instance_id=None, *, item_catalog=N
     state = wire_state_for_actor(sim, actor_eid, create=True)
     scene = ensure_wire_combat_state(sim, actor_eid, item_catalog=item_catalog)
     if scene is None:
+        refresh_wire_state_interface_capacity(sim, actor_eid, state, item_catalog=item_catalog)
         normalize_wire_ram_slots(state, item_catalog=item_catalog)
     program_slots = int(getattr(state, "program_slots", 0))
     loaded_ids = {_clean_text(entry.get("instance_id")) for entry in getattr(state, "ram_slots", ()) or () if isinstance(entry, Mapping)}
@@ -404,9 +405,15 @@ def load_wire_program_to_ram(sim, actor_eid, instance_id=None, *, item_catalog=N
             candidates.append(entry)
     else:
         candidates = [dict(entry) for entry in getattr(state, "kit_entries", ()) or () if isinstance(entry, Mapping)]
-    for entry in candidates:
-        if not _is_program_entry(entry, item_catalog=item_catalog):
-            continue
+    program_candidates = [
+        entry
+        for entry in candidates
+        if _is_program_entry(entry, item_catalog=item_catalog)
+    ]
+    if program_slots <= 0 and program_candidates:
+        sim.emit(Event("wire_program_blocked", eid=actor_eid, reason="wire_interface_missing"))
+        return {"ok": False, "reason": "wire_interface_missing"}
+    for entry in program_candidates:
         iid = _clean_text(entry.get("instance_id"))
         if not iid or iid in loaded_ids:
             continue
@@ -428,7 +435,7 @@ def load_wire_program_to_ram(sim, actor_eid, instance_id=None, *, item_catalog=N
             program_name=_program_name(clean, item_catalog=item_catalog),
         ))
         return {"ok": True, "reason": None, "entry": dict(clean)}
-    reason = "ram_full" if candidates else "no_program_available"
+    reason = "ram_full" if program_candidates else "no_program_available"
     sim.emit(Event("wire_program_blocked", eid=actor_eid, reason=reason))
     return {"ok": False, "reason": reason}
 

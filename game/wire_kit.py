@@ -7,10 +7,13 @@ from collections.abc import Mapping
 from game.components import Inventory, WireState
 from game.items import ITEM_CATALOG, item_inventory_slot_cost
 from game.wire_runtime import (
+    is_wire_interface_item,
     is_wire_item,
     normalize_wire_entry_metadata,
+    normalize_wire_interface_metadata,
     wire_entry_display_name,
     wire_entry_storage_points,
+    wire_interface_profile_for_item,
     wire_profile_for_item,
 )
 
@@ -67,9 +70,9 @@ def normalize_wire_state(state):
     if not hasattr(state, "schema_version"):
         state.schema_version = 1
     if not hasattr(state, "capacity_points"):
-        state.capacity_points = 24
+        state.capacity_points = 0
     if not hasattr(state, "program_slots"):
-        state.program_slots = 2
+        state.program_slots = 0
     if not hasattr(state, "kit_entries"):
         state.kit_entries = []
     if not hasattr(state, "ram_slots"):
@@ -86,8 +89,8 @@ def normalize_wire_state(state):
         state.last_wire_feedback = ""
     if not hasattr(state, "last_ejection_state"):
         state.last_ejection_state = None
-    state.capacity_points = int(max(1, _int(getattr(state, "capacity_points", 24), 24)))
-    state.program_slots = int(max(0, _int(getattr(state, "program_slots", 2), 2)))
+    state.capacity_points = int(max(0, _int(getattr(state, "capacity_points", 0), 0)))
+    state.program_slots = int(max(0, _int(getattr(state, "program_slots", 0), 0)))
     state.kit_entries = [
         clean
         for clean in (
@@ -107,6 +110,87 @@ def normalize_wire_state(state):
         if isinstance(getattr(state, "last_ejection_state", None), Mapping)
         else None
     )
+    return state
+
+
+def wire_interface_capacity_points(metadata):
+    metadata = dict(metadata or {})
+    explicit = (
+        metadata.get("kit_capacity_points")
+        if "kit_capacity_points" in metadata
+        else metadata.get("storage_capacity", metadata.get("capacity_points"))
+    )
+    if explicit is not None:
+        return max(0, _int(explicit, 0))
+    slots = max(0, _int(metadata.get("program_slots"), 0))
+    buffer_size = max(0, _int(metadata.get("buffer_size"), 0))
+    return int(max(0, (slots * 4) + buffer_size))
+
+
+def provision_wire_state_from_interface(state, *, entry=None, item_id=None, metadata=None, item_catalog=None):
+    state = normalize_wire_state(state)
+    if state is None:
+        return None
+    item_catalog = item_catalog or ITEM_CATALOG
+    item_key = _clean_item_id(item_id or ((entry or {}).get("item_id") if isinstance(entry, Mapping) else ""))
+    if not item_key:
+        return state
+    profile = wire_interface_profile_for_item(item_key, item_catalog=item_catalog)
+    if not profile.get("kind"):
+        return state
+    clean_metadata = normalize_wire_interface_metadata(
+        metadata if isinstance(metadata, Mapping) else ((entry or {}).get("metadata") if isinstance(entry, Mapping) else {}),
+        item_id=item_key,
+        profile=profile,
+    )
+    state.capacity_points = wire_interface_capacity_points(clean_metadata)
+    state.program_slots = max(0, _int(clean_metadata.get("program_slots"), 0))
+    normalize_wire_state(state)
+    return state
+
+
+def refresh_wire_state_interface_capacity(sim, actor_eid, state=None, *, item_catalog=None):
+    state = normalize_wire_state(state or wire_state_for_actor(sim, actor_eid, create=True))
+    item_catalog = item_catalog or ITEM_CATALOG
+    inventory = sim.ecs.get(Inventory).get(actor_eid)
+    if state is None or inventory is None:
+        return state
+    entries = [entry for entry in tuple(getattr(inventory, "items", ()) or ()) if isinstance(entry, Mapping)]
+    preferred = str(getattr(state, "equipped_interface_instance_id", None) or "").strip()
+    candidate = None
+    if preferred:
+        for entry in entries:
+            if str(entry.get("instance_id", "") or "") == preferred and is_wire_interface_item(entry.get("item_id"), item_catalog=item_catalog):
+                candidate = entry
+                break
+    if candidate is None:
+        scored = []
+        for entry in entries:
+            item_id = _clean_item_id(entry.get("item_id"))
+            if not is_wire_interface_item(item_id, item_catalog=item_catalog):
+                continue
+            profile = wire_interface_profile_for_item(item_id, item_catalog=item_catalog)
+            metadata = normalize_wire_interface_metadata(
+                entry.get("metadata") if isinstance(entry.get("metadata"), Mapping) else {},
+                item_id=item_id,
+                profile=profile,
+            )
+            scored.append((
+                wire_interface_capacity_points(metadata),
+                _int(metadata.get("program_slots"), 0),
+                _int(metadata.get("buffer_size"), 0),
+                str(entry.get("instance_id", "") or ""),
+                entry,
+            ))
+        if scored:
+            scored.sort(key=lambda row: (-row[0], -row[1], -row[2], row[3]))
+            candidate = scored[0][4]
+    if candidate is None:
+        state.capacity_points = 0
+        state.program_slots = 0
+        normalize_wire_state(state)
+        return state
+    provision_wire_state_from_interface(state, entry=candidate, item_catalog=item_catalog)
     return state
 
 
@@ -136,15 +220,15 @@ def wire_kit_summary(state, *, item_catalog=None):
         return {
             "entries": 0,
             "points_used": 0,
-            "capacity_points": 24,
-            "program_slots": 2,
+            "capacity_points": 0,
+            "program_slots": 0,
             "ram_used": 0,
         }
     return {
         "entries": len(getattr(state, "kit_entries", ()) or ()),
         "points_used": wire_kit_used_points(state, item_catalog=item_catalog),
-        "capacity_points": int(getattr(state, "capacity_points", 24)),
-        "program_slots": int(getattr(state, "program_slots", 2)),
+        "capacity_points": int(getattr(state, "capacity_points", 0)),
+        "program_slots": int(getattr(state, "program_slots", 0)),
         "ram_used": _wire_ram_used_points(state, item_catalog=item_catalog),
     }
 
@@ -172,7 +256,10 @@ def wire_kit_can_accept_entry(state, entry, *, item_catalog=None):
         return False, "not_loadable"
     used = wire_kit_used_points(state, item_catalog=item_catalog)
     cost = wire_entry_storage_points(clean, item_catalog=item_catalog) * max(1, _int(clean.get("quantity"), 1))
-    if used + cost > int(getattr(state, "capacity_points", 24)):
+    capacity = int(getattr(state, "capacity_points", 0))
+    if capacity <= 0 and cost > 0:
+        return False, "wire_interface_missing"
+    if used + cost > capacity:
         return False, "wire_kit_full"
     return True, None
 
@@ -231,6 +318,7 @@ def load_inventory_entry_to_wire_kit(sim, actor_eid, instance_id, *, item_catalo
     if not is_wire_item(entry.get("item_id"), item_catalog=item_catalog):
         return {"ok": False, "reason": "not_wire_item", "entry": dict(entry)}
     wire_state = wire_state_for_actor(sim, actor_eid, create=True)
+    refresh_wire_state_interface_capacity(sim, actor_eid, wire_state, item_catalog=item_catalog)
     ok, reason = wire_kit_can_accept_entry(wire_state, entry, item_catalog=item_catalog)
     if not ok:
         return {"ok": False, "reason": reason, "entry": dict(entry)}
@@ -316,6 +404,7 @@ def wire_kit_rows(sim, actor_eid, tab="kit", *, item_catalog=None):
     if tab not in WIRE_KIT_TABS:
         tab = "kit"
     state = wire_state_for_actor(sim, actor_eid, create=True)
+    refresh_wire_state_interface_capacity(sim, actor_eid, state, item_catalog=item_catalog)
     rows = []
     if tab == "pack":
         inventory = sim.ecs.get(Inventory).get(actor_eid)

@@ -2936,6 +2936,12 @@ class RenderSystem(System):
             return ambient_dim_attr
 
         light_tint_drawer = getattr(self.view, "draw_light_tint", None)
+        player_glare = lighting_state.get("player_glare")
+        try:
+            player_glare_strength = float(player_glare.get("strength", 0.0) if isinstance(player_glare, dict) else 0.0)
+        except (TypeError, ValueError):
+            player_glare_strength = 0.0
+        player_glare_strength = max(0.0, min(1.0, player_glare_strength))
 
         def _draw_light_tint_overlay(sx, sy, wx, wy, z):
             if not callable(light_tint_drawer):
@@ -2950,6 +2956,29 @@ class RenderSystem(System):
             except (TypeError, ValueError):
                 return
             light_tint_drawer(sx, sy, tint, layer="fx", priority=-900)
+
+        def _draw_glare_wash_overlay(sx, sy, wx, wy, z):
+            if player_glare_strength <= 0.0 or not callable(light_tint_drawer) or player_pos is None:
+                return
+            sample = _ambient_sample(wx, wy, z)
+            try:
+                ambient = float(sample.get("ambient", 1.0) or 1.0)
+            except (TypeError, ValueError):
+                ambient = 1.0
+            ambient = max(0.0, min(1.0, ambient))
+            dist = abs(int(wx) - int(player_pos.x)) + abs(int(wy) - int(player_pos.y))
+            distance_factor = max(0.0, min(1.0, float(dist) / 14.0))
+            dark_factor = max(0.0, 0.72 - ambient) / 0.72
+            wash = player_glare_strength * (0.035 + (0.08 * distance_factor) + (0.12 * dark_factor))
+            if wash <= 0.025:
+                return
+            tint = {
+                "rgb": [255, 250, 226],
+                "strength": round(max(0.02, min(0.22, wash)), 4),
+                "profile": "visual_glare",
+                "pulse": "soft",
+            }
+            light_tint_drawer(sx, sy, tint, layer="fx", priority=-625)
 
         def _surface_light_tint(wx, wy, z):
             sample = _ambient_sample(wx, wy, z)
@@ -3513,6 +3542,7 @@ class RenderSystem(System):
                                 priority=-850,
                             )
                         _draw_light_tint_overlay(sx, sy, wx, wy, active_z)
+                        _draw_glare_wash_overlay(sx, sy, wx, wy, active_z)
 
             for flora in flora_records_in_rect(
                 self.sim,
@@ -3993,6 +4023,13 @@ class RenderSystem(System):
             player_pct = max(0, min(100, player_pct))
             context = "in" if player_inside else "out"
             status_chunks.append(f"Light {context} {player_pct}% (out {outside_pct}%)")
+            player_glare = lighting_state.get("player_glare")
+            try:
+                glare_pct = int(round(float(player_glare.get("strength", 0.0) if isinstance(player_glare, dict) else 0.0) * 100.0))
+            except (TypeError, ValueError):
+                glare_pct = 0
+            if glare_pct > 0:
+                status_chunks.append(f"Glare {max(1, min(100, glare_pct))}%")
         else:
             status_chunks.append(f"Light out {outside_pct}%")
         if isinstance(active_disguise, dict):

@@ -9,7 +9,7 @@ from game.components import Inventory, Position
 from game.items import ITEM_CATALOG, item_display_name
 from game.property_runtime import property_linked_property_id
 from game.skills import actor_skill
-from game.wire_kit import wire_state_for_actor
+from game.wire_kit import provision_wire_state_from_interface, wire_state_for_actor
 from game.wire_runtime import (
     is_wire_interface_item,
     normalize_wire_interface_metadata,
@@ -165,6 +165,7 @@ def set_preferred_wire_interface(sim, actor_eid, instance_id, *, item_catalog=No
         return {"ok": False, "reason": "not_wire_interface", "entry": dict(entry)}
     state = wire_state_for_actor(sim, actor_eid, create=True)
     state.equipped_interface_instance_id = str(instance_id or "").strip()
+    provision_wire_state_from_interface(state, entry=entry, item_id=item_id, item_catalog=item_catalog or ITEM_CATALOG)
     state.last_wire_feedback = f"Preferred interface set to {item_display_name(item_id, metadata=entry.get('metadata'), item_catalog=item_catalog or ITEM_CATALOG)}."
     return {"ok": True, "reason": None, "entry": dict(entry), "wire_state": state}
 
@@ -422,6 +423,12 @@ def connect_wire_target(sim, actor_eid, prop, *, item_catalog=None, deliberate=F
         return {"ok": False, "reason": reason, "preflight": preflight}
     interface = preflight.get("interface") or {}
     state.equipped_interface_instance_id = str(interface.get("instance_id", "") or "") or getattr(state, "equipped_interface_instance_id", None)
+    provision_wire_state_from_interface(
+        state,
+        item_id=interface.get("item_id"),
+        metadata=interface.get("metadata") if isinstance(interface.get("metadata"), Mapping) else {},
+        item_catalog=item_catalog or ITEM_CATALOG,
+    )
     state.active_connection = {
         "status": "shell_connected",
         "target_property_id": str(prop.get("id", "") or ""),

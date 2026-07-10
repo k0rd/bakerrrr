@@ -186,8 +186,10 @@ from game.justice_runtime import (
 )
 from game.lighting import (
     ambient_snapshot as _lighting_ambient_snapshot,
+    glare_strength as _lighting_glare_strength,
     lighting_state as _lighting_state,
     update_lighting_state as _update_lighting_state,
+    update_visual_glare_for_entity as _lighting_update_visual_glare_for_entity,
 )
 from game.organization_reputation import (
     apply_organization_reputation_delta as _apply_organization_reputation_delta,
@@ -1898,6 +1900,7 @@ def _observer_light_notice_params(sim):
         "interior_floor_penalty": 0.04,
         "aperture_boost_scale": 0.12,
         "contrast_boost_scale": 0.08,
+        "glare_dark_penalty": 0.32,
         "role_floor_default": 0.52,
         "role_floor_guard": 0.60,
         "role_floor_scout": 0.66,
@@ -1936,6 +1939,7 @@ def _observer_light_notice_params(sim):
     params["interior_floor_penalty"] = _clamp(params["interior_floor_penalty"], lo=0.0, hi=0.2)
     params["aperture_boost_scale"] = _clamp(params["aperture_boost_scale"], lo=0.0, hi=0.4)
     params["contrast_boost_scale"] = _clamp(params["contrast_boost_scale"], lo=0.0, hi=0.4)
+    params["glare_dark_penalty"] = _clamp(params["glare_dark_penalty"], lo=0.0, hi=0.7)
     params["role_floor_default"] = _clamp(params["role_floor_default"], lo=0.35, hi=0.9)
     params["role_floor_guard"] = _clamp(params["role_floor_guard"], lo=0.35, hi=0.95)
     params["role_floor_scout"] = _clamp(params["role_floor_scout"], lo=0.35, hi=0.95)
@@ -1949,7 +1953,7 @@ def _observer_light_notice_params(sim):
     return params
 
 
-def _observer_light_notice_multiplier(sim, observer_pos, target_x, target_y, target_z, ai=None, params=None):
+def _observer_light_notice_multiplier(sim, observer_pos, target_x, target_y, target_z, ai=None, params=None, observer_eid=None):
     if params is None:
         params = _observer_light_notice_params(sim)
 
@@ -1993,6 +1997,12 @@ def _observer_light_notice_multiplier(sim, observer_pos, target_x, target_y, tar
     # Adaptation: observers already in low light are slightly less penalized noticing dark targets.
     adaptation = (1.0 - target_ambient) * max(0.0, (0.55 - observer_ambient)) * float(params["adaptation_strength"])
     floor = _clamp(floor + adaptation, lo=0.38, hi=0.9)
+
+    glare = _lighting_glare_strength(sim, eid=observer_eid) if observer_eid is not None else 0.0
+    if glare > 0.0:
+        dark_target = max(0.0, 0.62 - target_ambient) / 0.62
+        floor -= float(params["glare_dark_penalty"]) * float(glare) * dark_target
+        floor = _clamp(floor, lo=0.30, hi=0.9)
 
     weighted_ambient = (
         (target_ambient * float(params["target_weight"]))
@@ -2045,6 +2055,8 @@ def _observer_can_notice_position(sim, observer_eid, x, y, z):
     if distance > radius:
         return False
 
+    _lighting_update_visual_glare_for_entity(sim, observer_eid, observer_pos)
+
     params = _observer_light_notice_params(sim)
     light_mult = _observer_light_notice_multiplier(
         sim,
@@ -2054,6 +2066,7 @@ def _observer_can_notice_position(sim, observer_eid, x, y, z):
         target_z=z,
         ai=ai,
         params=params,
+        observer_eid=observer_eid,
     )
     close_range = float(params.get("close_range", 2.0))
     if distance > max(close_range, float(radius) * float(light_mult)):

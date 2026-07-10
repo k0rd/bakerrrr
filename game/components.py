@@ -2849,8 +2849,8 @@ class WireState:
         self,
         *,
         kit_entries=None,
-        capacity_points=24,
-        program_slots=2,
+        capacity_points=0,
+        program_slots=0,
         ram_slots=None,
         equipped_interface_instance_id=None,
         active_connection=None,
@@ -2861,7 +2861,7 @@ class WireState:
         schema_version=1,
     ):
         self.schema_version = int(schema_version or 1)
-        self.capacity_points = int(max(1, capacity_points or 24))
+        self.capacity_points = int(max(0, capacity_points or 0))
         self.program_slots = int(max(0, program_slots or 0))
         self.kit_entries = [
             dict(entry)

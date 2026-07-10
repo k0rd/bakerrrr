@@ -25,7 +25,7 @@ from game.incident_runtime import (
 )
 from game.organizations import property_org_members
 from game.property_runtime import property_covering, property_runtime_container_entries
-from game.system_support.awareness_runtime import event_observation_accountability
+from game.system_support.awareness_runtime import event_observation_accountability, observation_payload_for_position
 from game.system_support.actor_attention_runtime import record_area_warmth
 from game.system_support.item_provenance_runtime import CLAIM_PUBLIC_FREE, CLAIM_SCENE_SALVAGE, classify_item_claim, stamp_item_provenance
 from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS, WILDLIFE_OFFENSE_CONTEXTS
@@ -854,6 +854,50 @@ class IncidentKnowledgeSystem(System):
         ))
         return incident
 
+    def _vehicle_fire_owner_suspect_payload(self, event):
+        data = getattr(event, "data", {})
+        if not isinstance(data, dict):
+            return None
+        if _text(data.get("source_kind")).lower() != "vehicle_explosion":
+            return None
+        owner_eid = _safe_int(data.get("vehicle_owner_eid"), 0)
+        if owner_eid <= 0:
+            return None
+        owner_pos = self.sim.ecs.get(Position).get(owner_eid)
+        if owner_pos is None:
+            return None
+
+        scene_x = _safe_int(data.get("source_x", data.get("x")), owner_pos.x)
+        scene_y = _safe_int(data.get("source_y", data.get("y")), owner_pos.y)
+        scene_z = _safe_int(data.get("source_z", data.get("z", 0)), owner_pos.z)
+        try:
+            owner_x, owner_y, owner_z = int(owner_pos.x), int(owner_pos.y), int(owner_pos.z)
+        except (TypeError, ValueError):
+            return None
+        if owner_z != scene_z:
+            return None
+        scene_radius = max(1, _safe_int(data.get("vehicle_scene_radius"), 3))
+        if abs(owner_x - scene_x) + abs(owner_y - scene_y) > scene_radius:
+            return None
+
+        observation = observation_payload_for_position(
+            self.sim,
+            owner_x,
+            owner_y,
+            owner_z,
+            exclude_eid=owner_eid,
+            offender_eid=owner_eid,
+            observation_channels=("actor_witness",),
+        )
+        if not tuple(observation.get("accountable_observer_eids", ())):
+            return None
+        payload = dict(observation)
+        payload["owner_eid"] = owner_eid
+        payload["scene_x"] = scene_x
+        payload["scene_y"] = scene_y
+        payload["scene_z"] = scene_z
+        return payload
+
     def _record_player_witnessed_area_warmth(self, incident, event, *, reason="witnessed_event", score_delta=0.8):
         if not isinstance(incident, dict):
             return False
@@ -1223,7 +1267,23 @@ class IncidentKnowledgeSystem(System):
             chunk_subject = f"area:{int(x) // 16}:{int(y) // 16}:{z}"
         merge_subject = building_id or property_id or chunk_subject
         source_kind = str(event.data.get("source_kind", "") or "").strip().lower()
+        tags = ["fire", "hazard", "disaster"]
+        suspect_payload = self._vehicle_fire_owner_suspect_payload(event)
+        if source_kind == "vehicle_explosion":
+            tags.append("vehicle_explosion")
+        if suspect_payload:
+            owner_eid = int(suspect_payload["owner_eid"])
+            event.data["offender_eid"] = owner_eid
+            event.data["observer_eids"] = tuple(suspect_payload.get("observer_eids", ()))
+            event.data["accountable_observer_eids"] = tuple(suspect_payload.get("accountable_observer_eids", ()))
+            event.data["observation_channels"] = tuple(suspect_payload.get("observation_channels", ("actor_witness",)))
+            event.data["witnessed"] = bool(suspect_payload.get("witnessed", True))
+            event.data["witnesses"] = tuple(suspect_payload.get("witnesses", ()))
+            event.data["vehicle_owner_seen_at_scene"] = True
+            tags.append("owner_seen_at_scene")
         note = f"{source_kind} fire" if source_kind else "structure fire"
+        if suspect_payload:
+            note = "vehicle explosion fire; owner seen at scene"
         incident = self._create_incident(
             event,
             kind="structure_fire",
@@ -1231,8 +1291,15 @@ class IncidentKnowledgeSystem(System):
             merge_subject=merge_subject,
             official_reportable=True,
             note=note,
-            tags=("fire", "hazard", "disaster"),
+            tags=tuple(dict.fromkeys(tags)),
         )
+        if suspect_payload and incident.get("primary_actor_eid") in (None, "", 0):
+            incident["primary_actor_eid"] = int(suspect_payload["owner_eid"])
+        if suspect_payload:
+            incident["vehicle_owner_eid"] = int(suspect_payload["owner_eid"])
+            incident["source_vehicle_id"] = _text(event.data.get("source_vehicle_id"))
+            incident["suspect_basis"] = "vehicle_owner_seen_at_scene"
+            incident["suspect_source"] = "vehicle_explosion"
         observation = self._event_accountability(event)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_drone_incident_reports(incident, event)

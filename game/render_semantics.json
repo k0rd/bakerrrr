@@ -136,6 +136,7 @@
   },
   "terrain": {
     ".": {
+      "terrain_burned": "terrain_burned",
       "floor_coarse": "floor_coarse",
       "floor_industrial": "floor_industrial",
       "floor_residential": "floor_residential",

@@ -113,6 +113,10 @@ _SERVICE_LIGHT_PROFILE_HINTS = {
     "roulette": "casino_neon",
 }
 
+GLARE_RECOVERY_TICKS = 18
+GLARE_EXPOSURE_THRESHOLD = 0.44
+GLARE_LOW_AMBIENT_THRESHOLD = 0.46
+
 
 def _property_metadata(prop):
     if not isinstance(prop, dict):
@@ -1157,6 +1161,7 @@ def lighting_state(sim):
         "player_local_light": 0.0,
         "player_light_tint": None,
         "player_light_sources": [],
+        "player_glare": {},
         "source_cache_key": (),
         "local_light_sources": [],
         "source_count": 0,
@@ -1165,9 +1170,88 @@ def lighting_state(sim):
     return state
 
 
+def _glare_strength_at_tick(glare, tick):
+    if not isinstance(glare, dict):
+        return 0.0
+    try:
+        expires = int(glare.get("expires_tick", 0) or 0)
+        created = int(glare.get("created_tick", expires) or expires)
+        peak = float(glare.get("peak", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if expires <= int(tick) or peak <= 0.0:
+        return 0.0
+    span = max(1, expires - created)
+    remaining = max(0, expires - int(tick))
+    return _clamp_unit(peak * (float(remaining) / float(span)))
+
+
+def glare_strength(sim, *, eid=None, tick=None):
+    if tick is None:
+        tick = int(getattr(sim, "tick", 0) or 0)
+    if eid is not None:
+        registry = getattr(sim, "visual_glare_by_eid", None)
+        if isinstance(registry, dict):
+            return _glare_strength_at_tick(registry.get(int(eid)), int(tick))
+        return 0.0
+    return _glare_strength_at_tick(lighting_state(sim).get("player_glare"), int(tick))
+
+
+def _note_entity_glare(sim, eid, *, peak, source_profile=None, tick=None):
+    if sim is None or eid is None:
+        return None
+    if tick is None:
+        tick = int(getattr(sim, "tick", 0) or 0)
+    registry = getattr(sim, "visual_glare_by_eid", None)
+    if not isinstance(registry, dict):
+        registry = {}
+        sim.visual_glare_by_eid = registry
+    existing = registry.get(int(eid))
+    current = _glare_strength_at_tick(existing, int(tick))
+    peak = max(float(peak), current)
+    glare = {
+        "created_tick": int(tick),
+        "expires_tick": int(tick) + GLARE_RECOVERY_TICKS,
+        "peak": round(_clamp_unit(peak), 4),
+        "source_profile": str(source_profile or "bright_light"),
+    }
+    registry[int(eid)] = glare
+    return glare
+
+
+def update_visual_glare_for_entity(sim, eid, pos, *, clock=None):
+    if sim is None or eid is None or pos is None:
+        return None
+    if clock is None:
+        clock = clock_snapshot(sim)
+    sample = ambient_snapshot(
+        sim,
+        getattr(pos, "x", 0),
+        getattr(pos, "y", 0),
+        getattr(pos, "z", 0),
+        clock=clock,
+    )
+    try:
+        outside = float(sample.get("outside_ambient", clock.get("outdoor_ambient", 1.0)) or 1.0)
+        local_light = float(sample.get("local_light", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if outside > GLARE_LOW_AMBIENT_THRESHOLD or local_light < GLARE_EXPOSURE_THRESHOLD:
+        return None
+    light_tint = sample.get("light_tint") if isinstance(sample, dict) else None
+    source_profile = ""
+    if isinstance(light_tint, dict):
+        source_profile = str(light_tint.get("profile", "") or "").strip().lower()
+    overage = (local_light - GLARE_EXPOSURE_THRESHOLD) / max(0.01, 1.0 - GLARE_EXPOSURE_THRESHOLD)
+    darkness = (GLARE_LOW_AMBIENT_THRESHOLD - outside) / max(0.01, GLARE_LOW_AMBIENT_THRESHOLD)
+    peak = 0.32 + (0.50 * _clamp_unit(overage)) + (0.18 * _clamp_unit(darkness))
+    return _note_entity_glare(sim, int(eid), peak=peak, source_profile=source_profile, tick=clock.get("tick"))
+
+
 def update_lighting_state(sim, player_pos=None):
     state = lighting_state(sim)
     snapshot = clock_snapshot(sim)
+    tick = int(snapshot["tick"])
     state["tick"] = int(snapshot["tick"])
     state["hour"] = int(snapshot["hour"])
     state["minute"] = int(snapshot["minute"])
@@ -1182,10 +1266,14 @@ def update_lighting_state(sim, player_pos=None):
         state["player_local_light"] = 0.0
         state["player_light_tint"] = None
         state["player_light_sources"] = []
+        state["player_glare"] = {}
         _local_light_sources(sim, clock=snapshot)
         return state
 
     _local_light_sources(sim, clock=snapshot)
+    player_eid = getattr(sim, "player_eid", None)
+    if player_eid is not None:
+        update_visual_glare_for_entity(sim, player_eid, player_pos, clock=snapshot)
     ambient = ambient_snapshot(
         sim,
         x=getattr(player_pos, "x", 0),
@@ -1199,4 +1287,27 @@ def update_lighting_state(sim, player_pos=None):
     state["player_local_light"] = _clamp_unit(ambient.get("local_light", 0.0))
     state["player_light_tint"] = ambient.get("light_tint")
     state["player_light_sources"] = list(ambient.get("light_sources", ()) or ())
+    glare = None
+    if player_eid is not None:
+        registry = getattr(sim, "visual_glare_by_eid", None)
+        if isinstance(registry, dict):
+            glare = registry.get(int(player_eid))
+    if isinstance(glare, dict):
+        strength = _glare_strength_at_tick(glare, tick)
+        if strength > 0.0:
+            state["player_glare"] = {**glare, "strength": round(float(strength), 4)}
+        else:
+            state["player_glare"] = {}
+    else:
+        state["player_glare"] = {}
+
+    registry = getattr(sim, "visual_glare_by_eid", None)
+    if isinstance(registry, dict) and registry:
+        expired = [
+            int(eid)
+            for eid, row in tuple(registry.items())
+            if _glare_strength_at_tick(row, tick) <= 0.0
+        ]
+        for eid in expired:
+            registry.pop(eid, None)
     return state

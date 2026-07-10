@@ -6444,6 +6444,66 @@ class PygameView:
             _text("CRASH", graph.left + 6, graph.top + 3, gold, self._ui_bold_font)
             _text(label, graph.right - max(self.cell_px * 8, 90), graph.top + 3, cursor, self._ui_bold_font)
 
+        def _draw_keno():
+            pick_set = set()
+            drawn_set = set()
+            hit_set = set()
+            for key, target in (
+                ("picks", pick_set),
+                ("picked_numbers", pick_set),
+                ("drawn_numbers", drawn_set),
+                ("hits", hit_set),
+                ("hit_numbers", hit_set),
+            ):
+                for raw in list(payload.get(key, ()) or ()):
+                    try:
+                        target.add(int(raw))
+                    except (TypeError, ValueError):
+                        continue
+            board = rect.inflate(-max(self.cell_px, 12), -max(6, self.cell_px // 2))
+            if board.w <= 0 or board.h <= 0:
+                board = rect.inflate(-4, -4)
+            title_h = max(10, min(self.cell_px, board.h // 4))
+            grid = self.pygame.Rect(
+                board.left + 4,
+                board.top + title_h,
+                max(1, board.w - 8),
+                max(1, board.h - title_h - 5),
+            )
+            cols = 5
+            rows = 8
+            cell_w = max(1, grid.w / cols)
+            cell_h = max(1, grid.h / rows)
+            base_outline = (52, 91, 82)
+            draw_fill = (78, 137, 154)
+            pick_fill = (214, 160, 64)
+            hit_fill = (238, 224, 124)
+            radius = max(2, min(int(cell_w), int(cell_h)) // 4)
+            for number in range(1, 41):
+                row = (number - 1) // cols
+                col = (number - 1) % cols
+                cx = int(grid.left + cell_w * (col + 0.5))
+                cy = int(grid.top + cell_h * (row + 0.5))
+                cx = max(grid.left + radius, min(grid.right - radius - 1, cx))
+                cy = max(grid.top + radius, min(grid.bottom - radius - 1, cy))
+                if number in hit_set:
+                    self.pygame.draw.circle(self.surface, hit_fill, (cx, cy), radius)
+                    self.pygame.draw.circle(self.surface, white, (cx, cy), radius, 1)
+                elif number in pick_set:
+                    self.pygame.draw.circle(self.surface, pick_fill, (cx, cy), radius)
+                    self.pygame.draw.circle(self.surface, black, (cx, cy), radius, 1)
+                elif number in drawn_set:
+                    self.pygame.draw.circle(self.surface, draw_fill, (cx, cy), max(1, radius - 1))
+                else:
+                    self.pygame.draw.circle(self.surface, base_outline, (cx, cy), max(1, radius - 1), 1)
+            try:
+                hit_count = int(payload.get("hit_count", len(hit_set)) or len(hit_set))
+            except (TypeError, ValueError):
+                hit_count = len(hit_set)
+            pick_count = len(pick_set)
+            label = f"KENO {hit_count}/{pick_count}" if pick_count else "KENO"
+            _center_text(label, self.pygame.Rect(board.left + 4, board.top + 1, board.w - 8, title_h), gold, self._ui_bold_font)
+
         if service in {"video_poker", "baccarat", "three_card_poker", "twenty_one", "casino_holdem"}:
             top = rect.top + 9
             dealer = payload.get("dealer_cards") or payload.get("banker_cards") or ()
@@ -6535,26 +6595,48 @@ class PygameView:
             _center_text("BLOOM CARDS", self.pygame.Rect(rect.left + 8, rect.bottom - self.cell_px - 3, rect.w - 16, self.cell_px), gold, self._ui_bold_font)
         elif service == "crash":
             _draw_crash()
+        elif service == "keno":
+            _draw_keno()
         elif service == "plinko":
-            board = rect.inflate(-self.cell_px, -self.cell_px // 2)
+            board = rect.inflate(-max(self.cell_px * 2, 18), -max(self.cell_px, 10))
+            if board.w <= 0 or board.h <= 0:
+                board = rect.inflate(-self.cell_px, -self.cell_px // 2)
+            bucket_count = 9
             rows = 6
+            title_h = max(self.cell_px, self._ui_bold_font.get_height())
+            peg_top = board.top + title_h + max(2, self.cell_px // 4)
+            peg_bottom = board.bottom - max(self.cell_px, 10)
+            peg_h = max(1, peg_bottom - peg_top)
             for row in range(rows):
                 count = row + 3
-                y_pos = board.top + self.cell_px + int((board.h - self.cell_px * 2) * (row / max(1, rows - 1)))
+                y_pos = peg_top + int(peg_h * (row / max(1, rows - 1)))
                 for idx in range(count):
                     x_pos = board.left + int(board.w * ((idx + 1) / (count + 1)))
                     self.pygame.draw.circle(self.surface, gold, (x_pos, y_pos), max(2, self.cell_px // 8))
             path = list(payload.get("path", ()) or ())
-            if path:
-                last = path[-1]
-                lane_count = max(1, 7)
-                ball_x = board.left + int(board.w * ((int(last) + 1) / (lane_count + 1)))
-                ball_y = board.bottom - self.cell_px
-            else:
-                ball_x = board.centerx
-                ball_y = board.top + self.cell_px // 2
-            self.pygame.draw.circle(self.surface, cursor, (ball_x, ball_y), max(4, self.cell_px // 4))
-            _text("PLINKO", board.left + 6, board.top + 4, gold, self._ui_bold_font)
+            try:
+                lane = max(0, min(int(payload.get("drop_lane", 3) or 3), 6))
+            except (TypeError, ValueError):
+                lane = 3
+            position = lane + 1
+            for step in path:
+                step_text = str(step or "").strip().upper()
+                if step_text == "L":
+                    position -= 1
+                elif step_text == "R":
+                    position += 1
+                position = max(0, min(position, bucket_count - 1))
+            try:
+                position = max(0, min(int(payload.get("bucket_index", position)), bucket_count - 1))
+            except (TypeError, ValueError):
+                pass
+            ball_x = board.left + int(board.w * ((position + 1) / (bucket_count + 1)))
+            ball_y = board.bottom - max(self.cell_px // 2, 6) if path or payload.get("bucket_index") is not None else board.top + title_h
+            radius = max(4, min(self.cell_px // 4, max(2, min(board.w, board.h) // 10)))
+            ball_x = max(board.left + radius, min(board.right - radius - 1, ball_x))
+            ball_y = max(board.top + radius, min(board.bottom - radius - 1, ball_y))
+            self.pygame.draw.circle(self.surface, cursor, (ball_x, ball_y), radius)
+            _center_text("PLINKO", self.pygame.Rect(board.left + 4, board.top + 2, board.w - 8, title_h), gold, self._ui_bold_font)
         elif service == "slots":
             reels = list(payload.get("reels", ()) or ("BELL", "BAR", "7"))
             reel_w = max(self.cell_px * 3, min(self.cell_px * 6, (rect.w - self.cell_px * 3) // max(1, len(reels))))

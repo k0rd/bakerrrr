@@ -2358,6 +2358,28 @@ def _casino_ascii_keno_board(*, picks=(), drawn=(), hits=()):
     return lines
 
 
+def _casino_number_group_lines(label, numbers, *, group_size=8, empty="none"):
+    label_text = str(label or "Numbers").strip() or "Numbers"
+    try:
+        group_size = max(1, int(group_size))
+    except (TypeError, ValueError):
+        group_size = 8
+    values = []
+    for number in list(numbers or ()):
+        try:
+            values.append(int(number))
+        except (TypeError, ValueError):
+            continue
+    if not values:
+        return [f"{label_text}: {empty}."]
+    prefix = f"{label_text}: "
+    lines = []
+    for index in range(0, len(values), group_size):
+        chunk = " ".join(f"{number:02d}" for number in values[index:index + group_size])
+        lines.append(f"{prefix}{chunk}")
+    return lines
+
+
 def _casino_ascii_roll_block(label, roll):
     if not isinstance(roll, dict):
         return []
@@ -2903,11 +2925,11 @@ def _casino_keno_draw(session):
     headline, detail = _casino_keno_outcome_text(pick_count, hit_count, payout_mult)
     result_lines = []
     result_lines.extend(_casino_ascii_keno_board(picks=picks, drawn=drawn_numbers, hits=hit_numbers))
+    result_lines.extend(_casino_number_group_lines("Ticket", picks, group_size=8))
+    result_lines.extend(_casino_number_group_lines("Draw", drawn_numbers, group_size=8))
     result_lines.extend([
-        f"Ticket: {' '.join(f'{number:02d}' for number in picks)}",
-        f"Draw: {' '.join(f'{number:02d}' for number in drawn_numbers)}",
         (
-            f"Hits: {' '.join(f'{number:02d}' for number in hit_numbers)} "
+            f"{_casino_number_group_lines('Hits', hit_numbers, group_size=8)[0]} "
             f"({hit_count}/{pick_count})."
             if hit_numbers
             else f"Hits: none (0/{pick_count})."
@@ -5152,8 +5174,8 @@ def _casino_ascii_plinko_board(*, drop_lane=None, path=(), bucket_index=None):
         cells = []
         for index in range(bucket_count):
             value = markers.get(index, default)
-            cells.append(f"{str(value)[:4]:^4}")
-        return f"{str(label)[:6]:<6}" + " ".join(cells).rstrip()
+            cells.append(f"{str(value)[:3]:^3}")
+        return f"{str(label)[:5]:<5}" + " ".join(cells).rstrip()
 
     try:
         lane = max(0, min(int(drop_lane), CASINO_PLINKO_LANE_COUNT - 1))

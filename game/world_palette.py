@@ -62,6 +62,7 @@ WORLD_PALETTE: tuple[WorldPaletteRow, ...] = (
     _row("building_edge_dark", (98, 110, 122), 240, "blue", tags=("building", "edge", "dark")),
     _row("terrain_block", (78, 82, 86), 238, "blue", tags=("terrain", "block")),
     _row("terrain_brush", (104, 174, 108), 108, "green", attrs=("bold",), tags=("terrain", "greenery")),
+    _row("terrain_burned", (78, 72, 62), 238, "black", attrs=("dim",), tags=("terrain", "burned")),
     _row("terrain_rock", (156, 158, 160), 245, "white", tags=("terrain", "rock")),
     _row("terrain_water", (78, 162, 218), 117, "cyan", attrs=("bold",), tags=("terrain", "water")),
     _row("terrain_salt", (226, 216, 184), 223, "yellow", attrs=("bold",), tags=("terrain", "salt")),

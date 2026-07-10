@@ -6,6 +6,8 @@ world cell. Properties and chunks only derive summary state from these cells.
 
 from __future__ import annotations
 
+from engine.tilemap import Tile
+
 from game.property_runtime import (
     building_id_from_structure,
     property_aperture_at,
@@ -61,6 +63,18 @@ WALL_SEMANTICS = {"wall_building"}
 FLOOR_SEMANTICS = {"floor_building_fill"}
 DOOR_SEMANTICS = {"feature_door"}
 WINDOW_SEMANTICS = {"feature_window"}
+VEGETATION_SEMANTICS = {
+    "terrain_brush",
+    "floor_wilderness",
+    "floor_frontier",
+}
+VEGETATION_COLORS = {
+    "terrain_brush",
+    "floor_wilderness",
+    "floor_frontier",
+}
+VEGETATION_GLYPHS = {",", ";", "\""}
+TREE_SEMANTICS = {"terrain_block"}
 _STATE_DICT_KEYS = (
     "chunk_index",
     "property_index",
@@ -662,10 +676,14 @@ def _behavior_should_leave_spent_fuel(behavior):
         for tag in tuple(behavior.get("source_tags", ()) or ())
         if _text(tag)
     }
-    if tags.intersection({"campfire", "open_air"}):
+    if tags.intersection({"campfire"}):
+        return False
+    if tags.intersection({"open_air"}) and not tags.intersection({"vegetation", "brush", "tree"}):
         return False
     if _text(behavior.get("structural_damage_kind")).lower() in {"door", "window", "wall"}:
         return False
+    if tags.intersection({"vegetation", "brush", "tree"}):
+        return True
     return bool(
         behavior.get("building_id")
         or behavior.get("property_id")
@@ -708,7 +726,43 @@ def mark_fire_cell_spent(sim, x, y, z=0, *, cell=None, behavior=None, reason="bu
         "spent_tick": _safe_int(getattr(sim, "tick", 0), 0),
     }
     state.get("spent_cells", {})[key] = record
+    if "vegetation" in set(tags) or "brush" in set(tags) or "tree" in set(tags):
+        _mark_terrain_burned(sim, key, behavior=behavior)
     return record
+
+
+def _mark_terrain_burned(sim, key, *, behavior=None):
+    if sim is None or key is None or not hasattr(sim, "tilemap"):
+        return False
+    tile = sim.tilemap.tile_at(key[0], key[1], key[2])
+    if tile is None:
+        return False
+    if getattr(tile, "semantic_id", None) == "terrain_burned":
+        return True
+    if hasattr(tile, "set_appearance"):
+        tile.set_appearance(
+            glyph=".",
+            color="terrain_burned",
+            semantic_id="terrain_burned",
+            effects=tuple(dict.fromkeys(tuple(getattr(tile, "effects", ()) or ()) + ("scorched",))),
+        )
+        tile.walkable = True
+        tile.transparent = True
+    else:
+        sim.tilemap.set_tile(
+            key[0],
+            key[1],
+            Tile(
+                walkable=True,
+                transparent=True,
+                glyph=".",
+                color="terrain_burned",
+                semantic_id="terrain_burned",
+                effects=("scorched",),
+            ),
+            z=key[2],
+        )
+    return True
 
 
 def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
@@ -727,6 +781,7 @@ def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
 
     semantic = _text(getattr(tile, "semantic_id", "")).lower()
     glyph = _text(getattr(tile, "glyph", ""))
+    color = _text(getattr(tile, "color", "")).lower()
     room_kind = _text((structure or {}).get("room_kind")).lower()
     archetype = (
         _text(linked_metadata.get("archetype")).lower()
@@ -791,6 +846,19 @@ def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
     elif structure is not None and (semantic in FLOOR_SEMANTICS or bool(getattr(tile, "walkable", False))):
         burn_tier = "low"
         source_tags.update({"interior"})
+    elif structure is None and linked_prop is None and (
+        semantic in VEGETATION_SEMANTICS
+        or color in VEGETATION_COLORS
+        or glyph in VEGETATION_GLYPHS
+    ):
+        burn_tier = "medium"
+        source_tags.update({"vegetation", "brush", "open_air"})
+    elif structure is None and linked_prop is None and (
+        semantic in TREE_SEMANTICS
+        or (glyph == "#" and color == "terrain_block")
+    ):
+        burn_tier = "low"
+        source_tags.update({"vegetation", "tree", "open_air"})
 
     profile = dict(_BURN_TIER_PROFILES.get(burn_tier, _BURN_TIER_PROFILES["none"]))
     profile.update({

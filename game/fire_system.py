@@ -245,6 +245,8 @@ class FireSystem(System):
         origin = _coord_key(x, y, z)
         if origin is None:
             return
+        weapon_id = _text(event.data.get("weapon_id")).lower()
+        source_kind = "vehicle_explosion" if weapon_id == "vehicle_explosion" or event.data.get("vehicle_id") else "explosion"
 
         for dx in range(-radius, radius + 1):
             for dy in range(-radius, radius + 1):
@@ -269,11 +271,19 @@ class FireSystem(System):
                     tx,
                     ty,
                     tz,
-                    source_kind="explosion",
+                    source_kind=source_kind,
                     source_eid=source_eid,
+                    source_property_id=event.data.get("source_property_id"),
                     spread_from=origin if is_spread else None,
                     intensity=max(2, (source_intensity or 4) - distance),
                     sync_protected=False,
+                    source_x=origin[0],
+                    source_y=origin[1],
+                    source_z=origin[2],
+                    source_vehicle_id=event.data.get("vehicle_id"),
+                    vehicle_owner_eid=event.data.get("vehicle_owner_eid"),
+                    vehicle_owner_tag=event.data.get("vehicle_owner_tag"),
+                    vehicle_scene_radius=max(2, radius),
                 )
 
     def on_smoke_cloud_released(self, event):
@@ -345,6 +355,13 @@ class FireSystem(System):
         source_kind="",
         source_eid=None,
         source_property_id=None,
+        source_x=None,
+        source_y=None,
+        source_z=None,
+        source_vehicle_id=None,
+        vehicle_owner_eid=None,
+        vehicle_owner_tag=None,
+        vehicle_scene_radius=None,
         spread_from=None,
         intensity=2,
         sync_protected=True,
@@ -396,6 +413,13 @@ class FireSystem(System):
                 source_kind=_text(source_kind).lower(),
                 source_eid=source_eid,
                 source_property_id=record.get("source_property_id"),
+                source_x=source_x,
+                source_y=source_y,
+                source_z=source_z,
+                source_vehicle_id=source_vehicle_id,
+                vehicle_owner_eid=vehicle_owner_eid,
+                vehicle_owner_tag=vehicle_owner_tag,
+                vehicle_scene_radius=vehicle_scene_radius,
                 fire_intensity=_safe_int(record.get("fire_intensity"), intensity),
                 smoke_intensity=_safe_int(record.get("smoke_intensity"), smoke_intensity),
                 severity=min(100, 18 + (_safe_int(record.get("fire_intensity"), intensity) * 18)),
