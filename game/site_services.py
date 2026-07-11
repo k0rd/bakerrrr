@@ -25,6 +25,7 @@ from game.property_runtime import (
     property_metadata as _property_metadata,
     property_power_cut_active as _property_power_cut_active,
     property_runtime_container_entries as _property_runtime_container_entries,
+    remember_property_lead_for_actor as _remember_property_lead_for_actor,
     site_services_for_property as _site_services_for_property,
     vehicle_fuel_values as _vehicle_fuel_values,
     vehicle_label as _vehicle_label,
@@ -45,10 +46,8 @@ from game.service_runtime import (
     _int_or_default,
     _manhattan,
     _overworld_discovery_profile,
-    _overworld_discovery_summary_bits,
     _overworld_legend_line,
     _overworld_travel_profile,
-    _overworld_travel_summary_bits,
     _site_service_roll_index,
     _site_service_state,
     _transit_destinations as _shared_transit_destinations,
@@ -224,6 +223,49 @@ def _split_total_across_pulses(total, pulse_count):
     base = total // pulse_count
     remainder = total % pulse_count
     return [base + (1 if idx < remainder else 0) for idx in range(pulse_count)]
+
+
+def _plain_intel_label(value, default=""):
+    text = str(value or "").strip().replace("_", " ")
+    return " ".join(text.split()) or str(default)
+
+
+def _chunk_distance_phrase(direction, distance):
+    direction = str(direction or "HERE").strip().upper() or "HERE"
+    distance = max(0, int(distance))
+    if direction == "HERE" or distance <= 0:
+        return "nearby"
+    unit = "chunk" if distance == 1 else "chunks"
+    return f"{distance} {unit} {direction}"
+
+
+def _intel_route_sentence(*, direction, distance, area_type, terrain, path, landmark_name, interest_detail, travel=None, discovery=None, region_name="", settlement_name=""):
+    area_label = _plain_intel_label(area_type, "area")
+    terrain_label = _plain_intel_label(terrain, area_label)
+    if terrain_label and terrain_label != area_label:
+        place_text = f"{terrain_label} in the {area_label}"
+    else:
+        place_text = terrain_label or area_label
+    parts = [f"{_chunk_distance_phrase(direction, distance).capitalize()}: {place_text}."]
+    if path:
+        parts.append(f"Route read: {_plain_intel_label(path)}.")
+    if landmark_name:
+        parts.append(f"Landmark: {str(landmark_name).strip()}.")
+    if interest_detail:
+        parts.append(f"Point of interest: {str(interest_detail).strip()}.")
+    if isinstance(travel, dict):
+        risk = _plain_intel_label(travel.get("risk_label"), "low")
+        support = _plain_intel_label(travel.get("support_label"), "none")
+        parts.append(f"Travel looks {risk}; support reads {support}.")
+    if isinstance(discovery, dict):
+        label = _plain_intel_label(discovery.get("label"))
+        if label:
+            parts.append(f"Opportunity read: {label}.")
+    if region_name:
+        parts.append(f"Region: {str(region_name).strip()}.")
+    if settlement_name:
+        parts.append(f"Settlement: {str(settlement_name).strip()}.")
+    return " ".join(part for part in parts if part)
 
 
 class SiteServiceSystem(System):
@@ -3489,28 +3531,38 @@ class SiteServiceSystem(System):
                 if path:
                     score += 1
 
-                bits = [
-                    f"{self._chunk_direction(origin_chunk, (cx, cy))} {dist}c",
-                    f"{area_type}/{terrain}",
-                ]
-                if path:
-                    bits.append(f"path:{path}")
-                if landmark_name:
-                    bits.append(f"landmark:{landmark_name}")
-                if interest_detail:
-                    bits.append(f"poi:{interest_detail}")
+                direction = self._chunk_direction(origin_chunk, (cx, cy))
+                travel = None
+                discovery = None
+                region_name = ""
+                settlement_name = ""
                 if detail_level >= 1:
-                    bits.extend(_overworld_travel_summary_bits(_overworld_travel_profile(self.sim, cx, cy, desc=desc, interest=interest)))
-                    bits.extend(_overworld_discovery_summary_bits(_overworld_discovery_profile(self.sim, cx, cy, desc=desc, interest=interest, travel=_overworld_travel_profile(self.sim, cx, cy, desc=desc, interest=interest))))
+                    travel = _overworld_travel_profile(self.sim, cx, cy, desc=desc, interest=interest)
+                    discovery = _overworld_discovery_profile(
+                        self.sim,
+                        cx,
+                        cy,
+                        desc=desc,
+                        interest=interest,
+                        travel=travel,
+                    )
                 if detail_level >= 2:
                     region_name = str(desc.get("region_name", "")).strip()
                     settlement_name = str(desc.get("settlement_name", "")).strip()
-                    if region_name:
-                        bits.append(f"region:{region_name}")
-                    if settlement_name:
-                        bits.append(f"city:{settlement_name}")
 
-                text = " ".join(bit for bit in bits if bit)
+                text = _intel_route_sentence(
+                    direction=direction,
+                    distance=dist,
+                    area_type=area_type,
+                    terrain=terrain,
+                    path=path,
+                    landmark_name=landmark_name,
+                    interest_detail=interest_detail,
+                    travel=travel,
+                    discovery=discovery,
+                    region_name=region_name,
+                    settlement_name=settlement_name,
+                )
                 candidates.append((
                     -score,
                     dist,
@@ -3749,6 +3801,35 @@ class SiteServiceSystem(System):
             "property_name": target_name,
         }
 
+    def _remember_intel_opportunity_site(self, eid, opportunity_reward):
+        reward = opportunity_reward if isinstance(opportunity_reward, dict) else {}
+        property_id = str(reward.get("property_id", "") or "").strip()
+        if not property_id:
+            return False
+        prop = self.sim.properties.get(property_id) if hasattr(self.sim, "properties") else None
+        if not isinstance(prop, dict):
+            return False
+        changed = _remember_property_lead_for_actor(
+            self.sim,
+            eid,
+            prop,
+            lead_kind="service_intel",
+            confidence=0.68,
+            hidden=False,
+        )
+        if changed:
+            self.sim.emit(Event(
+                "property_self_discovered",
+                eid=eid,
+                property_id=prop.get("id"),
+                property_name=str(prop.get("name", prop.get("id", "location"))).strip() or "location",
+                discovery_mode="intel",
+                confidence=0.68,
+                lead_kind="service_intel",
+                hidden=False,
+            ))
+        return bool(changed)
+
     def _emit_intel(self, eid, prop, pos):
         ready_in = self._service_ready_in(eid, prop, "intel")
         if ready_in > 0:
@@ -3776,6 +3857,7 @@ class SiteServiceSystem(System):
         )
         lead_reward = self._grant_relay_hidden_contact_lead(eid, prop, pos)
         opportunity_reward = self._grant_relay_opportunity_lead(eid, prop)
+        self._remember_intel_opportunity_site(eid, opportunity_reward)
         if not lines and not lead_reward and not opportunity_reward:
             self.sim.emit(Event(
                 "site_service_blocked",

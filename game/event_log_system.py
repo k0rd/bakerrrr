@@ -2281,6 +2281,9 @@ class EventLogSystem(System):
                 return
             self.sim.log.add(f"Lead noted: {property_name} added to {bucket} ({confidence}% confidence).")
             return
+        if discovery_mode == "intel":
+            self.sim.log.add(f"Intel filed: {property_name} added to {bucket} ({confidence}% confidence).")
+            return
         if discovery_mode == "covert_note":
             if source_item_name:
                 self.sim.log.add(f"Hidden lead filed from {source_item_name}: {property_name} added to {bucket} ({confidence}% confidence).")

@@ -1178,15 +1178,41 @@ def item_display_glyph(item_def):
         return "*"
 
     item_id = str(item_def.get("id", "")).strip().lower()
-    tags = {
-        str(tag).strip().lower()
-        for tag in item_def.get("tags", [])
-        if str(tag).strip()
-    }
+    tags = _item_tags(item_def)
+    category = str(item_def.get("category", "") or "").strip().lower()
     raw = str(item_def.get("glyph", "*"))[:1] or "*"
 
     if item_id == "credstick_chip":
         return "$"
+    render_kind = item_render_kind(item_def)
+    if render_kind == "drone":
+        return "d"
+    if render_kind == "drone_part":
+        return "p"
+    if render_kind == "wire_interface":
+        return "u"
+    if render_kind == "wireware":
+        return "w"
+    if render_kind == "wire_data":
+        return "D"
+    if render_kind == "ammo":
+        return ";"
+    if render_kind == "device":
+        return "u"
+    if render_kind == "container":
+        return "b"
+    if render_kind == "cosmetic":
+        return "c"
+    if render_kind == "disguise":
+        return "v"
+    if render_kind == "throwable":
+        return "o"
+    if render_kind == "trap":
+        return "^"
+    if render_kind == "plant_material":
+        return ","
+    if render_kind == "meat":
+        return "%"
     if "weapon" in tags:
         return "/"
     if "armor" in tags:
@@ -1201,11 +1227,96 @@ def item_display_glyph(item_def):
         return ":"
     if "token" in tags:
         return "="
-    if "tool" in tags:
+    if "tool" in tags or category == "tool":
         return ")"
     if "junk" in tags:
         return "*"
     return raw
+
+
+def _item_tags(item_def):
+    if not isinstance(item_def, dict):
+        return set()
+    return {
+        str(tag).strip().lower()
+        for tag in item_def.get("tags", [])
+        if str(tag).strip()
+    }
+
+
+def item_render_kind(item_def):
+    if not isinstance(item_def, dict):
+        return "ground"
+
+    item_id = str(item_def.get("id", "") or "").strip().lower()
+    category = str(item_def.get("category", "") or "").strip().lower()
+    tags = _item_tags(item_def)
+    drone_profile = item_def.get("drone_profile") if isinstance(item_def.get("drone_profile"), Mapping) else {}
+    wire_profile = item_def.get("wire_profile") if isinstance(item_def.get("wire_profile"), Mapping) else {}
+    wire_interface = (
+        item_def.get("wire_interface_profile")
+        if isinstance(item_def.get("wire_interface_profile"), Mapping)
+        else {}
+    )
+
+    if drone_profile or category in {"drone", "drone_part"} or "drone" in tags:
+        drone_kind = str(drone_profile.get("kind", "") or "").strip().lower()
+        if drone_kind == "assembly" or category == "drone" or item_id == "packed_drone":
+            return "drone"
+        return "drone_part"
+    if wire_interface or category == "wire_interface" or ({"wire", "interface"} <= tags):
+        return "wire_interface"
+    if wire_profile:
+        wire_kind = str(wire_profile.get("kind", "") or "").strip().lower()
+        if wire_kind == "data_packet" or category == "wire_data" or "data" in tags:
+            return "wire_data"
+        return "wireware"
+    if category == "wireware" or "program" in tags:
+        return "wireware"
+    if category == "wire_data" or ({"wire", "data"} <= tags):
+        return "wire_data"
+    if category == "ammo" or "ammo" in tags:
+        return "ammo"
+    if category == "weapon" or "weapon" in tags:
+        return "weapon"
+    if category == "armor" or "armor" in tags:
+        return "armor"
+    if category == "disguise" or "disguise" in tags:
+        return "disguise"
+    if category == "cosmetic" or "cosmetic" in tags or "clothing" in tags:
+        return "cosmetic"
+    if category == "throwable" or "throwable" in tags:
+        return "throwable"
+    if category == "medical" or "medical" in tags:
+        return "medical"
+    if "trap" in tags or "aerosol_trap" in tags:
+        return "trap"
+    if "meat" in tags or "raw_meat" in tags or item_id.endswith("_meat"):
+        return "meat"
+    if (
+        "herbal_ingredient" in tags
+        or "plant_material" in tags
+        or "blossom" in tags
+        or category == "plant_material"
+    ):
+        return "plant_material"
+    if "food" in tags:
+        return "food"
+    if "drink" in tags or "stimulant" in tags or "consumable" in tags:
+        return "drink"
+    if category == "credential" or "credential" in tags or "key" in tags:
+        return "access"
+    if category == "device" or "device" in tags or "phone" in tags or "communication" in tags:
+        return "device"
+    if category == "container" or "container" in tags:
+        return "container"
+    if category == "token" or "token" in tags:
+        return "token"
+    if "junk" in tags:
+        return "junk"
+    if category == "tool" or "tool" in tags:
+        return "tool"
+    return "ground"
 
 
 def ground_item_color(item_def):
@@ -1265,9 +1376,11 @@ def item_render_snapshot(item_def, *, metadata=None, catalog=None):
         )
     glyph = item_display_glyph(item_def)
     color = ground_item_color(item_def)
+    render_kind = item_render_kind(item_def)
     return _semantic_snapshot(
         glyph,
         color=color,
+        semantic_id=f"item_{render_kind}",
         catalog=catalog,
         preferred_categories=("items",),
     )

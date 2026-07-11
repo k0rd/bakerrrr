@@ -1062,6 +1062,20 @@ class ServiceMenuSystem(System):
     def _open_casino_result(self, prop, service, title, lines, *, subtitle="", art=None):
         state = self._casino_ui_state()
         host_style = str(state.get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
+        body_lines = list(lines or ())
+        service_key = str(service or "").strip().lower()
+        body_focus_line = -1
+        if service_key == "keno":
+            for index, line in enumerate(body_lines):
+                text = str(line or "").strip().lower()
+                if text.startswith("hits:"):
+                    body_focus_line = index
+                    break
+            if body_focus_line < 0:
+                for index, line in enumerate(body_lines):
+                    if str(line or "").strip().lower().startswith("pay row"):
+                        body_focus_line = index
+                        break
         rail_lines = self._casino_common_rail_lines(prop, service=service)
         rail_lines.extend([
             "",
@@ -1074,7 +1088,8 @@ class ServiceMenuSystem(System):
             host_style=host_style,
             title=title,
             subtitle=str(subtitle or "").strip(),
-            body_lines=list(lines or ()),
+            body_lines=body_lines,
+            body_focus_line=body_focus_line,
             rail_lines=rail_lines,
             rows=[],
             hint="Space returns from the result screen.",

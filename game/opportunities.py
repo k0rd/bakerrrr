@@ -7972,6 +7972,65 @@ def objective_focus_facts(sim, player_eid, objective_id, limit=3):
     return tuple(rows)
 
 
+def _plain_label(value, default="unknown"):
+    text = str(value or "").strip().replace("_", " ")
+    return " ".join(text.split()) or str(default)
+
+
+def _board_awareness_label(awareness):
+    key = str(awareness or "").strip().lower()
+    if key == "confirmed":
+        return "confirmed"
+    if key == "heard":
+        return "secondhand"
+    return "uncertain"
+
+
+def _board_site_label(sim, entry):
+    requirements = entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}
+    for key in ("property_name", "delivery_property_name", "pickup_property_name"):
+        label = str(requirements.get(key, "") or "").strip()
+        if label:
+            return label
+    for key in ("property_id", "delivery_property_id", "pickup_property_id"):
+        property_id = str(requirements.get(key, "") or "").strip()
+        if not property_id or sim is None or not hasattr(sim, "properties"):
+            continue
+        prop = sim.properties.get(property_id)
+        if isinstance(prop, dict):
+            return _property_label(prop, property_id)
+    return ""
+
+
+def _board_opportunity_line(sim, entry, *, dist_text, awareness, confidence, intel_source):
+    title = str(entry.get("title", "Opportunity")).strip() or "Opportunity"
+    source_text = opportunity_source_label(entry.get("source", "unknown"), short=False)
+    reward_text = format_reward_text(entry.get("reward", {}))
+    risk_text = _plain_label(entry.get("risk", "low"), default="low")
+    style_bits = [_plain_label(style, default="").strip() for style in entry.get("playstyles", ()) if str(style).strip()]
+    style_text = ", ".join(style_bits[:2]) if style_bits else "mixed approach"
+    intel_text = _board_awareness_label(awareness)
+    try:
+        confidence_value = float(confidence or 0.0)
+    except (TypeError, ValueError):
+        confidence_value = 0.0
+    intel_pct = int(round(max(0.0, min(1.0, confidence_value)) * 100.0))
+    intel_source_text = _plain_label(intel_source, default="unknown source")
+    site_name = _board_site_label(sim, entry)
+    site_part = f" near {site_name}" if site_name else ""
+    next_step = opportunity_next_step_text(sim, entry)
+
+    line = (
+        f"O{int(entry.get('id', 0))}: {title}{site_part} is {dist_text}. "
+        f"Source: {source_text}. Approach: {style_text}. "
+        f"Risk looks {risk_text}. Reward: {reward_text}. "
+        f"Intel is {intel_text} ({intel_pct}% confidence from {intel_source_text})."
+    )
+    if next_step:
+        line += f" Next step: {next_step}"
+    return line
+
+
 def evaluate_opportunity_board(sim, player_eid, limit=3, observer_eid=None):
     state = _state(sim)
     observer = player_eid if observer_eid is None else observer_eid
@@ -7997,18 +8056,15 @@ def evaluate_opportunity_board(sim, player_eid, limit=3, observer_eid=None):
         chunk = _chunk_tuple(entry.get("chunk")) or current
         direction = _chunk_direction(current, chunk)
         dist_text = opportunity_distance_text(dist, direction)
-        reward_text = format_reward_text(entry.get("reward", {}))
-        style_bits = [str(style).strip() for style in entry.get("playstyles", ()) if str(style).strip()]
-        style_text = "/".join(style_bits[:2]) if style_bits else "mixed"
-        source_text = opportunity_source_label(entry.get("source", "unknown"), short=True)
-        intel_tag = f"intel:{awareness}/{int(round(confidence * 100.0))}%/{source}"
-        next_step = opportunity_next_step_text(sim, entry)
-        next_part = f" next:{next_step}" if next_step else ""
         lines.append(
-            f"O{int(entry.get('id', 0))} {dist_text} "
-            f"{str(entry.get('title', 'Opportunity')).strip()} "
-            f"@({chunk[0]},{chunk[1]}) src:{source_text} {style_text} "
-            f"risk:{str(entry.get('risk', 'low')).strip()} rw:{reward_text} {intel_tag}{next_part}"
+            _board_opportunity_line(
+                sim,
+                entry,
+                dist_text=dist_text,
+                awareness=awareness,
+                confidence=confidence,
+                intel_source=source,
+            )
         )
 
     if scoped:
@@ -8017,12 +8073,12 @@ def evaluate_opportunity_board(sim, player_eid, limit=3, observer_eid=None):
         nearest_dir = _chunk_direction(current, nearest_chunk)
         nearest_text = opportunity_distance_text(nearest_dist, nearest_dir)
         summary_line = (
-            f"Opp {len(scoped)} known/{len(completed)} done/{len(failed)} failed | "
-            f"nearest O{int(nearest.get('id', 0))} {nearest_text} "
-            f"{str(nearest.get('title', 'Opportunity')).strip()}"
+            f"Opportunities: {len(scoped)} known, {len(completed)} done, {len(failed)} failed. "
+            f"Nearest: O{int(nearest.get('id', 0))} "
+            f"{str(nearest.get('title', 'Opportunity')).strip()} {nearest_text}."
         )
     else:
-        summary_line = f"Opp 0 known/{len(completed)} done/{len(failed)} failed"
+        summary_line = f"Opportunities: 0 known, {len(completed)} done, {len(failed)} failed."
 
     remaining = max(0, len(scoped) - len(lines))
     return {

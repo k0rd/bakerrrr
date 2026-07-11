@@ -1937,6 +1937,237 @@ class PygameView:
                 (handle_x1 - max(1, self.cell_px // 12), handle_y1 + max(1, self.cell_px // 12)),
                 max(1, stroke_w),
             )
+        elif kind == "ammo":
+            box = self.pygame.Rect(
+                max(2, self.cell_px // 5),
+                max(3, self.cell_px // 3),
+                self.cell_px - max(4, (self.cell_px // 5) * 2),
+                max(5, self.cell_px // 3),
+            )
+            self.pygame.draw.rect(overlay, outline, box.move(1, 1), border_radius=max(1, self.cell_px // 22))
+            self.pygame.draw.rect(overlay, fill, box, border_radius=max(1, self.cell_px // 22))
+            self.pygame.draw.rect(overlay, stroke, box, stroke_w, border_radius=max(1, self.cell_px // 22))
+            for idx in range(3):
+                px = box.left + max(2, box.w // 5) + idx * max(2, box.w // 4)
+                self.pygame.draw.line(overlay, metal, (px, box.top + 2), (px, box.bottom - 2), max(1, stroke_w))
+                self.pygame.draw.circle(overlay, highlight, (px, box.top + max(2, box.h // 4)), max(1, stroke_w))
+        elif kind == "device":
+            body = self.pygame.Rect(
+                mid_x - max(3, self.cell_px // 6),
+                max(2, self.cell_px // 5),
+                max(6, self.cell_px // 3),
+                self.cell_px - max(5, (self.cell_px // 5) * 2),
+            )
+            self.pygame.draw.rect(overlay, outline, body.move(1, 1), border_radius=max(2, self.cell_px // 14))
+            self.pygame.draw.rect(overlay, dark, body, border_radius=max(2, self.cell_px // 14))
+            screen = body.inflate(-max(3, self.cell_px // 7), -max(4, self.cell_px // 5))
+            screen.y = body.top + max(3, self.cell_px // 7)
+            self.pygame.draw.rect(overlay, glass, screen, border_radius=max(1, self.cell_px // 24))
+            self.pygame.draw.circle(overlay, metal, (body.centerx, body.bottom - max(2, self.cell_px // 9)), max(1, stroke_w))
+            self.pygame.draw.line(
+                overlay,
+                stroke,
+                (body.right - 1, body.top + max(2, self.cell_px // 8)),
+                (self.cell_px - max(2, self.cell_px // 5), max(2, self.cell_px // 7)),
+                max(1, stroke_w),
+            )
+        elif kind == "container":
+            bag = self.pygame.Rect(
+                max(3, self.cell_px // 5),
+                max(4, self.cell_px // 3),
+                self.cell_px - max(6, (self.cell_px // 5) * 2),
+                self.cell_px - max(6, (self.cell_px // 3) + (self.cell_px // 5)),
+            )
+            self.pygame.draw.rect(overlay, outline, bag.move(1, 1), border_radius=max(2, self.cell_px // 10))
+            self.pygame.draw.rect(overlay, fill, bag, border_radius=max(2, self.cell_px // 10))
+            self.pygame.draw.rect(overlay, stroke, bag, stroke_w, border_radius=max(2, self.cell_px // 10))
+            self.pygame.draw.arc(
+                overlay,
+                metal,
+                (bag.left + max(2, bag.w // 5), bag.top - max(4, self.cell_px // 5), max(4, bag.w - max(4, bag.w // 3)), max(6, self.cell_px // 3)),
+                math.pi,
+                math.tau,
+                max(1, stroke_w),
+            )
+            self.pygame.draw.line(overlay, cloth, (bag.left + 2, bag.centery), (bag.right - 2, bag.centery), max(1, stroke_w))
+        elif kind == "cosmetic":
+            sleeve = max(3, self.cell_px // 5)
+            points = [
+                (mid_x - max(2, self.cell_px // 8), max(2, self.cell_px // 5)),
+                (mid_x + max(2, self.cell_px // 8), max(2, self.cell_px // 5)),
+                (self.cell_px - sleeve, max(4, self.cell_px // 3)),
+                (self.cell_px - max(3, self.cell_px // 5), self.cell_px - max(4, self.cell_px // 4)),
+                (max(3, self.cell_px // 5), self.cell_px - max(4, self.cell_px // 4)),
+                (sleeve, max(4, self.cell_px // 3)),
+            ]
+            self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in points], stroke_w + 1)
+            self.pygame.draw.polygon(overlay, cloth, points)
+            self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
+            self.pygame.draw.line(overlay, highlight, (mid_x - max(2, self.cell_px // 8), max(3, self.cell_px // 4)), (mid_x + max(2, self.cell_px // 8), max(3, self.cell_px // 4)), max(1, stroke_w))
+        elif kind == "disguise":
+            points = [
+                (max(3, self.cell_px // 4), max(3, self.cell_px // 5)),
+                (mid_x - max(1, self.cell_px // 12), max(3, self.cell_px // 3)),
+                (mid_x, self.cell_px - max(3, self.cell_px // 5)),
+                (mid_x + max(1, self.cell_px // 12), max(3, self.cell_px // 3)),
+                (self.cell_px - max(3, self.cell_px // 4), max(3, self.cell_px // 5)),
+                (self.cell_px - max(4, self.cell_px // 4), self.cell_px - max(4, self.cell_px // 4)),
+                (max(4, self.cell_px // 4), self.cell_px - max(4, self.cell_px // 4)),
+            ]
+            self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in points], stroke_w + 1)
+            self.pygame.draw.polygon(overlay, fill, points)
+            self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
+            badge = self.pygame.Rect(mid_x + max(1, self.cell_px // 12), mid_y, max(3, self.cell_px // 7), max(3, self.cell_px // 7))
+            self.pygame.draw.rect(overlay, metal, badge, border_radius=max(1, self.cell_px // 28))
+        elif kind == "throwable":
+            body = self.pygame.Rect(
+                mid_x - max(3, self.cell_px // 7),
+                max(3, self.cell_px // 4),
+                max(6, self.cell_px // 4),
+                self.cell_px - max(6, self.cell_px // 3),
+            )
+            self.pygame.draw.rect(overlay, outline, body.move(1, 1), border_radius=max(3, self.cell_px // 8))
+            self.pygame.draw.rect(overlay, glass, body, border_radius=max(3, self.cell_px // 8))
+            self.pygame.draw.rect(overlay, stroke, body, stroke_w, border_radius=max(3, self.cell_px // 8))
+            self.pygame.draw.line(overlay, cloth, (body.left + 2, body.centery), (body.right - 2, body.centery), max(1, stroke_w))
+            fuse_start = (body.right - 1, body.top + max(2, self.cell_px // 8))
+            fuse_end = (self.cell_px - max(2, self.cell_px // 5), max(2, self.cell_px // 6))
+            self.pygame.draw.line(overlay, stroke, fuse_start, fuse_end, max(1, stroke_w))
+            self.pygame.draw.circle(overlay, chemical, fuse_end, max(1, stroke_w + 1))
+        elif kind == "drone":
+            body = self.pygame.Rect(
+                max(3, self.cell_px // 4),
+                mid_y - max(2, self.cell_px // 8),
+                self.cell_px - max(6, self.cell_px // 2),
+                max(5, self.cell_px // 4),
+            )
+            self.pygame.draw.rect(overlay, outline, body.move(1, 1), border_radius=max(2, self.cell_px // 12))
+            self.pygame.draw.rect(overlay, fill, body, border_radius=max(2, self.cell_px // 12))
+            self.pygame.draw.rect(overlay, stroke, body, stroke_w, border_radius=max(2, self.cell_px // 12))
+            for px in (body.left - max(2, self.cell_px // 7), body.right + max(2, self.cell_px // 7)):
+                self.pygame.draw.circle(overlay, outline, (px + 1, body.centery + 1), max(2, self.cell_px // 8))
+                self.pygame.draw.circle(overlay, metal, (px, body.centery), max(2, self.cell_px // 8), max(1, stroke_w))
+            self.pygame.draw.circle(overlay, glass, (body.centerx, body.centery), max(1, self.cell_px // 12))
+        elif kind == "drone_part":
+            chip = self.pygame.Rect(
+                max(3, self.cell_px // 4),
+                max(3, self.cell_px // 4),
+                self.cell_px - max(6, self.cell_px // 2),
+                self.cell_px - max(6, self.cell_px // 2),
+            )
+            self.pygame.draw.rect(overlay, outline, chip.move(1, 1), border_radius=max(1, self.cell_px // 20))
+            self.pygame.draw.rect(overlay, dark, chip, border_radius=max(1, self.cell_px // 20))
+            self.pygame.draw.rect(overlay, stroke, chip, stroke_w, border_radius=max(1, self.cell_px // 20))
+            for idx in range(3):
+                py = chip.top + max(2, chip.h // 4) + idx * max(2, chip.h // 4)
+                self.pygame.draw.line(overlay, metal, (chip.left - max(2, self.cell_px // 9), py), (chip.left, py), max(1, stroke_w))
+                self.pygame.draw.line(overlay, metal, (chip.right, py), (chip.right + max(2, self.cell_px // 9), py), max(1, stroke_w))
+            self.pygame.draw.circle(overlay, glass, (chip.centerx, chip.centery), max(1, self.cell_px // 10))
+        elif kind == "wireware":
+            base = self.pygame.Rect(
+                max(3, self.cell_px // 4),
+                max(3, self.cell_px // 4),
+                self.cell_px - max(6, self.cell_px // 2),
+                self.cell_px - max(6, self.cell_px // 2),
+            )
+            self.pygame.draw.rect(overlay, outline, base.move(1, 1), border_radius=max(1, self.cell_px // 24))
+            self.pygame.draw.rect(overlay, dark, base, border_radius=max(1, self.cell_px // 24))
+            self.pygame.draw.rect(overlay, stroke, base, stroke_w, border_radius=max(1, self.cell_px // 24))
+            chevron = [
+                (base.left + max(2, base.w // 5), base.top + max(2, base.h // 4)),
+                (base.centerx, base.centery),
+                (base.left + max(2, base.w // 5), base.bottom - max(2, base.h // 4)),
+            ]
+            self.pygame.draw.lines(overlay, highlight, False, chevron, max(1, stroke_w))
+            self.pygame.draw.line(overlay, chemical, (base.centerx, base.centery), (base.right - max(2, base.w // 5), base.centery), max(1, stroke_w))
+        elif kind == "wire_interface":
+            deck = self.pygame.Rect(
+                max(3, self.cell_px // 5),
+                max(4, self.cell_px // 3),
+                self.cell_px - max(6, (self.cell_px // 5) * 2),
+                max(5, self.cell_px // 4),
+            )
+            self.pygame.draw.rect(overlay, outline, deck.move(1, 1), border_radius=max(1, self.cell_px // 20))
+            self.pygame.draw.rect(overlay, dark, deck, border_radius=max(1, self.cell_px // 20))
+            self.pygame.draw.rect(overlay, stroke, deck, stroke_w, border_radius=max(1, self.cell_px // 20))
+            self.pygame.draw.line(overlay, glass, (deck.left + 2, deck.centery), (deck.right - 2, deck.centery), max(1, stroke_w))
+            self.pygame.draw.arc(
+                overlay,
+                metal,
+                (deck.left - max(3, self.cell_px // 4), deck.top - max(4, self.cell_px // 3), deck.w + max(6, self.cell_px // 2), deck.h + max(6, self.cell_px // 2)),
+                0.1,
+                2.7,
+                max(1, stroke_w),
+            )
+            plug = self.pygame.Rect(deck.right - max(2, self.cell_px // 8), max(2, self.cell_px // 5), max(3, self.cell_px // 8), max(3, self.cell_px // 7))
+            self.pygame.draw.rect(overlay, metal, plug, border_radius=max(1, self.cell_px // 28))
+        elif kind == "wire_data":
+            sheet = self.pygame.Rect(
+                max(3, self.cell_px // 4),
+                max(3, self.cell_px // 5),
+                self.cell_px - max(6, self.cell_px // 2),
+                self.cell_px - max(6, (self.cell_px // 5) * 2),
+            )
+            self.pygame.draw.rect(overlay, outline, sheet.move(2, 2), border_radius=max(1, self.cell_px // 28))
+            self.pygame.draw.rect(overlay, paper, sheet.move(1, 1), border_radius=max(1, self.cell_px // 28))
+            self.pygame.draw.rect(overlay, fill, sheet, border_radius=max(1, self.cell_px // 28))
+            self.pygame.draw.rect(overlay, stroke, sheet, stroke_w, border_radius=max(1, self.cell_px // 28))
+            for idx in range(3):
+                py = sheet.top + max(3, sheet.h // 4) + idx * max(2, sheet.h // 5)
+                self.pygame.draw.line(overlay, dark, (sheet.left + 2, py), (sheet.right - 2, py), max(1, stroke_w))
+        elif kind == "plant_material":
+            stem = (mid_x, self.cell_px - max(3, self.cell_px // 5))
+            for dx in (-max(3, self.cell_px // 7), max(3, self.cell_px // 7), 0):
+                leaf = self.pygame.Rect(mid_x + dx - max(3, self.cell_px // 8), max(3, self.cell_px // 4), max(6, self.cell_px // 4), max(5, self.cell_px // 3))
+                self.pygame.draw.ellipse(overlay, fill, leaf)
+                self.pygame.draw.ellipse(overlay, stroke, leaf, max(1, stroke_w))
+                self.pygame.draw.line(overlay, dark, stem, (leaf.centerx, leaf.centery), max(1, stroke_w))
+        elif kind == "meat":
+            cut = self.pygame.Rect(
+                max(3, self.cell_px // 5),
+                max(3, self.cell_px // 3),
+                self.cell_px - max(6, (self.cell_px // 5) * 2),
+                max(5, self.cell_px // 3),
+            )
+            self.pygame.draw.ellipse(overlay, outline, cut.move(1, 1))
+            self.pygame.draw.ellipse(overlay, fill, cut)
+            self.pygame.draw.ellipse(overlay, stroke, cut, stroke_w)
+            self.pygame.draw.circle(overlay, paper, (cut.centerx + max(2, cut.w // 5), cut.centery), max(2, self.cell_px // 10))
+            self.pygame.draw.line(overlay, dark, (cut.left + 2, cut.centery), (cut.centerx, cut.centery + max(2, cut.h // 4)), max(1, stroke_w))
+        elif kind == "trap":
+            points = [
+                (mid_x, max(2, self.cell_px // 5)),
+                (self.cell_px - max(3, self.cell_px // 5), self.cell_px - max(4, self.cell_px // 4)),
+                (max(3, self.cell_px // 5), self.cell_px - max(4, self.cell_px // 4)),
+            ]
+            self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in points], stroke_w + 1)
+            self.pygame.draw.polygon(overlay, fill, points)
+            self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
+            self.pygame.draw.line(overlay, dark, (mid_x, max(3, self.cell_px // 3)), (mid_x, self.cell_px - max(5, self.cell_px // 3)), max(1, stroke_w))
+            self.pygame.draw.circle(overlay, chemical, (mid_x, self.cell_px - max(3, self.cell_px // 4)), max(1, stroke_w))
+            self.pygame.draw.line(overlay, metal, (max(2, self.cell_px // 7), self.cell_px - max(3, self.cell_px // 6)), (self.cell_px - max(2, self.cell_px // 7), self.cell_px - max(3, self.cell_px // 6)), max(1, stroke_w))
+        elif kind == "junk":
+            shards = [
+                [
+                    (max(3, self.cell_px // 5), max(3, self.cell_px // 3)),
+                    (mid_x, max(2, self.cell_px // 5)),
+                    (mid_x - max(1, self.cell_px // 10), mid_y),
+                ],
+                [
+                    (mid_x + max(1, self.cell_px // 10), mid_y),
+                    (self.cell_px - max(3, self.cell_px // 5), max(3, self.cell_px // 3)),
+                    (self.cell_px - max(4, self.cell_px // 4), self.cell_px - max(4, self.cell_px // 4)),
+                ],
+                [
+                    (max(4, self.cell_px // 4), self.cell_px - max(4, self.cell_px // 4)),
+                    (mid_x, mid_y + max(2, self.cell_px // 8)),
+                    (mid_x - max(1, self.cell_px // 8), self.cell_px - max(3, self.cell_px // 5)),
+                ],
+            ]
+            for shard in shards:
+                self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in shard], max(1, stroke_w))
+                self.pygame.draw.polygon(overlay, metal, shard)
+                self.pygame.draw.polygon(overlay, stroke, shard, max(1, stroke_w))
         elif kind == "weapon":
             self.pygame.draw.line(
                 overlay,
@@ -5351,6 +5582,21 @@ class PygameView:
             "item_medical": "medical",
             "item_token": "token",
             "item_tool": "tool",
+            "item_ammo": "ammo",
+            "item_device": "device",
+            "item_container": "container",
+            "item_cosmetic": "cosmetic",
+            "item_disguise": "disguise",
+            "item_throwable": "throwable",
+            "item_drone": "drone",
+            "item_drone_part": "drone_part",
+            "item_wireware": "wireware",
+            "item_wire_interface": "wire_interface",
+            "item_wire_data": "wire_data",
+            "item_plant_material": "plant_material",
+            "item_meat": "meat",
+            "item_trap": "trap",
+            "item_junk": "junk",
             "item_weapon": "weapon",
             "item_armor": "armor",
             "item_food": "food",
@@ -5360,7 +5606,7 @@ class PygameView:
             "item_illegal": "illegal",
             "item_objective": "objective",
         }
-        item_kind = item_kind_map.get(color_key)
+        item_kind = item_kind_map.get(semantic_key) or item_kind_map.get(color_key)
         if item_kind:
             self._draw_item_overlay(x, y, color=color, attrs=attrs, kind=item_kind)
             return f"item_{item_kind}"
@@ -6183,16 +6429,17 @@ class PygameView:
             return 0
         width = max(1, min(width, self.width_cells - x))
         height = max(1, min(height, self.height_cells - y))
-        used_cells = max(4, min(height, 7))
-        rect = self.pygame.Rect(x * self.cell_px, y * self.cell_px, width * self.cell_px, used_cells * self.cell_px)
-        if rect.w <= 0 or rect.h <= 0:
-            return 0
-
         art = state.get("art") if isinstance(state.get("art"), dict) else None
         session = state.get("session") if isinstance(state.get("session"), dict) else None
         payload = art or session or {}
         service = str(state.get("service") or payload.get("service") or "").strip().lower()
         if not service:
+            return 0
+        mode = str(state.get("mode", "") or "").strip().lower()
+        art_cap = 4 if service == "keno" and mode == "result" else 7
+        used_cells = max(4, min(height, art_cap))
+        rect = self.pygame.Rect(x * self.cell_px, y * self.cell_px, width * self.cell_px, used_cells * self.cell_px)
+        if rect.w <= 0 or rect.h <= 0:
             return 0
 
         felt = (14, 42, 36)
