@@ -1838,7 +1838,7 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_item_overlay(self, x, y, color=None, attrs=0, *, kind="ground"):
+    def _draw_item_overlay(self, x, y, color=None, attrs=0, *, kind="ground", effects=None):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
@@ -1864,6 +1864,19 @@ class PygameView:
         chemical = self._alpha_color("item_chemical", 150)
         backing_rect = self._local_tile_rect(inset=max(2, self.cell_px // 7), min_size=6)
         self._draw_legibility_backing(overlay, backing_rect, color="item_outline", alpha=72)
+        effect_list = tuple(
+            str(effect).strip().lower()
+            for effect in (effects or ())
+            if str(effect).strip()
+        )
+
+        def _shape_variant_for(kind_name):
+            prefixes = (f"{kind_name}_shape_", "item_shape_")
+            for effect in effect_list:
+                for prefix in prefixes:
+                    if effect.startswith(prefix):
+                        return effect.removeprefix(prefix)
+            return ""
 
         if kind == "ground":
             points = [
@@ -1921,22 +1934,182 @@ class PygameView:
                 max(1, stroke_w),
             )
         elif kind == "tool":
-            handle_x0 = max(2, self.cell_px // 4)
-            handle_y0 = self.cell_px - max(4, self.cell_px // 3)
-            handle_x1 = self.cell_px - max(4, self.cell_px // 4)
-            handle_y1 = max(3, self.cell_px // 3)
-            self.pygame.draw.line(overlay, outline, (handle_x0 + 1, handle_y0 + 1), (handle_x1 + 1, handle_y1 + 1), max(3, stroke_w + 2))
-            self.pygame.draw.line(overlay, metal, (handle_x0, handle_y0), (handle_x1, handle_y1), max(2, stroke_w + 1))
-            jaw_r = max(2, self.cell_px // 7)
-            self.pygame.draw.circle(overlay, metal, (handle_x1, handle_y1), jaw_r)
-            self.pygame.draw.circle(overlay, outline, (handle_x1 + max(1, jaw_r // 2), handle_y1 - max(1, jaw_r // 2)), max(1, jaw_r - 1))
-            self.pygame.draw.line(
-                overlay,
-                highlight,
-                (handle_x0 + max(1, self.cell_px // 12), handle_y0 - max(1, self.cell_px // 12)),
-                (handle_x1 - max(1, self.cell_px // 12), handle_y1 + max(1, self.cell_px // 12)),
-                max(1, stroke_w),
-            )
+            tool_shape = _shape_variant_for("tool")
+            if tool_shape == "prybar":
+                bar_w = max(2, stroke_w + 1)
+                path = [
+                    (max(3, self.cell_px // 4), self.cell_px - max(3, self.cell_px // 5)),
+                    (mid_x + max(1, self.cell_px // 12), mid_y),
+                    (self.cell_px - max(4, self.cell_px // 4), max(3, self.cell_px // 4)),
+                ]
+                self.pygame.draw.lines(overlay, outline, False, [(px + 1, py + 1) for px, py in path], bar_w + 2)
+                self.pygame.draw.lines(overlay, metal, False, path, bar_w)
+                hook = self.pygame.Rect(
+                    self.cell_px - max(6, self.cell_px // 3),
+                    max(2, self.cell_px // 5),
+                    max(5, self.cell_px // 4),
+                    max(5, self.cell_px // 4),
+                )
+                self.pygame.draw.arc(overlay, outline, hook.move(1, 1), 0.9, 3.4, max(2, stroke_w + 1))
+                self.pygame.draw.arc(overlay, metal, hook, 0.9, 3.4, max(1, stroke_w))
+                self.pygame.draw.line(overlay, highlight, path[0], path[1], max(1, stroke_w))
+            elif tool_shape == "lockpick_kit":
+                case = self.pygame.Rect(
+                    max(3, self.cell_px // 5),
+                    max(4, self.cell_px // 3),
+                    self.cell_px - max(6, (self.cell_px // 5) * 2),
+                    max(5, self.cell_px // 3),
+                )
+                self.pygame.draw.rect(overlay, outline, case.move(1, 1), border_radius=max(2, self.cell_px // 12))
+                self.pygame.draw.rect(overlay, dark, case, border_radius=max(2, self.cell_px // 12))
+                self.pygame.draw.rect(overlay, stroke, case, stroke_w, border_radius=max(2, self.cell_px // 12))
+                for idx, lift in enumerate((0, -1, 1)):
+                    px = case.left + max(3, case.w // 4) + idx * max(2, case.w // 5)
+                    self.pygame.draw.line(
+                        overlay,
+                        metal,
+                        (px, case.bottom - 2),
+                        (px + max(1, self.cell_px // 12), case.top + max(2, case.h // 4) + lift),
+                        max(1, stroke_w),
+                    )
+                    self.pygame.draw.circle(overlay, highlight, (px, case.bottom - 2), max(1, stroke_w))
+            elif tool_shape == "glass_cutter":
+                grip = self.pygame.Rect(
+                    max(3, self.cell_px // 4),
+                    mid_y,
+                    self.cell_px - max(6, self.cell_px // 2),
+                    max(4, self.cell_px // 5),
+                )
+                self.pygame.draw.rect(overlay, outline, grip.move(1, 1), border_radius=max(2, self.cell_px // 10))
+                self.pygame.draw.rect(overlay, dark, grip, border_radius=max(2, self.cell_px // 10))
+                self.pygame.draw.rect(overlay, stroke, grip, stroke_w, border_radius=max(2, self.cell_px // 10))
+                wheel = (grip.right + max(1, self.cell_px // 12), grip.top)
+                self.pygame.draw.circle(overlay, outline, (wheel[0] + 1, wheel[1] + 1), max(2, self.cell_px // 9))
+                self.pygame.draw.circle(overlay, metal, wheel, max(2, self.cell_px // 9), max(1, stroke_w))
+                self.pygame.draw.line(overlay, highlight, (grip.left + 2, grip.centery), (grip.right - 2, grip.centery), max(1, stroke_w))
+            elif tool_shape == "leads":
+                for offset, lead_color in ((-1, stroke), (1, chemical)):
+                    self.pygame.draw.arc(
+                        overlay,
+                        lead_color,
+                        (
+                            max(2, self.cell_px // 5) + offset,
+                            max(2, self.cell_px // 5),
+                            self.cell_px - max(4, (self.cell_px // 5) * 2),
+                            self.cell_px - max(5, self.cell_px // 3),
+                        ),
+                        0.2,
+                        3.0,
+                        max(1, stroke_w),
+                    )
+                for px in (max(4, self.cell_px // 4), self.cell_px - max(4, self.cell_px // 4)):
+                    clip = self.pygame.Rect(px - max(2, self.cell_px // 12), self.cell_px - max(4, self.cell_px // 3), max(4, self.cell_px // 5), max(3, self.cell_px // 7))
+                    self.pygame.draw.rect(overlay, outline, clip.move(1, 1), border_radius=max(1, self.cell_px // 28))
+                    self.pygame.draw.rect(overlay, metal, clip, border_radius=max(1, self.cell_px // 28))
+            elif tool_shape == "jammer":
+                body = self.pygame.Rect(
+                    max(3, self.cell_px // 4),
+                    max(4, self.cell_px // 3),
+                    self.cell_px - max(6, self.cell_px // 2),
+                    max(6, self.cell_px // 3),
+                )
+                self.pygame.draw.rect(overlay, outline, body.move(1, 1), border_radius=max(2, self.cell_px // 12))
+                self.pygame.draw.rect(overlay, dark, body, border_radius=max(2, self.cell_px // 12))
+                self.pygame.draw.rect(overlay, stroke, body, stroke_w, border_radius=max(2, self.cell_px // 12))
+                antenna = (body.centerx, body.top)
+                self.pygame.draw.line(overlay, metal, antenna, (antenna[0], max(2, self.cell_px // 6)), max(1, stroke_w))
+                for radius in (max(4, self.cell_px // 4), max(6, self.cell_px // 3)):
+                    self.pygame.draw.arc(
+                        overlay,
+                        chemical,
+                        (antenna[0] - radius // 2, max(1, antenna[1] - radius // 2), radius, radius),
+                        4.0,
+                        5.4,
+                        max(1, stroke_w),
+                    )
+                self.pygame.draw.circle(overlay, glass, body.center, max(1, self.cell_px // 12))
+            elif tool_shape == "programmer":
+                deck = self.pygame.Rect(
+                    max(3, self.cell_px // 5),
+                    max(4, self.cell_px // 3),
+                    self.cell_px - max(6, (self.cell_px // 5) * 2),
+                    max(6, self.cell_px // 3),
+                )
+                screen = deck.inflate(-max(4, self.cell_px // 4), -max(3, self.cell_px // 5))
+                screen.y = deck.top + max(2, self.cell_px // 8)
+                self.pygame.draw.rect(overlay, outline, deck.move(1, 1), border_radius=max(2, self.cell_px // 12))
+                self.pygame.draw.rect(overlay, dark, deck, border_radius=max(2, self.cell_px // 12))
+                self.pygame.draw.rect(overlay, stroke, deck, stroke_w, border_radius=max(2, self.cell_px // 12))
+                self.pygame.draw.rect(overlay, glass, screen, border_radius=max(1, self.cell_px // 28))
+                for idx in range(3):
+                    px = deck.left + max(3, deck.w // 4) + idx * max(2, deck.w // 6)
+                    self.pygame.draw.line(overlay, metal, (px, deck.bottom), (px, self.cell_px - max(3, self.cell_px // 5)), max(1, stroke_w))
+                    self.pygame.draw.circle(overlay, chemical, (px, self.cell_px - max(3, self.cell_px // 5)), max(1, stroke_w))
+            elif tool_shape == "battery_pack":
+                battery = self.pygame.Rect(
+                    max(3, self.cell_px // 4),
+                    max(4, self.cell_px // 3),
+                    self.cell_px - max(6, self.cell_px // 2),
+                    max(6, self.cell_px // 3),
+                )
+                nub = self.pygame.Rect(battery.right, battery.top + max(2, battery.h // 4), max(2, self.cell_px // 10), max(3, battery.h // 2))
+                self.pygame.draw.rect(overlay, outline, battery.move(1, 1), border_radius=max(2, self.cell_px // 12))
+                self.pygame.draw.rect(overlay, fill, battery, border_radius=max(2, self.cell_px // 12))
+                self.pygame.draw.rect(overlay, stroke, battery, stroke_w, border_radius=max(2, self.cell_px // 12))
+                self.pygame.draw.rect(overlay, metal, nub, border_radius=max(1, self.cell_px // 30))
+                self.pygame.draw.line(overlay, highlight, (battery.left + max(2, battery.w // 4), battery.centery), (battery.right - max(2, battery.w // 4), battery.centery), max(1, stroke_w))
+            elif tool_shape in {"cutters", "multitool"}:
+                hinge = (mid_x, mid_y)
+                arm_len = max(5, self.cell_px // 3)
+                self.pygame.draw.circle(overlay, outline, (hinge[0] + 1, hinge[1] + 1), max(2, self.cell_px // 10))
+                self.pygame.draw.circle(overlay, metal, hinge, max(2, self.cell_px // 10))
+                for sx in (-1, 1):
+                    self.pygame.draw.line(
+                        overlay,
+                        outline,
+                        hinge,
+                        (mid_x + sx * arm_len, self.cell_px - max(3, self.cell_px // 5)),
+                        max(3, stroke_w + 1),
+                    )
+                    self.pygame.draw.line(
+                        overlay,
+                        stroke,
+                        hinge,
+                        (mid_x + sx * arm_len, self.cell_px - max(3, self.cell_px // 5)),
+                        max(2, stroke_w),
+                    )
+                    self.pygame.draw.line(
+                        overlay,
+                        metal,
+                        hinge,
+                        (mid_x + sx * max(4, self.cell_px // 4), max(3, self.cell_px // 4)),
+                        max(2, stroke_w),
+                    )
+            elif tool_shape == "mirror":
+                handle_start = (max(4, self.cell_px // 4), self.cell_px - max(3, self.cell_px // 5))
+                mirror_center = (self.cell_px - max(4, self.cell_px // 3), max(4, self.cell_px // 3))
+                self.pygame.draw.line(overlay, outline, (handle_start[0] + 1, handle_start[1] + 1), (mirror_center[0] + 1, mirror_center[1] + 1), max(3, stroke_w + 1))
+                self.pygame.draw.line(overlay, metal, handle_start, mirror_center, max(2, stroke_w))
+                self.pygame.draw.circle(overlay, outline, (mirror_center[0] + 1, mirror_center[1] + 1), max(3, self.cell_px // 6))
+                self.pygame.draw.circle(overlay, glass, mirror_center, max(3, self.cell_px // 6))
+                self.pygame.draw.circle(overlay, stroke, mirror_center, max(3, self.cell_px // 6), max(1, stroke_w))
+            else:
+                handle_x0 = max(2, self.cell_px // 4)
+                handle_y0 = self.cell_px - max(4, self.cell_px // 3)
+                handle_x1 = self.cell_px - max(4, self.cell_px // 4)
+                handle_y1 = max(3, self.cell_px // 3)
+                self.pygame.draw.line(overlay, outline, (handle_x0 + 1, handle_y0 + 1), (handle_x1 + 1, handle_y1 + 1), max(3, stroke_w + 2))
+                self.pygame.draw.line(overlay, metal, (handle_x0, handle_y0), (handle_x1, handle_y1), max(2, stroke_w + 1))
+                jaw_r = max(2, self.cell_px // 7)
+                self.pygame.draw.circle(overlay, metal, (handle_x1, handle_y1), jaw_r)
+                self.pygame.draw.circle(overlay, outline, (handle_x1 + max(1, jaw_r // 2), handle_y1 - max(1, jaw_r // 2)), max(1, jaw_r - 1))
+                self.pygame.draw.line(
+                    overlay,
+                    highlight,
+                    (handle_x0 + max(1, self.cell_px // 12), handle_y0 - max(1, self.cell_px // 12)),
+                    (handle_x1 - max(1, self.cell_px // 12), handle_y1 + max(1, self.cell_px // 12)),
+                    max(1, stroke_w),
+                )
         elif kind == "ammo":
             box = self.pygame.Rect(
                 max(2, self.cell_px // 5),
@@ -2001,7 +2174,7 @@ class PygameView:
                 (sleeve, max(4, self.cell_px // 3)),
             ]
             self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in points], stroke_w + 1)
-            self.pygame.draw.polygon(overlay, cloth, points)
+            self.pygame.draw.polygon(overlay, fill, points)
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
             self.pygame.draw.line(overlay, highlight, (mid_x - max(2, self.cell_px // 8), max(3, self.cell_px // 4)), (mid_x + max(2, self.cell_px // 8), max(3, self.cell_px // 4)), max(1, stroke_w))
         elif kind == "disguise":
@@ -5608,10 +5781,10 @@ class PygameView:
         }
         item_kind = item_kind_map.get(semantic_key) or item_kind_map.get(color_key)
         if item_kind:
-            self._draw_item_overlay(x, y, color=color, attrs=attrs, kind=item_kind)
+            self._draw_item_overlay(x, y, color=color, attrs=attrs, kind=item_kind, effects=effects)
             return f"item_{item_kind}"
         if semantic_key == "item_objective":
-            self._draw_item_overlay(x, y, color=color or "objective", attrs=attrs, kind="objective")
+            self._draw_item_overlay(x, y, color=color or "objective", attrs=attrs, kind="objective", effects=effects)
             return "item_objective"
         if (
             semantic_key.startswith("property_vehicle")

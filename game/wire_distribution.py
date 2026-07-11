@@ -46,6 +46,7 @@ WIRE_STORE_POOL_EXTRAS = {
         ("cracked_service_dongle", 4),
         ("corp_interface_cable", 3),
         ("cheap_deck", 3),
+        ("wetwire_jack", 2),
         ("wire_route_probe_program", 4),
         ("wire_talk_program", 3),
         ("wire_door_latch_program", 2),
@@ -70,6 +71,7 @@ WIRE_STORE_POOL_EXTRAS = {
     "comms_shop": (
         ("cheap_deck", 4),
         ("skin_contact_rig", 3),
+        ("wetwire_jack", 2),
         ("drone_radio_bridge", 3),
         ("wire_talk_program", 5),
         ("wire_route_probe_program", 3),
@@ -81,6 +83,7 @@ WIRE_STORE_POOL_EXTRAS = {
         ("drone_radio_bridge", 4),
         ("cheap_deck", 3),
         ("skin_contact_rig", 2),
+        ("wetwire_jack", 1),
         ("wire_talk_program", 3),
         ("wire_route_probe_program", 3),
         ("wire_camera_loop_program", 1),
@@ -135,6 +138,7 @@ WIRE_STORE_POOL_EXTRAS = {
     "pawn_shop": (
         ("cheap_deck", 3),
         ("skin_contact_rig", 2),
+        ("wetwire_jack", 1),
         ("cracked_service_dongle", 2),
         ("wire_talk_program", 2),
         ("wire_route_probe_program", 2),
@@ -153,6 +157,7 @@ WIRE_STORE_POOL_EXTRAS = {
     "chop_shop": (
         ("cracked_service_dongle", 3),
         ("drone_radio_bridge", 2),
+        ("wetwire_jack", 1),
         ("wire_route_probe_program", 2),
         ("wire_door_latch_program", 2),
         ("wire_camera_loop_program", 1),
@@ -191,6 +196,7 @@ WIRE_STREET_VENDOR_POOL_EXTRAS = {
     ),
     "alley_market": (
         "cheap_deck",
+        "wetwire_jack",
         "cracked_service_dongle",
         "wire_route_probe_program",
         "wire_signal_cloak_program",

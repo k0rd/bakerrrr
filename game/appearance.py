@@ -13,6 +13,7 @@ from game.appearance_loadout import (
     player_appearance_color_key,
     player_appearance_color_word,
 )
+from game.color_words import clothing_render_key_for_color_word
 from game.dialogue_runtime import active_contractor_record
 from game.human_description import human_render_color_key as _human_render_color_key
 from game.property_runtime import (
@@ -1259,7 +1260,12 @@ def item_render_kind(item_def):
         else {}
     )
 
-    if drone_profile or category in {"drone", "drone_part"} or "drone" in tags:
+    if (
+        drone_profile
+        or category in {"drone", "drone_part"}
+        or item_id == "packed_drone"
+        or bool(tags & {"drone_chassis", "drone_module", "drone_power", "drone_battery"})
+    ):
         drone_kind = str(drone_profile.get("kind", "") or "").strip().lower()
         if drone_kind == "assembly" or category == "drone" or item_id == "packed_drone":
             return "drone"
@@ -1319,21 +1325,98 @@ def item_render_kind(item_def):
     return "ground"
 
 
+_OBVIOUS_LEGAL_STATUS_TAGS = frozenset(
+    {
+        "aerosol_trap",
+        "explosive",
+        "launcher",
+        "missile",
+        "ordnance",
+        "rocket",
+    }
+)
+
+
+_ITEM_SHAPE_EFFECTS = {
+    "battery_pack": "tool_shape_battery_pack",
+    "bolt_cutters": "tool_shape_cutters",
+    "drone_programmer": "tool_shape_programmer",
+    "glass_cutter": "tool_shape_glass_cutter",
+    "hotwire_leads": "tool_shape_leads",
+    "inspection_mirror": "tool_shape_mirror",
+    "lockpick_kit": "tool_shape_lockpick_kit",
+    "pocket_multitool": "tool_shape_multitool",
+    "pruning_shears": "tool_shape_cutters",
+    "prybar": "tool_shape_prybar",
+    "signal_jammer": "tool_shape_jammer",
+}
+
+
+def _visible_legal_status_color(item_def, tags):
+    legal_status = str(item_def.get("legal_status", "legal") or "legal").strip().lower()
+    if legal_status not in {"illegal", "restricted"}:
+        return ""
+    if tags & _OBVIOUS_LEGAL_STATUS_TAGS:
+        return "item_illegal" if legal_status == "illegal" else "item_restricted"
+    return ""
+
+
+def _clothing_color_from_metadata(item_def, metadata):
+    if not isinstance(item_def, Mapping) or not isinstance(metadata, Mapping):
+        return "", None
+    tags = _item_tags(item_def)
+    category = str(item_def.get("category", "") or "").strip().lower()
+    if not (
+        category in {"cosmetic", "disguise"}
+        or "clothing" in tags
+        or "cosmetic" in tags
+        or "disguise" in tags
+    ):
+        return "", None
+
+    explicit_render = str(
+        metadata.get("render_color") or metadata.get("color_key") or ""
+    ).strip().lower()
+    if explicit_render.startswith("clothing_"):
+        return explicit_render, explicit_render.removeprefix("clothing_") or None
+
+    appearance = metadata.get("appearance") if isinstance(metadata.get("appearance"), Mapping) else {}
+    word = str(
+        metadata.get("color_word")
+        or metadata.get("color")
+        or appearance.get("color_word")
+        or appearance.get("color")
+        or ""
+    ).strip().lower()
+    color = clothing_render_key_for_color_word(word, default="") if word else ""
+    if color:
+        return str(color), word or None
+    return "clothing_charcoal", "charcoal"
+
+
+def _item_shape_effects(item_def, render_kind):
+    item_id = str(item_def.get("id", "") or "").strip().lower()
+    effect = _ITEM_SHAPE_EFFECTS.get(item_id)
+    if not effect:
+        return ()
+    if render_kind == "tool" and effect.startswith("tool_shape_"):
+        return (effect,)
+    return ()
+
+
 def ground_item_color(item_def):
     if not isinstance(item_def, dict):
         return "item_ground"
 
-    legal_status = str(item_def.get("legal_status", "legal")).strip().lower()
     tags = {
         str(tag).strip().lower()
         for tag in item_def.get("tags", [])
         if str(tag).strip()
     }
 
-    if legal_status == "illegal":
-        return "item_illegal"
-    if legal_status == "restricted":
-        return "item_restricted"
+    visible_status_color = _visible_legal_status_color(item_def, tags)
+    if visible_status_color:
+        return visible_status_color
     if "weapon" in tags:
         return "item_weapon"
     if "armor" in tags:
@@ -1377,12 +1460,19 @@ def item_render_snapshot(item_def, *, metadata=None, catalog=None):
     glyph = item_display_glyph(item_def)
     color = ground_item_color(item_def)
     render_kind = item_render_kind(item_def)
+    color_word = None
+    clothing_color, clothing_word = _clothing_color_from_metadata(item_def, metadata)
+    if clothing_color:
+        color = clothing_color
+        color_word = clothing_word
     return _semantic_snapshot(
         glyph,
         color=color,
+        color_word=color_word,
         semantic_id=f"item_{render_kind}",
         catalog=catalog,
         preferred_categories=("items",),
+        effects=_item_shape_effects(item_def, render_kind),
     )
 
 

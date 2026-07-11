@@ -1346,7 +1346,7 @@ def bootstrap_normal_run(
         player_insight,
         player_skill_profile,
         NPCNeeds(energy=78, safety=68, social=54, hunger=86, thirst=90),
-        Inventory(capacity=14),
+        Inventory(capacity=28),
         StatusEffects(),
         Vitality(max_hp=120, recover_to_hp=42),
         ArmorLoadout(),
