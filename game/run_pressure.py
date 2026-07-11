@@ -143,7 +143,7 @@ def apply_pressure_delta(
         state["last_decay_tick"] = tick
 
     key = str(source or "unknown").strip().lower() or "unknown"
-    if actual < 0 and key in {"shelter", "banking", "insurance", "lay_low", "passive_decay"}:
+    if actual < 0 and key in {"shelter", "banking", "insurance", "lay_low", "passive_decay", "appearance_changed"}:
         state["mitigation_count"] = int(state["mitigation_count"]) + 1
 
     entry = {
@@ -186,6 +186,7 @@ class RunPressureSystem(System):
     PRESSURE_REPEAT_SCALARS = (1.0, 0.75, 0.55, 0.4)
     BANKING_MITIGATION_COOLDOWN = 90
     BANKING_MITIGATION_MIN_AMOUNT = 20
+    APPEARANCE_MITIGATION_COOLDOWN = 60
 
     def __init__(self, sim, player_eid):
         super().__init__(sim)
@@ -194,6 +195,7 @@ class RunPressureSystem(System):
         self.last_pressure_event_tick = {}
         self.pressure_event_streak = {}
         self.last_banking_mitigation_tick = {}
+        self.last_appearance_mitigation_tick = -10_000
         self.sim.events.subscribe("action_offense", self.on_action_offense)
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
@@ -204,6 +206,13 @@ class RunPressureSystem(System):
         self.sim.events.subscribe("site_service_used", self.on_site_service_used)
         self.sim.events.subscribe("bank_transaction", self.on_bank_transaction)
         self.sim.events.subscribe("insurance_policy_purchased", self.on_insurance_policy_purchased)
+        self.sim.events.subscribe("appearance_item_equipped", self.on_appearance_changed)
+        self.sim.events.subscribe("appearance_item_unequipped", self.on_appearance_changed)
+        self.sim.events.subscribe("appearance_style_updated", self.on_appearance_changed)
+        self.sim.events.subscribe("armor_equipped", self.on_appearance_changed)
+        self.sim.events.subscribe("armor_removed", self.on_appearance_changed)
+        self.sim.events.subscribe("disguise_equipped", self.on_appearance_changed)
+        self.sim.events.subscribe("disguise_removed", self.on_appearance_changed)
         self.sim.events.subscribe("player_action", self.on_player_action)
 
     def _event_cooldown_for(self, source):
@@ -700,6 +709,58 @@ class RunPressureSystem(System):
                 "policy_name": str(event.data.get("policy_name", "") or "").strip(),
                 "property_id": str(event.data.get("property_id", "") or "").strip(),
                 "provider_name": str(event.data.get("provider_name", "") or "").strip(),
+            },
+        )
+
+    def _appearance_change_reason(self, event):
+        event_type = str(getattr(event, "type", "") or "").strip().lower()
+        if event_type == "appearance_style_updated":
+            style_kind = str(event.data.get("style_kind", "") or "").strip().lower()
+            if style_kind in {"hair_style", "hair_color"}:
+                return "hair_change", 2
+            if style_kind.startswith("makeup"):
+                return "makeup_change", 1
+            return "style_change", 1
+        if event_type in {"disguise_equipped", "disguise_removed"}:
+            return "cover_change", 2
+        if event_type in {"armor_equipped", "armor_removed"}:
+            return "visible_gear_change", 2
+        slot = str(event.data.get("slot", "") or "").strip().lower()
+        if slot in {"full_body", "outer"}:
+            return "outfit_change", 2
+        if slot in {"top", "bottom", "hat", "shoes"}:
+            return "clothing_change", 1
+        return "small_appearance_change", 0
+
+    def on_appearance_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if str(event.data.get("reason", "") or "").strip().lower() == "justice_booking_release":
+            return
+        snapshot = pressure_snapshot(self.sim)
+        attention = int(snapshot.get("attention", 0))
+        if attention < 8:
+            return
+        tick = int(getattr(self.sim, "tick", 0))
+        if tick - int(self.last_appearance_mitigation_tick) < int(self.APPEARANCE_MITIGATION_COOLDOWN):
+            return
+        reason, bonus = self._appearance_change_reason(event)
+        tier = str(snapshot.get("tier", "low")).strip().lower()
+        reduction = 1 if tier == "low" else 2 if tier == "medium" else 3
+        reduction = max(1, min(5, int(reduction) + int(bonus)))
+        self.last_appearance_mitigation_tick = tick
+        self._emit_pressure(
+            delta=-reduction,
+            source="appearance_changed",
+            reason=reason,
+            source_event=str(getattr(event, "type", "") or "appearance_changed"),
+            category="mitigation",
+            extra={
+                "item_id": str(event.data.get("item_id", "") or "").strip(),
+                "item_name": str(event.data.get("item_name") or event.data.get("armor_name") or "").strip(),
+                "slot": str(event.data.get("slot", "") or "").strip().lower(),
+                "style_kind": str(event.data.get("style_kind", "") or "").strip().lower(),
+                "style_value": str(event.data.get("style_value", "") or "").strip().lower(),
             },
         )
 

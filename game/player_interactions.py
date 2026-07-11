@@ -1263,7 +1263,7 @@ class PlayerInteractionRuntime:
         target_instance_id = str(target_entry.get("instance_id", "")).strip()
         disguise = getattr(self.sim, "disguise_state", None)
         if isinstance(disguise, dict) and str(disguise.get("instance_id", "")).strip() == target_instance_id:
-            _log_player_feedback(self.sim, "Remove the active disguise before stashing it.", kind="interaction")
+            _log_player_feedback(self.sim, "Remove the active cover before stashing it.", kind="interaction")
             return False
         container = getattr(self.sim, "equipped_container", None)
         if isinstance(container, dict) and str(container.get("instance_id", "")).strip() == target_instance_id:

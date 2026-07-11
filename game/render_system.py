@@ -4044,7 +4044,7 @@ class RenderSystem(System):
                 strength_pct = int(round(float(active_disguise.get("strength", 0.0)) * 100.0))
             except (TypeError, ValueError):
                 strength_pct = 0
-            status_chunks.append(f"Disguise {role_text} {max(0, strength_pct)}%")
+            status_chunks.append(f"Cover {role_text} {max(0, strength_pct)}%")
         stakeout_snapshot = _stakeout_progress_snapshot(self.sim, self.player_eid, player_pos, require_hidden=False)
         if isinstance(stakeout_snapshot, dict) and (bool(stakeout_snapshot.get("hidden")) or bool(stakeout_snapshot.get("active"))):
             target_name = str(stakeout_snapshot.get("property_name", "site")).strip() or "site"
@@ -4788,7 +4788,7 @@ class RenderSystem(System):
                         isinstance(active_disguise, dict)
                         and str(active_disguise.get("instance_id", "")).strip() == entry_instance_id
                     ):
-                        gear_marker = "D"
+                        gear_marker = "K"
                         row_color = "inventory_equipped_consequence"
                     if not gear_marker and weapon_loadout:
                         weapon_id = _item_weapon_id(item_def)

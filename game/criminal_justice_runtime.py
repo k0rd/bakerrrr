@@ -45,6 +45,14 @@ def observer_is_active_contractor_ally(sim, observer_eid, offender_eid):
     ) is not None
 
 
+def observer_is_active_bodyguard(sim, observer_eid):
+    return _active_contractor_record(
+        sim,
+        observer_eid,
+        jobs={"bodyguard"},
+    ) is not None
+
+
 def observer_turns_blind_eye_to_offense(sim, observer_eid, offender_eid, *, action="", context="ordinary", offense_score=0):
     if sim is None or observer_eid is None or offender_eid is None:
         return False
@@ -202,6 +210,7 @@ _justice_snapshot = _justice_snapshot
 _justice_summary_rows = _justice_summary_rows
 _mark_justice_in_custody = _mark_justice_in_custody
 _noise_merits_attention = noise_merits_attention
+_observer_is_active_bodyguard = observer_is_active_bodyguard
 _observer_is_active_contractor_ally = observer_is_active_contractor_ally
 _observer_turns_blind_eye_to_offense = observer_turns_blind_eye_to_offense
 _record_justice_booking_completion = _record_justice_booking_completion

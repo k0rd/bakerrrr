@@ -6681,7 +6681,7 @@ class InputSystem(System):
         disguise_profile = item_def.get("disguise", {}) if isinstance(item_def.get("disguise"), dict) else {}
         disguise_role_id = str(disguise_profile.get("role_id", "")).strip().lower()
         if disguise_role_id:
-            disguise_bits = [f"disguise {_disguise_role_label(disguise_role_id)}"]
+            disguise_bits = [f"cover {_disguise_role_label(disguise_role_id)}"]
             active_disguise = getattr(self.sim, "disguise_state", None)
             if (
                 isinstance(active_disguise, dict)

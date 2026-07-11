@@ -81,18 +81,20 @@ def _normalize_item_category(item_id, tags, item):
         return "ammo"
     if item.get("throw_profile") or "throwable" in tag_set:
         return "throwable"
-    if "cosmetic" in tag_set:
-        return "cosmetic"
-    if item.get("disguise") or "disguise" in tag_set:
-        return "disguise"
-    if item.get("armor") or "armor" in tag_set or "wearable" in tag_set:
+    if item.get("armor") or "armor" in tag_set:
         return "armor"
+    if "cosmetic" in tag_set or "clothing" in tag_set:
+        return "cosmetic"
     if "medical" in tag_set:
         return "medical"
     if "consumable" in tag_set or item.get("effects"):
         return "consumable"
     if "key" in tag_set or "credential" in tag_set:
         return "credential"
+    if item.get("disguise") or "disguise" in tag_set:
+        return "misc"
+    if "wearable" in tag_set:
+        return "armor"
     if "communication" in tag_set or "phone" in tag_set or "cellular" in tag_set:
         return "device"
     if item.get("container"):

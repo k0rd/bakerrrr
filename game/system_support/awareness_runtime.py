@@ -67,6 +67,13 @@ def _observer_ignores_offender(sim, observer_eid, offender_eid):
         return False
 
 
+def _observer_is_private_bodyguard(sim, observer_eid):
+    try:
+        return bool(_observer_support()._observer_is_active_bodyguard(sim, observer_eid))
+    except AttributeError:
+        return False
+
+
 def _filter_observers_for_offender(sim, observer_eids, excluded_eids=(), *, offender_eid=None):
     observers = _filter_excluded_observers(observer_eids, excluded_eids)
     if offender_eid is None:
@@ -74,7 +81,8 @@ def _filter_observers_for_offender(sim, observer_eids, excluded_eids=(), *, offe
     return tuple(
         observer_eid
         for observer_eid in observers
-        if not _observer_ignores_offender(sim, observer_eid, offender_eid)
+        if _observer_is_private_bodyguard(sim, observer_eid)
+        or not _observer_ignores_offender(sim, observer_eid, offender_eid)
     )
 
 
@@ -137,6 +145,8 @@ def _observer_is_accountable(sim, observer_eid, *, offender_eid=None, allow_play
     if not allow_player_accountable and observer_eid == getattr(sim, "player_eid", None):
         return False
     if _observer_ignores_offender(sim, observer_eid, offender_eid):
+        return False
+    if _observer_is_private_bodyguard(sim, observer_eid):
         return False
     return _observer_role(sim, observer_eid) != "wildlife"
 
@@ -368,7 +378,11 @@ def _watchers_for_position(sim, x, y, z, exclude_eid=None, exclude_eids=(), offe
     for observer_eid, observer_pos in positions.items():
         if observer_eid in excluded:
             continue
-        if offender_eid is not None and support._observer_is_active_contractor_ally(sim, observer_eid, offender_eid):
+        if (
+            offender_eid is not None
+            and support._observer_is_active_contractor_ally(sim, observer_eid, offender_eid)
+            and not _observer_is_private_bodyguard(sim, observer_eid)
+        ):
             continue
         if int(observer_pos.z) != int(z):
             continue

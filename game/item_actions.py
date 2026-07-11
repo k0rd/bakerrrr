@@ -142,6 +142,68 @@ class ItemActionRuntime:
             item_catalog=self.catalog,
         )
 
+    def _clear_disguise_if_source(self, eid, instance_id, *, reason="removed"):
+        instance_id = str(instance_id or "").strip()
+        if not instance_id:
+            return False
+        current = getattr(self.sim, "disguise_state", None)
+        if not isinstance(current, dict):
+            return False
+        if str(current.get("instance_id", "")).strip() != instance_id:
+            return False
+        self.sim.disguise_state = None
+        self.sim.emit(Event(
+            "disguise_removed",
+            eid=eid,
+            item_id=current.get("item_id"),
+            item_name=current.get("item_name", ""),
+            reason=reason,
+        ))
+        return True
+
+    def _activate_cover_from_item(self, eid, entry, item_def, *, item_name="", reason="manual"):
+        disguise_profile = item_def.get("disguise", {}) if isinstance(item_def, dict) else {}
+        if not isinstance(disguise_profile, dict) or not disguise_profile:
+            return False
+        item_id = item_def.get("id") or entry.get("item_id")
+        instance_id = str(entry.get("instance_id") or "").strip()
+        if not instance_id:
+            return False
+        if not item_name:
+            item_name = self._display_name_for_actor(eid, entry)
+        current = getattr(self.sim, "disguise_state", None)
+        if isinstance(current, dict) and str(current.get("instance_id", "")).strip() == instance_id:
+            return True
+        if isinstance(current, dict):
+            self.sim.emit(Event(
+                "disguise_removed",
+                eid=eid,
+                item_id=current.get("item_id"),
+                item_name=current.get("item_name", ""),
+                reason="replaced",
+            ))
+        role_id = str(disguise_profile.get("role_id", "worker")).strip()
+        strength = float(disguise_profile.get("strength", 1.0))
+        self.sim.disguise_state = {
+            "item_id": item_id,
+            "instance_id": instance_id,
+            "item_name": item_name,
+            "role_id": role_id,
+            "strength": strength,
+            "equipped_tick": int(getattr(self.sim, "tick", 0)),
+            "source": "visible_item",
+        }
+        self.sim.emit(Event(
+            "disguise_equipped",
+            eid=eid,
+            item_id=item_id,
+            item_name=item_name,
+            role_id=role_id,
+            strength=strength,
+            reason=reason,
+        ))
+        return True
+
     def _maybe_identify_item(self, eid, item_or_entry, *, source_kind="direct"):
         profile = item_identification_profile(item_or_entry, item_catalog=self.catalog)
         if not profile.get("requires_identification", False):
@@ -312,6 +374,7 @@ class ItemActionRuntime:
             removed_reduction = loadout.damage_reduction
             loadout.clear()
             mark_inventory_instance_worn(self.sim, eid, entry.get("instance_id"), worn=False)
+            self._clear_disguise_if_source(eid, entry.get("instance_id"), reason=reason)
             self.sim.emit(Event(
                 "armor_removed",
                 eid=eid,
@@ -345,6 +408,7 @@ class ItemActionRuntime:
             previous_instance_id = loadout.equipped_instance_id
             loadout.clear()
             mark_inventory_instance_worn(self.sim, eid, previous_instance_id, worn=False)
+            self._clear_disguise_if_source(eid, previous_instance_id, reason="replaced")
             self.sim.emit(Event(
                 "armor_removed",
                 eid=eid,
@@ -383,6 +447,7 @@ class ItemActionRuntime:
             slot=armor_slot,
             damage_reduction=armor["damage_reduction"],
         ))
+        self._activate_cover_from_item(eid, entry, item_def, item_name=item_name, reason=reason)
         return True
 
     def _toggle_disguise_item(self, eid, entry, item_def, reason="manual"):
@@ -394,43 +459,8 @@ class ItemActionRuntime:
         item_name = self._display_name_for_actor(eid, entry)
         current = getattr(self.sim, "disguise_state", None)
         if isinstance(current, dict) and current.get("instance_id") == instance_id:
-            self.sim.disguise_state = None
-            self.sim.emit(Event(
-                "disguise_removed",
-                eid=eid,
-                item_id=item_id,
-                item_name=item_name,
-                reason=reason,
-            ))
-            return True
-        if isinstance(current, dict):
-            self.sim.emit(Event(
-                "disguise_removed",
-                eid=eid,
-                item_id=current.get("item_id"),
-                item_name=current.get("item_name", ""),
-                reason="replaced",
-            ))
-        role_id = str(disguise_profile.get("role_id", "worker")).strip()
-        strength = float(disguise_profile.get("strength", 1.0))
-        self.sim.disguise_state = {
-            "item_id": item_id,
-            "instance_id": instance_id,
-            "item_name": item_name,
-            "role_id": role_id,
-            "strength": strength,
-            "equipped_tick": int(getattr(self.sim, "tick", 0)),
-        }
-        self.sim.emit(Event(
-            "disguise_equipped",
-            eid=eid,
-            item_id=item_id,
-            item_name=item_name,
-            role_id=role_id,
-            strength=strength,
-            reason=reason,
-        ))
-        return True
+            return self._clear_disguise_if_source(eid, instance_id, reason=reason)
+        return self._activate_cover_from_item(eid, entry, item_def, item_name=item_name, reason=reason)
 
     def _toggle_container_item(self, eid, entry, item_def, reason="manual"):
         container_profile = item_def.get("container", {})
@@ -1429,6 +1459,10 @@ class ItemActionRuntime:
                 preferred_slot=preferred_appearance_slot,
             )
             if bool(getattr(result, "ok", False)):
+                if getattr(result, "action", "") == "equipped":
+                    self._activate_cover_from_item(eid, entry, item_def, item_name=item_name, reason=reason)
+                elif getattr(result, "action", "") in {"unequipped", "cleared_missing"}:
+                    self._clear_disguise_if_source(eid, entry.get("instance_id"), reason=reason)
                 return True
             self.sim.emit(Event(
                 "item_use_blocked",

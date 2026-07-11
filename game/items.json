@@ -5770,6 +5770,7 @@
     "stack_max": 1,
     "tags": [
       "clothing",
+      "cosmetic",
       "disguise",
       "legal"
     ],
@@ -5786,6 +5787,7 @@
     "stack_max": 1,
     "tags": [
       "clothing",
+      "cosmetic",
       "disguise",
       "legal"
     ],
@@ -5836,6 +5838,7 @@
     "stack_max": 1,
     "tags": [
       "clothing",
+      "cosmetic",
       "disguise",
       "restricted"
     ],
@@ -5852,6 +5855,7 @@
     "stack_max": 1,
     "tags": [
       "clothing",
+      "cosmetic",
       "disguise",
       "restricted"
     ],

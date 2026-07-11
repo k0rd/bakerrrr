@@ -101,6 +101,7 @@ from game.criminal_justice_runtime import (
     _justice_snapshot,
     _justice_summary_rows,
     _mark_justice_in_custody,
+    _observer_is_active_bodyguard,
     _record_justice_booking_completion,
     _record_justice_incident,
     _record_justice_questioning_resolution,
@@ -811,6 +812,8 @@ class CriminalJusticeSystem(System):
         career = str(getattr(occupation, "career", "") or "").strip().lower()
         role = str(getattr(ai, "role", "") or "").strip().lower()
         if role == "wildlife":
+            return False, 0.0, 0
+        if _observer_is_active_bodyguard(self.sim, eid):
             return False, 0.0, 0
 
         law_drive = 0.0

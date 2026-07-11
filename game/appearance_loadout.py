@@ -132,6 +132,12 @@ COSMETIC_ITEM_IDS = {
         "materials": ("cotton", "linen", "satin", "knit"),
         "styles": ("simple", "fitted", "loose", "sharp"),
     },
+    "worker_coverall": {
+        "label": "worker coverall",
+        "slots": ("full_body",),
+        "materials": ("cotton", "canvas", "poly-cotton", "duck cloth"),
+        "styles": ("issued", "work-worn", "plain", "zip-front"),
+    },
     "orange_jumpsuit": {
         "label": "jumpsuit",
         "slots": ("full_body",),
@@ -209,6 +215,24 @@ COSMETIC_ITEM_IDS = {
         "slots": ("outer",),
         "materials": ("cotton", "canvas", "wool", "denim"),
         "styles": ("sleeveless", "plain", "neat", "severe"),
+    },
+    "maintenance_vest": {
+        "label": "maintenance vest",
+        "slots": ("outer",),
+        "materials": ("canvas", "polyester", "ripstop", "duck cloth"),
+        "styles": ("high-visibility", "pocketed", "issued", "work-worn"),
+    },
+    "patrol_rain_shell": {
+        "label": "patrol rain shell",
+        "slots": ("outer",),
+        "materials": ("nylon", "ripstop", "weatherproof cloth", "polyester"),
+        "styles": ("hooded", "issued", "zip-front", "weatherproof"),
+    },
+    "security_jacket": {
+        "label": "security jacket",
+        "slots": ("outer",),
+        "materials": ("nylon", "canvas", "polyester", "weatherproof cloth"),
+        "styles": ("issued", "boxy", "patched", "dark"),
     },
     "butcher_apron": {
         "label": "butcher apron",
@@ -668,7 +692,8 @@ def is_appearance_item(entry_or_item_id, *, item_catalog=None):
         item_id = _key(entry_or_item_id)
     item_def = _item_def(item_id, item_catalog=item_catalog)
     tags = {_key(tag) for tag in item_def.get("tags", ())}
-    return item_id in COSMETIC_ITEM_IDS or "cosmetic" in tags
+    category = _key(item_def.get("category"))
+    return item_id in COSMETIC_ITEM_IDS or category == "cosmetic" or "cosmetic" in tags or "clothing" in tags
 
 
 def is_entry_worn(entry):

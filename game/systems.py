@@ -3801,6 +3801,7 @@ from game.criminal_justice_runtime import (
     _defender_excuses_window_shot,
     _entities_have_family_bond,
     _noise_merits_attention,
+    _observer_is_active_bodyguard,
     _observer_is_active_contractor_ally,
     _observer_turns_blind_eye_to_offense,
 )

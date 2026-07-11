@@ -30,6 +30,7 @@ from game.system_support.actor_attention_runtime import record_area_warmth
 from game.system_support.item_provenance_runtime import CLAIM_PUBLIC_FREE, CLAIM_SCENE_SALVAGE, classify_item_claim, stamp_item_provenance
 from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS, WILDLIFE_OFFENSE_CONTEXTS
 from game.system_support.social_knowledge_runtime import hydrate_incident_social_knowledge
+from game.criminal_justice_runtime import _observer_is_active_bodyguard
 from game.vision_scene_runtime import event_is_vision_only
 
 
@@ -852,6 +853,7 @@ class IncidentKnowledgeSystem(System):
             primary_actor_eid=incident.get("primary_actor_eid"),
             official_reportable=bool(incident.get("official_reportable", official_reportable)),
         ))
+        self._learn_private_bodyguard_observers(incident, event, observation)
         return incident
 
     def _vehicle_fire_owner_suspect_payload(self, event):
@@ -966,6 +968,50 @@ class IncidentKnowledgeSystem(System):
                 confidence=1.0,
                 propagation_depth=0,
             )
+
+    def _learn_private_bodyguard_observers(self, incident, event, observation):
+        if not isinstance(incident, dict) or not isinstance(observation, dict):
+            return
+        incident_id = int(incident.get("id", 0) or 0)
+        if incident_id <= 0:
+            return
+        offender_eid = event.data.get("offender_eid", event.data.get("eid"))
+        accountable = set()
+        for eid in tuple(observation.get("accountable_observer_eids", ()) or ()):
+            try:
+                accountable.add(int(eid))
+            except (TypeError, ValueError):
+                continue
+        for observer_eid in tuple(observation.get("observer_eids", ()) or ()):
+            try:
+                observer_id = int(observer_eid)
+            except (TypeError, ValueError):
+                continue
+            if observer_id in accountable:
+                continue
+            if offender_eid is not None:
+                try:
+                    if observer_id == int(offender_eid):
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            if not _observer_is_active_bodyguard(self.sim, observer_id):
+                continue
+            record = self._learn_incident(
+                observer_id,
+                incident_id,
+                source_kind="private_bodyguard_witness",
+                source_eid=offender_eid,
+                firsthand=True,
+                confidence=1.0,
+                propagation_depth=0,
+                queue=False,
+            )
+            if isinstance(record, dict):
+                record["private_bodyguard_memory"] = True
+                record["spreadable"] = False
+                record["urgency"] = 0.0
+                record["social_interest"] = 0.0
 
     def _learn_victim_survivor_memory(self, incident, event):
         incident_id = int(incident.get("id", 0) or 0)

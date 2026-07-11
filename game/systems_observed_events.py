@@ -38,6 +38,7 @@ from game.npc_relationships import incident_relationship_override
 from game.organizations import actor_org_memberships
 from game.property_runtime import property_covering as _property_covering
 from game.system_support.social_knowledge_runtime import hydrate_incident_social_knowledge
+from game.criminal_justice_runtime import _observer_is_active_bodyguard
 
 
 PEACE_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
@@ -195,6 +196,8 @@ class ObservedIncidentConsequenceSystem(System):
         socials = self.sim.ecs.get(NPCSocial)
 
         for from_eid, knowledge in tuple(knowledge_map.items()):
+            if _observer_is_active_bodyguard(self.sim, from_eid):
+                continue
             pos = positions.get(from_eid)
             social = socials.get(from_eid)
             if not pos or not social:
@@ -584,6 +587,8 @@ class ObservedIncidentConsequenceSystem(System):
     def _process_urgent_queues(self):
         knowledge_map = self.sim.ecs.get(IncidentKnowledge)
         for eid, knowledge in tuple(knowledge_map.items()):
+            if _observer_is_active_bodyguard(self.sim, eid):
+                continue
             if not knowledge.urgent_queue:
                 continue
             if (getattr(self.sim, "tick", 0) + int(eid)) % 3 != 0:

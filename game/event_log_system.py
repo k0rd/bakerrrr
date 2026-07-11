@@ -983,6 +983,20 @@ class EventLogSystem(System):
             return f"{detail}{place_suffix}" if place_name else detail
         if source == "shelter":
             return f"lying low{place_suffix}" if place_name else "lying low"
+        if source == "appearance_changed":
+            if reason == "hair_change":
+                return "changing your hair"
+            if reason == "makeup_change":
+                return "changing your makeup"
+            if reason == "cover_change":
+                return "changing visible cover"
+            if reason == "visible_gear_change":
+                return "changing visible gear"
+            if reason == "outfit_change":
+                return "changing your outfit"
+            if reason == "clothing_change":
+                return "changing clothes"
+            return "changing your look"
         if source == "banking":
             kind = str(
                 event.data.get("transaction_kind", event.data.get("kind", "transaction")) or "transaction"
@@ -5269,7 +5283,7 @@ class EventLogSystem(System):
         except (TypeError, ValueError):
             strength_pct = 100
         strength_pct = max(1, strength_pct)
-        self.sim.log.add(f"Disguise on: {item_name} ({role_text}, {strength_pct}%).")
+        self.sim.log.add(f"Cover on: {item_name} ({role_text}, {strength_pct}%).")
 
     def on_disguise_removed(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -5277,16 +5291,16 @@ class EventLogSystem(System):
         item_name = str(event.data.get("item_name", event.data.get("item_id", "disguise"))).strip() or "disguise"
         reason = str(event.data.get("reason", "") or "").strip().lower()
         if reason in {"dropped", "sold", "stashed"}:
-            self.sim.log.add(f"Disguise lost: {item_name}.")
+            self.sim.log.add(f"Cover lost: {item_name}.")
             return
-        self.sim.log.add(f"Disguise off: {item_name}.")
+        self.sim.log.add(f"Cover off: {item_name}.")
 
     def on_disguise_blown(self, event):
         if event.data.get("eid") != self.player_eid:
             return
         item_name = str(event.data.get("item_name", event.data.get("item_id", "disguise"))).strip() or "disguise"
         self._log(
-            f"Disguise blown: {item_name}.",
+            f"Cover blown: {item_name}.",
             channel="alerts",
             priority="high",
             dedupe_window=6,

@@ -1287,10 +1287,10 @@ def item_render_kind(item_def):
         return "weapon"
     if category == "armor" or "armor" in tags:
         return "armor"
-    if category == "disguise" or "disguise" in tags:
-        return "disguise"
     if category == "cosmetic" or "cosmetic" in tags or "clothing" in tags:
         return "cosmetic"
+    if category == "disguise":
+        return "disguise"
     if category == "throwable" or "throwable" in tags:
         return "throwable"
     if category == "medical" or "medical" in tags:

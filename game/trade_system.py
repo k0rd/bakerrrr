@@ -1283,7 +1283,10 @@ class TradeSystem(System):
                 ("stab_vest", 10),
                 ("armored_motor_jacket", 8),
                 ("cutproof_apron", 6),
+                ("worker_coverall", 6),
                 ("maintenance_vest", 7),
+                ("patrol_rain_shell", 4),
+                ("security_jacket", 4),
                 ("pocket_multitool", 8),
                 ("bandage_roll", 10),
                 ("field_dressing", 10),
@@ -1322,6 +1325,7 @@ class TradeSystem(System):
                 ("bracelet", 6),
                 ("gloves", 6),
                 ("watch", 5),
+                ("worker_coverall", 4),
             ),
         },
         "ranger_hut": {
