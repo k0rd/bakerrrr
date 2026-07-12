@@ -1634,7 +1634,7 @@ CASINO_GAME_PROFILES = {
         "menu_label": "Play crash",
         "bet_options": (5, 15, 30),
         "prompt": "Post a stake, ride the rising multiplier, and cash out before the graph breaks.",
-        "note": "Each step gets hotter. Cash out early for a smaller win, or ride too long and lose the stake.",
+        "note": "Each tick gets hotter. Cash out early for a smaller win, or ride too long and lose the stake.",
         "social_gain": (1, 4),
     },
     "twenty_one": {
@@ -5277,7 +5277,9 @@ def _casino_plinko_resolve(seed_token, wager, drop_lane):
 
 
 CASINO_CRASH_MAX_MULTIPLIER = 30.0
-CASINO_CRASH_STEP_TICKS = 5
+CASINO_CRASH_STEP_TICKS = 1
+CASINO_CRASH_BASE_TICK_GAIN = 0.01
+CASINO_CRASH_ACCELERATION_GAIN = 0.00035
 CASINO_CRASH_AUTO_STEPS = (0.01, 0.10, 1.00)
 CASINO_CRASH_AUTO_MIN_MULTIPLIER = 1.01
 
@@ -5302,7 +5304,12 @@ def _casino_crash_multiplier_for_step(step):
     except (TypeError, ValueError):
         step = 0
     step = max(0, step)
-    return round(1.0 + (step * 0.18) + ((step * step) * 0.018), 2)
+    return round(
+        1.0
+        + (step * CASINO_CRASH_BASE_TICK_GAIN)
+        + ((step * step) * CASINO_CRASH_ACCELERATION_GAIN),
+        2,
+    )
 
 
 def _casino_crash_auto_step_value(value):

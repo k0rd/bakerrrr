@@ -5106,7 +5106,16 @@ class RenderSystem(System):
             draw_casino_art = getattr(self.view, "draw_casino_table_art", None)
             if callable(draw_casino_art) and body_h >= 5:
                 try:
-                    art_h = int(draw_casino_art(body_x, body_top, body_w, min(7, max(4, body_h // 2)), casino_ui) or 0)
+                    service_key = str(casino_ui.get("service", "") or "").strip().lower()
+                    mode_key = str(casino_ui.get("mode", "") or "").strip().lower()
+                    art_request_h = min(7, max(4, body_h // 2))
+                    if mode_key == "result" and service_key in {"keno", "plinko"}:
+                        art_request_h = min(4, art_request_h)
+                    text_rows_after_art = body_h - art_request_h - 1
+                    if mode_key == "result" and service_key in {"keno", "plinko"} and text_rows_after_art < 4:
+                        art_h = 0
+                    else:
+                        art_h = int(draw_casino_art(body_x, body_top, body_w, art_request_h, casino_ui) or 0)
                 except Exception:
                     art_h = 0
                 if art_h > 0:

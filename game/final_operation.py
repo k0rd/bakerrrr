@@ -136,6 +136,28 @@ def _manhattan(a, b):
     return abs(int(a[0]) - int(b[0])) + abs(int(a[1]) - int(b[1]))
 
 
+def _distance_text(distance):
+    try:
+        value = max(0, int(distance))
+    except (TypeError, ValueError):
+        value = 0
+    if value == 0:
+        return "here"
+    if value == 1:
+        return "1 chunk away"
+    return f"{value} chunks away"
+
+
+def _destination_text(chunk, target_label=""):
+    label = _text(target_label)
+    if label:
+        return f"the area near {label}"
+    chunk = _chunk_tuple(chunk)
+    if chunk:
+        return f"chunk {int(chunk[0])},{int(chunk[1])}"
+    return "the target area"
+
+
 def _same_actor_id(left, right):
     try:
         return int(left) == int(right)
@@ -1311,6 +1333,8 @@ def evaluate_final_operation(sim, player_eid):
     if not target:
         target = current
     distance = _manhattan(current, target)
+    destination = _destination_text(target, state.get("target_label", ""))
+    distance_text = _distance_text(distance)
     unlocked = bool(state["unlocked"])
     completed = bool(state["completed"])
     objective_id = _text(state.get("objective_id")).lower()
@@ -1349,10 +1373,10 @@ def evaluate_final_operation(sim, player_eid):
         elif target_property_id:
             if distance > 0:
                 summary_line = (
-                    f"Final operation: recover {item_label} from {label} "
-                    f"in chunk ({target[0]},{target[1]}) [{state.get('target_label', 'target')}] ({distance}c)."
+                    f"Final operation: recover {item_label} from {label}. "
+                    f"Target area is {destination}, {distance_text}."
                 )
-                next_step = f"Travel to target chunk and hit {label}."
+                next_step = f"Travel to {destination} and hit {label}."
             elif str(getattr(sim, "zoom_mode", "city")).strip().lower() == "overworld":
                 summary_line = f"Final operation: recover {item_label} from {label}."
                 next_step = f"Enter local area and hit {label}."
@@ -1375,16 +1399,15 @@ def evaluate_final_operation(sim, player_eid):
                 next_step = " ".join([next_step] + guidance_bits)
         else:
             summary_line = (
-                f"Final operation: reach chunk ({target[0]},{target[1]}) "
-                f"[{state.get('target_label', 'target')}] and identify the site ({distance}c)."
+                f"Final operation: reach {destination} and identify the retrieval site "
+                f"({distance_text})."
             )
-            next_step = "Travel to target chunk and identify the retrieval site."
+            next_step = f"Travel to {destination} and identify the retrieval site."
     else:
         summary_line = (
-            f"Final operation: reach chunk ({target[0]},{target[1]}) "
-            f"[{state.get('target_label', 'target')}] ({distance}c)."
+            f"Final operation: reach {destination} ({distance_text})."
         )
-        next_step = "Travel to target chunk and enter local area."
+        next_step = f"Travel to {destination} and enter the local area."
 
     return {
         "unlocked": unlocked,

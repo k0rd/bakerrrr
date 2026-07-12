@@ -738,6 +738,17 @@ class EventLogSystem(System):
         self._log(text, channel=channel, priority=priority)
         return True
 
+    def _final_operation_destination_text(self, target, target_label=""):
+        target_label = str(target_label or "").strip()
+        if target_label:
+            return f"the area near {target_label}"
+        if isinstance(target, (list, tuple)) and len(target) == 2:
+            try:
+                return f"chunk {int(target[0])},{int(target[1])}"
+            except (TypeError, ValueError):
+                return "the target area"
+        return "the target area"
+
     def _npc_label(self, eid, fallback="NPC"):
         if eid is None:
             return str(fallback or "NPC")
@@ -946,6 +957,25 @@ class EventLogSystem(System):
         if normalized == "requirements met":
             return "you met the local handoff conditions"
         return normalized
+
+    def _opportunity_chunk_text(self, chunk):
+        if isinstance(chunk, (list, tuple)) and len(chunk) == 2:
+            try:
+                return f" near chunk {int(chunk[0])},{int(chunk[1])}"
+            except (TypeError, ValueError):
+                return ""
+        return ""
+
+    def _opportunity_remaining_text(self, active_remaining):
+        try:
+            count = max(0, int(active_remaining))
+        except (TypeError, ValueError):
+            count = 0
+        if count == 0:
+            return "No known leads remain on the board"
+        if count == 1:
+            return "1 known lead remains on the board"
+        return f"{count} known leads remain on the board"
 
     def _pressure_cause_text(self, event):
         source = str(event.data.get("source", "pressure") or "pressure").strip().lower()
@@ -7650,7 +7680,7 @@ class EventLogSystem(System):
         )
         completion_text = self._opportunity_completion_text(completion_reason)
         label = f"O{opp_id} {title}" if opp_id > 0 else title
-        location = f" @ {chunk}" if isinstance(chunk, (list, tuple)) and len(chunk) == 2 else ""
+        location = self._opportunity_chunk_text(chunk)
         headline = "Lead confirmed" if is_discovery_style else "Opportunity complete"
         if completion_text:
             headline_text = f"{headline}: {label}{location} after {completion_text}."
@@ -7670,7 +7700,7 @@ class EventLogSystem(System):
         details = [f"Source {source_text}"]
         if reward_text:
             details.append(f"Reward {reward_text}")
-        details.append(f"{active_remaining} active remain")
+        details.append(self._opportunity_remaining_text(active_remaining))
         details.append("Press O for report")
         self.sim.log.add("  " + " | ".join(details) + ".")
 
@@ -7685,7 +7715,7 @@ class EventLogSystem(System):
         failure_reason = str(event.data.get("failure_reason", "")).strip() or "the lead collapsed"
         active_remaining = int(event.data.get("active_remaining", 0))
         label = f"O{opp_id} {title}" if opp_id > 0 else title
-        location = f" @ {chunk}" if isinstance(chunk, (list, tuple)) and len(chunk) == 2 else ""
+        location = self._opportunity_chunk_text(chunk)
 
         self._log(
             f"Opportunity failed: {label}{location} after {failure_reason}.",
@@ -7697,7 +7727,7 @@ class EventLogSystem(System):
             self.sim.log.add(f"  {summary}")
 
         source_text = opportunity_source_label(source, short=False)
-        details = [f"Source {source_text}", f"{active_remaining} active remain", "Press O for report"]
+        details = [f"Source {source_text}", self._opportunity_remaining_text(active_remaining), "Press O for report"]
         self.sim.log.add("  " + " | ".join(details) + ".")
 
     def on_opportunity_added(self, event):
@@ -7958,32 +7988,19 @@ class EventLogSystem(System):
         target_label = str(event.data.get("target_label", "")).strip()
         objective_title = str(event.data.get("objective_title", "Run Objective")).strip() or "Run Objective"
         objective_id = str(event.data.get("objective_id", "")).strip().lower()
+        destination = self._final_operation_destination_text(target, target_label)
         if objective_id == "high_value_retrieval":
-            if target_label:
-                self._log(
-                    f"Final operation unlocked: {objective_title}. Reach ({int(target[0])},{int(target[1])}) [{target_label}], enter local, and identify the retrieval site.",
-                    channel="mission",
-                    priority="critical",
-                )
-            else:
-                self._log(
-                    f"Final operation unlocked: {objective_title}. Reach ({int(target[0])},{int(target[1])}), enter local, and identify the retrieval site.",
-                    channel="mission",
-                    priority="critical",
-                )
+            self._log(
+                f"Final operation unlocked: {objective_title}. Head for {destination}, enter the local area, and identify the retrieval site.",
+                channel="mission",
+                priority="critical",
+            )
             return
-        if target_label:
-            self._log(
-                f"Final operation unlocked: {objective_title}. Reach ({int(target[0])},{int(target[1])}) [{target_label}] and enter local.",
-                channel="mission",
-                priority="critical",
-            )
-        else:
-            self._log(
-                f"Final operation unlocked: {objective_title}. Reach ({int(target[0])},{int(target[1])}) and enter local.",
-                channel="mission",
-                priority="critical",
-            )
+        self._log(
+            f"Final operation unlocked: {objective_title}. Head for {destination} and enter the local area.",
+            channel="mission",
+            priority="critical",
+        )
 
     def on_final_operation_target_identified(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -7998,7 +8015,7 @@ class EventLogSystem(System):
         message = f"Target site identified: {property_name}. Recover {item_name}."
         if target_intel_score > 0:
             mark_text = "richer mark" if target_value_bonus >= 2 else "cleaner mark" if target_value_bonus >= 1 else "right mark"
-            message += f" {quality_label.capitalize()} intel via {target_reason} makes it the {mark_text}."
+            message += f" {quality_label.capitalize()} intel from {target_reason} points to the {mark_text}."
         if target_entry_detail:
             message += f" Best angle: {target_entry_detail}"
         self._log(message, channel="mission", priority="critical")

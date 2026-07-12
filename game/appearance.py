@@ -1274,8 +1274,14 @@ def item_render_kind(item_def):
         return "wire_interface"
     if wire_profile:
         wire_kind = str(wire_profile.get("kind", "") or "").strip().lower()
-        if wire_kind == "data_packet" or category == "wire_data" or "data" in tags:
+        if (
+            wire_kind in {"data_packet", "backup", "trace", "corrupted_file"}
+            or category == "wire_data"
+            or "data" in tags
+        ):
             return "wire_data"
+        if wire_kind in {"credential", "license"} or category == "credential" or "credential" in tags or "license" in tags:
+            return "access"
         return "wireware"
     if category == "wireware" or "program" in tags:
         return "wireware"
@@ -1299,10 +1305,15 @@ def item_render_kind(item_def):
         return "trap"
     if "meat" in tags or "raw_meat" in tags or item_id.endswith("_meat"):
         return "meat"
+    if "plant_pot" in tags:
+        return "container"
     if (
         "herbal_ingredient" in tags
         or "plant_material" in tags
         or "blossom" in tags
+        or "seed" in tags
+        or "plantable" in tags
+        or "cultivation" in tags
         or category == "plant_material"
     ):
         return "plant_material"
@@ -1340,14 +1351,17 @@ _OBVIOUS_LEGAL_STATUS_TAGS = frozenset(
 _ITEM_SHAPE_EFFECTS = {
     "battery_pack": "tool_shape_battery_pack",
     "bolt_cutters": "tool_shape_cutters",
+    "cloned_thumb": "tool_shape_biometric",
     "drone_programmer": "tool_shape_programmer",
     "glass_cutter": "tool_shape_glass_cutter",
     "hotwire_leads": "tool_shape_leads",
     "inspection_mirror": "tool_shape_mirror",
     "lockpick_kit": "tool_shape_lockpick_kit",
+    "mortar_kit": "tool_shape_mortar",
     "pocket_multitool": "tool_shape_multitool",
     "pruning_shears": "tool_shape_cutters",
     "prybar": "tool_shape_prybar",
+    "scrap_circuit": "tool_shape_circuit",
     "signal_jammer": "tool_shape_jammer",
 }
 
@@ -1394,14 +1408,384 @@ def _clothing_color_from_metadata(item_def, metadata):
     return "clothing_charcoal", "charcoal"
 
 
-def _item_shape_effects(item_def, render_kind):
-    item_id = str(item_def.get("id", "") or "").strip().lower()
-    effect = _ITEM_SHAPE_EFFECTS.get(item_id)
-    if not effect:
+def _item_id_text(item_def):
+    return str(item_def.get("id", "") or "").strip().lower()
+
+
+def _appearance_slot_set(item_def):
+    slots = item_def.get("appearance_slots")
+    if not isinstance(slots, (list, tuple, set)):
+        slots = ()
+    return {
+        str(slot or "").strip().lower()
+        for slot in slots
+        if str(slot or "").strip()
+    }
+
+
+def _item_weapon_shape(item_def, tags):
+    item_id = _item_id_text(item_def)
+    if "launcher" in tags or "rocket" in tags or "grenade" in item_id:
+        return "launcher"
+    if "shotgun" in tags or "shotgun" in item_id:
+        return "shotgun"
+    if "rifle" in tags or "carbine" in tags or "rifle" in item_id or "carbine" in item_id:
+        return "rifle"
+    if "smg" in tags or "machine_pistol" in item_id or "compact_smg" in item_id:
+        return "smg"
+    if "handgun" in tags or "pistol" in item_id or "revolver" in item_id:
+        return "handgun"
+    if "axe" in item_id:
+        return "axe"
+    if "knife" in tags or "knife" in item_id or "cutter" in item_id:
+        return "knife"
+    if "blade" in tags or "machete" in item_id:
+        return "blade"
+    if "club" in tags or "baton" in tags or "iron" in item_id or "crowbar" in item_id:
+        return "club"
+    return "generic"
+
+
+def _item_armor_shape(item_def, tags):
+    item_id = _item_id_text(item_def)
+    slot = str((item_def.get("armor") or {}).get("slot", "") if isinstance(item_def.get("armor"), Mapping) else "").strip().lower()
+    if slot == "head" or "helmet" in item_id:
+        return "helmet"
+    if "apron" in item_id or "apron" in tags:
+        return "apron"
+    if "jacket" in item_id:
+        return "jacket"
+    if "plate" in item_id or "plates" in item_id or "carrier" in item_id or "rig" in item_id:
+        return "plate"
+    if "vest" in item_id or "mesh" in item_id:
+        return "vest"
+    return "vest"
+
+
+def _item_cosmetic_shape(item_def, tags):
+    item_id = _item_id_text(item_def)
+    slots = _appearance_slot_set(item_def)
+    if "earpiece" in item_id:
+        return "earpiece"
+    if "lanyard" in item_id or "badge" in item_id:
+        return "lanyard"
+    if "apron" in item_id:
+        return "apron"
+    if "coverall" in item_id or "jumpsuit" in item_id:
+        return "coverall"
+    if "full_body" in slots or "dress" in item_id:
+        return "dress"
+    if "skirt" in item_id:
+        return "skirt"
+    if "bottom" in slots:
+        return "shorts" if "shorts" in item_id else "trousers"
+    if "shoes" in slots:
+        if "sandals" in item_id:
+            return "sandals"
+        if "sneakers" in item_id:
+            return "sneakers"
+        return "boots"
+    if "hat" in slots or item_id in {"cap", "baseball_cap", "bandana"}:
+        return "bandana" if "bandana" in item_id else "cap"
+    if tags & {"jewelry"} or slots & {"necklace", "ring_left", "ring_right", "bracelet", "earrings"}:
+        if "watch" in item_id:
+            return "watch"
+        if "ring" in item_id:
+            return "ring"
+        if "earring" in item_id:
+            return "earrings"
+        if "bracelet" in item_id:
+            return "bracelet"
+        return "necklace"
+    if "scarf" in item_id:
+        return "scarf"
+    if "gloves" in item_id:
+        return "gloves"
+    if "outer" in slots or item_id in {"jacket", "windbreaker", "coat", "cardigan", "blazer", "vest", "security_jacket", "patrol_rain_shell"}:
+        if "vest" in item_id:
+            return "vest"
+        if "coat" in item_id or "rain" in item_id:
+            return "coat"
+        if "blazer" in item_id:
+            return "blazer"
+        return "jacket"
+    if "turtleneck" in item_id:
+        return "turtleneck"
+    if "sweater" in item_id or "cardigan" in item_id:
+        return "sweater"
+    if "button" in item_id or "blouse" in item_id:
+        return "buttoned_top"
+    return "top"
+
+
+def _item_drone_part_shape(item_def, tags):
+    profile = item_def.get("drone_profile") if isinstance(item_def.get("drone_profile"), Mapping) else {}
+    item_id = _item_id_text(item_def)
+    kind = str(profile.get("kind", "") or "").strip().lower()
+    module_kind = str(profile.get("module_kind", "") or "").strip().lower()
+    if kind == "chassis" or "chassis" in tags:
+        return "chassis"
+    if kind == "power_center" or "power" in tags or "power_core" in item_id:
+        return "power_core"
+    if kind == "battery" or "battery" in tags:
+        return "battery"
+    if module_kind:
+        if module_kind in {"radar", "ir", "sonar", "lidar"}:
+            return "sensor"
+        if module_kind in {"pistol", "ammo_rack", "fuel_tank", "flame_nozzle"}:
+            return module_kind
+        return module_kind
+    if "procedure" in tags or "procedure" in item_id:
+        return "procedure"
+    return "module"
+
+
+def _item_wireware_shape(item_def, tags):
+    profile = item_def.get("wire_profile") if isinstance(item_def.get("wire_profile"), Mapping) else {}
+    item_id = _item_id_text(item_def)
+    family = str(profile.get("program_family", "") or "").strip().lower()
+    key = str(profile.get("program_key", "") or "").strip().lower()
+    if key in {"spike", "ice_cutter"} or family == "attack":
+        return "attack"
+    if key in {"signal_cloak", "trace_scrubber"} or family in {"stealth", "trace"}:
+        return "stealth"
+    if key in {"checksum_ward", "sacrificial_shell"} or family in {"defense", "ward"}:
+        return "defense"
+    if key in {"panic_eject"}:
+        return "eject"
+    if key in {"door_latch"} or "door" in item_id:
+        return "door"
+    if key in {"camera_loop"} or "camera" in item_id:
+        return "camera"
+    if key in {"data_siphon_shell"} or "data" in item_id:
+        return "data"
+    if key in {"route_probe"} or "route" in item_id:
+        return "route"
+    if key in {"talk"} or "talk" in item_id:
+        return "talk"
+    return "program"
+
+
+def _item_access_shape(item_def, tags):
+    profile = item_def.get("wire_profile") if isinstance(item_def.get("wire_profile"), Mapping) else {}
+    item_id = _item_id_text(item_def)
+    wire_kind = str(profile.get("kind", "") or "").strip().lower()
+    if wire_kind == "credential" or "wire_access" in item_id:
+        return "wire_key"
+    if wire_kind == "license" or "license" in item_id:
+        return "license"
+    if "badge" in item_id or "badge" in tags:
+        return "badge"
+    if "key" in item_id or "key" in tags:
+        return "key"
+    if "pass" in item_id or "token" in item_id:
+        return "pass"
+    return "credential"
+
+
+def _item_wire_interface_shape(item_def, tags):
+    profile = item_def.get("wire_interface_profile") if isinstance(item_def.get("wire_interface_profile"), Mapping) else {}
+    item_id = _item_id_text(item_def)
+    kind = str(profile.get("kind", "") or "").strip().lower()
+    if kind:
+        return kind
+    if "jack" in item_id:
+        return "jack"
+    if "rig" in item_id:
+        return "rig"
+    if "cable" in item_id:
+        return "cable"
+    if "dongle" in item_id:
+        return "dongle"
+    if "bridge" in item_id:
+        return "bridge"
+    return "deck"
+
+
+def _item_token_shape(item_def, tags):
+    item_id = _item_id_text(item_def)
+    if "phone" in tags or "phone" in item_id:
+        return "phone"
+    if "radio" in tags or "radio" in item_id:
+        return "radio"
+    if "credstick" in item_id or "chip" in item_id:
+        return "chip"
+    if "deck" in item_id and "card" in item_id:
+        return "cards"
+    if "badge" in item_id:
+        return "badge"
+    if "pass" in item_id or "token" in item_id:
+        return "pass"
+    if "card" in item_id:
+        return "card"
+    if "ticket" in item_id or "voucher" in item_id:
+        return "ticket"
+    if "notebook" in item_id or "ledger" in item_id:
+        return "book"
+    if "flyer" in item_id or "scrap" in item_id or "note" in item_id:
+        return "paper"
+    if "charm" in item_id:
+        return "charm"
+    if "deck" in item_id:
+        return "cards"
+    return "token"
+
+
+def _item_plant_material_shape(item_def, tags):
+    item_id = _item_id_text(item_def)
+    if "seed" in tags or "seed" in item_id:
+        return "seed"
+    if "blossom" in tags or "flower" in tags or "blossom" in item_id:
+        return "blossom"
+    if "moss" in tags or "moss" in item_id:
+        return "moss"
+    if "vine" in tags or "cutting" in item_id or "vine" in item_id:
+        return "vine"
+    if "leaf" in tags or "leaf" in item_id or "clipping" in item_id:
+        return "leaf"
+    return "bundle"
+
+
+def _item_container_shape(item_def, tags):
+    item_id = _item_id_text(item_def)
+    if "plant_pot" in tags or "plant_pot" in item_id or item_id == "plant_pot":
+        return "pot"
+    if "backpack" in item_id or "pack" in item_id:
+        return "backpack"
+    if "apron" in item_id or "satchel" in item_id or "bag" in item_id:
+        return "soft_bag"
+    return "box"
+
+
+def _item_junk_shape(item_def, tags):
+    item_id = _item_id_text(item_def)
+    if "circuit" in item_id or "electronics" in tags:
+        return "circuit"
+    if "stub" in item_id:
+        return "stub"
+    if "scrap" in item_id:
+        return "scrap"
+    if "paper" in tags or "flyer" in item_id or "note" in item_id:
+        return "paper"
+    return "junk"
+
+
+def _item_medical_shape(item_def, tags):
+    item_id = _item_id_text(item_def)
+    if "kit" in item_id or "suture" in item_id:
+        return "kit"
+    if "injector" in item_id or "ampoule" in item_id or "serum" in item_id or "jab" in item_id:
+        return "injector"
+    if "patch" in item_id:
+        return "patch"
+    if "foam" in item_id:
+        return "foam"
+    if "bandage" in item_id or "dressing" in item_id:
+        return "bandage"
+    if "inhaler" in item_id:
+        return "inhaler"
+    if "tabs" in item_id or "salts" in item_id or "wipes" in item_id:
+        return "packet"
+    if tags & {"herbal", "herbal_medicine"} or "poultice" in item_id or "tincture" in item_id or "draught" in item_id:
+        return "herbal"
+    return "vial"
+
+
+def _item_food_shape(item_def, tags):
+    item_id = _item_id_text(item_def)
+    if "soup" in item_id or "bowl" in item_id:
+        return "bowl"
+    if "fruit" in item_id:
+        return "fruit"
+    if "bar" in item_id or "wrap" in item_id or "ration" in item_id:
+        return "bar"
+    return "meal"
+
+
+def _item_drink_shape(item_def, tags):
+    item_id = _item_id_text(item_def)
+    if "coffee" in item_id or "brew" in item_id:
+        return "cup"
+    if "shot" in item_id or "gel" in item_id or "strip" in item_id:
+        return "small"
+    if "juice" in item_id:
+        return "carton"
+    return "bottle"
+
+
+def _item_shape_effect_for_kind(item_def, render_kind, tags):
+    if render_kind == "weapon":
+        return f"weapon_shape_{_item_weapon_shape(item_def, tags)}"
+    if render_kind == "armor":
+        return f"armor_shape_{_item_armor_shape(item_def, tags)}"
+    if render_kind == "cosmetic":
+        return f"cosmetic_shape_{_item_cosmetic_shape(item_def, tags)}"
+    if render_kind == "drone_part":
+        return f"drone_part_shape_{_item_drone_part_shape(item_def, tags)}"
+    if render_kind == "wireware":
+        return f"wireware_shape_{_item_wireware_shape(item_def, tags)}"
+    if render_kind == "wire_interface":
+        return f"wire_interface_shape_{_item_wire_interface_shape(item_def, tags)}"
+    if render_kind == "access":
+        return f"access_shape_{_item_access_shape(item_def, tags)}"
+    if render_kind == "token":
+        return f"token_shape_{_item_token_shape(item_def, tags)}"
+    if render_kind == "plant_material":
+        return f"plant_material_shape_{_item_plant_material_shape(item_def, tags)}"
+    if render_kind == "container":
+        return f"container_shape_{_item_container_shape(item_def, tags)}"
+    if render_kind == "junk":
+        return f"junk_shape_{_item_junk_shape(item_def, tags)}"
+    if render_kind == "medical":
+        return f"medical_shape_{_item_medical_shape(item_def, tags)}"
+    if render_kind == "food":
+        return f"food_shape_{_item_food_shape(item_def, tags)}"
+    if render_kind == "drink":
+        return f"drink_shape_{_item_drink_shape(item_def, tags)}"
+    if render_kind == "wire_data":
+        item_id = _item_id_text(item_def)
+        profile = item_def.get("wire_profile") if isinstance(item_def.get("wire_profile"), Mapping) else {}
+        wire_kind = str(profile.get("kind", "") or "").strip().lower()
+        if wire_kind == "backup" or "backup" in item_id:
+            return "wire_data_shape_backup"
+        if wire_kind == "trace" or "trace" in item_id:
+            return "wire_data_shape_trace"
+        if wire_kind == "corrupted_file" or "corrupted" in item_id:
+            return "wire_data_shape_corrupt"
+        return "wire_data_shape_cache"
+    return ""
+
+
+def _stable_item_mark_effects(item_def, metadata=None):
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    item_id = _item_id_text(item_def)
+    seed_text = str(
+        metadata.get("instance_id")
+        or metadata.get("source_instance_id")
+        or metadata.get("visual_seed")
+        or item_id
+    )
+    if not seed_text:
         return ()
-    if render_kind == "tool" and effect.startswith("tool_shape_"):
-        return (effect,)
-    return ()
+    value = 0
+    for char in f"{item_id}:{seed_text}":
+        value = ((value * 131) + ord(char)) % 1000003
+    marks = ("dot", "slash", "bar", "chevron", "ring", "corner")
+    return (f"item_mark_{marks[value % len(marks)]}", f"item_mark_seed_{value % 31}")
+
+
+def _item_shape_effects(item_def, render_kind, metadata=None):
+    item_id = str(item_def.get("id", "") or "").strip().lower()
+    tags = _item_tags(item_def)
+    effects = []
+    effect = _ITEM_SHAPE_EFFECTS.get(item_id)
+    if effect and (render_kind == "tool" and effect.startswith("tool_shape_")):
+        effects.append(effect)
+    taxonomy = _item_shape_effect_for_kind(item_def, render_kind, tags)
+    if taxonomy and taxonomy not in effects:
+        effects.append(taxonomy)
+    effects.extend(effect for effect in _stable_item_mark_effects(item_def, metadata) if effect not in effects)
+    return tuple(effects)
 
 
 def ground_item_color(item_def):
@@ -1429,10 +1813,16 @@ def ground_item_color(item_def):
         return "item_drink"
     if "credential" in tags or "key" in tags:
         return "item_access"
+    if "herbal_ingredient" in tags or "plant_material" in tags or "seed" in tags or "plantable" in tags:
+        return "item_plant_material"
+    if "container" in tags:
+        return "item_container"
     if "tool" in tags:
         return "item_tool"
     if "token" in tags:
         return "item_token"
+    if "junk" in tags:
+        return "item_junk"
     return "item_ground"
 
 
@@ -1472,7 +1862,7 @@ def item_render_snapshot(item_def, *, metadata=None, catalog=None):
         semantic_id=f"item_{render_kind}",
         catalog=catalog,
         preferred_categories=("items",),
-        effects=_item_shape_effects(item_def, render_kind),
+        effects=_item_shape_effects(item_def, render_kind, metadata),
     )
 
 

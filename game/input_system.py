@@ -532,6 +532,7 @@ class InputSystem(System):
                 "target_z": 0,
                 "target_name": "",
                 "property_id": None,
+                "walk_mode": "local",
                 "last_step_at": 0.0,
             }
         if not hasattr(self.sim, "auto_drive_ui"):
@@ -863,6 +864,7 @@ class InputSystem(System):
                 "target_z": 0,
                 "target_name": "",
                 "property_id": None,
+                "walk_mode": "local",
                 "last_step_at": 0.0,
             }
             self.sim.auto_walk_ui = state
@@ -873,6 +875,7 @@ class InputSystem(System):
             state.setdefault("target_z", 0)
             state.setdefault("target_name", "")
             state.setdefault("property_id", None)
+            state.setdefault("walk_mode", "local")
             state.setdefault("last_step_at", 0.0)
         return state
 
@@ -3730,6 +3733,70 @@ class InputSystem(System):
                         return (nx, ny)
         return None
 
+    def _loaded_auto_walk_waypoint_toward(self, pos, target_x, target_y, target_z):
+        if pos is None:
+            return None
+        target_z = int(target_z)
+        if int(pos.z) != target_z:
+            return None
+        ensure = getattr(self.sim, "ensure_loaded_chunk_terrain", None)
+        if callable(ensure):
+            ensure()
+
+        loaded_chunks = getattr(getattr(self.sim, "world", None), "loaded_chunks", {})
+        if not isinstance(loaded_chunks, dict) or not loaded_chunks:
+            return None
+
+        try:
+            current_distance = _grid_distance(int(pos.x), int(pos.y), int(target_x), int(target_y))
+        except (TypeError, ValueError):
+            return None
+
+        exterior_candidates = []
+        interior_candidates = []
+        chunk_size = int(max(8, getattr(self.sim, "chunk_size", 20)))
+        for raw_chunk in tuple(loaded_chunks.keys()):
+            if not isinstance(raw_chunk, (list, tuple)) or len(raw_chunk) != 2:
+                continue
+            try:
+                cx = int(raw_chunk[0])
+                cy = int(raw_chunk[1])
+            except (TypeError, ValueError):
+                continue
+            origin_x, origin_y = self.sim.chunk_origin(cx, cy)
+            for y in range(int(origin_y), int(origin_y) + chunk_size):
+                for x in range(int(origin_x), int(origin_x) + chunk_size):
+                    if int(x) == int(pos.x) and int(y) == int(pos.y):
+                        continue
+                    if str(self.sim.detail_for_xy(int(x), int(y))).strip().lower() == "unloaded":
+                        continue
+                    distance = _grid_distance(int(x), int(y), int(target_x), int(target_y))
+                    if distance >= current_distance:
+                        continue
+                    traversable, _reason = _is_traversable_for(
+                        self.sim,
+                        self.player_eid,
+                        int(x),
+                        int(y),
+                        target_z,
+                    )
+                    if not traversable:
+                        continue
+                    inside = self.sim.structure_at(int(x), int(y), target_z) is not None
+                    inside = inside or self.sim.property_covering(int(x), int(y), target_z) is not None
+                    origin_distance = _grid_distance(int(pos.x), int(pos.y), int(x), int(y))
+                    score = (distance, origin_distance, abs(int(y) - int(pos.y)), abs(int(x) - int(pos.x)), int(y), int(x))
+                    row = (score, (int(x), int(y)))
+                    if inside:
+                        interior_candidates.append(row)
+                    else:
+                        exterior_candidates.append(row)
+
+        candidates = exterior_candidates or interior_candidates
+        if not candidates:
+            return None
+        return min(candidates, key=lambda row: row[0])[1]
+
     def _start_selected_known_location_walk(self):
         target = self._selected_known_location_target()
         if not target:
@@ -3771,19 +3838,6 @@ class InputSystem(System):
                 )
             return bool(marked)
 
-        if detail == "unloaded":
-            marked = self._mark_selected_known_location()
-            if marked:
-                self._close_report_ui()
-                _log_player_feedback(
-                    self.sim,
-                    f"{target.get('name', 'Known location')} is outside loaded street detail; marked it on the overworld map.",
-                    kind="movement",
-                    dedupe_window=2,
-                    dedupe_key=f"known_location:unloaded_walk:{str(target.get('property_id') or target.get('name') or target.get('chunk'))}",
-                )
-            return bool(marked)
-
         overlay = getattr(self.sim, "combat_overlay", {})
         if bool(overlay.get("active")) or bool(getattr(self.sim, "turn_based", False)):
             _log_player_feedback(
@@ -3795,10 +3849,23 @@ class InputSystem(System):
             )
             return False
 
+        if detail == "unloaded" and int(pos.z) != target_z:
+            marked = self._mark_selected_known_location()
+            if marked:
+                self._close_report_ui()
+                _log_player_feedback(
+                    self.sim,
+                    f"{target.get('name', 'Known location')} is outside loaded street detail; marked it on the overworld map. Use stairs or an elevator when you get close.",
+                    kind="movement",
+                    dedupe_window=2,
+                    dedupe_key=f"known_location:unloaded_floor_walk:{str(target.get('property_id') or target.get('name') or target.get('chunk'))}",
+                )
+            return bool(marked)
+
         if int(pos.z) != target_z:
             _log_player_feedback(
                 self.sim,
-                "Notebook walking only handles the current floor for now.",
+                "That place is on another floor. Use stairs or an elevator, then start walking from there.",
                 kind="movement",
                 dedupe_window=2,
                 dedupe_key="autowalk:floor_blocked",
@@ -3806,6 +3873,9 @@ class InputSystem(System):
             return False
 
         self._stop_auto_drive(reason="stopped", announce=False)
+        marked = False
+        if detail == "unloaded":
+            marked = self._mark_selected_known_location()
         state = self._auto_walk_state()
         state["active"] = True
         state["target_x"] = int(target_x)
@@ -3813,9 +3883,20 @@ class InputSystem(System):
         state["target_z"] = int(target_z)
         state["target_name"] = str(target.get("name", "")).strip()
         state["property_id"] = str(target.get("property_id", "")).strip() or None
+        state["walk_mode"] = "cross_chunk" if detail == "unloaded" else "local"
         state["last_step_at"] = 0.0
 
         self._close_report_ui()
+        if detail == "unloaded":
+            marker_text = " Marked it on the overworld map." if marked else ""
+            _log_player_feedback(
+                self.sim,
+                f"Walking toward {self._auto_walk_target_label()} across nearby chunks.{marker_text} Any key interrupts.",
+                kind="movement",
+                dedupe_window=2,
+                dedupe_key=f"autowalk:start_cross_chunk:{str(state.get('property_id') or state.get('target_name') or 'coords')}",
+            )
+            return True
         _log_player_feedback(
             self.sim,
             f"Walking to {self._auto_walk_target_label()}. Any key interrupts.",
@@ -3888,13 +3969,37 @@ class InputSystem(System):
             return False
 
         raw_target = (int(state.get("target_x", pos.x)), int(state.get("target_y", pos.y)))
+        target_detail = str(self.sim.detail_for_xy(raw_target[0], raw_target[1])).strip().lower() or "unloaded"
         goal = raw_target
-        if _grid_distance(pos.x, pos.y, goal[0], goal[1]) <= 6:
+        if target_detail == "unloaded":
+            waypoint = self._loaded_auto_walk_waypoint_toward(pos, raw_target[0], raw_target[1], target_z)
+            if waypoint is None:
+                self._stop_auto_walk(reason="blocked", announce=False)
+                _log_player_feedback(
+                    self.sim,
+                    f"No loaded walking route toward {self._auto_walk_target_label()} is available from here. The map marker remains.",
+                    kind="movement",
+                    dedupe_window=2,
+                    dedupe_key=f"autowalk:unloaded_blocked:{str(state.get('property_id') or state.get('target_name') or 'coords')}",
+                )
+                return True
+            goal = waypoint
+        elif _grid_distance(pos.x, pos.y, goal[0], goal[1]) <= 6:
             nearby = self._nearest_walkable_destination(goal[0], goal[1], target_z, radius=6)
             if nearby is not None:
                 goal = nearby
 
         if (int(pos.x), int(pos.y)) == goal or (int(pos.x), int(pos.y)) == raw_target:
+            if target_detail == "unloaded" and (int(pos.x), int(pos.y)) != raw_target:
+                self._stop_auto_walk(reason="blocked", announce=False)
+                _log_player_feedback(
+                    self.sim,
+                    f"Walking route toward {self._auto_walk_target_label()} needs more street detail to load. The map marker remains.",
+                    kind="movement",
+                    dedupe_window=2,
+                    dedupe_key=f"autowalk:unloaded_pause:{str(state.get('property_id') or state.get('target_name') or 'coords')}",
+                )
+                return True
             self._stop_auto_walk(reason="arrived", announce=True)
             return True
 
@@ -3906,7 +4011,7 @@ class InputSystem(System):
             tx=int(goal[0]),
             ty=int(goal[1]),
             z=int(pos.z),
-            max_nodes=4096,
+            max_nodes=8192 if target_detail == "unloaded" else 4096,
         )
         if not step:
             self._stop_auto_walk(reason="blocked", announce=True)

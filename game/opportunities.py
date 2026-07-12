@@ -1546,6 +1546,21 @@ def _schedule_opportunity_refill(state, sim, reason, delay_ticks):
     return state
 
 
+def _schedule_terminal_opportunity_refill(state, sim):
+    """Schedule quiet board turnover after a terminal opportunity change."""
+    if not isinstance(state, dict):
+        return False
+    if _active_opportunity_count(state) >= MIN_ACTIVE_OPPORTUNITIES:
+        return False
+    _schedule_opportunity_refill(
+        state,
+        sim,
+        "terminal",
+        _opportunity_terminal_refill_delay_ticks(sim),
+    )
+    return True
+
+
 def _opportunity_has_readable_urgency(opportunity):
     if not isinstance(opportunity, dict):
         return False
@@ -7749,13 +7764,18 @@ def advance_opportunity_lifecycle(sim, player_eid):
             )
         )
 
+    refill_scheduled = False
     if completed or failed:
         state["active"] = remaining
         _refresh_tracked_targets(sim)
+        refill_scheduled = _schedule_terminal_opportunity_refill(state, sim)
     return {
         "completed": completed,
         "failed": failed,
         "issued_items": issued_items,
+        "refill_scheduled": refill_scheduled,
+        "next_refill_tick": _safe_int(state.get("next_refill_tick"), default=0),
+        "pending_refill_reason": str(state.get("pending_refill_reason", "") or "").strip().lower(),
     }
 
 
@@ -7829,6 +7849,7 @@ def resolve_external_opportunity(
 
     if resolved is not None:
         state["active"] = remaining
+        _schedule_terminal_opportunity_refill(state, sim)
     return resolved
 
 

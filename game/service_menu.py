@@ -60,6 +60,7 @@ from game.property_runtime import (
 from game.justice_dispatch_runtime import request_player_justice_dispatch
 from game.service_runtime import (
     CASINO_CRASH_MAX_MULTIPLIER,
+    CASINO_CRASH_STEP_TICKS,
     CASINO_KENO_DRAW_COUNT,
     CASINO_KENO_MAX_PICKS,
     CASINO_KENO_NUMBER_COUNT,
@@ -179,6 +180,7 @@ class ServiceMenuSystem(System):
 
     def __init__(self, sim, player_eid):
         super().__init__(sim)
+        self.runs_without_turn = True
         self.player_eid = player_eid
         self.pending_service_result = None
         self.sim.events.subscribe("property_interact", self.on_property_interact)
@@ -210,12 +212,27 @@ class ServiceMenuSystem(System):
             }
         selected = self._selected_casino_row()
         selected_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
-        next_session, round_result = _casino_crash_advance(session, getattr(self.sim, "tick", 0))
+        live_tick = self._crash_live_tick(session)
+        next_session, round_result = _casino_crash_advance(session, live_tick)
         if round_result:
             self._settle_casino_round(prop, "crash", round_result)
             return
         if next_session and next_session != session:
             self._open_crash_table(prop, next_session, selected_id=selected_id)
+
+    def _crash_live_tick(self, session):
+        try:
+            sim_tick = int(getattr(self.sim, "tick", 0) or 0)
+        except (TypeError, ValueError):
+            sim_tick = 0
+        try:
+            last_tick = session.get("last_step_tick")
+            if last_tick is None:
+                last_tick = session.get("launched_tick")
+            last_tick = int(last_tick if last_tick is not None else sim_tick)
+        except (TypeError, ValueError):
+            last_tick = sim_tick
+        return max(sim_tick, last_tick + CASINO_CRASH_STEP_TICKS)
 
     def _dialog_ui_state(self):
         state = getattr(self.sim, "dialog_ui", None)
@@ -1068,12 +1085,23 @@ class ServiceMenuSystem(System):
         if service_key == "keno":
             for index, line in enumerate(body_lines):
                 text = str(line or "").strip().lower()
-                if text.startswith("hits:"):
+                if text.startswith("pay row"):
                     body_focus_line = index
                     break
             if body_focus_line < 0:
                 for index, line in enumerate(body_lines):
-                    if str(line or "").strip().lower().startswith("pay row"):
+                    if str(line or "").strip().lower().startswith("hits:"):
+                        body_focus_line = index
+                        break
+        elif service_key == "plinko":
+            for index, line in enumerate(body_lines):
+                text = str(line or "").strip().lower()
+                if text.startswith("bucket "):
+                    body_focus_line = index
+                    break
+            if body_focus_line < 0:
+                for index, line in enumerate(body_lines):
+                    if str(line or "").strip().lower().startswith("drop lane "):
                         body_focus_line = index
                         break
         rail_lines = self._casino_common_rail_lines(prop, service=service)
@@ -1893,7 +1921,7 @@ class ServiceMenuSystem(System):
             f"Current multiplier: x{current:.2f}.",
             f"Next tick pushes toward x{next_multiplier:.2f}.",
             f"Auto cash out: {self._crash_auto_label(session)}.",
-            "Cash out now to take the visible multiplier. The graph keeps running while the city moves.",
+            "Cash out now to take the visible multiplier. The graph keeps running while you watch.",
             f"Wallet {_credit_amount_label(self._wallet_credits())}.",
         ])
         rows = [

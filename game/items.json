@@ -2483,7 +2483,7 @@
     "effects": []
   },
   "parking_stub": {
-    "name": "Parking Stub",
+    "name": "Parking Claim Ticket",
     "glyph": "=",
     "stack_max": 5,
     "tags": [
@@ -2492,6 +2492,7 @@
       "legal"
     ],
     "legal_status": "legal",
+    "description": "a torn parking-lot claim ticket, long separated from anything it could claim",
     "effects": []
   },
   "metro_flyer": {

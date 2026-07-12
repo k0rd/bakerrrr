@@ -1215,6 +1215,15 @@ class OpportunitySystem(System):
     def _ensure_seeded(self):
         return seed_run_opportunities(self.sim, player_eid=self.player_eid, rng=self.seed_rng)
 
+    @staticmethod
+    def _opportunity_chunk_text(chunk):
+        if isinstance(chunk, (list, tuple)) and len(chunk) == 2:
+            try:
+                return f"near chunk {int(chunk[0])},{int(chunk[1])}"
+            except (TypeError, ValueError):
+                return "somewhere nearby"
+        return "somewhere nearby"
+
     def _emit_new_opportunity_log(self):
         state = getattr(self.sim, "world_traits", {}).get("opportunities", {})
         if not isinstance(state, dict):
@@ -1246,7 +1255,7 @@ class OpportunitySystem(System):
             source_text = opportunity_source_label(entry.get("source", "unknown"), short=False)
             title = str(entry.get("title", "Opportunity")).strip() or "Opportunity"
             preview_lines.append(
-                f"O{int(entry.get('id', 0))} {title} @ {chunk} from {source_text}"
+                f"O{int(entry.get('id', 0))} {title}, {self._opportunity_chunk_text(chunk)}, from {source_text}"
             )
 
         self.sim.emit(Event(
