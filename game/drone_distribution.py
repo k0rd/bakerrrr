@@ -62,8 +62,15 @@ DRONE_ITEM_BASE_VALUES = {
     "drone_ammo_rack_module": 76,
     "drone_fuel_tank_module": 86,
     "drone_flame_nozzle_module": 168,
+    "blank_procedure_flash": 42,
+    "drone_programmer": 140,
     PACKED_DRONE_ITEM_ID: 280,
 }
+
+DRONE_AUTHORING_SUPPLY_ITEM_IDS = frozenset({
+    "blank_procedure_flash",
+    "drone_programmer",
+})
 
 DRONE_PACKED_PRESET_LOADOUTS = {
     "utility_a": {
@@ -139,6 +146,8 @@ DRONE_STORE_POOL_EXTRAS = {
         ("drone_light_module", 4),
         ("drone_speaker_module", 3),
         ("drone_cargo_clamp_module", 2),
+        ("blank_procedure_flash", 2),
+        ("drone_programmer", 1),
         (PACKED_DRONE_ITEM_ID, 1),
     ),
     "comms_shop": (
@@ -155,6 +164,8 @@ DRONE_STORE_POOL_EXTRAS = {
         ("drone_lidar_module", 3),
         ("drone_sonar_module", 3),
         ("drone_mapping_procedure_module", 3),
+        ("blank_procedure_flash", 2),
+        ("drone_programmer", 1),
         (PACKED_DRONE_ITEM_ID, 1),
     ),
     "drone_shop": (
@@ -183,6 +194,8 @@ DRONE_STORE_POOL_EXTRAS = {
         ("drone_armor_shell_module", 2),
         ("drone_mapping_procedure_module", 4),
         ("drone_follow_procedure_module", 4),
+        ("blank_procedure_flash", 4),
+        ("drone_programmer", 2),
         (PACKED_DRONE_ITEM_ID, 2),
     ),
     "hardware_store": (
@@ -649,4 +662,4 @@ def distributed_drone_item_ids():
     for rows in DRONE_STREET_VENDOR_POOL_EXTRAS.values():
         ids.update(str(item_id).strip().lower() for item_id in rows)
     ids.update(DRONE_ITEM_BASE_VALUES)
-    return tuple(sorted(item_id for item_id in ids if item_id))
+    return tuple(sorted(item_id for item_id in ids if item_id and item_id not in DRONE_AUTHORING_SUPPLY_ITEM_IDS))

@@ -325,7 +325,6 @@ BUILT_IN_DRONE_PROGRAMS = {
         "slots": (),
         "lines": (
             {"line": 10, "op": "FOLLOW"},
-            {"line": 20, "op": "GOTO", "goto": 10},
         ),
     },
     "return_home": {

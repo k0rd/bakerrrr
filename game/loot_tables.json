@@ -3984,6 +3984,14 @@
       "weight": 4
     },
     {
+      "item_id": "blank_procedure_flash",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_programmer",
+      "weight": 1
+    },
+    {
       "item_id": "packed_drone",
       "weight": 2
     }
@@ -4048,6 +4056,14 @@
     {
       "item_id": "drone_mapping_procedure_module",
       "weight": 4
+    },
+    {
+      "item_id": "blank_procedure_flash",
+      "weight": 3
+    },
+    {
+      "item_id": "drone_programmer",
+      "weight": 1
     },
     {
       "item_id": "packed_drone",
@@ -4162,6 +4178,14 @@
     {
       "item_id": "drone_sonar_module",
       "weight": 6
+    },
+    {
+      "item_id": "blank_procedure_flash",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_programmer",
+      "weight": 3
     },
     {
       "item_id": "packed_drone",

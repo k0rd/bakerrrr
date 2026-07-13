@@ -2009,7 +2009,7 @@ class TradeSystem(System):
         wire_pool = wire_store_item_pool(archetype)
         if wire_pool:
             profile["item_pool"] = tuple(profile.get("item_pool", ())) + tuple(wire_pool)
-            profile["max_slots"] = int(max(profile.get("max_slots", 5), min(9, int(profile.get("max_slots", 5)) + 1)))
+            profile["max_slots"] = int(max(profile.get("max_slots", 5), min(12, int(profile.get("max_slots", 5)) + 3)))
         return profile
 
     def _is_storefront(self, prop):
