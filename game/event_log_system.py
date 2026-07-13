@@ -577,6 +577,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("ambient_ritual_started", self.on_ambient_ritual_started)
         self.sim.events.subscribe("quiet_maintenance_resolved", self.on_quiet_maintenance_resolved)
         self.sim.events.subscribe("business_scene_nuisance", self.on_business_scene_nuisance)
+        self.sim.events.subscribe("property_doorway_obstruction_warning", self.on_property_doorway_obstruction_warning)
+        self.sim.events.subscribe("property_doorway_obstruction", self.on_property_doorway_obstruction)
         self.sim.events.subscribe("camera_scrutiny", self.on_camera_scrutiny)
         self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
         self.sim.events.subscribe("status_applied", self.on_status_applied)
@@ -697,6 +699,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("run_pressure_mitigated", self.on_run_pressure_mitigated)
         self.sim.events.subscribe("justice_record_changed", self.on_justice_record_changed)
         self.sim.events.subscribe("justice_wanted_tier_changed", self.on_justice_wanted_tier_changed)
+        self.sim.events.subscribe("justice_mutual_fight_questioning_recorded", self.on_justice_mutual_fight_questioning_recorded)
+        self.sim.events.subscribe("justice_mutual_fight_unready_ordered", self.on_justice_mutual_fight_unready_ordered)
         self.sim.events.subscribe("actor_detained", self.on_actor_detained)
         self.sim.events.subscribe("justice_inventory_inspected", self.on_justice_inventory_inspected)
         self.sim.events.subscribe("justice_questioning_resolved", self.on_justice_questioning_resolved)
@@ -5716,6 +5720,45 @@ class EventLogSystem(System):
             dedupe_key=f"business-scene-nuisance:{event.data.get('property_id')}:{nuisance_kind or 'generic'}:{int(bool(owner_player))}",
         )
 
+    def on_property_doorway_obstruction_warning(self, event):
+        if not (
+            self._player_can_perceive_entity(event.data.get("npc_eid"))
+            or self._player_can_perceive_event_position(event)
+        ):
+            return
+        prop = self.sim.properties.get(event.data.get("property_id"))
+        prop_label = _property_summary(self.sim, prop, viewer_eid=self.player_eid) if prop else (
+            str(event.data.get("property_name", "the building")).strip() or "the building"
+        )
+        npc_eid = event.data.get("npc_eid")
+        self._log_npc_bark(
+            npc_eid,
+            "Clear the doorway.",
+            f"You hear someone being told to clear the doorway at {prop_label}.",
+            "You hear someone being told to clear a doorway on another floor.",
+            channel="alerts",
+            priority="normal",
+            dedupe_key=f"doorway-obstruction-warning:{npc_eid}:{event.data.get('property_id')}",
+        )
+
+    def on_property_doorway_obstruction(self, event):
+        if not (
+            self._player_can_perceive_entity(event.data.get("npc_eid"))
+            or self._player_can_perceive_event_position(event)
+        ):
+            return
+        prop = self.sim.properties.get(event.data.get("property_id"))
+        prop_label = _property_summary(self.sim, prop, viewer_eid=self.player_eid) if prop else (
+            str(event.data.get("property_name", "the building")).strip() or "the building"
+        )
+        self._log(
+            f"Doorway obstruction at {prop_label} draws official attention.",
+            channel="alerts",
+            priority="normal",
+            dedupe_window=12,
+            dedupe_key=f"doorway-obstruction:{event.data.get('npc_eid')}:{event.data.get('property_id')}",
+        )
+
     def on_status_applied(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -8221,6 +8264,52 @@ class EventLogSystem(System):
             priority="high",
             dedupe_window=20,
             dedupe_key=f"justice:{str(event.data.get('jurisdiction_key', jurisdiction)).strip().lower()}:{after_tier}",
+        )
+
+    def on_justice_mutual_fight_questioning_recorded(self, event):
+        participants = tuple(event.data.get("participant_eids", ()) or ())
+        if self.player_eid not in participants:
+            return
+        weapon = str(event.data.get("weapon_seriousness", "") or "").strip() or "violence"
+        witness_count = int(event.data.get("witness_count", 0) or 0)
+        incident_id = event.data.get("incident_id")
+        if witness_count > 0:
+            witness_text = f"{witness_count} firsthand statement(s)"
+        else:
+            witness_text = "their own firsthand view"
+        self._log(
+            f"Justice separates the fight: they want to question you over {weapon} tied to incident #{incident_id} with {witness_text}.",
+            channel="mission",
+            priority="high",
+            dedupe_window=20,
+            dedupe_key=f"justice-mutual-fight:{incident_id}:{weapon}",
+        )
+
+    def on_justice_mutual_fight_unready_ordered(self, event):
+        participants = tuple(event.data.get("participant_eids", ()) or ())
+        officer_eid = event.data.get("officer_eid")
+        if self.player_eid in participants:
+            quote = "Unready weapons, both of you. Hands where I can see them."
+            nearby = "You hear an officer ordering people to unready weapons."
+            other_floor = "You hear an officer shouting for weapons to be unreadied on another floor."
+            self._log_npc_bark(
+                officer_eid,
+                quote,
+                nearby,
+                other_floor,
+                channel="mission",
+                priority="high",
+                dedupe_key=f"justice-mutual-fight-unready:{event.data.get('incident_id')}",
+            )
+            return
+        if not self._player_is_near_event_position(event, radius=8):
+            return
+        self._log(
+            "An officer orders both sides of a nearby fight to unready weapons.",
+            channel="mission",
+            priority="high",
+            dedupe_window=12,
+            dedupe_key=f"justice-mutual-fight-unready-near:{event.data.get('incident_id')}",
         )
 
     def on_actor_detained(self, event):

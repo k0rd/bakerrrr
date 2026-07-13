@@ -302,9 +302,11 @@ class CriminalJusticeSystem(System):
         self._streaming_system = None
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
+        self.sim.events.subscribe("property_doorway_obstruction", self.on_property_doorway_obstruction)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
         self.sim.events.subscribe("action_offense", self.on_action_offense)
         self.sim.events.subscribe("npc_killed", self.on_npc_killed)
+        self.sim.events.subscribe("justice_mutual_fight_observed", self.on_justice_mutual_fight_observed)
         self.sim.events.subscribe("incident_authority_reported", self.on_incident_authority_reported)
         self.sim.events.subscribe("property_interact", self.on_property_interact)
         self.sim.events.subscribe("npc_interact", self.on_npc_interact)
@@ -468,6 +470,83 @@ class CriminalJusticeSystem(System):
             self._emit_change_events(change, source_event=source_event, reason=incident_type)
             self._queue_npc_wanted_detention(change, reason=incident_type)
         return change
+
+    def _mutual_fight_context_label(self, context):
+        key = str(context or "").strip().lower()
+        return {
+            "unarmed_assault": "unarmed blows",
+            "melee_assault": "armed melee",
+            "armed_assault": "firearms",
+            "explosive_discharge": "explosives or rockets",
+        }.get(key, key.replace("_", " ") or "violence")
+
+    def _latest_mutual_fight_questioning_payload(self, offender_eid=None):
+        offender_eid = self.player_eid if offender_eid is None else offender_eid
+        state = getattr(self.sim, "world_traits", None)
+        if not isinstance(state, dict):
+            return {}
+        rows = state.get("justice_mutual_fight_questioning")
+        if not isinstance(rows, dict):
+            return {}
+        row = rows.get(str(offender_eid))
+        return dict(row) if isinstance(row, dict) else {}
+
+    def _remember_mutual_fight_questioning_payload(self, offender_eid, payload):
+        if offender_eid is None or not isinstance(payload, dict):
+            return
+        state = getattr(self.sim, "world_traits", None)
+        if not isinstance(state, dict):
+            self.sim.world_traits = {}
+            state = self.sim.world_traits
+        rows = state.setdefault("justice_mutual_fight_questioning", {})
+        if not isinstance(rows, dict):
+            rows = {}
+            state["justice_mutual_fight_questioning"] = rows
+        rows[str(offender_eid)] = dict(payload)
+
+    def _mutual_fight_questioning_lines(self, offender_eid=None):
+        payload = self._latest_mutual_fight_questioning_payload(offender_eid)
+        if not payload:
+            return []
+        incident_id = payload.get("incident_id")
+        context_label = self._mutual_fight_context_label(payload.get("context"))
+        witness_count = int(payload.get("witness_count", 0) or 0)
+        other_eid = payload.get("other_participant_eid")
+        if other_eid is not None:
+            other_text = " with the other person"
+        else:
+            other_text = ""
+        lines = [
+            f"Officer read: they saw blows both ways{other_text}; weapon level: {context_label}.",
+        ]
+        if incident_id:
+            if witness_count > 1:
+                lines.append(f"They have {witness_count} firsthand statement(s) tied to incident #{incident_id}.")
+            else:
+                lines.append(f"They have one firsthand statement tied to incident #{incident_id}.")
+        return lines
+
+    def _humanoid_participants(self, participant_eids):
+        results = []
+        ais = self.sim.ecs.get(AI)
+        identities = self.sim.ecs.get(CreatureIdentity)
+        for eid in tuple(participant_eids or ()):
+            try:
+                value = int(eid)
+            except (TypeError, ValueError):
+                continue
+            ai = ais.get(value)
+            role = str(getattr(ai, "role", "") or "").strip().lower()
+            if role == "wildlife":
+                continue
+            identity = identities.get(value)
+            taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower()
+            creature_type = str(getattr(identity, "creature_type", "") or "").strip().lower()
+            if taxonomy in {"machine", "vehicle"} or creature_type in {"animal", "machine"}:
+                continue
+            if value not in results:
+                results.append(value)
+        return tuple(results)
 
     def _event_accountability(self, event, *, offender_eid=None, allow_position_backfill=False):
         return event_observation_accountability(
@@ -1943,6 +2022,7 @@ class CriminalJusticeSystem(System):
                 f"Local posture: {str(protective.get('state_label')).strip()} - "
                 f"{str(protective.get('summary', '')).strip() or 'the area is already on alert'}."
             )
+        mutual_fight_lines = self._mutual_fight_questioning_lines(self.player_eid)
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
         self._rehydrate_local_opportunity_knowledge(
@@ -1959,6 +2039,7 @@ class CriminalJusticeSystem(System):
             "transcript": [
                 f"{jurisdiction_name} wants to question you about {cause}.",
                 *([posture_line] if posture_line else []),
+                *mutual_fight_lines,
                 "Cooperate and they will search what you are carrying before deciding what happens next.",
                 "Refusal will escalate to custody.",
             ],
@@ -3977,6 +4058,57 @@ class CriminalJusticeSystem(System):
                 damage_tick=int(getattr(self.sim, "tick", 0)),
             )
 
+    def on_property_doorway_obstruction(self, event):
+        offender_eid = event.data.get("offender_eid")
+        if offender_eid is None:
+            return
+        observer_eids = []
+        positions = self.sim.ecs.get(Position)
+        try:
+            target_x = int(event.data.get("x"))
+            target_y = int(event.data.get("y"))
+            target_z = int(event.data.get("z", 0))
+        except (TypeError, ValueError):
+            return
+        for raw_eid in tuple(event.data.get("observer_eids", ()) or ()):
+            try:
+                observer_eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            enforcer, _law_drive, _priority = self._actor_is_enforcer(observer_eid)
+            if not enforcer:
+                continue
+            observer_pos = positions.get(observer_eid)
+            if observer_pos is None:
+                continue
+            if not _shared_observer_can_see_position(
+                self.sim,
+                observer_eid,
+                int(observer_pos.x),
+                int(observer_pos.y),
+                int(observer_pos.z),
+                target_x,
+                target_y,
+                target_z,
+                radius=8,
+            ):
+                continue
+            observer_eids.append(observer_eid)
+        if not observer_eids:
+            return
+        severity = int(event.data.get("severity_score", 28) or 28)
+        self._record_incident(
+            offender_eid,
+            incident_type="obstruction",
+            severity=severity,
+            source_event="property_doorway_obstruction",
+            property_id=event.data.get("property_id"),
+            x=event.data.get("x"),
+            y=event.data.get("y"),
+            witnessed=True,
+            note="blocking_entry",
+        )
+
     def on_item_stolen(self, event):
         if event_is_vision_only(event):
             return
@@ -4046,6 +4178,87 @@ class CriminalJusticeSystem(System):
         )
         if change is not None:
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
+
+    def on_justice_mutual_fight_observed(self, event):
+        if event_is_vision_only(event):
+            return
+        incident_id = event.data.get("incident_id")
+        participants = tuple(event.data.get("participant_eids", ()) or ())
+        cleaned_participants = []
+        for eid in participants:
+            try:
+                value = int(eid)
+            except (TypeError, ValueError):
+                continue
+            if value > 0 and value not in cleaned_participants:
+                cleaned_participants.append(value)
+        if len(cleaned_participants) < 2:
+            return
+
+        context = str(event.data.get("context", "unarmed_assault") or "unarmed_assault").strip().lower()
+        if context not in VIOLENT_OFFENSE_CONTEXTS:
+            context = "unarmed_assault"
+        incident_type = self._incident_type_from_context(context)
+        severity = max(18, int(event.data.get("severity", 0) or 0))
+        witness_eids = tuple(event.data.get("witness_eids", ()) or ())
+        observer_eid = event.data.get("observer_eid")
+        witness_count = max(len(witness_eids), 1 if observer_eid is not None else 0)
+        context_label = self._mutual_fight_context_label(context)
+
+        changes = []
+        for offender_eid in cleaned_participants:
+            other_participants = [eid for eid in cleaned_participants if eid != offender_eid]
+            other_eid = other_participants[0] if other_participants else None
+            payload = {
+                "incident_id": incident_id,
+                "observer_eid": observer_eid,
+                "participant_eids": tuple(cleaned_participants),
+                "other_participant_eid": other_eid,
+                "context": context,
+                "weapon_seriousness": context_label,
+                "witness_eids": witness_eids,
+                "witness_count": int(witness_count),
+                "tick": int(getattr(self.sim, "tick", 0)),
+            }
+            self._remember_mutual_fight_questioning_payload(offender_eid, payload)
+            change = self._record_incident(
+                offender_eid,
+                incident_type=incident_type,
+                severity=severity,
+                source_event="mutual_fight_observed",
+                x=event.data.get("x"),
+                y=event.data.get("y"),
+                witnessed=True,
+                note=f"mutual_fight/{context}/{context_label}/incident_{incident_id}/witnesses_{witness_count}",
+            )
+            if change is not None:
+                changes.append(change)
+
+        if changes:
+            ordered_eids = self._humanoid_participants(cleaned_participants)
+            if ordered_eids:
+                self.sim.emit(Event(
+                    "justice_mutual_fight_unready_ordered",
+                    incident_id=incident_id,
+                    officer_eid=observer_eid,
+                    participant_eids=ordered_eids,
+                    context=context,
+                    weapon_seriousness=context_label,
+                    x=event.data.get("x"),
+                    y=event.data.get("y"),
+                    z=event.data.get("z"),
+                ))
+            self.sim.emit(Event(
+                "justice_mutual_fight_questioning_recorded",
+                incident_id=incident_id,
+                observer_eid=observer_eid,
+                participant_eids=tuple(cleaned_participants),
+                context=context,
+                weapon_seriousness=context_label,
+                witness_eids=witness_eids,
+                witness_count=int(witness_count),
+                change_count=len(changes),
+            ))
 
     def on_npc_killed(self, event):
         if event_is_vision_only(event):

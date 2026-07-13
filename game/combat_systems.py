@@ -193,21 +193,9 @@ class WeaponSystem(System):
 
         taxonomy = str(getattr(identity, "taxonomy_class", "other") or "other").strip().lower() or "other"
         target_name = _entity_display_name(self.sim, target_eid, title_case=False)
-        if taxonomy in PEST_WILDLIFE_TAXONOMIES and str(action or "").strip().lower() == "melee_attack":
-            return {
-                "context": "pest_control",
-                "score": 0,
-                "target_name": target_name,
-                "target_taxonomy": taxonomy,
-            }
-
-        context = "wildlife_hunting" if (
-            str(action or "").strip().lower() == "fire_weapon"
-            or taxonomy in MAJOR_WILDLIFE_TAXONOMIES
-        ) else "wildlife_harassment"
         return {
-            "context": context,
-            "score": self._offense_score_for(action, context=context),
+            "context": "wildlife_encounter",
+            "score": 0,
             "target_name": target_name,
             "target_taxonomy": taxonomy,
         }

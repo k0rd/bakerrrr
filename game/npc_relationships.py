@@ -689,6 +689,364 @@ def record_partner_combat_witnesses(sim, source_eid, target_eid, *, damage=0, x=
     return changed
 
 
+_HOMICIDE_CLOSE_RELATIONS = {
+    "family",
+    "partner",
+    "spouse",
+    "lover",
+    "sibling",
+    "parent",
+    "child",
+}
+_HOMICIDE_WITNESS_RANGE = 14
+
+
+def _homicide_bond_stake(bond):
+    if not isinstance(bond, dict) or not bond:
+        return 0.0, ""
+    kind = str(bond.get("kind", "") or "").strip().lower()
+    try:
+        closeness = float(bond.get("closeness", 0.0) or 0.0)
+        trust = float(bond.get("trust", 0.0) or 0.0)
+        protectiveness = float(bond.get("protectiveness", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0, kind
+    if kind in _HOMICIDE_CLOSE_RELATIONS:
+        return max(0.72, closeness, trust, protectiveness), kind
+    if kind in {"friend", "best_friend"}:
+        stake = (closeness * 0.42) + (trust * 0.28) + (protectiveness * 0.3)
+        return (stake if stake >= 0.68 else 0.0), kind
+    if kind in {"crew", "gang", "cult"}:
+        stake = (closeness * 0.32) + (trust * 0.24) + (protectiveness * 0.44)
+        return (stake if stake >= 0.76 else 0.0), kind
+    if kind in {"coworker", "neighbor"}:
+        stake = (closeness * 0.35) + (trust * 0.25) + (protectiveness * 0.4)
+        return (stake if stake >= 0.84 else 0.0), kind
+    stake = (closeness * 0.3) + (trust * 0.25) + (protectiveness * 0.45)
+    return (stake if stake >= 0.88 else 0.0), kind
+
+
+def _clean_explicit_witness_eids(values):
+    if values is None:
+        return set()
+    if not isinstance(values, (list, tuple, set)):
+        values = (values,)
+    cleaned = set()
+    for value in values:
+        try:
+            cleaned.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return cleaned
+
+
+def record_homicide_social_ripples(
+    sim,
+    source_eid,
+    target_eid,
+    *,
+    x=None,
+    y=None,
+    z=None,
+    reason=None,
+    explicit_witness_eids=(),
+):
+    try:
+        source_eid = int(source_eid)
+        target_eid = int(target_eid)
+    except (TypeError, ValueError):
+        return 0
+    if source_eid == target_eid:
+        return 0
+
+    positions = sim.ecs.get(Position)
+    socials = sim.ecs.get(NPCSocial)
+    source_pos = positions.get(source_eid)
+    fallback_z = getattr(source_pos, "z", 0)
+    try:
+        death_x = int(x if x is not None else getattr(source_pos, "x", 0))
+        death_y = int(y if y is not None else getattr(source_pos, "y", 0))
+        death_z = int(z if z is not None else fallback_z)
+    except (TypeError, ValueError):
+        death_x = int(getattr(source_pos, "x", 0))
+        death_y = int(getattr(source_pos, "y", 0))
+        death_z = int(fallback_z or 0)
+
+    explicit = _clean_explicit_witness_eids(explicit_witness_eids)
+    now = int(getattr(sim, "tick", 0) or 0)
+    changed = 0
+    source_name = _entity_display_name(sim, source_eid, title_case=True) or "someone"
+    target_name = _entity_display_name(sim, target_eid, title_case=True) or "someone"
+
+    for witness_eid, social in list(socials.items()):
+        if witness_eid in {source_eid, target_eid}:
+            continue
+        bond = social.bonds.get(target_eid)
+        stake, relation = _homicide_bond_stake(bond)
+        if stake <= 0.0:
+            continue
+
+        witness_pos = positions.get(witness_eid)
+        if not witness_pos or int(witness_pos.z) != death_z:
+            continue
+        if abs(int(witness_pos.x) - death_x) + abs(int(witness_pos.y) - death_y) > _HOMICIDE_WITNESS_RANGE:
+            continue
+
+        knows_source = witness_eid in explicit
+        if not knows_source and source_pos and int(getattr(source_pos, "z", death_z)) == death_z:
+            if (
+                abs(int(witness_pos.x) - int(source_pos.x))
+                + abs(int(witness_pos.y) - int(source_pos.y))
+                > _HOMICIDE_WITNESS_RANGE
+            ):
+                continue
+            knows_source = has_line_of_sight(
+                sim,
+                int(witness_pos.x),
+                int(witness_pos.y),
+                int(witness_pos.z),
+                int(source_pos.x),
+                int(source_pos.y),
+                int(source_pos.z),
+            ) and has_line_of_sight(
+                sim,
+                int(witness_pos.x),
+                int(witness_pos.y),
+                int(witness_pos.z),
+                death_x,
+                death_y,
+                death_z,
+            )
+        if not knows_source:
+            continue
+
+        memory = sim.ecs.get(NPCMemory).get(witness_eid)
+        if memory is None:
+            memory = NPCMemory()
+            sim.ecs.add(witness_eid, memory)
+        strength = min(1.0, 0.78 + (stake * 0.22))
+        common = {
+            "side_eid": target_eid,
+            "against_eid": source_eid,
+            "ally_eid": target_eid,
+            "victim_eid": target_eid,
+            "killer_eid": source_eid,
+            "source_eid": source_eid,
+            "target_eid": target_eid,
+            "x": death_x,
+            "y": death_y,
+            "z": death_z,
+            "relation": relation,
+            "via": "witnessed_homicide",
+            "source_event": "npc_killed",
+            "context": "homicide",
+            "action": "homicide",
+            "danger": "high",
+            "permanent": True,
+        }
+        memory.remember(tick=now, kind="homicide_grief", strength=strength, **common)
+        memory.remember(tick=now, kind="conflict_side", strength=strength, **common)
+        memory.remember(
+            tick=now,
+            kind="actor_reputation",
+            strength=strength,
+            actor_eid=source_eid,
+            approval=-1.0,
+            against_eid=target_eid,
+            victim_eid=target_eid,
+            killer_eid=source_eid,
+            x=death_x,
+            y=death_y,
+            z=death_z,
+            relation=relation,
+            via="witnessed_homicide",
+            source_event="npc_killed",
+            context="homicide",
+            permanent=True,
+        )
+
+        will = sim.ecs.get(NPCWill).get(witness_eid)
+        if will is not None:
+            will.last_tick = now - 1
+        _mark_actor_urgent(sim, witness_eid, family="will", reason="known_homicide", ttl_ticks=30)
+        _mark_actor_urgent(sim, witness_eid, family="move", reason="known_homicide", ttl_ticks=30)
+        _schedule_actor_due(sim, witness_eid, "will", delay_ticks=0, reason="known_homicide")
+        _schedule_actor_due(sim, witness_eid, "move", delay_ticks=0, reason="known_homicide")
+        sim.emit(Event(
+            "npc_homicide_social_ripple",
+            npc_eid=witness_eid,
+            victim_eid=target_eid,
+            killer_eid=source_eid,
+            relation=relation,
+            strength=strength,
+            source_name=source_name,
+            target_name=target_name,
+            reason=str(reason or "").strip().lower(),
+            x=death_x,
+            y=death_y,
+            z=death_z,
+        ))
+        changed += 1
+    return changed
+
+
+def _memory_has_homicide_grief(memory, *, incident_id=None, victim_eid=None, killer_eid=None):
+    if memory is None:
+        return False
+    try:
+        incident_key = int(incident_id) if incident_id is not None else None
+    except (TypeError, ValueError):
+        incident_key = None
+    try:
+        victim_key = int(victim_eid) if victim_eid is not None else None
+        killer_key = int(killer_eid) if killer_eid is not None else None
+    except (TypeError, ValueError):
+        victim_key = None
+        killer_key = None
+    for entry in list(getattr(memory, "entries", ()) or ()):
+        if str(entry.get("kind", "") or "").strip().lower() != "homicide_grief":
+            continue
+        data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+        try:
+            if incident_key is not None and int(data.get("incident_id")) == incident_key:
+                return True
+        except (TypeError, ValueError):
+            pass
+        try:
+            if (
+                victim_key is not None
+                and killer_key is not None
+                and int(data.get("victim_eid")) == victim_key
+                and int(data.get("killer_eid")) == killer_key
+            ):
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
+def record_homicide_incident_knowledge(
+    sim,
+    learner_eid,
+    incident,
+    *,
+    source_kind="",
+    source_eid=None,
+    confidence=1.0,
+    propagation_depth=0,
+):
+    if not isinstance(incident, dict):
+        return 0
+    if str(incident.get("kind", "") or "").strip().lower() != "homicide":
+        return 0
+    try:
+        learner_eid = int(learner_eid)
+        victim_eid = int(incident.get("victim_eid"))
+        killer_eid = int(incident.get("primary_actor_eid"))
+    except (TypeError, ValueError):
+        return 0
+    if learner_eid in {victim_eid, killer_eid} or victim_eid == killer_eid:
+        return 0
+
+    social = sim.ecs.get(NPCSocial).get(learner_eid)
+    bond = social.bonds.get(victim_eid) if social is not None else None
+    stake, relation = _homicide_bond_stake(bond)
+    if stake <= 0.0:
+        return 0
+
+    memory = sim.ecs.get(NPCMemory).get(learner_eid)
+    if memory is None:
+        memory = NPCMemory()
+        sim.ecs.add(learner_eid, memory)
+    incident_id = incident.get("id")
+    if _memory_has_homicide_grief(memory, incident_id=incident_id, victim_eid=victim_eid, killer_eid=killer_eid):
+        return 0
+
+    try:
+        depth = max(0, int(propagation_depth))
+    except (TypeError, ValueError):
+        depth = 0
+    try:
+        confidence = max(0.0, min(1.0, float(confidence)))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    x = int(incident.get("x", 0) or 0)
+    y = int(incident.get("y", 0) or 0)
+    z = int(incident.get("z", 0) or 0)
+    strength = max(0.62, min(0.96, 0.6 + (stake * 0.24) + (confidence * 0.12) - (depth * 0.04)))
+    now = int(getattr(sim, "tick", 0) or 0)
+    common = {
+        "incident_id": incident_id,
+        "side_eid": victim_eid,
+        "against_eid": killer_eid,
+        "ally_eid": victim_eid,
+        "victim_eid": victim_eid,
+        "killer_eid": killer_eid,
+        "source_eid": source_eid,
+        "target_eid": victim_eid,
+        "x": x,
+        "y": y,
+        "z": z,
+        "relation": relation,
+        "via": "incident_homicide_rumor",
+        "source_kind": str(source_kind or "").strip().lower(),
+        "source_event": "knowledge_incident_learned",
+        "context": "homicide",
+        "action": "homicide",
+        "danger": "high",
+        "confidence": round(confidence, 3),
+        "propagation_depth": depth,
+        "permanent": True,
+    }
+    memory.remember(tick=now, kind="homicide_grief", strength=strength, **common)
+    memory.remember(tick=now, kind="conflict_side", strength=strength, **common)
+    memory.remember(
+        tick=now,
+        kind="actor_reputation",
+        strength=strength,
+        actor_eid=killer_eid,
+        approval=round(max(-0.98, -0.74 - (strength * 0.18)), 3),
+        against_eid=victim_eid,
+        victim_eid=victim_eid,
+        killer_eid=killer_eid,
+        incident_id=incident_id,
+        x=x,
+        y=y,
+        z=z,
+        relation=relation,
+        via="incident_homicide_rumor",
+        source_kind=str(source_kind or "").strip().lower(),
+        source_event="knowledge_incident_learned",
+        context="homicide",
+        confidence=round(confidence, 3),
+        propagation_depth=depth,
+        permanent=True,
+    )
+    will = sim.ecs.get(NPCWill).get(learner_eid)
+    if will is not None:
+        will.last_tick = now - 1
+    _mark_actor_urgent(sim, learner_eid, family="will", reason="known_homicide_rumor", ttl_ticks=30)
+    _mark_actor_urgent(sim, learner_eid, family="move", reason="known_homicide_rumor", ttl_ticks=30)
+    _schedule_actor_due(sim, learner_eid, "will", delay_ticks=0, reason="known_homicide_rumor")
+    _schedule_actor_due(sim, learner_eid, "move", delay_ticks=0, reason="known_homicide_rumor")
+    sim.emit(Event(
+        "npc_homicide_social_ripple",
+        npc_eid=learner_eid,
+        victim_eid=victim_eid,
+        killer_eid=killer_eid,
+        relation=relation,
+        strength=strength,
+        source_kind=str(source_kind or "").strip().lower(),
+        propagation_depth=depth,
+        confidence=round(confidence, 3),
+        reason="incident_knowledge",
+        x=x,
+        y=y,
+        z=z,
+    ))
+    return 1
+
+
 def should_block_solo_vehicle_for_partner(sim, eid, target=None):
     partner_eid = relationship_partner_eid(sim, eid, minimum_stage="dating")
     if partner_eid is None:
@@ -816,6 +1174,8 @@ __all__ = [
     "maybe_progress_relationship_after_socialized",
     "mutual_presentation_taste_match",
     "presentation_satisfies_taste",
+    "record_homicide_incident_knowledge",
+    "record_homicide_social_ripples",
     "record_partner_combat_witnesses",
     "relationship_between",
     "relationship_pair_key",

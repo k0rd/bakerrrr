@@ -31,6 +31,7 @@ from game.system_support.item_provenance_runtime import CLAIM_PUBLIC_FREE, CLAIM
 from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS, WILDLIFE_OFFENSE_CONTEXTS
 from game.system_support.social_knowledge_runtime import hydrate_incident_social_knowledge
 from game.criminal_justice_runtime import _observer_is_active_bodyguard
+from game.npc_relationships import record_homicide_incident_knowledge
 from game.vision_scene_runtime import event_is_vision_only
 
 
@@ -293,6 +294,16 @@ class IncidentKnowledgeSystem(System):
                 )
         if social_queued:
             hydrate_incident_social_knowledge(self.sim, eid, source_event="incident_social_queued")
+
+        record_homicide_incident_knowledge(
+            self.sim,
+            eid,
+            incident,
+            source_kind=source_kind,
+            source_eid=source_eid,
+            confidence=record.get("confidence", confidence) if isinstance(record, dict) else confidence,
+            propagation_depth=propagation_depth,
+        )
 
         self.sim.emit(Event(
             "knowledge_incident_learned",

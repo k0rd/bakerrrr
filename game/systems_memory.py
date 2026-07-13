@@ -897,6 +897,8 @@ class NPCMemorySystem(System):
             def _stake_decay(entry, base_amount):
                 kind = str(entry.get("kind", "")).strip().lower()
                 data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+                if bool(data.get("permanent")):
+                    return 0.0
                 property_id = data.get("property_id")
                 if not property_id:
                     return base_amount

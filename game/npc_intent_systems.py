@@ -86,6 +86,7 @@ from game.population import (
 from game.organizations import organization_profile
 from game.npc_relationships import (
     maybe_progress_relationship_after_socialized as _maybe_progress_relationship_after_socialized,
+    record_homicide_social_ripples as _record_homicide_social_ripples,
     record_partner_combat_witnesses as _record_partner_combat_witnesses,
     should_block_solo_vehicle_for_partner as _should_block_solo_vehicle_for_partner,
 )
@@ -105,6 +106,7 @@ from game.property_access import (
     _property_archetype,
     property_access_controller as _property_access_controller,
     evaluate_property_access as _evaluate_property_access,
+    property_is_open as _property_is_open,
     sync_property_access_controller as _sync_property_access_controller,
     property_access_level as _property_access_level,
     property_apertures as _property_apertures,
@@ -181,7 +183,7 @@ from game.system_support.actor_attention_runtime import (
     schedule_actor_due as _schedule_actor_due,
 )
 from game.outfit_impression import apply_visible_outfit_social_offset
-from game.criminal_justice_runtime import _noise_merits_attention
+from game.criminal_justice_runtime import _noise_merits_attention, _observer_is_active_bodyguard
 from game.dialogue_runtime import (
     _active_contractor_record,
     _contractor_order_target_from_record,
@@ -586,6 +588,81 @@ BEHAVIOR_TIP_SHARE_TARGET_LIMITS = {
     BEHAVIOR_TIP_STREET_BUY: 2,
     BEHAVIOR_TIP_STREET_APPRAISE: 2,
 }
+PROTECTIVE_DUTY_ROLES = {
+    "bodyguard",
+    "bouncer",
+    "cop",
+    "enforcer",
+    "guard",
+    "officer",
+    "peace_officer",
+    "ranger",
+    "scout",
+    "security",
+}
+PROTECTIVE_DUTY_CAREER_HINTS = (
+    "bodyguard",
+    "bouncer",
+    "cop",
+    "guard",
+    "officer",
+    "peace officer",
+    "ranger",
+    "security",
+)
+HIGH_DANGER_THREAT_ACTIONS = {
+    "drone_weapon_fire",
+    "fire_weapon",
+    "gunshot",
+    "throw_explosive",
+    "vehicle_ram",
+}
+HIGH_DANGER_THREAT_CONTEXTS = {
+    "armed_assault",
+    "arson",
+    "explosive_discharge",
+    "homicide",
+    "murder",
+}
+HIGH_DANGER_DAMAGE_KINDS = {
+    "ballistic",
+    "blast",
+    "explosive",
+    "fire",
+}
+HIGH_DANGER_WEAPON_HINTS = (
+    "bomb",
+    "flame",
+    "grenade",
+    "gun",
+    "pistol",
+    "revolver",
+    "rifle",
+    "rocket",
+    "shotgun",
+)
+MEDIUM_DANGER_THREAT_CONTEXTS = {
+    "melee_assault",
+    "wildlife_encounter",
+}
+MEDIUM_DANGER_DAMAGE_KINDS = {
+    "bite",
+    "cut",
+    "melee",
+    "pierce",
+    "slash",
+}
+MEDIUM_DANGER_WEAPON_HINTS = (
+    "axe",
+    "bat",
+    "blade",
+    "club",
+    "crowbar",
+    "knife",
+    "machete",
+    "pipe",
+    "shiv",
+)
 
 
 def _recent_behavior_tip(memory, kind, *, now, max_age=BEHAVIOR_TIP_MAX_AGE):
@@ -855,6 +932,175 @@ def _retreat_target_from_warning(sim, pos, warning_pos, *, max_stride=4):
     return None
 
 
+def _property_entry_cells(prop):
+    if not isinstance(prop, dict):
+        return frozenset()
+    metadata = prop.get("metadata", {}) if isinstance(prop.get("metadata"), dict) else {}
+    rows = []
+    entry = metadata.get("entry")
+    if isinstance(entry, dict):
+        rows.append(entry)
+    apertures = metadata.get("apertures", ())
+    if isinstance(apertures, (list, tuple, set, frozenset)):
+        rows.extend(row for row in apertures if isinstance(row, dict))
+    cells = set()
+    for row in rows:
+        kind = str(row.get("kind", "door") or "door").strip().lower()
+        if kind not in {"door", "entry", "front_door", "service_door", "employee_door"}:
+            continue
+        try:
+            cells.add((
+                int(row.get("x")),
+                int(row.get("y")),
+                int(row.get("z", prop.get("z", 0))),
+            ))
+        except (TypeError, ValueError):
+            continue
+    return frozenset(cells)
+
+
+def _entry_clearance_cells(prop):
+    cells = set(_property_entry_cells(prop))
+    for x, y, z in tuple(cells):
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            cells.add((int(x + dx), int(y + dy), int(z)))
+    return frozenset(cells)
+
+
+def _actor_can_hold_open_entry(sim, actor_eid, prop, pos):
+    if sim is None or actor_eid is None or not isinstance(prop, dict):
+        return False
+    try:
+        if prop.get("owner_eid") is not None and int(prop.get("owner_eid")) == int(actor_eid):
+            return True
+    except (TypeError, ValueError):
+        if prop.get("owner_eid") == actor_eid:
+            return True
+    access = _evaluate_property_access(
+        sim,
+        actor_eid,
+        prop,
+        x=getattr(pos, "x", None),
+        y=getattr(pos, "y", None),
+        z=getattr(pos, "z", None),
+    )
+    reason = str(getattr(access, "standing_reason", "") or "").strip().lower()
+    return reason in {"owner", "resident"}
+
+
+def _open_public_building_entry_for_position(sim, actor_eid, pos):
+    if sim is None or pos is None:
+        return None
+    for prop in sim.properties_in_radius(int(pos.x), int(pos.y), int(pos.z), r=1):
+        if not isinstance(prop, dict):
+            continue
+        if str(prop.get("kind", "") or "").strip().lower() not in {"building", "site"}:
+            continue
+        cells = _property_entry_cells(prop)
+        if (int(pos.x), int(pos.y), int(pos.z)) not in cells:
+            continue
+        if _property_access_level(prop) != "public":
+            continue
+        if _property_is_open(sim, prop) is False:
+            continue
+        if _actor_can_hold_open_entry(sim, actor_eid, prop, pos):
+            return None
+        return prop
+    return None
+
+
+def _doorway_clear_target(sim, actor_eid, prop, pos, *, radius=4):
+    if sim is None or pos is None or not isinstance(prop, dict):
+        return None
+    blocked = _entry_clearance_cells(prop)
+    candidates = []
+    for dist in range(1, int(max(1, radius)) + 1):
+        for dx in range(-dist, dist + 1):
+            for dy in range(-dist, dist + 1):
+                if abs(dx) + abs(dy) != dist:
+                    continue
+                x = int(pos.x) + int(dx)
+                y = int(pos.y) + int(dy)
+                z = int(pos.z)
+                cell = (x, y, z)
+                if cell in blocked:
+                    continue
+                tile = sim.tilemap.tile_at(x, y, z)
+                if tile is None or not bool(getattr(tile, "walkable", False)):
+                    continue
+                occupants = set(sim.tilemap.entities_at(x, y, z) or ())
+                if any(int(other_eid) != int(actor_eid) for other_eid in occupants):
+                    continue
+                traversable, _reason = _is_traversable_for(sim, actor_eid, x, y, z)
+                if not traversable:
+                    continue
+                if blocked:
+                    clearance = min(_manhattan(x, y, bx, by) for bx, by, bz in blocked if int(bz) == z)
+                else:
+                    clearance = dist
+                candidates.append((dist, -int(clearance), x, y, z))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: row)
+    _dist, _neg_clearance, x, y, z = candidates[0]
+    return (int(x), int(y), int(z))
+
+
+def _doorway_observer_is_enforcer(sim, observer_eid):
+    if sim is None or observer_eid is None:
+        return False
+    if _observer_is_active_bodyguard(sim, observer_eid):
+        return False
+    ais = sim.ecs.get(AI)
+    occupations = sim.ecs.get(Occupation)
+    justices = sim.ecs.get(JusticeProfile)
+    ai = ais.get(observer_eid)
+    occupation = occupations.get(observer_eid)
+    profile = justices.get(observer_eid)
+    role = str(getattr(ai, "role", "") or "").strip().lower()
+    career = str(getattr(occupation, "career", "") or "").strip().lower()
+    if role == "wildlife":
+        return False
+    if profile is not None and bool(getattr(profile, "enforce_all", False)):
+        return True
+    if role == "guard":
+        return True
+    return any(token in career for token in ("guard", "corrections", "deputy", "bailiff", "sergeant", "police"))
+
+
+def _doorway_observing_enforcers(sim, blocker_eid, pos, *, radius=8):
+    if sim is None or pos is None:
+        return ()
+    observers = []
+    positions = sim.ecs.get(Position)
+    for observer_eid, observer_pos in positions.items():
+        try:
+            observer_eid = int(observer_eid)
+            blocker_id = int(blocker_eid)
+        except (TypeError, ValueError):
+            continue
+        if observer_eid == blocker_id:
+            continue
+        if int(getattr(observer_pos, "z", 0)) != int(pos.z):
+            continue
+        if _manhattan(int(observer_pos.x), int(observer_pos.y), int(pos.x), int(pos.y)) > int(radius):
+            continue
+        if not _doorway_observer_is_enforcer(sim, observer_eid):
+            continue
+        if not _has_line_of_sight(
+            sim,
+            int(observer_pos.x),
+            int(observer_pos.y),
+            int(observer_pos.z),
+            int(pos.x),
+            int(pos.y),
+            int(pos.z),
+        ):
+            continue
+        observers.append(observer_eid)
+    return tuple(sorted(set(observers)))
+
+
 def _live_target_position(sim, target_eid, *, positions=None, vitalities=None, z=None):
     if sim is None or target_eid is None:
         return None
@@ -919,6 +1165,160 @@ def _npc_live_threat_context(
         "threat_focus": threat_focus,
         "metrics": metrics,
         "retreat_target": retreat_target,
+    }
+
+
+def _normalized_threat_tokens(threat_data):
+    data = threat_data if isinstance(threat_data, dict) else {}
+    tokens = []
+    for key in (
+        "action",
+        "context",
+        "damage_kind",
+        "weapon_id",
+        "weapon_item_id",
+        "weapon_name",
+        "source_kind",
+        "cause",
+    ):
+        value = str(data.get(key, "") or "").strip().lower()
+        if value:
+            tokens.append(value)
+    for key in ("tags", "weapon_tags", "contexts"):
+        values = data.get(key)
+        if isinstance(values, (set, tuple, list)):
+            tokens.extend(str(value or "").strip().lower() for value in values if str(value or "").strip())
+    return tuple(tokens)
+
+
+def _threat_danger_level(threat_data):
+    tokens = _normalized_threat_tokens(threat_data)
+    if any(token in HIGH_DANGER_THREAT_ACTIONS for token in tokens):
+        return "high"
+    if any(token in HIGH_DANGER_THREAT_CONTEXTS for token in tokens):
+        return "high"
+    if any(token in HIGH_DANGER_DAMAGE_KINDS for token in tokens):
+        return "high"
+    if any(any(hint in token for hint in HIGH_DANGER_WEAPON_HINTS) for token in tokens):
+        return "high"
+    if any(token in MEDIUM_DANGER_THREAT_CONTEXTS for token in tokens):
+        return "medium"
+    if any(token in MEDIUM_DANGER_DAMAGE_KINDS for token in tokens):
+        return "medium"
+    if any(any(hint in token for hint in MEDIUM_DANGER_WEAPON_HINTS) for token in tokens):
+        return "medium"
+    if any(token in {"fistfight", "unarmed", "unarmed_assault", "shove", "punch"} for token in tokens):
+        return "low"
+    # Unknown violence should not be treated like harmless horseplay.
+    return "medium"
+
+
+def _has_protective_duty(ai, *, justice=None, occupation=None):
+    role_key = str(getattr(ai, "role", "") or "").strip().lower()
+    if role_key in PROTECTIVE_DUTY_ROLES:
+        return True
+    career = str(getattr(occupation, "career", "") or "").strip().lower()
+    if career and any(hint in career for hint in PROTECTIVE_DUTY_CAREER_HINTS):
+        return True
+    if justice is not None:
+        if bool(getattr(justice, "enforce_all", False)):
+            return True
+        justice_score = float(getattr(justice, "justice", 0.0) or 0.0)
+        sensitivity = float(getattr(justice, "crime_sensitivity", justice_score) or justice_score)
+        if justice_score >= 0.78 and sensitivity >= 0.7:
+            return True
+    return False
+
+
+def _bond_supports_physical_intervention(bond, *, danger):
+    if not isinstance(bond, dict) or not bond:
+        return False
+    kind = str(bond.get("kind", "") or "").strip().lower()
+    closeness = float(bond.get("closeness", 0.0) or 0.0)
+    trust = float(bond.get("trust", 0.0) or 0.0)
+    protectiveness = float(bond.get("protectiveness", 0.0) or 0.0)
+    if kind in {"family", "partner", "spouse", "lover", "sibling", "parent", "child"}:
+        return closeness >= 0.24 or trust >= 0.24 or protectiveness >= 0.18
+    if kind in {"friend", "best_friend"}:
+        return protectiveness >= 0.62 or (closeness >= 0.68 and trust >= 0.58)
+    if kind in {"coworker", "crew", "gang", "cult", "bodyguard_principal"}:
+        return protectiveness >= 0.72 or (danger != "high" and closeness >= 0.72 and trust >= 0.68)
+    return protectiveness >= 0.78 or (danger == "low" and closeness >= 0.75 and trust >= 0.7)
+
+
+def _brave_stranger_intervention_allowed(traits, *, protect_allies, threat_strength, danger):
+    bravery = float(getattr(traits, "bravery", 0.0) or 0.0)
+    empathy = float(getattr(traits, "empathy", 0.0) or 0.0)
+    loyalty = float(getattr(traits, "loyalty", 0.0) or 0.0)
+    discipline = float(getattr(traits, "discipline", 0.0) or 0.0)
+    protect_allies = float(protect_allies or 0.0)
+    threat_strength = float(threat_strength or 0.0)
+    if danger == "low":
+        return bravery >= 0.76 and empathy >= 0.5 and protect_allies >= 0.7 and threat_strength >= 0.28
+    if danger == "medium":
+        return bravery >= 0.93 and protect_allies >= 0.9 and max(empathy, loyalty) >= 0.58 and threat_strength >= 0.48
+    return bravery >= 0.985 and discipline >= 0.76 and protect_allies >= 0.98 and threat_strength >= 0.72
+
+
+def _physical_intervention_reason(
+    *,
+    ai,
+    traits,
+    threat_data,
+    threat_strength,
+    protect_allies,
+    bond=None,
+    justice=None,
+    occupation=None,
+    side_impression=0.0,
+    against_impression=0.0,
+):
+    danger = _threat_danger_level(threat_data)
+    if _has_protective_duty(ai, justice=justice, occupation=occupation):
+        return "duty", danger
+    if _bond_supports_physical_intervention(bond, danger=danger):
+        return "bond", danger
+    side_impression = float(side_impression or 0.0)
+    against_impression = float(against_impression or 0.0)
+    protect_allies = float(protect_allies or 0.0)
+    threat_strength = float(threat_strength or 0.0)
+    if danger != "high" and side_impression >= 0.72 and protect_allies >= 0.5 and threat_strength >= 0.34:
+        return "known_ally", danger
+    if danger == "low" and against_impression <= -0.82 and protect_allies >= 0.64 and threat_strength >= 0.34:
+        return "known_threat", danger
+    if _brave_stranger_intervention_allowed(
+        traits,
+        protect_allies=protect_allies,
+        threat_strength=threat_strength,
+        danger=danger,
+    ):
+        return "brave_stranger", danger
+    return None, danger
+
+
+def _safer_threat_response(sim, pos, threat_pos, danger, *, target_eid=None, strength=0.0):
+    if not threat_pos or int(getattr(threat_pos, "z", -9999)) != int(pos.z):
+        return None
+    base_score = max(34.0, float(strength or 0.0) * 52.0)
+    if danger == "high":
+        retreat_target = _retreat_target_from_warning(
+            sim,
+            pos,
+            (int(threat_pos.x), int(threat_pos.y), int(threat_pos.z)),
+            max_stride=4,
+        )
+        if retreat_target and retreat_target != (int(pos.x), int(pos.y), int(pos.z)):
+            return {
+                "intent": "seeking_safety",
+                "score": max(42.0, base_score),
+                "target": retreat_target,
+                "target_eid": target_eid,
+            }
+    return {
+        "intent": "investigating",
+        "score": base_score,
+        "target": (int(threat_pos.x), int(threat_pos.y), int(threat_pos.z)),
+        "target_eid": target_eid,
     }
 
 
@@ -1658,6 +2058,7 @@ class NPCWillSystem(System):
     def __init__(self, sim):
         super().__init__(sim)
         self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
+        self.sim.events.subscribe("npc_killed", self.on_npc_killed)
         self.sim.events.subscribe("npc_intent_changed", self.on_npc_intent_changed)
 
     def _live_timeskip_active(self):
@@ -1674,6 +2075,36 @@ class NPCWillSystem(System):
         if intent in self.LIVE_TIMESKIP_URGENT_STATES:
             _mark_actor_urgent(self.sim, npc_eid, family="will", reason=f"intent:{intent}", ttl_ticks=12)
             _schedule_actor_due(self.sim, npc_eid, "will", delay_ticks=0, reason=f"intent:{intent}")
+
+    def on_npc_killed(self, event):
+        if isinstance(event.data.get("animal_payload"), dict) and event.data.get("animal_payload"):
+            return
+        source_eid = event.data.get("source_eid")
+        target_eid = event.data.get("target_eid")
+        if source_eid is None or target_eid is None:
+            return
+        explicit_witness_eids = []
+        for key in (
+            "observer_eids",
+            "witness_eids",
+            "accountable_observer_eids",
+            "accountable_witness_eids",
+        ):
+            values = event.data.get(key)
+            if isinstance(values, (list, tuple, set)):
+                explicit_witness_eids.extend(values)
+            elif values is not None:
+                explicit_witness_eids.append(values)
+        _record_homicide_social_ripples(
+            self.sim,
+            source_eid,
+            target_eid,
+            x=event.data.get("x"),
+            y=event.data.get("y"),
+            z=event.data.get("z"),
+            reason=event.data.get("reason"),
+            explicit_witness_eids=explicit_witness_eids,
+        )
 
     def on_entity_damaged(self, event):
         source_eid = event.data.get("source_eid")
@@ -2816,6 +3247,7 @@ class NPCWillSystem(System):
                 against_eid = threat_data.get("against_eid")
                 against_pos = positions.get(against_eid) if against_eid is not None else None
                 ally_bond = social.bonds.get(ally_eid) if social and ally_eid is not None else {}
+                justice = justices.get(eid)
                 protectiveness = float((ally_bond or {}).get("protectiveness", 0.0) or 0.0)
                 trust = float((ally_bond or {}).get("trust", 0.0) or 0.0)
                 protect_drive = (
@@ -2825,15 +3257,35 @@ class NPCWillSystem(System):
                     + (protect_allies * 24.0)
                 )
                 if against_pos and int(against_pos.z) == int(pos.z):
-                    if protect_drive > best_score and (
-                        threat_strength >= 0.24
-                        or protectiveness >= 0.62
-                        or protect_allies >= 0.65
-                    ):
+                    intervention_reason, danger = _physical_intervention_reason(
+                        ai=ai,
+                        traits=traits,
+                        threat_data=threat_data,
+                        threat_strength=threat_strength,
+                        protect_allies=protect_allies,
+                        bond=ally_bond,
+                        justice=justice,
+                        occupation=occupation,
+                    )
+                    if intervention_reason and protect_drive > best_score:
                         best_intent = "protecting"
                         best_score = min(96.0, protect_drive)
                         best_target = (against_pos.x, against_pos.y, against_pos.z)
                         best_target_eid = against_eid
+                    else:
+                        response = _safer_threat_response(
+                            self.sim,
+                            pos,
+                            against_pos,
+                            danger,
+                            target_eid=against_eid,
+                            strength=threat_strength,
+                        )
+                        if response and float(response["score"]) > best_score:
+                            best_intent = str(response["intent"])
+                            best_score = float(response["score"])
+                            best_target = response["target"]
+                            best_target_eid = response["target_eid"]
 
             conflict_side = _strongest_memory_entry(
                 memory,
@@ -2853,13 +3305,21 @@ class NPCWillSystem(System):
                 against_eid = side_data.get("against_eid")
                 side_pos = positions.get(side_eid) if side_eid is not None else None
                 against_pos = positions.get(against_eid) if against_eid is not None else None
+                side_bond = social.bonds.get(side_eid) if social and side_eid is not None else {}
                 side_impression = _npc_actor_impression(self.sim, eid, side_eid, memory=memory, social=social)
                 against_impression = _npc_actor_impression(self.sim, eid, against_eid, memory=memory, social=social)
-                commit_ready = (
-                    side_strength >= 0.38
-                    or protect_allies >= 0.58
-                    or side_impression >= 0.58
-                    or against_impression <= -0.58
+                justice = justices.get(eid)
+                intervention_reason, danger = _physical_intervention_reason(
+                    ai=ai,
+                    traits=traits,
+                    threat_data=side_data,
+                    threat_strength=side_strength,
+                    protect_allies=protect_allies,
+                    bond=side_bond,
+                    justice=justice,
+                    occupation=occupation,
+                    side_impression=side_impression,
+                    against_impression=against_impression,
                 )
                 protect_drive = (
                     (side_strength * 54.0)
@@ -2867,11 +3327,25 @@ class NPCWillSystem(System):
                     + (max(0.0, -against_impression) * 16.0)
                     + (protect_allies * 22.0)
                 )
-                if against_pos and int(against_pos.z) == int(pos.z) and commit_ready and protect_drive > best_score:
+                if against_pos and int(against_pos.z) == int(pos.z) and intervention_reason and protect_drive > best_score:
                     best_intent = "protecting"
                     best_score = min(96.0, protect_drive)
                     best_target = (against_pos.x, against_pos.y, against_pos.z)
                     best_target_eid = against_eid
+                elif against_pos and int(against_pos.z) == int(pos.z):
+                    response = _safer_threat_response(
+                        self.sim,
+                        pos,
+                        against_pos,
+                        danger,
+                        target_eid=against_eid,
+                        strength=side_strength,
+                    )
+                    if response and float(response["score"]) > best_score:
+                        best_intent = str(response["intent"])
+                        best_score = float(response["score"])
+                        best_target = response["target"]
+                        best_target_eid = response["target_eid"]
                 elif side_pos and int(side_pos.z) == int(pos.z):
                     investigate_score = max(18.0, side_strength * 48.0)
                     if investigate_score > best_score:
@@ -2899,6 +3373,15 @@ class NPCWillSystem(System):
                     traits=traits,
                     justice=justice,
                 )
+                intervention_reason, danger = _physical_intervention_reason(
+                    ai=ai,
+                    traits=traits,
+                    threat_data=offense_data,
+                    threat_strength=offense_strength,
+                    protect_allies=justice_behavior,
+                    justice=justice,
+                    occupation=occupation,
+                )
 
                 justice_drive = 24.0 + (justice_behavior * 56.0) + (crime_sensitivity * 10.0)
 
@@ -2906,11 +3389,29 @@ class NPCWillSystem(System):
                 investigate_threshold = max(0.18, 0.34 - (crime_sensitivity * 0.1))
 
                 if offender_pos and offender_pos.z == pos.z:
-                    if offense_strength >= protect_threshold and justice_drive > best_score:
+                    if (
+                        intervention_reason
+                        and offense_strength >= protect_threshold
+                        and justice_drive > best_score
+                    ):
                         best_intent = "protecting"
                         best_score = min(95.0, justice_drive + (offense_strength * 35.0))
                         best_target = (offender_pos.x, offender_pos.y, offender_pos.z)
                         best_target_eid = offender_eid
+                    elif danger == "high":
+                        response = _safer_threat_response(
+                            self.sim,
+                            pos,
+                            offender_pos,
+                            danger,
+                            target_eid=offender_eid,
+                            strength=offense_strength,
+                        )
+                        if response and float(response["score"]) > best_score:
+                            best_intent = str(response["intent"])
+                            best_score = float(response["score"])
+                            best_target = response["target"]
+                            best_target_eid = response["target_eid"]
                     elif (
                         offense_strength >= investigate_threshold
                         and justice_behavior >= 0.32
@@ -3924,6 +4425,8 @@ class NPCInvestigateSystem(System):
         self._move_due_membership = {}
         self._urgent_move_eids = set()
         self._live_no_path_cache = {}
+        self._danger_noise_pulses = {}
+        self._doorway_obstruction_watch = {}
 
     def _live_timeskip_active(self):
         state = getattr(self.sim, "live_timeskip", None)
@@ -4043,6 +4546,111 @@ class NPCInvestigateSystem(System):
         _clear_actor_attention(self.sim, eid, family="move")
         return True
 
+    def _handle_open_doorway_blocking(self, eid, ai, pos, *, wills, identities):
+        role = str(getattr(ai, "role", "") or "").strip().lower()
+        if role in {"wildlife", "animal"}:
+            self._doorway_obstruction_watch.pop(int(eid), None)
+            return False
+        identity = identities.get(eid) if isinstance(identities, dict) else None
+        if identity is not None:
+            creature_type = str(getattr(identity, "creature_type", "") or "").strip().lower()
+            taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower()
+            if creature_type not in {"", "human", "person", "creature"} and taxonomy != "hominid":
+                self._doorway_obstruction_watch.pop(int(eid), None)
+                return False
+
+        prop = _open_public_building_entry_for_position(self.sim, eid, pos)
+        if not isinstance(prop, dict):
+            self._doorway_obstruction_watch.pop(int(eid), None)
+            return False
+
+        tick = int(getattr(self.sim, "tick", 0))
+        key = int(eid)
+        cell = (int(pos.x), int(pos.y), int(pos.z))
+        property_id = str(prop.get("id", "") or "").strip()
+        record = self._doorway_obstruction_watch.get(key)
+        if not isinstance(record, dict) or record.get("property_id") != property_id or tuple(record.get("cell", ())) != cell:
+            record = {
+                "property_id": property_id,
+                "cell": cell,
+                "first_tick": tick,
+                "last_warning_tick": -10_000,
+                "last_obstruction_tick": -10_000,
+                "observer_ticks": {},
+            }
+            self._doorway_obstruction_watch[key] = record
+
+        clear_target = _doorway_clear_target(self.sim, eid, prop, pos)
+        if clear_target is not None:
+            ai.state = "leaving_property"
+            ai.target = tuple(clear_target)
+            ai.target_eid = None
+            will = wills.get(eid)
+            if will is not None:
+                will.intent = "leaving_property"
+                will.target = tuple(clear_target)
+                will.target_eid = None
+            _mark_actor_urgent(self.sim, eid, family="move", reason="clear_doorway", ttl_ticks=8)
+            _mark_actor_urgent(self.sim, eid, family="will", reason="clear_doorway", ttl_ticks=8)
+            self._urgent_move_eids.add(int(eid))
+
+        try:
+            first_tick = int(record.get("first_tick", tick))
+        except (TypeError, ValueError):
+            first_tick = tick
+        blocked_ticks = max(0, tick - first_tick)
+        observer_ticks = record.get("observer_ticks")
+        if not isinstance(observer_ticks, dict):
+            observer_ticks = {}
+            record["observer_ticks"] = observer_ticks
+        current_observers = _doorway_observing_enforcers(self.sim, eid, pos)
+        current_observer_keys = {str(int(observer_eid)) for observer_eid in current_observers}
+        for observer_key in tuple(observer_ticks.keys()):
+            if observer_key not in current_observer_keys:
+                observer_ticks.pop(observer_key, None)
+        for observer_eid in current_observers:
+            observer_key = str(int(observer_eid))
+            observer_ticks[observer_key] = int(observer_ticks.get(observer_key, 0) or 0) + 1
+        qualifying_observers = tuple(
+            int(observer_key)
+            for observer_key, seen_ticks in sorted(observer_ticks.items(), key=lambda row: int(row[0]))
+            if int(seen_ticks or 0) >= 3
+        )
+        if blocked_ticks >= 2 and tick - int(record.get("last_warning_tick", -10_000) or -10_000) >= 6:
+            record["last_warning_tick"] = tick
+            self.sim.emit(Event(
+                "property_doorway_obstruction_warning",
+                npc_eid=eid,
+                offender_eid=eid,
+                property_id=property_id,
+                property_name=str(prop.get("name", property_id or "the building")).strip() or "the building",
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+                clear_target=tuple(clear_target) if clear_target is not None else None,
+                blocked_ticks=int(blocked_ticks),
+            ))
+
+        if qualifying_observers and blocked_ticks >= 5 and tick - int(record.get("last_obstruction_tick", -10_000) or -10_000) >= 12:
+            record["last_obstruction_tick"] = tick
+            self.sim.emit(Event(
+                "property_doorway_obstruction",
+                npc_eid=eid,
+                offender_eid=eid,
+                property_id=property_id,
+                property_name=str(prop.get("name", property_id or "the building")).strip() or "the building",
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+                blocked_ticks=int(blocked_ticks),
+                severity_score=30,
+                observer_eids=qualifying_observers,
+                accountable_observer_eids=qualifying_observers,
+                observation_channels=("actor_witness",),
+                witnessed=True,
+            ))
+        return clear_target is not None
+
     def _live_no_path_signature(self, eid, ai, pos, target):
         if ai is None or pos is None or target is None:
             return None
@@ -4091,6 +4699,61 @@ class NPCInvestigateSystem(System):
             self._live_no_path_cache.pop(int(eid), None)
         except (TypeError, ValueError):
             return
+
+    def _recent_danger_noise_pulse_count(self, eid, *, x, y, z, cause, window_ticks=18, radius=3):
+        try:
+            eid = int(eid)
+        except (TypeError, ValueError):
+            return 1
+        now = int(getattr(self.sim, "tick", 0) or 0)
+        cause_key = str(cause or "").strip().lower()
+        rows = []
+        for row in self._danger_noise_pulses.get(eid, ()):
+            if not isinstance(row, dict):
+                continue
+            if now - int(row.get("tick", now) or now) > int(window_ticks):
+                continue
+            rows.append(row)
+        rows.append({
+            "tick": now,
+            "x": int(x),
+            "y": int(y),
+            "z": int(z),
+            "cause": cause_key,
+        })
+        self._danger_noise_pulses[eid] = rows
+        count = 0
+        for row in rows:
+            if int(row.get("z", z) or z) != int(z):
+                continue
+            if _manhattan(int(row.get("x", x) or x), int(row.get("y", y) or y), int(x), int(y)) > int(radius):
+                continue
+            row_cause = str(row.get("cause", "") or "").strip().lower()
+            if row_cause and cause_key and row_cause != cause_key:
+                continue
+            count += 1
+        return max(1, count)
+
+    def _nearby_fleeing_humanoid_count(self, eid, *, x, y, z, ais, positions, radius=8):
+        count = 0
+        for other_eid, other_ai in ais.items():
+            if other_eid == eid:
+                continue
+            if str(getattr(other_ai, "role", "") or "").strip().lower() == "wildlife":
+                continue
+            if str(getattr(other_ai, "state", "") or "").strip().lower() != "seeking_safety":
+                continue
+            other_pos = positions.get(other_eid)
+            if not other_pos or int(other_pos.z) != int(z):
+                continue
+            if _manhattan(int(other_pos.x), int(other_pos.y), int(x), int(y)) > int(radius):
+                continue
+            target = getattr(other_ai, "target", None)
+            if isinstance(target, (tuple, list)) and len(target) >= 3 and int(target[2]) == int(z):
+                if _manhattan(int(target[0]), int(target[1]), int(x), int(y)) <= _manhattan(int(other_pos.x), int(other_pos.y), int(x), int(y)):
+                    continue
+            count += 1
+        return count
 
     def _current_next_move_tick(self, eid, throttle):
         if throttle is not None:
@@ -4170,6 +4833,8 @@ class NPCInvestigateSystem(System):
         needs_map = self.sim.ecs.get(NPCNeeds)
         routines = self.sim.ecs.get(NPCRoutine)
         wills = self.sim.ecs.get(NPCWill)
+        justices = self.sim.ecs.get(JusticeProfile)
+        occupations = self.sim.ecs.get(Occupation)
         wildlife_behaviors = self.sim.ecs.get(WildlifeBehavior)
         vehicle_states = self.sim.ecs.get(VehicleState)
 
@@ -4239,6 +4904,55 @@ class NPCInvestigateSystem(System):
                 or intent in NOISE_INTERRUPT_PROTECTED_STATES
                 or _actor_in_live_combat(self.sim, eid)
             ):
+                continue
+
+            danger = _threat_danger_level({"action": cause, "cause": cause})
+            if danger == "high" and not _has_protective_duty(
+                ai,
+                justice=justices.get(eid),
+                occupation=occupations.get(eid),
+            ):
+                pulse_count = self._recent_danger_noise_pulse_count(
+                    eid,
+                    x=nx,
+                    y=ny,
+                    z=nz,
+                    cause=cause,
+                )
+                fleeing_count = self._nearby_fleeing_humanoid_count(
+                    eid,
+                    x=nx,
+                    y=ny,
+                    z=nz,
+                    ais=ais,
+                    positions=positions,
+                )
+                needs = needs_map.get(eid)
+                if needs:
+                    needs.safety = _clamp(float(getattr(needs, "safety", 70.0) or 70.0) - 3.0)
+                if pulse_count < 3 and fleeing_count < 2:
+                    continue
+                retreat_target = _retreat_target_from_warning(
+                    self.sim,
+                    pos,
+                    (nx, ny, nz),
+                    max_stride=4,
+                )
+                if not retreat_target:
+                    continue
+                _sync_ai_intent(
+                    ai,
+                    will,
+                    self.sim.tick,
+                    "seeking_safety",
+                    score=78.0 + min(12.0, float(pulse_count + fleeing_count) * 3.0),
+                    target=retreat_target,
+                    target_eid=None,
+                )
+                self._urgent_move_eids.add(int(eid))
+                _mark_actor_urgent(self.sim, eid, family="move", reason="noise:danger", ttl_ticks=12)
+                _mark_actor_urgent(self.sim, eid, family="will", reason="noise:danger", ttl_ticks=12)
+                self._schedule_move_due(eid, getattr(self.sim, "tick", 0))
                 continue
 
             ai.state = "investigating"
@@ -5079,6 +5793,7 @@ class NPCInvestigateSystem(System):
         noise_profiles = self.sim.ecs.get(NoiseProfile)
         memories = self.sim.ecs.get(NPCMemory)
         traits_map = self.sim.ecs.get(NPCTraits)
+        identities = self.sim.ecs.get(CreatureIdentity)
         weapon_profiles = self.sim.ecs.get(WeaponUseProfile)
         vitalities = self.sim.ecs.get(Vitality)
         suppressions = self.sim.ecs.get(SuppressionState)
@@ -5140,6 +5855,7 @@ class NPCInvestigateSystem(System):
                 if live_timeskip_active:
                     self._schedule_move_due(eid, int(getattr(self.sim, "tick", 0)) + 1)
                 continue
+            self._handle_open_doorway_blocking(eid, ai, pos, wills=wills, identities=identities)
             if ai.state not in self.MOVING_STATES:
                 if live_timeskip_active:
                     self._unschedule_move_due(eid)

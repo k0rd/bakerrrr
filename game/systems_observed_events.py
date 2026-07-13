@@ -34,6 +34,7 @@ from game.components import (
     Position,
 )
 from game.incident_runtime import incident_propagation_allowed, incident_record
+from game.justice_force_runtime import classify_lawful_force
 from game.npc_relationships import incident_relationship_override
 from game.organizations import actor_org_memberships
 from game.property_runtime import property_covering as _property_covering
@@ -42,6 +43,7 @@ from game.criminal_justice_runtime import _observer_is_active_bodyguard
 
 
 PEACE_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
+LAW_ENFORCER_ROLES = {"officer", "police", "deputy", "marshal"}
 CIVIC_ROLES = {"clerk", "cashier", "merchant", "shopkeeper", "manager", "worker", "resident", "civilian"}
 VIOLENCE_TAGS = {
     "violence",
@@ -59,6 +61,13 @@ VIOLENCE_TAGS = {
 }
 DISASTER_TAGS = {"fire", "explosion", "collapse", "toxic", "hazard", "disaster", "gas", "flood"}
 TRESPASS_TAGS = {"trespass", "forced_entry", "break_in", "break-in", "unauthorized"}
+VIOLENT_QUESTIONING_CONTEXTS = ("explosive_discharge", "armed_assault", "melee_assault", "unarmed_assault")
+WEAPON_SERIOUSNESS_LABELS = {
+    "unarmed_assault": "unarmed blows",
+    "melee_assault": "armed melee",
+    "armed_assault": "firearms",
+    "explosive_discharge": "explosives or rockets",
+}
 
 
 # Global first, as discussed. Later these can move into world_traits or content JSON.
@@ -623,6 +632,7 @@ class ObservedIncidentConsequenceSystem(System):
         if not self._is_urgent_report_class(incident, source_record):
             return True
 
+        self._maybe_emit_mutual_fight_questioning(eid, incident_id, source_record, incident)
         decision = self._choose_urgent_response(eid, incident, source_record)
         cue_kind = decision["kind"]
 
@@ -688,6 +698,90 @@ class ObservedIncidentConsequenceSystem(System):
             # Known/observed trespass only. Rumor alone should usually not call police.
             return bool(source_record.get("firsthand")) and _clamp(source_record.get("confidence"), default=0.0) >= 0.62
         return bool(incident.get("official_reportable")) and bool(source_record.get("firsthand"))
+
+    def _maybe_emit_mutual_fight_questioning(self, eid, incident_id, source_record, incident):
+        if bool(incident.get("mutual_fight_questioning_reported")):
+            return False
+        if not bool(source_record.get("firsthand")):
+            return False
+        if _key(source_record.get("source_kind")) != "witnessed":
+            return False
+        if not self._actor_can_question_mutual_fight(eid):
+            return False
+
+        primary_eid = incident.get("primary_actor_eid")
+        victim_eid = incident.get("victim_eid")
+        if primary_eid is None or victim_eid is None:
+            return False
+        context = self._violent_questioning_context(incident)
+        if not context:
+            return False
+        force_read = classify_lawful_force(
+            self.sim,
+            {
+                "context": context,
+                "offender_eid": primary_eid,
+                "target_eid": victim_eid,
+                "victim_eid": victim_eid,
+            },
+            offender_eid=primary_eid,
+        )
+        if _key(force_read.get("force_context")) != "mutual_fight":
+            return False
+
+        witness_eids = self._firsthand_witnesses_for_incident(incident_id)
+        incident["mutual_fight_questioning_reported"] = True
+        incident["mutual_fight_questioning_tick"] = int(getattr(self.sim, "tick", 0))
+        self.sim.emit(Event(
+            "justice_mutual_fight_observed",
+            observer_eid=eid,
+            incident_id=incident_id,
+            participant_eids=(primary_eid, victim_eid),
+            primary_actor_eid=primary_eid,
+            victim_eid=victim_eid,
+            context=context,
+            weapon_seriousness=WEAPON_SERIOUSNESS_LABELS.get(context, context.replace("_", " ")),
+            severity=_int(incident.get("severity"), 0),
+            x=incident.get("x"),
+            y=incident.get("y"),
+            z=_int(incident.get("z"), 0),
+            witness_eids=witness_eids,
+            witness_count=len(witness_eids),
+            source_kind=_key(source_record.get("source_kind")),
+            force_context="mutual_fight",
+            force_reason=str(force_read.get("force_reason", "") or "").strip(),
+        ))
+        return True
+
+    def _actor_can_question_mutual_fight(self, eid):
+        ai = self.sim.ecs.get(AI).get(eid)
+        role = _key(getattr(ai, "role", ""))
+        justice = self.sim.ecs.get(JusticeProfile).get(eid)
+        return role in LAW_ENFORCER_ROLES or bool(getattr(justice, "enforce_all", False))
+
+    def _violent_questioning_context(self, incident):
+        tags = _tags(incident)
+        note = _key(incident.get("note")).replace("/", " ")
+        note_tokens = set(note.split())
+        for context in VIOLENT_QUESTIONING_CONTEXTS:
+            if context in tags or context in note_tokens:
+                return context
+        if "fire_weapon" in tags or "gunfire" in tags:
+            return "armed_assault"
+        return ""
+
+    def _firsthand_witnesses_for_incident(self, incident_id):
+        witnesses = []
+        for actor_eid, knowledge in self.sim.ecs.get(IncidentKnowledge).items():
+            record = knowledge.records.get(int(incident_id)) if knowledge is not None else None
+            if not isinstance(record, dict):
+                continue
+            if not bool(record.get("firsthand")):
+                continue
+            if _clamp(record.get("confidence"), default=0.0) < 0.5:
+                continue
+            witnesses.append(int(actor_eid))
+        return tuple(sorted(set(witnesses)))
 
     def _choose_urgent_response(self, eid, incident, source_record):
         relationship_override = incident_relationship_override(self.sim, eid, incident)
