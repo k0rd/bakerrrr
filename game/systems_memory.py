@@ -24,6 +24,7 @@ NPCSocial = _systems.NPCSocial
 NPCTraits = _systems.NPCTraits
 Position = _systems.Position
 PropertyKnowledge = _systems.PropertyKnowledge
+CreatureIdentity = _systems.CreatureIdentity
 _clamp = _systems._clamp
 _crime_sensitivity = _systems._crime_sensitivity
 _degrade_player_disguise = _systems._degrade_player_disguise
@@ -40,6 +41,15 @@ _property_claim_reason = _systems._property_claim_reason
 _property_covering = _systems._property_covering
 _property_focus_position = _systems._property_focus_position
 _world_trait_claim_value = _systems._world_trait_claim_value
+
+
+def _target_is_wildlife_or_animal(sim, target_eid):
+    ai = sim.ecs.get(AI).get(target_eid)
+    identity = sim.ecs.get(CreatureIdentity).get(target_eid)
+    role = str(getattr(ai, "role", "") or "").strip().lower()
+    creature_type = str(getattr(identity, "creature_type", "") or "").strip().lower()
+    return role == "wildlife" or creature_type == "animal"
+
 
 class NPCMemorySystem(System):
 
@@ -527,6 +537,8 @@ class NPCMemorySystem(System):
         if source_eid is None or target_eid is None or source_eid == target_eid:
             return
         if damage <= 0 or x is None or y is None or z is None:
+            return
+        if _target_is_wildlife_or_animal(self.sim, target_eid):
             return
 
         positions = self.sim.ecs.get(Position)

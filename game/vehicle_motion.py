@@ -461,6 +461,8 @@ def apply_vehicle_durability_loss(sim, vehicle_prop, amount=1, *, cause="vehicle
     metadata["vehicle_usable"] = bool(after > 0)
     metadata["vehicle_broken"] = bool(after <= 0)
     if before > 0 and after <= 0:
+        metadata["vehicle_explosion_durability_before"] = int(before)
+        metadata["vehicle_explosion_durability_lost"] = int(before - after)
         arm_vehicle_explosion(sim, vehicle_prop, cause=cause)
     return int(before), int(after), max(0, int(before) - int(after))
 

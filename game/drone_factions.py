@@ -407,7 +407,15 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
     drone_eid = sim.ecs.create()
     x, y, z = deploy_tile
     sim.ecs.add(drone_eid, Position(x, y, z))
-    sim.ecs.add(drone_eid, Render(render_spec["glyph"], render_spec["color"], semantic_id="entity_drone"))
+    sim.ecs.add(
+        drone_eid,
+        Render(
+            render_spec["glyph"],
+            render_spec["color"],
+            color_word=render_spec.get("color_word"),
+            semantic_id="entity_drone",
+        ),
+    )
     sim.ecs.add(
         drone_eid,
         CreatureIdentity(

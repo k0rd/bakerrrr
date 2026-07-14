@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from game.color_words import normalize_color_word, render_key_for_color_word
+
 
 DRONE_SCHEMA_VERSION = 1
 DRONE_CHASSIS_CLASSES = ("A", "B", "C", "D", "E")
@@ -626,11 +628,18 @@ def packed_drone_metadata_from_state(state, *, item_catalog=None):
 
 def deployed_drone_render_spec(metadata=None, *, item_catalog=None):
     summary = drone_loadout_summary(metadata, item_catalog=item_catalog)
-    chassis_item_id = _clean_item_id(summary.get("metadata", {}).get("chassis_item_id"))
+    normalized = summary.get("metadata", {})
+    chassis_item_id = _clean_item_id(normalized.get("chassis_item_id"))
     profile = drone_profile_for_item(chassis_item_id, item_catalog=item_catalog)
+    base_color = _clean_text(profile.get("base_color"), "item_restricted")
+    paint = normalized.get("paint") if isinstance(normalized.get("paint"), dict) else {}
+    paint_word = normalize_color_word(paint.get("primary_color"), default="") or _clean_text(paint.get("primary_color")).lower()
+    render_color = render_key_for_color_word(paint_word, domain="world_object", default="") if paint_word else ""
     return {
         "glyph": (_clean_text(profile.get("base_glyph"), "d") or "d")[:1],
-        "color": _clean_text(profile.get("base_color"), "item_restricted"),
+        "color": render_color or base_color,
+        "base_color": base_color,
+        "color_word": paint_word,
         "chassis_class": _clean_text(summary.get("chassis_class") or summary.get("metadata", {}).get("chassis_class")).upper(),
         "errors": tuple(summary.get("errors", ())),
     }

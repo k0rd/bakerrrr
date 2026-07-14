@@ -256,6 +256,7 @@ from game.location_presentation_runtime import (
     _property_interaction_modes,
     _property_summary,
 )
+from game.situation_read import area_effect_radius_read
 from game.dialogue_runtime import (
     _contact_benefit_labels,
     _disguise_role_label,
@@ -6666,9 +6667,16 @@ class EventLogSystem(System):
     def on_explosion_triggered(self, event):
         if event.data.get("source_eid") != self.player_eid:
             return
-        radius = event.data.get("radius", 0)
-        hits = event.data.get("hits", 0)
-        self._log(f"Explosion r={radius} affects {hits} targets.", channel="combat", priority="critical")
+        read = area_effect_radius_read(self.sim, self.player_eid, event.data.get("radius", 0), effect_label="blast")
+        hits = _int_or_default(event.data.get("hits"), 0)
+        if hits <= 0:
+            target_text = "no targets"
+        elif hits == 1:
+            target_text = "1 target"
+        else:
+            target_text = f"{hits} targets"
+        label = str(read.get("label", "blast") or "blast").strip()
+        self._log(f"{label[:1].upper()}{label[1:]} affects {target_text}.", channel="combat", priority="critical")
 
     def on_combat_overlay_entered(self, event):
         if event.data.get("player_eid") != self.player_eid:

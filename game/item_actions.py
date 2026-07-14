@@ -653,6 +653,7 @@ class ItemActionRuntime:
             Render(
                 render_spec.get("glyph", "d"),
                 color=render_spec.get("color") or "item_restricted",
+                color_word=render_spec.get("color_word"),
                 semantic_id="entity_drone",
                 layer="actor",
                 priority=20,

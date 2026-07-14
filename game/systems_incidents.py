@@ -993,7 +993,10 @@ class IncidentKnowledgeSystem(System):
                 accountable.add(int(eid))
             except (TypeError, ValueError):
                 continue
-        for observer_eid in tuple(observation.get("observer_eids", ()) or ()):
+        private_observers = tuple(observation.get("private_bodyguard_observer_eids", ()) or ())
+        if not private_observers:
+            private_observers = tuple(observation.get("observer_eids", ()) or ())
+        for observer_eid in private_observers:
             try:
                 observer_id = int(observer_eid)
             except (TypeError, ValueError):

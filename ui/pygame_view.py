@@ -1762,7 +1762,10 @@ class PygameView:
 
     def _draw_drone_overlay(self, x, y, color=None, attrs=0):
         color_key = str(color or "").strip().lower() if isinstance(color, str) else ""
-        base_color = "item_metal" if color_key in {"", "item_restricted"} else color
+        if isinstance(color, str):
+            base_color = "item_metal" if color_key in {"", "item_restricted"} else color
+        else:
+            base_color = color or "item_metal"
         frame = self._styled_overlay_color(base_color, attrs=attrs, bold_scale=1.06)
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px

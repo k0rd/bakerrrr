@@ -147,11 +147,10 @@ def _sync_drone_runtime_shape(sim, drone_eid, state, *, item_catalog=None):
     spec = deployed_drone_render_spec(metadata, item_catalog=item_catalog)
     render = sim.ecs.get(Render).get(drone_eid)
     if render is not None:
-        paint = dict(getattr(state, "paint", {}) or {})
         render.set_appearance(
             glyph=spec.get("glyph", "d"),
             color=spec.get("color") or "item_restricted",
-            color_word=_clean(paint.get("primary_color")),
+            color_word=spec.get("color_word"),
             semantic_id="entity_drone",
             overlays=_module_visible_overlays(state, item_catalog=item_catalog),
         )

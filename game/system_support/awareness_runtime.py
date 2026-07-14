@@ -81,9 +81,24 @@ def _filter_observers_for_offender(sim, observer_eids, excluded_eids=(), *, offe
     return tuple(
         observer_eid
         for observer_eid in observers
-        if _observer_is_private_bodyguard(sim, observer_eid)
-        or not _observer_ignores_offender(sim, observer_eid, offender_eid)
+        if not _observer_is_private_bodyguard(sim, observer_eid)
+        and not _observer_ignores_offender(sim, observer_eid, offender_eid)
     )
+
+
+def _private_bodyguard_observers_for_offender(sim, observer_eids, excluded_eids=(), *, offender_eid=None):
+    if offender_eid is None:
+        return ()
+    observers = _filter_excluded_observers(observer_eids, excluded_eids)
+    private = []
+    seen = set()
+    for observer_eid in observers:
+        if observer_eid in seen:
+            continue
+        if _observer_is_private_bodyguard(sim, observer_eid):
+            private.append(observer_eid)
+            seen.add(observer_eid)
+    return tuple(private)
 
 
 def _event_excluded_observer_eids(data, *, event_type=""):
@@ -186,6 +201,12 @@ def observation_payload_from_observers(
     allow_player_accountable=False,
     max_legacy_witnesses=4,
 ):
+    private_bodyguards = _private_bodyguard_observers_for_offender(
+        sim,
+        observer_eids,
+        exclude_eids,
+        offender_eid=offender_eid,
+    )
     observers = _filter_observers_for_offender(
         sim,
         observer_eids,
@@ -205,6 +226,9 @@ def observation_payload_from_observers(
     return {
         "observer_eids": observers,
         "observer_count": len(observers),
+        "private_bodyguard_observer_eids": private_bodyguards,
+        "private_observer_eids": private_bodyguards,
+        "private_observer_count": len(private_bodyguards),
         "accountable_observer_eids": accountable,
         "accountable_observer_count": len(accountable),
         "observation_channels": channels,
@@ -286,6 +310,16 @@ def event_observation_accountability(
         excluded_eids,
         offender_eid=offender_eid,
     )
+    private_bodyguards = _private_bodyguard_observers_for_offender(
+        sim,
+        (
+            tuple(_normalize_observer_eids(data.get("observer_eids"))) + tuple(reporter_observers)
+            if has_explicit_observers
+            else data.get("witnesses")
+        ),
+        excluded_eids,
+        offender_eid=offender_eid,
+    )
     channels = _normalize_observation_channels(data.get("observation_channels"))
     if not channels and observers:
         if event_type == "incident_authority_reported":
@@ -344,6 +378,7 @@ def event_observation_accountability(
             observation_channels=default_channels,
         )
         observers = tuple(backfilled.get("observer_eids", ()))
+        private_bodyguards = tuple(backfilled.get("private_bodyguard_observer_eids", ()))
         accountable = tuple(backfilled.get("accountable_observer_eids", ()))
         channels = tuple(backfilled.get("observation_channels", ()))
 
@@ -357,6 +392,9 @@ def event_observation_accountability(
     return {
         "observer_eids": observers,
         "observer_count": len(observers),
+        "private_bodyguard_observer_eids": private_bodyguards,
+        "private_observer_eids": private_bodyguards,
+        "private_observer_count": len(private_bodyguards),
         "accountable_observer_eids": accountable,
         "accountable_observer_count": len(accountable),
         "observation_channels": channels,

@@ -254,6 +254,33 @@ def _target_label(sim, chunk):
     return area or f"chunk {cx},{cy}"
 
 
+def _same_target_label(sim, chunk, target_label):
+    label = _text(target_label).casefold()
+    if not label or sim is None:
+        return False
+    chunk = _chunk_tuple(chunk)
+    if not chunk:
+        return False
+    try:
+        return _text(_target_label(sim, chunk)).casefold() == label
+    except Exception:
+        return False
+
+
+def _non_retrieval_target_area_reached(sim, player_eid, state):
+    target = _chunk_tuple(state.get("target_chunk"))
+    current = _current_chunk(sim, player_eid)
+    if not target or not current:
+        return False
+    if str(getattr(sim, "zoom_mode", "city")).strip().lower() == "overworld":
+        return False
+    if current == target:
+        return True
+    if _manhattan(current, target) > 1:
+        return False
+    return _same_target_label(sim, current, state.get("target_label"))
+
+
 def _player_inventory(sim, player_eid):
     return sim.ecs.get(Inventory).get(player_eid) if sim is not None else None
 
@@ -1333,11 +1360,14 @@ def evaluate_final_operation(sim, player_eid):
     if not target:
         target = current
     distance = _manhattan(current, target)
+    objective_id = _text(state.get("objective_id")).lower()
+    target_area_reached = objective_id != "high_value_retrieval" and _non_retrieval_target_area_reached(sim, player_eid, state)
+    if target_area_reached:
+        distance = 0
     destination = _destination_text(target, state.get("target_label", ""))
     distance_text = _distance_text(distance)
     unlocked = bool(state["unlocked"])
     completed = bool(state["completed"])
-    objective_id = _text(state.get("objective_id")).lower()
     target_property_id = _text(state.get("target_property_id"))
     target_property_name = _text(state.get("target_property_name"))
     target_item_name = _text(state.get("target_item_name"))
@@ -1404,10 +1434,14 @@ def evaluate_final_operation(sim, player_eid):
             )
             next_step = f"Travel to {destination} and identify the retrieval site."
     else:
-        summary_line = (
-            f"Final operation: reach {destination} ({distance_text})."
-        )
-        next_step = f"Travel to {destination} and enter the local area."
+        if target_area_reached:
+            summary_line = f"Final operation: reached {destination}."
+            next_step = "Hold position. Run will conclude."
+        else:
+            summary_line = (
+                f"Final operation: reach {destination} ({distance_text})."
+            )
+            next_step = f"Travel to {destination} and enter the local area."
 
     return {
         "unlocked": unlocked,
@@ -1527,11 +1561,7 @@ def try_complete_final_operation(sim, player_eid):
         if not state.get("target_recovered"):
             return None
     else:
-        target = _chunk_tuple(state.get("target_chunk"))
-        current = _current_chunk(sim, player_eid)
-        if not target or not current or target != current:
-            return None
-        if str(getattr(sim, "zoom_mode", "city")).strip().lower() == "overworld":
+        if not _non_retrieval_target_area_reached(sim, player_eid, state):
             return None
     target = _chunk_tuple(state.get("target_chunk")) or _current_chunk(sim, player_eid)
     target_property_id = _text(state.get("target_property_id"))

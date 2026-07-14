@@ -64,6 +64,43 @@ def _distance_label(dist, perception):
     return "far"
 
 
+def area_effect_radius_read(sim, eid, radius, *, tactics=None, effect_label="area effect"):
+    radius = int(max(0, _int(radius, 0)))
+    if tactics is None:
+        tactics = _skill(sim, eid, "tactics") if sim is not None and eid is not None else 5.0
+    try:
+        tactics = float(tactics)
+    except (TypeError, ValueError):
+        tactics = 5.0
+
+    if radius <= 1:
+        size = "small"
+    elif radius <= 3:
+        size = "medium"
+    else:
+        size = "large"
+
+    effect = str(effect_label or "area effect").strip().lower() or "area effect"
+    if tactics >= 6.0:
+        label = f"{effect} radius about {radius} m"
+        precise = True
+    else:
+        label = f"{size} {effect}"
+        precise = False
+    return {
+        "radius": int(radius),
+        "size": size,
+        "effect_label": effect,
+        "label": label,
+        "precise": bool(precise),
+        "tactics": float(tactics),
+    }
+
+
+def blast_radius_read(sim, eid, radius, *, tactics=None):
+    return area_effect_radius_read(sim, eid, radius, tactics=tactics, effect_label="blast")
+
+
 def _actor_kind(sim, eid, perception):
     ais = sim.ecs.get(AI)
     ai = ais.get(eid) if ais else None
