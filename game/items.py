@@ -436,6 +436,51 @@ def _normalize_condition_profile(value, *, tool_profiles=None, weapon_id=None, a
     }
 
 
+def _normalize_item_fire_profile(item_id, tags, item, category):
+    raw = item.get("fire_profile") if isinstance(item.get("fire_profile"), dict) else {}
+    tag_set = set(tags or ())
+    category = str(category or "").strip().lower()
+
+    if tag_set.intersection({"food", "paper", "flyer", "flora", "plant", "herbal"}):
+        default_flammability = 1.35
+        default_hp = 3
+    elif category == "cosmetic" or tag_set.intersection({"clothing", "cosmetic", "wearable"}):
+        default_flammability = 1.1
+        default_hp = 4
+    elif category in {"consumable", "medical"} or tag_set.intersection({"consumable", "medical", "drug"}):
+        default_flammability = 1.0
+        default_hp = 4
+    elif category in {"ammo", "throwable"} or tag_set.intersection({"ammo", "throwable", "fuel", "explosive"}):
+        default_flammability = 0.9
+        default_hp = 4
+    elif category in {"device", "credential", "token"} or tag_set.intersection({"device", "phone", "wire", "credential", "key"}):
+        default_flammability = 0.5
+        default_hp = 7
+    elif category in {"tool", "weapon", "armor"} or tag_set.intersection({"tool", "weapon", "armor", "drone"}):
+        default_flammability = 0.35
+        default_hp = 10
+    elif category == "container":
+        default_flammability = 0.9
+        default_hp = 6
+    else:
+        default_flammability = 0.75
+        default_hp = 5
+
+    flammability = max(0.0, min(3.0, _float_or_default(raw.get("flammability"), default_flammability)))
+    max_hp = max(0, _int_or_default(raw.get("hp", raw.get("max_hp")), default_hp))
+    breakable = bool(raw.get("breakable", True))
+    if flammability <= 0.0:
+        breakable = False
+    if breakable and max_hp <= 0:
+        max_hp = max(1, default_hp)
+
+    return {
+        "breakable": bool(breakable),
+        "flammability": float(flammability),
+        "max_hp": int(max_hp),
+    }
+
+
 def _normalize_trap_profile(value):
     if not isinstance(value, dict):
         return {}
@@ -1263,6 +1308,7 @@ def _normalize_item_catalog_source(source):
                 armor=item.get("armor"),
                 stack_max=stack_max,
             ),
+            "fire_profile": _normalize_item_fire_profile(item_id, tags, item, category),
         }
 
     return parsed
@@ -1347,6 +1393,25 @@ def item_condition_profile(item_id, item_catalog=None):
         weapon_id=item_def.get("weapon_id"),
         armor=item_def.get("armor"),
         stack_max=item_def.get("stack_max", 1),
+    )
+
+
+def item_fire_profile(item_id, item_catalog=None):
+    catalog = item_catalog or ITEM_CATALOG
+    item_def = catalog.get(item_id, {})
+    profile = item_def.get("fire_profile")
+    if isinstance(profile, dict):
+        return {
+            "breakable": bool(profile.get("breakable", True)),
+            "flammability": max(0.0, min(3.0, _float_or_default(profile.get("flammability"), 0.75))),
+            "max_hp": max(0, _int_or_default(profile.get("max_hp"), 5)),
+        }
+    tags = item_def.get("tags", ()) if isinstance(item_def.get("tags"), (list, tuple)) else ()
+    return _normalize_item_fire_profile(
+        item_id,
+        tags,
+        item_def,
+        item_def.get("category", _normalize_item_category(item_id, tags, item_def)),
     )
 
 
@@ -1859,6 +1924,41 @@ def apply_item_durability_loss(item_id, metadata=None, amount=1, item_catalog=No
         "after": after,
         "lost": max(0, before - after),
         "max_durability": max_durability,
+        "broken": bool(before > 0 and after <= 0),
+    }
+
+
+def apply_item_fire_damage(item_id, metadata=None, amount=1, item_catalog=None):
+    catalog = item_catalog or ITEM_CATALOG
+    normalized = normalize_item_instance_metadata(item_id, metadata=metadata, item_catalog=catalog)
+    profile = item_fire_profile(item_id, item_catalog=catalog)
+    raw_amount = max(0, _int_or_default(amount, 0))
+    flammability = max(0.0, _float_or_default(profile.get("flammability"), 0.0))
+    max_hp = max(0, _int_or_default(profile.get("max_hp"), 0))
+    if not profile.get("breakable", True) or max_hp <= 0 or raw_amount <= 0 or flammability <= 0.0:
+        return {
+            "metadata": normalized,
+            "before": max_hp,
+            "after": max_hp,
+            "lost": 0,
+            "max_hp": max_hp,
+            "flammability": flammability,
+            "broken": False,
+        }
+
+    before = max(0, min(max_hp, _int_or_default(normalized.get("item_fire_hp"), max_hp)))
+    loss = max(1, int(round(float(raw_amount) * flammability)))
+    after = max(0, before - loss)
+    updated = dict(normalized)
+    updated["item_fire_hp_max"] = int(max_hp)
+    updated["item_fire_hp"] = int(after)
+    return {
+        "metadata": updated,
+        "before": before,
+        "after": after,
+        "lost": max(0, before - after),
+        "max_hp": max_hp,
+        "flammability": flammability,
         "broken": bool(before > 0 and after <= 0),
     }
 

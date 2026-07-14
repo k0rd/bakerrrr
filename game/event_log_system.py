@@ -6315,10 +6315,11 @@ class EventLogSystem(System):
         if not self._player_can_perceive_event_position(event):
             return
         name = str(event.data.get("thrown_item_name", "") or "").strip() or "The canister"
-        radius = int(event.data.get("radius", 0) or 0)
+        read = area_effect_radius_read(self.sim, self.player_eid, event.data.get("radius", 0), effect_label="smoke cloud")
+        label = str(read.get("label", "smoke cloud") or "smoke cloud").strip()
         duration = int(event.data.get("cloud_duration", 0) or 0)
         duration_text = f" for about {duration}t" if duration > 0 else ""
-        self._log(f"{name} vents smoke r={radius}{duration_text}.", channel="combat", priority="high", dedupe_window=2)
+        self._log(f"{name} vents a {label}{duration_text}.", channel="combat", priority="high", dedupe_window=2)
 
     def on_aerosol_cloud_released(self, event):
         if event.data.get("source_eid") != self.player_eid:
@@ -6326,9 +6327,11 @@ class EventLogSystem(System):
         if not self._player_can_perceive_event_position(event):
             return
         label = str(event.data.get("aerosol_label", "") or "").strip() or "aerosol"
+        read = area_effect_radius_read(self.sim, self.player_eid, event.data.get("radius", 0), effect_label=f"{label} cloud")
+        cloud_label = str(read.get("label", f"{label} cloud") or f"{label} cloud").strip()
         cooldown = int(event.data.get("aerosol_exposure_cooldown", 0) or 0)
         caution = f" Re-exposure can hit again after about {cooldown}t." if cooldown > 0 else " Stay out of it."
-        self._log(f"{label.capitalize()} spreads through the smoke.{caution}", channel="combat", priority="high", dedupe_window=2)
+        self._log(f"{cloud_label[:1].upper()}{cloud_label[1:]} spreads through the smoke.{caution}", channel="combat", priority="high", dedupe_window=2)
 
     def on_aerosol_exposure_triggered(self, event):
         if event.data.get("target_eid") != self.player_eid:

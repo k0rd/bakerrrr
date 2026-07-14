@@ -7,6 +7,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game.components import Collider, NPCNeeds, Render, StatusEffects, Vitality
+from game.items import apply_item_fire_damage, item_display_name, split_item_stack_metadata
 from game.property_runtime import property_metadata
 from game.system_support.actor_runtime import _apply_downed_actor_state
 from game.system_support.business_event_state import _business_event_seed_state
@@ -798,6 +799,75 @@ class FireSystem(System):
             cause_detail=f"structural_{kind}" if result.get("broken") else f"scorched_{kind}",
         )
 
+    def _reset_stack_fire_metadata(self, metadata):
+        payload = dict(metadata or {})
+        payload.pop("item_fire_hp", None)
+        payload.pop("item_fire_hp_max", None)
+        return payload
+
+    def _apply_fire_to_ground_items(self, coord, cell):
+        fire_intensity = max(0, _safe_int(cell.get("fire_intensity"), 0))
+        if fire_intensity <= 0:
+            return
+        damage_amount = max(1, 1 + fire_intensity)
+        for ground in tuple(self.sim.ground_items_at(coord[0], coord[1], coord[2]) or ()):
+            if not isinstance(ground, dict):
+                continue
+            ground_item_id = str(ground.get("ground_item_id", "") or "").strip()
+            if not ground_item_id or ground_item_id not in getattr(self.sim, "ground_items", {}):
+                continue
+            item_id = str(ground.get("item_id", "") or "").strip()
+            if not item_id:
+                continue
+            quantity = max(1, _safe_int(ground.get("quantity"), 1))
+            metadata = ground.get("metadata") if isinstance(ground.get("metadata"), dict) else {}
+            result = apply_item_fire_damage(item_id, metadata=metadata, amount=damage_amount)
+            if _safe_int(result.get("lost"), 0) <= 0 and not bool(result.get("broken")):
+                continue
+
+            item_name = item_display_name(item_id, metadata=metadata)
+            event_payload = {
+                "ground_item_id": ground_item_id,
+                "instance_id": ground.get("instance_id"),
+                "item_id": item_id,
+                "item_name": item_name,
+                "x": int(coord[0]),
+                "y": int(coord[1]),
+                "z": int(coord[2]),
+                "fire_intensity": int(fire_intensity),
+                "damage": int(_safe_int(result.get("lost"), 0)),
+                "before_hp": int(_safe_int(result.get("before"), 0)),
+                "after_hp": int(_safe_int(result.get("after"), 0)),
+                "max_hp": int(_safe_int(result.get("max_hp"), 0)),
+                "quantity_before": int(quantity),
+            }
+
+            if bool(result.get("broken")):
+                if quantity <= 1:
+                    self.sim.remove_ground_item(ground_item_id)
+                    event_payload["quantity_after"] = 0
+                    self.sim.emit(Event("ground_item_destroyed_by_fire", **event_payload))
+                    continue
+
+                try:
+                    _removed_metadata, remaining_metadata = split_item_stack_metadata(
+                        item_id,
+                        metadata=metadata,
+                        stack_quantity=quantity,
+                        removed_quantity=1,
+                    )
+                except Exception:
+                    remaining_metadata = metadata
+                ground["quantity"] = int(quantity - 1)
+                ground["metadata"] = self._reset_stack_fire_metadata(remaining_metadata)
+                event_payload["quantity_after"] = int(quantity - 1)
+                self.sim.emit(Event("ground_item_destroyed_by_fire", **event_payload))
+                continue
+
+            ground["metadata"] = result.get("metadata") if isinstance(result.get("metadata"), dict) else dict(metadata)
+            event_payload["quantity_after"] = int(quantity)
+            self.sim.emit(Event("ground_item_fire_damaged", **event_payload))
+
     def _attempt_spread_to_neighbor(self, source_coord, source_cell, target_coord):
         target_chunk = self.sim.chunk_coords(target_coord[0], target_coord[1])
         if not self._chunk_is_loaded(target_chunk):
@@ -1076,6 +1146,7 @@ class FireSystem(System):
             behavior = self._behavior_for_cell(coord[0], coord[1], coord[2])
             if fire_intensity > 0:
                 self._mark_structural_damage(coord, cell, behavior)
+                self._apply_fire_to_ground_items(coord, cell)
                 for target in _neighbor_coords(coord[0], coord[1], coord[2]):
                     self._attempt_spread_to_neighbor(coord, cell, target)
                 cell["smoke_intensity"] = max(smoke_intensity, max(1, fire_intensity))
