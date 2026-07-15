@@ -66,6 +66,13 @@ from game.items import (
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
 )
+from game.inventory_display import (
+    inventory_panel_entries_sortable,
+    inventory_sort_label,
+    next_inventory_sort_mode,
+    normalize_inventory_sort_mode,
+    sort_inventory_entries,
+)
 from game.item_semantics import (
     appraise_item_for_actor,
     item_display_name_for_actor,
@@ -464,6 +471,7 @@ class InputSystem(System):
                 "container_view": "pack",
                 "cache_view": "pack",
                 "note_text": "",
+                "sort_mode": "default",
                 "selected_index": 0,
                 "inspect_text": "",
             }
@@ -668,6 +676,7 @@ class InputSystem(System):
                 "container_view": "pack",
                 "cache_view": "pack",
                 "note_text": "",
+                "sort_mode": "default",
                 "selected_index": 0,
                 "inspect_text": "",
             }
@@ -691,6 +700,7 @@ class InputSystem(System):
         state.setdefault("container_view", "pack")
         state["cache_view"] = "pack" if str(state.get("container_view", "pack")).strip().lower() == "pack" else "cache"
         state.setdefault("note_text", "")
+        state["sort_mode"] = normalize_inventory_sort_mode(state.get("sort_mode", "default"))
         return state
 
     def _trade_state(self):
@@ -6283,6 +6293,24 @@ class InputSystem(System):
             return None
         return self.sim.properties.get(property_id)
 
+    def _inventory_sort_mode(self):
+        state = self._inventory_state()
+        mode = normalize_inventory_sort_mode(state.get("sort_mode", "default"))
+        state["sort_mode"] = mode
+        return mode
+
+    def _sort_inventory_panel_entries(self, entries):
+        entries = list(entries or [])
+        if not inventory_panel_entries_sortable(self._inventory_panel_kind(), self._inventory_container_view()):
+            return entries
+        return sort_inventory_entries(
+            self.sim,
+            self.player_eid,
+            entries,
+            sort_mode=self._inventory_sort_mode(),
+            item_catalog=self.catalog,
+        )
+
     def _equipped_container_entry(self, container_instance_id=None):
         current = getattr(self.sim, "equipped_container", None)
         if not isinstance(current, dict):
@@ -6348,19 +6376,21 @@ class InputSystem(System):
         if self._inventory_panel_kind() == "container":
             if self._inventory_container_kind() == "worn":
                 if self._inventory_container_view() == "pack":
-                    return self._worn_container_pack_entries(self._inventory_container_instance_id())
+                    return self._sort_inventory_panel_entries(
+                        self._worn_container_pack_entries(self._inventory_container_instance_id())
+                    )
                 return self._worn_container_entries(self._inventory_container_instance_id())
             if self._inventory_container_view() == "pack":
                 inventory = self._player_inventory()
                 entries = list(inventory.items) if inventory else []
                 container_kind = self._inventory_container_kind()
                 if container_kind == CAMPFIRE_HERB_CACHE_KIND:
-                    return [
+                    return self._sort_inventory_panel_entries([
                         entry
                         for entry in entries
                         if entry_allowed_in_container(entry, container_kind=container_kind, item_catalog=self.catalog)
-                    ]
-                return entries
+                    ])
+                return self._sort_inventory_panel_entries(entries)
             container_prop = self._inventory_container_property()
             if not container_prop:
                 return []
@@ -6369,7 +6399,7 @@ class InputSystem(System):
                 container_kind=self._inventory_container_kind(),
             ))
         inventory = self._player_inventory()
-        return list(inventory.items) if inventory else []
+        return self._sort_inventory_panel_entries(list(inventory.items) if inventory else [])
 
     def _cache_panel_mission_note(self, prop):
         if not isinstance(prop, dict):
@@ -6604,6 +6634,37 @@ class InputSystem(System):
             state["selected_index"] = 0
             return
         state["selected_index"] = max(0, min(int(state.get("selected_index", 0)), len(entries) - 1))
+
+    def _select_inventory_instance(self, instance_id):
+        instance_id = str(instance_id or "").strip()
+        if not instance_id:
+            self._normalize_inventory_selection()
+            return False
+        state = self._inventory_state()
+        entries = self._inventory_panel_entries()
+        for idx, entry in enumerate(entries):
+            if str(entry.get("instance_id", "") or "").strip() == instance_id:
+                state["selected_index"] = idx
+                return True
+        self._normalize_inventory_selection()
+        return False
+
+    def _cycle_inventory_sort_mode(self):
+        state = self._inventory_state()
+        selected = self._selected_inventory_entry()
+        selected_instance_id = str((selected or {}).get("instance_id", "") or "").strip()
+        state["sort_mode"] = next_inventory_sort_mode(state.get("sort_mode", "default"))
+        state.pop("appearance_slot_choice", None)
+        if selected_instance_id:
+            self._select_inventory_instance(selected_instance_id)
+        else:
+            self._normalize_inventory_selection()
+        label = inventory_sort_label(state.get("sort_mode", "default"))
+        if inventory_panel_entries_sortable(self._inventory_panel_kind(), self._inventory_container_view()):
+            state["inspect_text"] = f"Sort: {label}."
+        else:
+            state["inspect_text"] = f"Sort: {label}. Container contents stay in source order."
+        return True
 
     def _selected_inventory_entry(self):
         self._normalize_inventory_selection()
@@ -6926,6 +6987,9 @@ class InputSystem(System):
         if panel_kind == "container" and key in (KEY_LEFT, KEY_RIGHT, ord("\t"), ord("["), ord("]")):
             self._toggle_container_inventory_view()
             return True
+
+        if key in (ord("s"), ord("S")):
+            return self._cycle_inventory_sort_mode()
 
         choice = state.get("appearance_slot_choice") if isinstance(state.get("appearance_slot_choice"), dict) else None
         if choice:

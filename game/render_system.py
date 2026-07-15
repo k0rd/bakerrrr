@@ -83,6 +83,12 @@ from game.items import (
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
 )
+from game.inventory_display import (
+    inventory_panel_entries_sortable,
+    inventory_sort_label,
+    normalize_inventory_sort_mode,
+    sort_inventory_entries,
+)
 from game.hunting_runtime import hunting_carcasses_at
 from game.flora_runtime import flora_records_in_rect, flora_render_data
 from game.vision_scene_runtime import dream_residue_state, vision_scene_render_state
@@ -2620,7 +2626,9 @@ class RenderSystem(System):
             "open": False,
             "selected_index": 0,
             "inspect_text": "",
+            "sort_mode": "default",
         })
+        inventory_ui["sort_mode"] = normalize_inventory_sort_mode(inventory_ui.get("sort_mode", "default"))
         inventory_panel_kind = str(inventory_ui.get("panel_kind", "inventory")).strip().lower() or "inventory"
         if inventory_panel_kind == "cache":
             inventory_panel_kind = "container"
@@ -4713,6 +4721,14 @@ class RenderSystem(System):
                         for entry in entries
                         if entry_allowed_in_container(entry, container_kind=container_kind, item_catalog=ITEM_CATALOG)
                     ]
+            if inventory_panel_entries_sortable(panel_kind, container_view):
+                entries = sort_inventory_entries(
+                    self.sim,
+                    self.player_eid,
+                    entries,
+                    sort_mode=inventory_ui.get("sort_mode", "default"),
+                    item_catalog=ITEM_CATALOG,
+                )
             if entries:
                 selected_index = int(inventory_ui.get("selected_index", 0))
                 selected_index = max(0, min(selected_index, len(entries) - 1))
@@ -4780,6 +4796,8 @@ class RenderSystem(System):
             else:
                 cap = inv.capacity if inv else 0
                 slot_line = f"Slots {inv.slot_count(entries=entries) if inv else 0}/{cap}"
+            if inventory_panel_entries_sortable(panel_kind, container_view):
+                slot_line += f" | Sort {inventory_sort_label(inventory_ui.get('sort_mode', 'default'))}"
             self.view.draw_text(panel_x + 2, panel_y + 1, _clip(slot_line, body_w), color=self._theme_color(modal_theme, "muted"))
 
             list_y = panel_y + 2
@@ -4923,10 +4941,10 @@ class RenderSystem(System):
             if panel_kind == "container":
                 hint = (
                     f"U transfer  Left/Right or Tab switch {container_label.lower()}/pack  "
-                    f"E inspect  O ops  Y notebooks  L log  D debug  I close"
+                    f"S sort pack  E inspect  O ops  Y notebooks  L log  D debug  I close"
                 )
             else:
-                hint = "U use/equip/stow  R drop  E inspect  O ops  Y notebooks  L log  D debug  I close"
+                hint = "U use/equip/stow  R drop  S sort  E inspect  O ops  Y notebooks  L log  D debug  I close"
             hint = release_control_text(hint, self.sim)
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
         elif trade_ui.get("open"):

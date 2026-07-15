@@ -48,6 +48,7 @@ These are player-facing tools. They are not just flavor; they are how the game r
 - `i` opens inventory.
 - `U` uses, equips, or stows the selected item.
 - `R` drops the selected item.
+- `S` cycles inventory sort order without changing what you carry.
 - `E` inspects items in inventory-style panels.
 
 ## Drones

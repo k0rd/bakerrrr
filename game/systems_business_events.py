@@ -7276,7 +7276,7 @@ class BusinessPulseSceneSystem(System):
         anchor = _business_event_frontage_anchor(self.sim, prop)
         if isinstance(anchor, (tuple, list)) and len(anchor) >= 3:
             return (int(anchor[0]), int(anchor[1]), int(anchor[2]))
-        focus = _property_focus_position(self.sim, prop)
+        focus = _property_focus_position(prop)
         if isinstance(focus, (tuple, list)) and len(focus) >= 3:
             return (int(focus[0]), int(focus[1]), int(focus[2]))
         return None
