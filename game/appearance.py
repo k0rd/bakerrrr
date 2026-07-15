@@ -245,6 +245,15 @@ PROPERTY_FIXTURE_SEMANTICS = {
     "field_cache_box": "prop_cover_cache",
     "water_tank": "prop_cover_tank",
     "campfire_ring": "prop_campfire_ring",
+    "notice_board": "prop_notice_board",
+    "news_rack": "prop_notice_board",
+    "meeting_board": "prop_notice_board",
+    "watch_board": "prop_notice_board",
+    "help_wanted_board": "prop_notice_board",
+    "complaint_board": "prop_notice_board",
+    "route_welcome_board": "prop_notice_board",
+    "shift_board": "prop_notice_board",
+    "quick_travel_ramp": "prop_vehicle_onramp",
 }
 
 SPECIAL_TILE_RENDER_STYLES = {

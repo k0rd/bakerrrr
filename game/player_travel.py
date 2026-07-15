@@ -244,6 +244,44 @@ class PlayerTravelRuntime:
             ramp_x=int(ramp.get("x", 0)),
             ramp_y=int(ramp.get("y", 0)),
             ramp_z=int(ramp.get("z", 0)),
+            auto_ramp_enter=self._local_ramp_auto_enter_enabled(),
+        ))
+        return True
+
+    def _local_ramp_auto_enter_state(self):
+        state = getattr(self.sim, "local_drive_ui", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.local_drive_ui = state
+        state.setdefault("auto_ramp_enter", False)
+        return state
+
+    def _local_ramp_auto_enter_enabled(self):
+        return bool(self._local_ramp_auto_enter_state().get("auto_ramp_enter", False))
+
+    def _set_local_ramp_auto_enter(self, active):
+        self._local_ramp_auto_enter_state()["auto_ramp_enter"] = bool(active)
+
+    def _maybe_auto_enter_quick_travel_ramp(self, eid, pos, vehicle_prop=None):
+        if not self._local_ramp_auto_enter_enabled():
+            return False
+        if str(getattr(self.sim, "zoom_mode", "city")).strip().lower() == "overworld":
+            self._set_local_ramp_auto_enter(False)
+            return False
+        ramp = self._quick_travel_ramp_near(pos.x, pos.y, pos.z)
+        if not isinstance(ramp, dict) or self._ramp_distance_from_pos(ramp, pos) != 0:
+            return False
+        if not self._enter_quick_travel_from_ramp(eid, pos, vehicle_prop=vehicle_prop):
+            return False
+        self._set_local_ramp_auto_enter(False)
+        self.sim.emit(Event(
+            "vehicle_ramp_auto_entered",
+            eid=eid,
+            vehicle_id=(vehicle_prop or {}).get("id") if isinstance(vehicle_prop, dict) else None,
+            vehicle_name=_vehicle_label(vehicle_prop) if isinstance(vehicle_prop, dict) else "",
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
         ))
         return True
 
@@ -410,6 +448,8 @@ class PlayerTravelRuntime:
                 cruise_active=int(getattr(state, "speed", 0) or 0) > 0,
                 reason=reason,
             )
+            if self._maybe_auto_enter_quick_travel_ramp(eid, pos, vehicle_prop=vehicle_prop):
+                return moved_any
             self._emit_nearby_onramp_notice(eid, pos, vehicle_prop=vehicle_prop)
         return moved_any
 
@@ -745,6 +785,7 @@ class PlayerTravelRuntime:
         if state:
             state.set_in_vehicle(False, tick=self.sim.tick)
             set_vehicle_speed(state, 0, tick=self.sim.tick)
+        self._set_local_ramp_auto_enter(False)
 
         if vehicle_prop:
             self._sync_vehicle_property_position(vehicle_prop, park_x, park_y, park_z)

@@ -7344,12 +7344,17 @@ class EventLogSystem(System):
         ramp_id = str(event.data.get("ramp_property_id", "") or "").strip()
         distance = _int_or_default(event.data.get("distance"), 0)
         distance_text = "here" if distance <= 0 else f"{distance}t away"
+        auto_ramp_enter = bool(event.data.get("auto_ramp_enter"))
+        if auto_ramp_enter:
+            message = f"Ramp auto-entry armed ({distance_text}). Drive onto the onramp for quick travel."
+        else:
+            message = f"There is an onramp nearby ({distance_text}). Interact to enter quick travel."
         _log_player_feedback(
             self.sim,
-            f"There is an onramp nearby ({distance_text}). Interact to enter quick travel.",
+            message,
             kind="movement",
             dedupe_window=8,
-            dedupe_key=f"vehicle-onramp-nearby:{ramp_id or 'unknown'}",
+            dedupe_key=f"vehicle-onramp-nearby:{ramp_id or 'unknown'}:{int(auto_ramp_enter)}",
         )
 
     def on_vehicle_action_blocked(self, event):

@@ -4173,6 +4173,156 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_notice_board_overlay(self, x, y, color=None, attrs=0):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        inset = max(1, self.cell_px // 9)
+        stroke_w = max(1, self.cell_px // 18)
+        fill = (frame[0], frame[1], frame[2], 150)
+        stroke = (
+            min(255, int(frame[0] * 1.12) + 8),
+            min(255, int(frame[1] * 1.12) + 8),
+            min(255, int(frame[2] * 1.12) + 8),
+            226,
+        )
+        shadow = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 126)
+        paper = (
+            min(255, int(frame[0] * 0.75) + 74),
+            min(255, int(frame[1] * 0.75) + 74),
+            min(255, int(frame[2] * 0.75) + 66),
+            202,
+        )
+        pin = (
+            min(255, int(frame[0] * 1.18) + 18),
+            min(255, int(frame[1] * 1.18) + 18),
+            min(255, int(frame[2] * 1.18) + 18),
+            222,
+        )
+        line = (shadow[0], shadow[1], shadow[2], 168)
+
+        board = self.pygame.Rect(
+            inset,
+            max(1, self.cell_px // 7),
+            max(6, self.cell_px - (inset * 2)),
+            max(7, self.cell_px - max(4, self.cell_px // 3)),
+        )
+        leg_top = board.bottom - max(1, self.cell_px // 12)
+        leg_bottom = self.cell_px - max(1, self.cell_px // 12)
+        for leg_x in (board.left + max(2, board.w // 5), board.right - max(2, board.w // 5)):
+            self.pygame.draw.line(
+                overlay,
+                shadow,
+                (leg_x, leg_top),
+                (leg_x, leg_bottom),
+                max(1, stroke_w),
+            )
+
+        self.pygame.draw.rect(overlay, fill, board, border_radius=max(1, self.cell_px // 16))
+        self.pygame.draw.rect(overlay, stroke, board, stroke_w, border_radius=max(1, self.cell_px // 16))
+
+        inner = board.inflate(-max(3, self.cell_px // 5), -max(3, self.cell_px // 5))
+        if inner.w > 3 and inner.h > 3:
+            left_note = self.pygame.Rect(
+                inner.left,
+                inner.top,
+                max(3, inner.w // 2),
+                max(3, inner.h - max(1, self.cell_px // 10)),
+            )
+            right_note = self.pygame.Rect(
+                inner.left + max(3, inner.w // 2) + max(1, self.cell_px // 16),
+                inner.top + max(1, self.cell_px // 10),
+                max(2, inner.w - max(3, inner.w // 2) - max(1, self.cell_px // 16)),
+                max(2, inner.h // 2),
+            )
+            for note in (left_note, right_note):
+                self.pygame.draw.rect(overlay, paper, note, border_radius=max(1, self.cell_px // 28))
+                self.pygame.draw.rect(overlay, line, note, max(1, stroke_w - 1), border_radius=max(1, self.cell_px // 28))
+                self.pygame.draw.circle(
+                    overlay,
+                    pin,
+                    (note.left + max(1, note.w // 2), note.top + max(1, self.cell_px // 20)),
+                    max(1, self.cell_px // 28),
+                )
+                for idx in range(2):
+                    py = note.top + max(2, note.h // 3) + (idx * max(1, note.h // 4))
+                    self.pygame.draw.line(
+                        overlay,
+                        line,
+                        (note.left + max(1, self.cell_px // 14), py),
+                        (note.right - max(1, self.cell_px // 14), py),
+                        max(1, stroke_w - 1),
+                    )
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
+    def _draw_vehicle_onramp_overlay(self, x, y, color=None, attrs=0):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.05)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        stroke_w = max(1, self.cell_px // 18)
+        road = (
+            max(12, int(frame[0] * 0.30)),
+            max(12, int(frame[1] * 0.30)),
+            max(12, int(frame[2] * 0.30)),
+            132,
+        )
+        stripe = (
+            min(255, int(frame[0] * 0.95) + 36),
+            min(255, int(frame[1] * 0.95) + 36),
+            min(255, int(frame[2] * 0.95) + 24),
+            198,
+        )
+        accent = (
+            min(255, int(frame[0] * 1.16) + 12),
+            min(255, int(frame[1] * 1.16) + 12),
+            min(255, int(frame[2] * 1.16) + 12),
+            230,
+        )
+        shadow = (frame[0] // 3, frame[1] // 3, frame[2] // 3, 120)
+
+        inset = max(1, self.cell_px // 9)
+        road_rect = self.pygame.Rect(
+            inset,
+            max(1, self.cell_px // 3),
+            max(4, self.cell_px - (inset * 2)),
+            max(3, self.cell_px // 3),
+        )
+        self.pygame.draw.rect(overlay, road, road_rect, border_radius=max(1, self.cell_px // 18))
+        self.pygame.draw.line(
+            overlay,
+            stripe,
+            (road_rect.left + max(1, self.cell_px // 8), road_rect.centery),
+            (road_rect.right - max(1, self.cell_px // 8), road_rect.centery),
+            max(1, stroke_w - 1),
+        )
+
+        ramp_points = [
+            (road_rect.left + max(1, self.cell_px // 12), road_rect.bottom),
+            (road_rect.centerx + max(1, self.cell_px // 12), road_rect.top),
+            (road_rect.right - max(1, self.cell_px // 12), road_rect.top),
+            (road_rect.centerx + max(2, self.cell_px // 4), road_rect.bottom),
+        ]
+        self.pygame.draw.polygon(overlay, (accent[0], accent[1], accent[2], 112), ramp_points)
+        self.pygame.draw.lines(overlay, accent, True, ramp_points, max(1, stroke_w))
+
+        badge_r = max(3, self.cell_px // 5)
+        badge_c = (self.cell_px - badge_r - max(1, self.cell_px // 12), badge_r + max(1, self.cell_px // 12))
+        self.pygame.draw.circle(overlay, shadow, (badge_c[0] + 1, badge_c[1] + 1), badge_r)
+        self.pygame.draw.circle(overlay, (accent[0], accent[1], accent[2], 196), badge_c, badge_r)
+        chevron = [
+            (badge_c[0] - max(1, badge_r // 2), badge_c[1] - max(1, badge_r // 3)),
+            (badge_c[0], badge_c[1]),
+            (badge_c[0] - max(1, badge_r // 2), badge_c[1] + max(1, badge_r // 3)),
+        ]
+        self.pygame.draw.lines(overlay, (18, 22, 26, 214), False, chevron, max(1, stroke_w))
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _draw_cover_fixture_overlay(self, x, y, color=None, attrs=0, *, kind="bench"):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.04)
         cell_x = int(x) * self.cell_px
@@ -6142,6 +6292,12 @@ class PygameView:
         if semantic_key == "prop_campfire_ring":
             self._draw_campfire_ring_overlay(x, y, color=color, attrs=attrs)
             return "campfire_ring"
+        if semantic_key == "prop_notice_board":
+            self._draw_notice_board_overlay(x, y, color=color, attrs=attrs)
+            return "notice_board"
+        if semantic_key == "prop_vehicle_onramp":
+            self._draw_vehicle_onramp_overlay(x, y, color=color, attrs=attrs)
+            return "vehicle_onramp"
         cover_fixture_kind = {
             "prop_cover_bench": "bench",
             "prop_cover_shelter": "shelter",

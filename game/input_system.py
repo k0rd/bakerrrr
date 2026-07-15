@@ -560,6 +560,7 @@ class InputSystem(System):
             self.sim.local_drive_ui = {
                 "active": False,
                 "last_step_at": 0.0,
+                "auto_ramp_enter": False,
             }
         if not hasattr(self.sim, "action_menu_ui"):
             self.sim.action_menu_ui = {
@@ -921,11 +922,13 @@ class InputSystem(System):
             state = {
                 "active": False,
                 "last_step_at": 0.0,
+                "auto_ramp_enter": False,
             }
             self.sim.local_drive_ui = state
         else:
             state.setdefault("active", False)
             state.setdefault("last_step_at", 0.0)
+            state.setdefault("auto_ramp_enter", False)
         return state
 
     def _action_menu_state(self):
@@ -3510,6 +3513,35 @@ class InputSystem(System):
         )
         return True
 
+    def _toggle_vehicle_ramp_auto_enter(self):
+        vehicle_state = self._player_vehicle_state()
+        if not vehicle_state or not bool(getattr(vehicle_state, "in_vehicle", False)):
+            _log_player_feedback(
+                self.sim,
+                "Get in a vehicle before arming ramp entry.",
+                kind="warning",
+                dedupe_window=2,
+                dedupe_key="vehicle_ramp_auto_enter:need_vehicle",
+            )
+            return False
+        state = self._local_drive_state()
+        active = not bool(state.get("auto_ramp_enter", False))
+        state["auto_ramp_enter"] = active
+        self.sim.emit(Event(
+            "vehicle_ramp_auto_enter_toggled",
+            eid=self.player_eid,
+            vehicle_id=str(getattr(vehicle_state, "active_vehicle_id", "") or "").strip(),
+            active=active,
+        ))
+        _log_player_feedback(
+            self.sim,
+            "Ramp auto-entry armed." if active else "Ramp auto-entry off.",
+            kind="movement",
+            dedupe_window=1,
+            dedupe_key=f"vehicle_ramp_auto_enter:{int(active)}",
+        )
+        return True
+
     def _local_drive_repeat_interval(self):
         state = self._player_vehicle_state()
         try:
@@ -3577,6 +3609,7 @@ class InputSystem(System):
             self._stop_local_drive(reason="stopped", announce=False, zero_speed=False)
             return False
         if not vehicle_state or not bool(getattr(vehicle_state, "in_vehicle", False)):
+            state["auto_ramp_enter"] = False
             self._stop_local_drive(reason="stopped", announce=False)
             return False
         try:
@@ -6165,6 +6198,9 @@ class InputSystem(System):
             return True
         if action_id == "vehicle_headlights":
             self._toggle_vehicle_headlights()
+            return True
+        if action_id == "vehicle_ramp_auto_enter":
+            self._toggle_vehicle_ramp_auto_enter()
             return True
         if action_id == "floor_up":
             self._emit_turn_action("floor_change", dz=1)

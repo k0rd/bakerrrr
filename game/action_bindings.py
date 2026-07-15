@@ -129,6 +129,7 @@ ACTION_SPECS = (
     ActionSpec("forced_breach", "Wall breach", "caution", (ord("K"),)),
     ActionSpec("purchase_property", "Buy property", "world", (ord("p"), ord("P"))),
     ActionSpec("vehicle_headlights", "Headlights", "vehicle", (ord("H"),), ({"kind": "button", "code": "east", "modifiers": ("right_trigger",)},), contexts=("local",)),
+    ActionSpec("vehicle_ramp_auto_enter", "Auto-enter ramp", "vehicle", (ord("*"),), contexts=("local",), description="Arm the vehicle to enter quick travel at the next onramp you cross."),
     ActionSpec("quit", "Save and quit", "system", (ord("Q"),), contexts=("local", "overworld"), rebindable=False, protected=True),
     ActionSpec("overworld_scan", "Scan map", "travel", (ord("x"),), contexts=("overworld",)),
     ActionSpec("marker_add", "Add marker", "travel", (ord("m"), ord("M")), contexts=("overworld",)),
@@ -506,7 +507,7 @@ def action_available(action_id, *, context="local", player_in_vehicle=False, aim
         return False, "unknown"
     if context not in spec.contexts:
         return False, "not here"
-    if action_id == "vehicle_headlights" and not player_in_vehicle:
+    if action_id in {"vehicle_headlights", "vehicle_ramp_auto_enter"} and not player_in_vehicle:
         return False, "need vehicle"
     if action_id == "map_enter_local" and context == "local" and not player_in_vehicle:
         return False, "need vehicle"
