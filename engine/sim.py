@@ -2134,17 +2134,68 @@ class Simulation:
 
         self._add_vertical_link_stack(center_x, center_y, top_floor=top_floor, kind=kind)
 
-    def _place_local_tile(self, x, y, glyph, walkable=True, transparent=True, z=0, overwrite=False):
+    def _place_local_tile(
+        self,
+        x,
+        y,
+        glyph,
+        walkable=True,
+        transparent=True,
+        z=0,
+        overwrite=False,
+        color=None,
+        semantic_id=None,
+    ):
         existing = self.tilemap.tile_at(int(x), int(y), int(z))
         if existing and not overwrite and str(existing.glyph)[:1] not in {".", ","}:
             return False
+        glyph = str(glyph)[:1] or "."
+        inferred = {
+            "#": ("terrain_block", "terrain_block"),
+            ",": ("terrain_brush", "terrain_brush"),
+            "^": ("terrain_rock", "terrain_rock"),
+            "~": ("terrain_water", "terrain_water"),
+            "_": ("terrain_salt", "terrain_salt"),
+            "=": ("terrain_road", "terrain_road"),
+            ":": ("terrain_trail", "terrain_trail"),
+        }.get(glyph, (None, None))
         self.tilemap.set_tile(
             int(x),
             int(y),
-            Tile(walkable=bool(walkable), transparent=bool(transparent), glyph=str(glyph)[:1] or "."),
+            Tile(
+                walkable=bool(walkable),
+                transparent=bool(transparent),
+                glyph=glyph,
+                color=color or inferred[0],
+                semantic_id=semantic_id or inferred[1],
+            ),
             z=int(z),
         )
         return True
+
+    def _paint_local_floor_style(self, ox, oy, size, *, color=None, semantic_id=None):
+        for y in range(int(oy), int(oy) + int(size)):
+            for x in range(int(ox), int(ox) + int(size)):
+                tile = self.tilemap.tile_at(x, y, 0)
+                if tile is None or str(getattr(tile, "glyph", "") or "")[:1] != ".":
+                    continue
+                if self.structure_at(x, y, 0) is not None:
+                    continue
+                if hasattr(tile, "set_appearance"):
+                    tile.set_appearance(color=color, semantic_id=semantic_id)
+                else:
+                    self.tilemap.set_tile(
+                        x,
+                        y,
+                        Tile(
+                            walkable=bool(getattr(tile, "walkable", True)),
+                            transparent=bool(getattr(tile, "transparent", True)),
+                            glyph=".",
+                            color=color,
+                            semantic_id=semantic_id,
+                        ),
+                        z=0,
+                    )
 
     def _stamp_local_route(self, ox, oy, size, path_kind, rng):
         path_kind = str(path_kind or "").strip().lower()
@@ -2167,11 +2218,33 @@ class Simulation:
                 if road_like and line + 1 < ox + size - 1:
                     self._place_local_tile(line + 1, y, glyph, walkable=True, transparent=True, z=0, overwrite=True)
 
-    def _scatter_local_tiles(self, ox, oy, size, rng, glyph, count, walkable=True, transparent=True):
+    def _scatter_local_tiles(
+        self,
+        ox,
+        oy,
+        size,
+        rng,
+        glyph,
+        count,
+        walkable=True,
+        transparent=True,
+        color=None,
+        semantic_id=None,
+    ):
         for _ in range(int(max(0, count))):
             x = rng.randint(ox + 1, ox + size - 2)
             y = rng.randint(oy + 1, oy + size - 2)
-            self._place_local_tile(x, y, glyph, walkable=walkable, transparent=transparent, z=0, overwrite=False)
+            self._place_local_tile(
+                x,
+                y,
+                glyph,
+                walkable=walkable,
+                transparent=transparent,
+                z=0,
+                overwrite=False,
+                color=color,
+                semantic_id=semantic_id,
+            )
 
     def _stamp_local_band(self, ox, oy, size, rng, glyph, width, walkable=True, transparent=True):
         edge = rng.choice(("north", "south", "east", "west"))
@@ -2383,6 +2456,14 @@ class Simulation:
             if terrain in {"badlands", "dunes", "ruins"}:
                 self._scatter_local_tiles(ox, oy, size, rng, "#", count=max(2, size // 6), walkable=False, transparent=False)
         elif area_type == "wilderness":
+            if terrain == "forest":
+                self._paint_local_floor_style(
+                    ox,
+                    oy,
+                    size,
+                    color="floor_wilderness",
+                    semantic_id="floor_wilderness",
+                )
             self._scatter_local_tiles(ox, oy, size, rng, ",", count=max(10, (size * 2) // 3), walkable=True, transparent=True)
             self._scatter_local_tiles(ox, oy, size, rng, "^", count=max(4, size // 4), walkable=False, transparent=False)
             if terrain in {"marsh", "lake"}:
@@ -2391,7 +2472,18 @@ class Simulation:
                 self._stamp_local_band(ox, oy, size, rng, "~", width=2, walkable=False, transparent=True)
                 self._stamp_local_band(ox, oy, size, rng, "_", width=1, walkable=True, transparent=True)
             if terrain in {"forest"}:
-                self._scatter_local_tiles(ox, oy, size, rng, "#", count=max(3, size // 6), walkable=False, transparent=False)
+                self._scatter_local_tiles(
+                    ox,
+                    oy,
+                    size,
+                    rng,
+                    "#",
+                    count=max(3, size // 6),
+                    walkable=False,
+                    transparent=False,
+                    color="terrain_brush",
+                    semantic_id="terrain_tree",
+                )
         elif area_type == "coastal":
             water_width = 3
             if terrain == "ocean":

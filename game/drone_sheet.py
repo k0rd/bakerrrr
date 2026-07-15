@@ -129,6 +129,7 @@ def _sync_drone_runtime_shape(sim, drone_eid, state, *, item_catalog=None):
 
     if state is None:
         return {}
+    _sync_source_metadata(state)
     metadata = packed_drone_metadata_from_state(state, item_catalog=item_catalog)
     summary = drone_loadout_summary(metadata, item_catalog=item_catalog)
     state.loadout_errors = tuple(summary.get("errors", ()) or ())

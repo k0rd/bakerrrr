@@ -20,6 +20,7 @@ from game.organizations import (
 )
 from game.property_runtime import (
     building_id_from_property,
+    property_linked_property_id,
     property_display_position,
     property_focus_position,
     property_is_storefront,
@@ -27,6 +28,7 @@ from game.property_runtime import (
     property_supports_business_relevance,
 )
 from game.system_support.crime_plan_runtime import crime_plan_surface_rows
+from game.wire_connection import wire_target_class_for_property
 from game.world_event_presentation import (
     world_event_effect_summary,
     world_event_uses_direct_row,
@@ -258,6 +260,7 @@ _ROW_PRIORITY_BY_SOURCE = {
     "opportunity": 10,
     "world_event": 20,
     "reported_incident_hold": 30,
+    "wire_probe": 35,
     "crime_plan": 40,
     "protective_pressure": 50,
     "trade_pressure": 55,
@@ -451,6 +454,8 @@ def _row_urgency_priority(row):
         return 20
     if source_kind in _CONCRETE_SCENE_SOURCES:
         return 30
+    if source_kind == "wire_probe":
+        return 40
     if source_kind == "crime_plan":
         return 80
     if source_kind == "protective_pressure":
@@ -471,6 +476,8 @@ def _row_dedupe_priority(row):
         return 8
     if source_kind in {"business_event", "business_scene", "pulse", "seed"}:
         return 10
+    if source_kind == "wire_probe":
+        return 35
     if source_kind == "crime_plan":
         return 80
     if source_kind == "protective_pressure":
@@ -1109,6 +1116,114 @@ def _row_from_organization_pressure(sim, prop, pressure, *, player_pos=None, pla
     }
 
 
+def _wire_linked_property(sim, prop):
+    linked_id = _text(property_linked_property_id(prop))
+    if linked_id:
+        linked = getattr(sim, "properties", {}).get(linked_id)
+        if isinstance(linked, dict):
+            return linked
+    return None
+
+
+def _wire_security_tier(prop, linked_prop=None):
+    metadata = property_metadata(prop)
+    linked_metadata = property_metadata(linked_prop)
+    return max(
+        1,
+        min(
+            5,
+            _int(
+                metadata.get("security_tier")
+                or linked_metadata.get("security_tier")
+                or metadata.get("security")
+                or linked_metadata.get("security"),
+                1,
+            ),
+        ),
+    )
+
+
+def _wire_expected_ice(target_class, security_tier):
+    labels = ["Camera Watchdog"]
+    labels.append("Door Arbiter" if _text(target_class).lower() == "access_panel" else "Compliance Daemon")
+    if int(security_tier) >= 2:
+        labels.append("Trace Sentinel")
+    if int(security_tier) >= 3:
+        labels.append("Quarantine Gate")
+    if int(security_tier) >= 4:
+        labels.append("Corruptor")
+    return tuple(labels)
+
+
+def _wire_probe_row_for_property(sim, prop, *, player_pos=None, player_eid=None):
+    if not isinstance(prop, dict):
+        return None
+    target_class = wire_target_class_for_property(prop, deliberate=True)
+    if not target_class:
+        return None
+    metadata = property_metadata(prop)
+    linked_prop = _wire_linked_property(sim, prop)
+    anchor = property_focus_position(prop) or property_display_position(prop)
+    anchor = _anchor_tuple(anchor)
+    if anchor is None:
+        return None
+    security_tier = _wire_security_tier(prop, linked_prop=linked_prop)
+    expected_ice = _wire_expected_ice(target_class, security_tier)
+    linked_name = _property_name(linked_prop) if isinstance(linked_prop, dict) else _property_name(prop)
+    fixture_name = _property_name(prop)
+    services = {
+        _text(service).lower()
+        for service in tuple(metadata.get("finance_services", ()) or ())
+        + tuple(metadata.get("site_services", ()) or ())
+        + tuple(prop.get("services", ()) or ())
+        if _text(service)
+    }
+    fixture_type = _text(metadata.get("fixture_type") or metadata.get("archetype")).lower()
+    atm_like = fixture_type in {"atm_kiosk", "banking_kiosk"} or "banking" in services
+    if target_class == "access_panel":
+        title = "Wire Relay Surface"
+        summary = f"{fixture_name} exposes {linked_name} as a local relay and records layer"
+        action = "connect with an interface, route-probe the ICE, or test relay and data programs"
+    elif atm_like:
+        title = "Wire Banking Mask"
+        summary = f"{fixture_name} presents a synthetic banking mask with a deeper service layer behind it"
+        action = "connect deliberately, talk to the mask, or try service and records programs"
+    else:
+        title = "Wire Service Surface"
+        summary = f"{fixture_name} exposes a service index and records layer for {linked_name}"
+        action = "connect with an interface, route-probe the ICE, or test talk and data programs"
+    if security_tier >= 4:
+        summary += "; high-grade ICE is likely"
+    elif security_tier >= 2:
+        summary += "; guarded ICE is likely"
+    else:
+        summary += "; light ICE is likely"
+    return {
+        "scene_id": f"wire_probe:{_text(prop.get('id'))}",
+        "property_id": _text(prop.get("id")),
+        "property_name": fixture_name,
+        "title": title,
+        "summary": summary,
+        "action": action,
+        "event_phase": "wire_probe",
+        "scene_type": target_class,
+        "traffic_state": "",
+        "community_tone": "security_tier_%d" % int(security_tier),
+        "source_kind": "wire_probe",
+        "anchor": anchor,
+        "fixture_names": (),
+        "organization_presence": format_visible_property_org_presence(sim, linked_prop or prop),
+        "priority": _source_priority("wire_probe"),
+        "wire_target_class": target_class,
+        "wire_linked_property_id": _text(property_linked_property_id(prop)),
+        "wire_security_tier": int(security_tier),
+        "wire_expected_ice": expected_ice,
+        "wire_expected_ice_text": ", ".join(expected_ice),
+        **_distance_fields(anchor, player_pos),
+        **_ownership_fields(sim, linked_prop or prop, player_eid=player_eid),
+    }
+
+
 def _row_dedupe_key(row):
     property_id = _text(row.get("property_id")).lower()
     if property_id:
@@ -1179,6 +1294,14 @@ def local_situation_rows(sim, player_eid=None, *, limit=4, current_chunk_only=Tr
         rows.append(row)
 
     for row in cult_local_situation_rows(sim, player_pos=player_pos, player_eid=player_eid):
+        if current_chunk_only and not _same_chunk(sim, player_pos, row.get("anchor")):
+            continue
+        rows.append(row)
+
+    for prop in getattr(sim, "properties", {}).values():
+        row = _wire_probe_row_for_property(sim, prop, player_pos=player_pos, player_eid=player_eid)
+        if not row:
+            continue
         if current_chunk_only and not _same_chunk(sim, player_pos, row.get("anchor")):
             continue
         rows.append(row)
@@ -1277,6 +1400,7 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
         texture_text = _report_place_texture_text(row)
         ritual_text = _report_ambient_ritual_text(row)
         object_text = _report_meaningful_object_text(row)
+        wire_text = _report_wire_text(row)
         if row.get("player_business_relevance") and owner_cue:
             owner_text = f" Your business is directly involved: {owner_cue}."
         elif row.get("player_business_relevance") and owner_style:
@@ -1287,7 +1411,7 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
             owner_text = ""
         lines.append(
             f"{row['title']} at {row['property_name']} ({row['distance_text']}): "
-            f"{row['summary']}; {row['action']}.{org_text}{fixture_text}{effect_text}{context_text}{mood_text}{texture_text}{ritual_text}{object_text}{owner_text}"
+            f"{row['summary']}; {row['action']}.{org_text}{fixture_text}{effect_text}{context_text}{mood_text}{texture_text}{ritual_text}{object_text}{wire_text}{owner_text}"
         )
     return tuple(lines)
 
@@ -1324,6 +1448,18 @@ def _report_meaningful_object_text(row):
         return f" Object: {summary}."
     label = _text(row.get("meaningful_object_label"))
     return f" Object: {label}." if label else ""
+
+
+def _report_wire_text(row):
+    if _text(row.get("source_kind")).lower() != "wire_probe":
+        return ""
+    ice_text = _text(row.get("wire_expected_ice_text"))
+    security = _int(row.get("wire_security_tier"), 1)
+    target_class = _text(row.get("wire_target_class")).replace("_", " ")
+    bits = [f"Wire: {target_class or 'target'} security {security}"]
+    if ice_text:
+        bits.append(f"expected ICE {ice_text}")
+    return " " + "; ".join(bits) + "."
 
 
 def _look_owner_text(row):
@@ -1390,6 +1526,16 @@ def _look_meaningful_object_text(row):
     return f"; object {label} - {action}"
 
 
+def _look_wire_text(row):
+    if _text(row.get("source_kind")).lower() != "wire_probe":
+        return ""
+    ice_text = _text(row.get("wire_expected_ice_text"))
+    security = _int(row.get("wire_security_tier"), 1)
+    if ice_text:
+        return f"; wire security {security}; expected ICE {ice_text}"
+    return f"; wire security {security}"
+
+
 def _format_property_look_row(row):
     if not row:
         return ""
@@ -1401,6 +1547,7 @@ def _format_property_look_row(row):
         + _look_place_texture_text(row)
         + _look_ambient_ritual_text(row)
         + _look_meaningful_object_text(row)
+        + _look_wire_text(row)
         + _look_owner_text(row)
     )
 
@@ -1469,6 +1616,15 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
     )
     if incident_hold_row:
         candidates.append(incident_hold_row)
+
+    wire_row = _wire_probe_row_for_property(
+        sim,
+        prop,
+        player_pos=player_pos,
+        player_eid=viewer_eid,
+    )
+    if wire_row:
+        candidates.append(wire_row)
 
     crew_rows = crime_plan_surface_rows(sim, prop=prop)
     if crew_rows:

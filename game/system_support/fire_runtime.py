@@ -74,7 +74,7 @@ VEGETATION_COLORS = {
     "floor_frontier",
 }
 VEGETATION_GLYPHS = {",", ";", "\""}
-TREE_SEMANTICS = {"terrain_block"}
+TREE_SEMANTICS = {"terrain_tree"}
 _STATE_DICT_KEYS = (
     "chunk_index",
     "property_index",
@@ -183,6 +183,22 @@ def _coord_key(x, y, z=0):
         return (int(x), int(y), int(z))
     except (TypeError, ValueError):
         return None
+
+
+def _overworld_terrain_for_cell(sim, key):
+    if sim is None or key is None:
+        return ""
+    world = getattr(sim, "world", None)
+    if world is None or not hasattr(world, "overworld_descriptor"):
+        return ""
+    try:
+        cx, cy = sim.chunk_coords(int(key[0]), int(key[1]))
+        descriptor = world.overworld_descriptor(int(cx), int(cy))
+    except (AttributeError, TypeError, ValueError):
+        return ""
+    if not isinstance(descriptor, dict):
+        return ""
+    return _text(descriptor.get("terrain")).lower()
 
 
 def _set_bucket(bucket, key):
@@ -822,6 +838,19 @@ def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
 
     burn_tier = "none"
     source_tags = set()
+    open_air = structure is None and linked_prop is None
+    terrain = _overworld_terrain_for_cell(sim, key) if open_air else ""
+    forest_floor_fallback = open_air and terrain == "forest" and glyph == "."
+    forest_tree_fallback = open_air and terrain == "forest" and glyph == "#"
+    wall_like = (
+        semantic in WALL_SEMANTICS
+        or glyph == "/"
+        or (
+            glyph == "#"
+            and not forest_tree_fallback
+            and (structure is not None or linked_prop is not None or semantic == "terrain_block")
+        )
+    )
     if fixture_type in ELECTRICAL_FIXTURE_TYPES or hazard_profile == "live_wire":
         burn_tier = "extreme"
         source_tags.update({"electrical", "hazard"})
@@ -840,25 +869,26 @@ def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
     elif aperture_kind in DOOR_APERTURE_KINDS or semantic in DOOR_SEMANTICS or glyph in {"+", "'"}:
         burn_tier = "medium"
         source_tags.update({"aperture", "door"})
-    elif semantic in WALL_SEMANTICS or glyph in {"#", "/"}:
+    elif wall_like:
         burn_tier = "low"
         source_tags.update({"wall"})
     elif structure is not None and (semantic in FLOOR_SEMANTICS or bool(getattr(tile, "walkable", False))):
         burn_tier = "low"
         source_tags.update({"interior"})
-    elif structure is None and linked_prop is None and (
-        semantic in VEGETATION_SEMANTICS
-        or color in VEGETATION_COLORS
-        or glyph in VEGETATION_GLYPHS
-    ):
-        burn_tier = "medium"
-        source_tags.update({"vegetation", "brush", "open_air"})
-    elif structure is None and linked_prop is None and (
+    elif open_air and (
         semantic in TREE_SEMANTICS
-        or (glyph == "#" and color == "terrain_block")
+        or forest_tree_fallback
     ):
         burn_tier = "low"
         source_tags.update({"vegetation", "tree", "open_air"})
+    elif open_air and (
+        semantic in VEGETATION_SEMANTICS
+        or color in VEGETATION_COLORS
+        or glyph in VEGETATION_GLYPHS
+        or forest_floor_fallback
+    ):
+        burn_tier = "medium"
+        source_tags.update({"vegetation", "brush", "open_air"})
 
     profile = dict(_BURN_TIER_PROFILES.get(burn_tier, _BURN_TIER_PROFILES["none"]))
     profile.update({
@@ -883,7 +913,7 @@ def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
         profile["structural_damage_kind"] = "window"
     elif aperture_kind in DOOR_APERTURE_KINDS or semantic in DOOR_SEMANTICS or glyph in {"+", "'"}:
         profile["structural_damage_kind"] = "door"
-    elif semantic in WALL_SEMANTICS or glyph in {"#", "/"}:
+    elif wall_like:
         profile["structural_damage_kind"] = "wall"
 
     if burn_tier in {"high", "extreme"} and profile["structural_damage_kind"] in {"door", "window"}:

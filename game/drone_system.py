@@ -14,6 +14,7 @@ from game.drone_runtime import (
 )
 from game.drone_procedures import (
     cardinal_step_toward,
+    default_drone_procedure_key,
     drone_procedure_implemented,
     drone_procedure_label,
     drone_procedure_missing_capability,
@@ -374,6 +375,12 @@ class DroneSystem(System):
             return run_drone_program_step(self, controller_eid, drone_eid, state)
         procedure_key = normalize_drone_procedure_key(getattr(state, "procedure_key", None))
         if not procedure_key:
+            procedure_key = default_drone_procedure_key(state)
+            if procedure_key:
+                state.procedure_key = procedure_key
+                state.last_command = procedure_key
+                self._sync_procedure_metadata(state, procedure_key=procedure_key)
+        if not procedure_key:
             return {"ok": True, "reason": None, "procedure_key": ""}
         tick = int(getattr(self.sim, "tick", 0) or 0)
         if _int(getattr(state, "source_metadata", {}).get("procedure_skip_tick"), -1) == tick:
@@ -517,6 +524,22 @@ class DroneSystem(System):
         else:
             state.source_metadata.pop("target", None)
 
+    def _clear_active_program_for_command_intent(self, state):
+        if state is None:
+            return
+        for attr in (
+            "procedure_program_id",
+            "procedure_program",
+            "procedure_bindings",
+            "procedure_pc",
+            "procedure_status",
+            "procedure_last_result",
+            "procedure_last_reason",
+            "procedure_last_tick",
+        ):
+            setattr(state, attr, None)
+        sync_drone_program_metadata(state)
+
     def command_drone(self, controller_eid, drone_eid, command, *, dx=0, dy=0, consume_turn=False):
         command = str(command or "").strip().lower()
         if command in {"direct_move", "step"}:
@@ -581,6 +604,7 @@ class DroneSystem(System):
                 z=getattr(pos, "z", None),
             )
 
+        self._clear_active_program_for_command_intent(state)
         state.procedure_key = command
         state.last_command = command
         state.target_eid = None

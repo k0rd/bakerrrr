@@ -21,6 +21,7 @@ from game.components import (
     Vitality,
 )
 from game.drone_combat import drone_weapon_status
+from game.drone_programs import activate_drone_program, built_in_drone_program
 from game.drone_runtime import (
     deployed_drone_render_spec,
     drone_profile_for_item,
@@ -319,6 +320,112 @@ def _loadout_for_kind(kind, rng):
     }
 
 
+def _loadout_module_ids(metadata):
+    ids = set()
+    if not isinstance(metadata, dict):
+        return ids
+    for module in tuple(metadata.get("modules", ()) or ()):
+        if isinstance(module, dict):
+            item_id = module.get("item_id")
+        else:
+            item_id = module
+        item_id = _clean(item_id)
+        if item_id:
+            ids.add(item_id)
+    return ids
+
+
+def _seeded_task_for_loadout(kind, metadata, rng):
+    kind = _clean(kind)
+    procedure_key = _clean((metadata or {}).get("procedure_key"))
+    module_ids = _loadout_module_ids(metadata)
+    armed = bool({"drone_pistol_module", "drone_flame_nozzle_module"} & module_ids)
+    has_radio = bool({"drone_radio_module", "drone_comms_module"} & module_ids)
+    has_mapping_procedure = "drone_mapping_procedure_module" in module_ids
+    has_follow_procedure = "drone_follow_procedure_module" in module_ids
+
+    if armed:
+        if kind in {"bodyguard", "enforcer"}:
+            return "protect_operator"
+        if has_radio:
+            return "guard_zone"
+        return "protect_operator"
+    if procedure_key in {"mapping", "scout"} and has_mapping_procedure:
+        return _roll_weighted_choice(rng, ((68, "map_area_loop"), (32, "patrol_route")))
+    if procedure_key == "follow" and has_follow_procedure:
+        if kind in {"scout", "rural", "civic", "utility"} and rng.randrange(4) == 0:
+            return "watch_person"
+        return "follow_operator"
+    return None
+
+
+def _seeded_task_bindings(sim, owner_eid, drone_eid, state, task_id):
+    positions = sim.ecs.get(Position)
+    owner_pos = positions.get(owner_eid)
+    drone_pos = positions.get(drone_eid)
+    home = getattr(state, "home", None)
+    if isinstance(home, (list, tuple)) and len(home) >= 3:
+        home_pos = (_int(home[0]), _int(home[1]), _int(home[2]))
+    elif owner_pos is not None:
+        home_pos = (int(owner_pos.x), int(owner_pos.y), int(owner_pos.z))
+    elif drone_pos is not None:
+        home_pos = (int(drone_pos.x), int(drone_pos.y), int(drone_pos.z))
+    else:
+        home_pos = None
+
+    bindings = {}
+    if task_id in {"follow_operator", "protect_operator", "watch_person"}:
+        bindings["PERSON"] = {"kind": "person", "eid": owner_eid, "label": "operator"}
+    if task_id in {"guard_zone", "map_area_loop"} and home_pos is not None:
+        bindings["AREA"] = {"kind": "area", "target": home_pos, "label": "operator area"}
+    if task_id == "patrol_route":
+        origin = None
+        if drone_pos is not None:
+            origin = (int(drone_pos.x), int(drone_pos.y), int(drone_pos.z))
+        elif home_pos is not None:
+            origin = home_pos
+        if origin is not None:
+            x, y, z = origin
+            bindings["ROUTE"] = {
+                "kind": "route",
+                "points": ((x, y, z), (x + 1, y, z), (x + 1, y + 1, z), (x, y + 1, z)),
+                "label": "seeded patrol loop",
+            }
+    if task_id == "seek_item_and_return" and home_pos is not None:
+        bindings["ITEM_TYPE"] = {"kind": "item_type", "item_id": "any", "label": "any item"}
+        bindings["RETURN_TO"] = {"kind": "return_to", "target": home_pos, "label": "operator area"}
+    return bindings
+
+
+def _activate_seeded_task(sim, owner_eid, drone_eid, state, task_id):
+    task_id = _clean(task_id)
+    if not task_id:
+        return None
+    program = built_in_drone_program(task_id)
+    if not isinstance(program, dict):
+        return None
+    bindings = _seeded_task_bindings(sim, owner_eid, drone_eid, state, task_id)
+    result = activate_drone_program(
+        state,
+        program,
+        bindings=bindings,
+        controller_eid=owner_eid,
+        drone_eid=drone_eid,
+        sim=sim,
+    )
+    metadata = getattr(state, "source_metadata", None)
+    if not isinstance(metadata, dict):
+        metadata = {}
+        state.source_metadata = metadata
+    metadata["npc_drone_task"] = task_id
+    metadata["npc_drone_task_activation_ok"] = bool(result.get("ok"))
+    if not result.get("ok"):
+        metadata["npc_drone_task_blocked_reason"] = str(result.get("reason", "blocked") or "blocked")
+    else:
+        metadata.pop("npc_drone_task_blocked_reason", None)
+    return result
+
+
 def _source_instance_id(sim, chunk, owner_eid, kind, ordinal):
     return f"npc-drone:{getattr(sim, 'seed', 0)}:{chunk[0]}:{chunk[1]}:{owner_eid}:{kind}:{ordinal}"
 
@@ -363,6 +470,7 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
     kind = _owner_kind(sim, owner_eid)
     rng = random.Random(f"{getattr(sim, 'seed', 0)}:drone-faction:{chunk}:{owner_eid}:{kind}:{ordinal}")
     metadata = _loadout_for_kind(kind, rng)
+    seeded_task = _seeded_task_for_loadout(kind, metadata, rng)
     owner_tag = _owner_tag_for_kind(kind)
     source_instance_id = _source_instance_id(sim, chunk, owner_eid, kind, ordinal)
     metadata.update({
@@ -377,6 +485,7 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
         "mode": "deployed",
         "home": (int(pos.x), int(pos.y), int(pos.z)),
         "target_eid": owner_eid if metadata.get("procedure_key") == "follow" else None,
+        "npc_drone_task": seeded_task,
         "paint": {
             "primary_color": "black" if kind in {"gang", "cult", "bodyguard", "enforcer"} else "white",
             "secondary_color": "red" if kind in {"justice", "security"} else "green",
@@ -429,6 +538,7 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
     sim.ecs.add(drone_eid, Vitality(max_hp=state.hull_hp_max, hp=state.hull_hp))
     sim.ecs.add(drone_eid, state)
     sim.tilemap.add_entity(drone_eid, x, y, z)
+    _activate_seeded_task(sim, owner_eid, drone_eid, state, seeded_task)
     sim.emit(Event(
         "drone_deployed",
         eid=owner_eid,

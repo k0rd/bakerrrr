@@ -124,6 +124,24 @@ def drone_procedure_missing_capability(state, key, *, item_catalog=None):
     return None
 
 
+def default_drone_procedure_key(state, *, item_catalog=None):
+    """Return the built-in procedure implied by installed procedure modules."""
+
+    if state is None:
+        return ""
+    if drone_state_has_capability(state, "follow", item_catalog=item_catalog):
+        return "follow"
+    has_mapping = drone_state_has_capability(state, "mapping", item_catalog=item_catalog)
+    has_sensor = drone_state_has_capability(state, "mapping_sensor", item_catalog=item_catalog)
+    has_radio = (
+        drone_state_has_capability(state, "radio", item_catalog=item_catalog)
+        or drone_state_has_capability(state, "comms", item_catalog=item_catalog)
+    )
+    if has_mapping and has_sensor and has_radio:
+        return "mapping"
+    return ""
+
+
 def cardinal_step_toward(start, target):
     if not isinstance(start, (list, tuple)) or not isinstance(target, (list, tuple)):
         return None
