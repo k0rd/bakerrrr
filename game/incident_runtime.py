@@ -60,6 +60,7 @@ INCIDENT_CATEGORY_LABELS = {
 
 INCIDENT_CONTEXT_LABELS = {
     "armed_assault": "armed violence",
+    "contraband_trade": "contraband trade",
     "contraband_use": "contraband use",
     "explosive_discharge": "explosive discharge",
     "homicide": "homicide",
@@ -75,6 +76,7 @@ INCIDENT_CONTEXT_LABELS = {
 
 INCIDENT_CONTEXT_ACTION_LABELS = {
     "armed_assault": "using a weapon",
+    "contraband_trade": "trading contraband",
     "contraband_use": "using contraband",
     "explosive_discharge": "setting off explosives",
     "homicide": "killing someone",

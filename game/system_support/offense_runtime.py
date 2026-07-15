@@ -52,11 +52,14 @@ WILDLIFE_OFFENSE_CONTEXTS = frozenset({
 })
 HOMICIDE_OFFENSE_CONTEXTS = frozenset({"homicide"})
 VIOLENT_OFFENSE_CONTEXTS = ASSAULT_OFFENSE_CONTEXTS | frozenset({"explosive_discharge"}) | HOMICIDE_OFFENSE_CONTEXTS
-OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS = VIOLENT_OFFENSE_CONTEXTS | frozenset({
+CONTRABAND_OFFENSE_CONTEXTS = frozenset({
+    "contraband_trade",
+    "contraband_use",
+})
+OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS = VIOLENT_OFFENSE_CONTEXTS | CONTRABAND_OFFENSE_CONTEXTS | frozenset({
     "trespass",
     "tamper",
     "item_theft",
-    "contraband_use",
 })
 
 DEFAULT_ACTION_OFFENSE_CONTEXT_BONUS = {
@@ -65,6 +68,7 @@ DEFAULT_ACTION_OFFENSE_CONTEXT_BONUS = {
     "tamper": 60,
     "not_for_sale_attempt": 10,
     "item_theft": 48,
+    "contraband_trade": 32,
     "contraband_use": 32,
     "unarmed_assault": 14,
     "melee_assault": 28,

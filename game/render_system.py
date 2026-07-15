@@ -1750,6 +1750,37 @@ class RenderSystem(System):
             return
         self.view.draw_text(x, y, _line_text(line), attrs=int(attrs or 0))
 
+    def _draw_dream_residue_mood_line(self, residue_line, map_w, map_h):
+        text = str(residue_line or "").strip()
+        if not text:
+            return
+        map_w = max(1, int(map_w or 1))
+        map_h = max(1, int(map_h or 1))
+        cell_w = max(1, map_w - 4)
+        text_w = max(1, _view_text_wrap_width(self.view, cell_w))
+        lines = [
+            line
+            for line in _wrap_display_lines(text, text_w, max_lines=2)
+            if _line_text(line).strip()
+        ]
+        if not lines:
+            return
+        start_y = max(0, map_h - len(lines))
+        for idx, line in enumerate(lines):
+            plain = _line_text(line)
+            # Pygame UI text is narrower than map cells, so center by the
+            # resolved text/cell ratio instead of raw character count.
+            approx_cell_len = max(1, min(cell_w, (len(plain) * cell_w + text_w - 1) // text_w))
+            x = max(0, min(map_w - 1, (map_w - approx_cell_len) // 2))
+            segments = _line_segments(line) or [_segment(plain, color="flora_flower_violet")]
+            self.view.draw_segments(
+                x,
+                start_y + idx,
+                segments,
+                max_width=cell_w,
+                attrs=A_DIM,
+            )
+
     def _side_state_layout(self, screen_w, screen_h, configured_hud_lines, *, panels_open=False):
         screen_w = max(1, int(screen_w))
         screen_h = max(1, int(screen_h))
@@ -3938,14 +3969,7 @@ class RenderSystem(System):
             residue = dream_residue_state(self.sim)
             residue_line = str((residue or {}).get("mood_line", "") or "").strip()
             if residue_line:
-                residue_line = residue_line[: max(0, map_w - 4)]
-                self.view.draw_text(
-                    max(0, (map_w - len(residue_line)) // 2),
-                    max(0, map_h - 1),
-                    residue_line,
-                    color="flora_flower_violet",
-                    attrs=A_DIM,
-                )
+                self._draw_dream_residue_mood_line(residue_line, map_w, map_h)
 
         chunk = getattr(self.sim, "active_chunk", {})
         if not isinstance(chunk, dict):

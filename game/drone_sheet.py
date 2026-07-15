@@ -10,6 +10,7 @@ from game.drone_runtime import (
     drone_loadout_summary,
     drone_profile_for_item,
     drone_state_controlled_by_actor,
+    is_packed_drone_entry,
     normalize_packed_drone_metadata,
     packed_drone_metadata_from_state,
 )
@@ -186,6 +187,44 @@ def _entry_to_module(entry):
     if instance_id:
         module["source_instance_id"] = instance_id
     return module
+
+
+def _workshop_entry_ids(workshop, *, item_catalog=None):
+    return {
+        str(entry.get("instance_id", "") or "").strip()
+        for entry in drone_workshop_entries(workshop, item_catalog=item_catalog)
+        if isinstance(entry, dict) and str(entry.get("instance_id", "") or "").strip()
+    }
+
+
+def _inventory_entry_ids(inventory, *, except_instance_id=None):
+    skipped = str(except_instance_id or "").strip()
+    return {
+        str(entry.get("instance_id", "") or "").strip()
+        for entry in tuple(getattr(inventory, "items", ()) or ())
+        if isinstance(entry, dict)
+        and str(entry.get("instance_id", "") or "").strip()
+        and str(entry.get("instance_id", "") or "").strip() != skipped
+    }
+
+
+def _fresh_instance_id(sim, prefix="drone-part"):
+    factory = getattr(sim, "new_item_instance_id", None)
+    if callable(factory):
+        return str(factory())
+    return f"{prefix}-{id(sim)}"
+
+
+def _unique_instance_id(preferred, used, sim, *, prefix="drone-part"):
+    candidate = str(preferred or "").strip()
+    if candidate and candidate not in used:
+        used.add(candidate)
+        return candidate
+    while True:
+        candidate = _fresh_instance_id(sim, prefix=prefix)
+        if candidate and candidate not in used:
+            used.add(candidate)
+            return candidate
 
 
 def _module_to_inventory_entry(module, *, player_eid=None, instance_factory=None):
@@ -478,9 +517,252 @@ def drone_sheet_parts_rows(sim, player_eid, *, item_catalog=None):
             "action": "workshop_part",
             "actionable": True,
         })
+    packed_rows = backpack_packed_drone_entries(sim, player_eid, item_catalog=item_catalog)
+    if packed_rows:
+        rows.append({"id": "section:packed_drones", "label": "Backpack packed drones", "actionable": False})
+        for entry in packed_rows:
+            metadata = dict(entry.get("metadata") or {})
+            summary = drone_loadout_summary(metadata, item_catalog=item_catalog)
+            chassis = str(summary.get("chassis_class") or metadata.get("chassis_class") or "?").strip().upper() or "?"
+            battery = _item_name(metadata.get("battery_item_id"), item_catalog=item_catalog)
+            rows.append({
+                "id": f"packed:{entry.get('instance_id', '')}",
+                "instance_id": str(entry.get("instance_id", "") or ""),
+                "label": (
+                    f"Unpack {item_display_name(PACKED_DRONE_ITEM_ID, metadata=metadata, item_catalog=item_catalog)} | "
+                    f"{chassis}-class | battery returns as {battery} | Enter workshop"
+                ),
+                "entry": dict(entry),
+                "action": "unpack_packed_drone",
+                "actionable": True,
+            })
     if len(rows) == 1:
         rows.append({"id": "empty", "label": "(workshop empty)", "actionable": False})
     return rows
+
+
+def backpack_packed_drone_entries(sim, player_eid, *, item_catalog=None):
+    inventory = sim.ecs.get(Inventory).get(player_eid)
+    entries = []
+    for entry in tuple(getattr(inventory, "items", ()) or ()):
+        if isinstance(entry, dict) and is_packed_drone_entry(entry, item_catalog=item_catalog):
+            entries.append(dict(entry))
+    return entries
+
+
+def has_backpack_packed_drone(sim, player_eid, *, item_catalog=None):
+    return bool(backpack_packed_drone_entries(sim, player_eid, item_catalog=item_catalog))
+
+
+def _packed_drone_unpacked_chassis_build(metadata, *, item_catalog=None):
+    build = dict(metadata or {})
+    build["source_context"] = "drone_workshop_unpack"
+    build["modules"] = []
+    build.pop("power_center_entry", None)
+    build.pop("power_center_item_id", None)
+    build.pop("battery_item_id", None)
+    build.pop("battery_charge", None)
+    build.pop("battery_charge_max", None)
+    build.pop("source_battery_instance_id", None)
+    return normalize_packed_drone_metadata(build, item_catalog=item_catalog)
+
+
+def unpack_packed_drone_to_workshop(sim, player_eid, packed_instance_id, *, item_catalog=None):
+    item_catalog = item_catalog or {}
+    inventory = sim.ecs.get(Inventory).get(player_eid)
+    if inventory is None:
+        return {"ok": False, "reason": "missing_inventory"}
+    packed_instance_id = str(packed_instance_id or "").strip()
+    packed_entry = inventory.find(instance_id=packed_instance_id)
+    if packed_entry is None or not is_packed_drone_entry(packed_entry, item_catalog=item_catalog):
+        return {"ok": False, "reason": "packed_drone_unavailable"}
+
+    metadata = normalize_packed_drone_metadata(packed_entry.get("metadata"), item_catalog=item_catalog)
+    summary = drone_loadout_summary(metadata, item_catalog=item_catalog)
+    chassis_item_id = str(metadata.get("chassis_item_id", "") or "").strip().lower()
+    chassis_profile = drone_profile_for_item(chassis_item_id, item_catalog=item_catalog)
+    if chassis_profile.get("kind") != "chassis":
+        return {"ok": False, "reason": "invalid_loadout", "errors": ("missing chassis",), "summary": summary}
+
+    workshop = drone_workshop_for_actor(sim, player_eid, create=True, item_catalog=item_catalog)
+    workshop_ids = _workshop_entry_ids(workshop, item_catalog=item_catalog)
+    if packed_instance_id in workshop_ids:
+        return {"ok": False, "reason": "instance_id_conflict", "summary": summary}
+    used_workshop_ids = set(workshop_ids)
+    used_workshop_ids.add(packed_instance_id)
+
+    build = _packed_drone_unpacked_chassis_build(metadata, item_catalog=item_catalog)
+    chassis_entry = {
+        "instance_id": packed_instance_id,
+        "item_id": chassis_item_id,
+        "quantity": 1,
+        "owner_eid": player_eid,
+        "owner_tag": "player",
+        "metadata": {
+            "source_context": "drone_workshop_unpack",
+            "source_packed_instance_id": packed_instance_id,
+            WORKSHOP_BUILD_METADATA_KEY: build,
+        },
+    }
+    workshop_entries = [chassis_entry]
+
+    power_center_item_id = str(metadata.get("power_center_item_id", "") or "").strip().lower()
+    if power_center_item_id:
+        power_profile = drone_profile_for_item(power_center_item_id, item_catalog=item_catalog)
+        if power_profile.get("kind") != "power_center":
+            return {"ok": False, "reason": "invalid_loadout", "errors": (f"{power_center_item_id} is not a power center",), "summary": summary}
+        power_source = metadata.get("power_center_entry") if isinstance(metadata.get("power_center_entry"), dict) else {}
+        power_metadata = dict(power_source.get("metadata") or {})
+        previous_context = power_metadata.get("source_context")
+        if previous_context and previous_context != "drone_workshop_unpack":
+            power_metadata.setdefault("original_source_context", previous_context)
+        power_metadata["source_context"] = "drone_workshop_unpack"
+        power_metadata.setdefault("source_packed_instance_id", packed_instance_id)
+        power_entry = {
+            "instance_id": _unique_instance_id(
+                power_source.get("instance_id") or metadata.get("source_power_center_instance_id"),
+                used_workshop_ids,
+                sim,
+                prefix="drone-core",
+            ),
+            "item_id": power_center_item_id,
+            "quantity": 1,
+            "owner_eid": player_eid,
+            "owner_tag": "player",
+            "metadata": power_metadata,
+        }
+        workshop_entries.append(power_entry)
+
+    for module in tuple(metadata.get("modules", ()) or ()):
+        if not isinstance(module, dict):
+            continue
+        module_item_id = str(module.get("item_id", "") or module.get("module_item_id", "") or "").strip().lower()
+        module_profile = drone_profile_for_item(module_item_id, item_catalog=item_catalog)
+        if module_profile.get("kind") != "module":
+            return {"ok": False, "reason": "invalid_loadout", "errors": (f"{module_item_id} is not a drone module",), "summary": summary}
+        module_entry = _module_to_inventory_entry(
+            module,
+            player_eid=player_eid,
+            instance_factory=lambda: _unique_instance_id(None, used_workshop_ids, sim, prefix="drone-module"),
+        )
+        if module_entry is None:
+            return {"ok": False, "reason": "invalid_loadout", "errors": ("bad module entry",), "summary": summary}
+        module_entry["instance_id"] = _unique_instance_id(
+            module_entry.get("instance_id"),
+            used_workshop_ids,
+            sim,
+            prefix="drone-module",
+        )
+        module_entry.setdefault("metadata", {})
+        previous_context = module_entry["metadata"].get("source_context")
+        if previous_context and previous_context != "drone_workshop_unpack":
+            module_entry["metadata"].setdefault("original_source_context", previous_context)
+        module_entry["metadata"]["source_context"] = "drone_workshop_unpack"
+        module_entry["metadata"].setdefault("source_packed_instance_id", packed_instance_id)
+        workshop_entries.append(module_entry)
+
+    shadow_chassis_used = len(getattr(workshop, "chassis_slots", ()) or ())
+    shadow_parts_used = drone_workshop_summary(workshop, item_catalog=item_catalog).get("parts_used", 0)
+    chassis_capacity = int(getattr(workshop, "chassis_capacity", 4))
+    parts_capacity = int(getattr(workshop, "parts_capacity_points", 60))
+    for entry in workshop_entries:
+        kind = drone_profile_for_item(entry.get("item_id"), item_catalog=item_catalog).get("kind")
+        if kind == "chassis":
+            if shadow_chassis_used + 1 > chassis_capacity:
+                return {"ok": False, "reason": "workshop_chassis_full", "entry": entry, "summary": summary}
+            shadow_chassis_used += 1
+        elif kind in {"power_center", "module"}:
+            cost = drone_workshop_part_points(entry.get("item_id"), item_catalog=item_catalog)
+            if shadow_parts_used + cost > parts_capacity:
+                return {"ok": False, "reason": "workshop_parts_full", "entry": entry, "summary": summary}
+            shadow_parts_used += cost
+        else:
+            return {"ok": False, "reason": "not_workshop_part", "entry": entry, "summary": summary}
+
+    battery_entry = None
+    battery_item_id = str(metadata.get("battery_item_id", "") or "").strip().lower()
+    if battery_item_id:
+        battery_profile = drone_profile_for_item(battery_item_id, item_catalog=item_catalog)
+        if battery_profile.get("kind") != "battery":
+            return {"ok": False, "reason": "invalid_loadout", "errors": (f"{battery_item_id} is not a battery",), "summary": summary}
+        inventory_ids = _inventory_entry_ids(inventory, except_instance_id=packed_instance_id) | set(used_workshop_ids)
+        battery_metadata = {
+            "battery_charge": int(max(0, _int(metadata.get("battery_charge"), 0))),
+            "battery_charge_max": int(max(0, _int(metadata.get("battery_charge_max"), 0))),
+            "source_context": "drone_workshop_unpack",
+            "source_packed_instance_id": packed_instance_id,
+        }
+        battery_entry = {
+            "instance_id": _unique_instance_id(
+                metadata.get("source_battery_instance_id"),
+                inventory_ids,
+                sim,
+                prefix="drone-battery",
+            ),
+            "item_id": battery_item_id,
+            "quantity": 1,
+            "owner_eid": player_eid,
+            "owner_tag": "player",
+            "metadata": battery_metadata,
+        }
+        projected_slots = (
+            int(inventory.slot_count())
+            - int(item_inventory_slot_cost(packed_entry))
+            + int(item_inventory_slot_cost(battery_entry))
+        )
+        if projected_slots > int(inventory.capacity):
+            return {"ok": False, "reason": "inventory_full", "entry": battery_entry, "summary": summary}
+
+    removed_packed = inventory.remove_item(instance_id=packed_instance_id, quantity=1)
+    if removed_packed is None:
+        return {"ok": False, "reason": "packed_remove_failed", "summary": summary}
+
+    added_workshop_ids = []
+    added_battery_instance_id = None
+    try:
+        for entry in workshop_entries:
+            result = drone_workshop_add_entry(workshop, entry, item_catalog=item_catalog)
+            if not result.get("ok"):
+                raise RuntimeError(str(result.get("reason", "workshop_add_failed")))
+            added_workshop_ids.append(str(entry.get("instance_id", "") or ""))
+        if battery_entry is not None:
+            item_def = item_catalog.get(battery_entry.get("item_id"), {}) if isinstance(item_catalog, dict) else {}
+            added, added_battery_instance_id = inventory.add_item(
+                battery_entry.get("item_id"),
+                quantity=1,
+                stack_max=max(1, _int(item_def.get("stack_max"), 1)),
+                instance_id=battery_entry.get("instance_id"),
+                instance_factory=getattr(sim, "new_item_instance_id", None),
+                owner_eid=player_eid,
+                owner_tag="player",
+                metadata=battery_entry.get("metadata"),
+            )
+            if not added:
+                raise RuntimeError("inventory_full")
+            battery_entry["instance_id"] = added_battery_instance_id
+            found_battery = inventory.find(instance_id=added_battery_instance_id)
+            if isinstance(found_battery, dict):
+                battery_entry = dict(found_battery)
+    except RuntimeError as exc:
+        for instance_id in reversed(added_workshop_ids):
+            drone_workshop_remove_entry(workshop, instance_id, item_catalog=item_catalog)
+        if added_battery_instance_id:
+            inventory.remove_item(instance_id=added_battery_instance_id, quantity=1)
+        _append_exact_inventory_entry(inventory, removed_packed)
+        return {"ok": False, "reason": str(exc) or "unpack_failed", "entry": dict(removed_packed), "summary": summary}
+
+    return {
+        "ok": True,
+        "reason": None,
+        "action": "unpack_packed_drone",
+        "entry": dict(removed_packed),
+        "chassis_entry": dict(chassis_entry),
+        "workshop_entries": [dict(entry) for entry in workshop_entries],
+        "battery_entry": dict(battery_entry) if isinstance(battery_entry, dict) else None,
+        "summary": summary,
+        "instance_id": packed_instance_id,
+        "parts_added": max(0, len(workshop_entries) - 1),
+    }
 
 
 def move_drone_workshop_part_to_pack(sim, player_eid, instance_id, *, item_catalog=None):
@@ -605,7 +887,7 @@ def drone_sheet_schematic_rows(sim, player_eid, state, *, item_catalog=None):
         rows.append({"id": "section:power_core", "label": "Power cores", "actionable": False})
         rows.extend(power_rows)
     elif is_workbench and not getattr(state, "power_center_item_id", None):
-        rows.append({"id": "section:power_core_empty", "label": "Power cores: none in workshop bay", "actionable": False})
+        rows.append({"id": "section:power_core_empty", "label": "Power cores: none in workshop", "actionable": False})
     if chassis_rows:
         rows.append({"id": "section:chassis", "label": "Chassis", "actionable": False})
         rows.extend(chassis_rows)

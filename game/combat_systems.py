@@ -1734,6 +1734,15 @@ def _clear_forced_attack(ai):
     ai.force_attack_reason = ""
 
 
+def _forced_attack_event_reason(ai, *, fallback="npc_forced_attack"):
+    reason = str(getattr(ai, "force_attack_reason", "") or "").strip().lower()
+    if reason == "justice_vehicle_misuse":
+        return "justice_vehicle_misuse_forced"
+    if reason:
+        return reason
+    return str(fallback or "npc_forced_attack")
+
+
 class NPCWeaponSystem(System):
 
     def __init__(self, sim, player_eid):
@@ -1815,7 +1824,7 @@ class NPCWeaponSystem(System):
                     "melee_attack_request",
                     eid=eid,
                     target_eid=target_eid,
-                    reason="justice_vehicle_misuse_forced" if forced_attack else "npc_auto_melee",
+                    reason=_forced_attack_event_reason(ai, fallback="npc_auto_melee") if forced_attack else "npc_auto_melee",
                 ))
                 if forced_attack:
                     _clear_forced_attack(ai)
@@ -1902,7 +1911,7 @@ class NPCWeaponSystem(System):
                 "weapon_fire_request",
                 eid=eid,
                 target_eid=target_eid,
-                reason="justice_vehicle_misuse_forced" if forced_attack else "npc_auto",
+                reason=_forced_attack_event_reason(ai, fallback="npc_auto") if forced_attack else "npc_auto",
             ))
             if forced_attack:
                 _clear_forced_attack(ai)

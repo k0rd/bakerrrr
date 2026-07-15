@@ -1137,6 +1137,23 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
     }
 
 
+def _visibility_ambient_from_sample(sample):
+    if not isinstance(sample, dict):
+        return 1.0
+    ambient = _clamp_unit(sample.get("ambient", sample.get("outside_ambient", 1.0)), default=1.0)
+    outside = _clamp_unit(sample.get("outside_ambient", ambient), default=ambient)
+    local_light = _clamp_unit(sample.get("local_light", 0.0), default=0.0)
+    if outside > GLARE_LOW_AMBIENT_THRESHOLD or local_light < GLARE_EXPOSURE_THRESHOLD:
+        return ambient
+
+    # Direct bright light should illuminate its own tiles and add glare wash,
+    # but standing inside it should not turn the player's whole FOV into day.
+    if local_light >= 0.999:
+        return outside
+    natural = (ambient - local_light) / max(0.001, 1.0 - local_light)
+    return min(ambient, _clamp_unit(natural, default=outside))
+
+
 def lighting_state(sim):
     world_traits = getattr(sim, "world_traits", None)
     if not isinstance(world_traits, dict):
@@ -1157,6 +1174,7 @@ def lighting_state(sim):
         "outside_ambient": 1.0,
         "player_inside": False,
         "player_ambient": 1.0,
+        "player_visibility_ambient": 1.0,
         "player_aperture_bleed": 0.0,
         "player_local_light": 0.0,
         "player_light_tint": None,
@@ -1262,6 +1280,7 @@ def update_lighting_state(sim, player_pos=None):
     if player_pos is None:
         state["player_inside"] = False
         state["player_ambient"] = state["outside_ambient"]
+        state["player_visibility_ambient"] = state["outside_ambient"]
         state["player_aperture_bleed"] = 0.0
         state["player_local_light"] = 0.0
         state["player_light_tint"] = None
@@ -1283,6 +1302,7 @@ def update_lighting_state(sim, player_pos=None):
     )
     state["player_inside"] = bool(ambient.get("inside"))
     state["player_ambient"] = _clamp_unit(ambient.get("ambient", state["outside_ambient"]), default=state["outside_ambient"])
+    state["player_visibility_ambient"] = _visibility_ambient_from_sample(ambient)
     state["player_aperture_bleed"] = _clamp_unit(ambient.get("aperture_bleed", 0.0))
     state["player_local_light"] = _clamp_unit(ambient.get("local_light", 0.0))
     state["player_light_tint"] = ambient.get("light_tint")

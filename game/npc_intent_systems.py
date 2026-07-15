@@ -386,6 +386,8 @@ NOISE_INTERRUPT_PROTECTED_STATES = frozenset({
     "chasing",
 })
 
+CORNERED_SELF_DEFENSE_TICKS = 12
+
 _WILL_COASTING_STATES = frozenset({
     "selling_scavenged",
     "seeking_medical_aid",
@@ -2202,6 +2204,7 @@ class NPCWillSystem(System):
         retreat_bias = float((metrics or {}).get("retreat_bias", 0.0) or 0.0)
         assault_bias = float((metrics or {}).get("assault_bias", 0.0) or 0.0)
         source_target = (int(source_pos.x), int(source_pos.y), int(source_pos.z))
+        adjacent_direct_threat = _manhattan(target_pos.x, target_pos.y, source_pos.x, source_pos.y) <= 1
 
         if retreat_target and retreat_bias >= max(0.42, assault_bias + 0.08):
             safety_score = min(96.0, 68.0 + (retreat_bias * 26.0) + min(12.0, float(damage)))
@@ -2259,6 +2262,9 @@ class NPCWillSystem(System):
                 target=source_target,
                 target_eid=source_eid,
             )
+            if adjacent_direct_threat:
+                ai.force_attack_reason = "cornered_self_defense"
+                ai.force_attack_until_tick = int(getattr(self.sim, "tick", 0)) + CORNERED_SELF_DEFENSE_TICKS
             quirk_row = apply_self_protection_quirk(
                 self.sim,
                 target_eid,

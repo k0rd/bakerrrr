@@ -160,6 +160,7 @@ from game.service_runtime import (
     _transit_payment_profile,
     _transit_service_profile,
     _transit_service_title,
+    _transit_travel_ticks,
     _vehicle_sale_offer_label,
     _vehicle_sale_offers,
     _vehicle_sale_quality,
@@ -3631,6 +3632,8 @@ class ServiceMenuSystem(System):
                     token_cost=int(payment.get("token_cost", 0) or 0),
                 )
             bits = [f"{distance}c"]
+            travel_ticks = _transit_travel_ticks(self.sim, service, distance)
+            bits.append(f"ETA {_tick_duration_label(self.sim, travel_ticks)}")
             if direction_label:
                 bits.append(direction_label)
             settlement_name = str(destination.get("settlement_name", "")).strip()

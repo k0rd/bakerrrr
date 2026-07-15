@@ -1005,6 +1005,7 @@ class NPCInteractionSystem(System):
                 "last_property_id": "",
                 "last_property_lead_kind": "",
                 "last_property_source_eid": None,
+                "property_references": {},
             }
             history[key] = memory
             return memory
@@ -1034,6 +1035,8 @@ class NPCInteractionSystem(System):
         memory.setdefault("last_property_id", "")
         memory.setdefault("last_property_lead_kind", "")
         memory.setdefault("last_property_source_eid", None)
+        if not isinstance(memory.get("property_references"), dict):
+            memory["property_references"] = {}
         memory.setdefault("refusal_until_tick", 0)
         memory.setdefault("refusal_reason", "")
         memory.setdefault("boundary_violation_count", 0)
@@ -1393,8 +1396,34 @@ class NPCInteractionSystem(System):
                     return "calling in the scene"
         return self.STATE_TEXT.get(state, state.replace("_", " "))
 
-    def _dialogue_topic_count(self, npc_eid, topic_id):
+    def _dialogue_pressure_topic_key(self, topic_id, context=None):
         topic_key = str(topic_id or "").strip().lower()
+        if topic_key == "where_place" and isinstance(context, dict):
+            prop = context.get("referenced_place_prop")
+            property_id = ""
+            if isinstance(prop, dict):
+                property_id = str(prop.get("id", "") or "").strip()
+            if not property_id:
+                property_id = str(context.get("referenced_place_id", "") or "").strip()
+            if property_id:
+                return f"{topic_key}:{property_id}"
+        return topic_key
+
+    def _dialogue_pressure_family_key(self, topic_id, context=None):
+        family_key = _dialogue_topic_family(topic_id)
+        if str(topic_id or "").strip().lower() == "where_place" and isinstance(context, dict):
+            prop = context.get("referenced_place_prop")
+            property_id = ""
+            if isinstance(prop, dict):
+                property_id = str(prop.get("id", "") or "").strip()
+            if not property_id:
+                property_id = str(context.get("referenced_place_id", "") or "").strip()
+            if property_id:
+                return f"{family_key}:{property_id}"
+        return family_key
+
+    def _dialogue_topic_count(self, npc_eid, topic_id, *, pressure_topic_id=None):
+        topic_key = str(pressure_topic_id or topic_id or "").strip().lower()
         if not topic_key:
             return 0
         topic_counts = self._dialogue_memory(npc_eid)["topic_counts"]
@@ -1403,8 +1432,8 @@ class NPCInteractionSystem(System):
         except (TypeError, ValueError):
             return 0
 
-    def _dialogue_topic_family_count(self, npc_eid, topic_id):
-        family_key = _dialogue_topic_family(topic_id)
+    def _dialogue_topic_family_count(self, npc_eid, topic_id, *, pressure_family_id=None):
+        family_key = str(pressure_family_id or _dialogue_topic_family(topic_id) or "").strip().lower()
         if not family_key:
             return 0
         counts = _dialogue_family_counts(self._dialogue_memory(npc_eid))
@@ -1446,8 +1475,8 @@ class NPCInteractionSystem(System):
         elapsed = max(0, int(now_tick) - int(last_tick))
         return elapsed <= self._dialogue_repeat_cooldown_ticks(family=family)
 
-    def _dialogue_topic_last_tick(self, npc_eid, topic_id):
-        topic_key = str(topic_id or "").strip().lower()
+    def _dialogue_topic_last_tick(self, npc_eid, topic_id, *, pressure_topic_id=None):
+        topic_key = str(pressure_topic_id or topic_id or "").strip().lower()
         if not topic_key:
             return None
         ticks = self._dialogue_memory(npc_eid).get("topic_last_ticks", {})
@@ -1455,8 +1484,8 @@ class NPCInteractionSystem(System):
             return None
         return self._dialogue_tick_value(ticks.get(topic_key))
 
-    def _dialogue_topic_family_last_tick(self, npc_eid, topic_id):
-        family_key = _dialogue_topic_family(topic_id)
+    def _dialogue_topic_family_last_tick(self, npc_eid, topic_id, *, pressure_family_id=None):
+        family_key = str(pressure_family_id or _dialogue_topic_family(topic_id) or "").strip().lower()
         if not family_key:
             return None
         ticks = self._dialogue_memory(npc_eid).get("topic_family_last_ticks", {})
@@ -1464,55 +1493,59 @@ class NPCInteractionSystem(System):
             return None
         return self._dialogue_tick_value(ticks.get(family_key))
 
-    def _dialogue_recent_topic_count(self, npc_eid, topic_id):
-        count = self._dialogue_topic_count(npc_eid, topic_id)
+    def _dialogue_recent_topic_count(self, npc_eid, topic_id, *, pressure_topic_id=None):
+        count = self._dialogue_topic_count(npc_eid, topic_id, pressure_topic_id=pressure_topic_id)
         if count <= 0:
             return 0
-        last_tick = self._dialogue_topic_last_tick(npc_eid, topic_id)
+        last_tick = self._dialogue_topic_last_tick(npc_eid, topic_id, pressure_topic_id=pressure_topic_id)
         return count if self._dialogue_tick_is_recent(last_tick) else 0
 
-    def _dialogue_recent_topic_family_count(self, npc_eid, topic_id):
-        count = self._dialogue_topic_family_count(npc_eid, topic_id)
+    def _dialogue_recent_topic_family_count(self, npc_eid, topic_id, *, pressure_family_id=None):
+        count = self._dialogue_topic_family_count(npc_eid, topic_id, pressure_family_id=pressure_family_id)
         if count <= 0:
             return 0
-        last_tick = self._dialogue_topic_family_last_tick(npc_eid, topic_id)
+        last_tick = self._dialogue_topic_family_last_tick(npc_eid, topic_id, pressure_family_id=pressure_family_id)
         return count if self._dialogue_tick_is_recent(last_tick, family=True) else 0
 
-    def _dialogue_last_repeat_state(self, npc_eid, topic_id):
+    def _dialogue_last_repeat_state(self, npc_eid, topic_id, *, pressure_topic_id=None):
         topic_key = str(topic_id or "").strip().lower()
         if not topic_key:
             return {}
+        pressure_key = str(pressure_topic_id or topic_key).strip().lower()
         state = self._dialogue_memory(npc_eid).get("last_topic_repeat_state", {})
         if not isinstance(state, dict):
             return {}
         if str(state.get("topic_id", "") or "").strip().lower() != topic_key:
             return {}
+        if str(state.get("pressure_topic_id", topic_key) or "").strip().lower() != pressure_key:
+            return {}
         return state
 
-    def _dialogue_current_ask_count(self, npc_eid, topic_id):
-        state = self._dialogue_last_repeat_state(npc_eid, topic_id)
+    def _dialogue_current_ask_count(self, npc_eid, topic_id, *, pressure_topic_id=None):
+        state = self._dialogue_last_repeat_state(npc_eid, topic_id, pressure_topic_id=pressure_topic_id)
         if state:
             try:
                 return max(1, int(state.get("ask_count", 1) or 1))
             except (TypeError, ValueError):
                 return 1
-        recent = self._dialogue_recent_topic_count(npc_eid, topic_id)
-        return recent if recent > 0 else self._dialogue_topic_count(npc_eid, topic_id)
+        recent = self._dialogue_recent_topic_count(npc_eid, topic_id, pressure_topic_id=pressure_topic_id)
+        return recent if recent > 0 else self._dialogue_topic_count(npc_eid, topic_id, pressure_topic_id=pressure_topic_id)
 
-    def _dialogue_current_family_count(self, npc_eid, topic_id):
-        state = self._dialogue_last_repeat_state(npc_eid, topic_id)
+    def _dialogue_current_family_count(self, npc_eid, topic_id, *, pressure_topic_id=None, pressure_family_id=None):
+        state = self._dialogue_last_repeat_state(npc_eid, topic_id, pressure_topic_id=pressure_topic_id)
         if state:
             try:
                 return max(1, int(state.get("family_count", 1) or 1))
             except (TypeError, ValueError):
                 return 1
-        recent = self._dialogue_recent_topic_family_count(npc_eid, topic_id)
-        return recent if recent > 0 else self._dialogue_topic_family_count(npc_eid, topic_id)
+        recent = self._dialogue_recent_topic_family_count(npc_eid, topic_id, pressure_family_id=pressure_family_id)
+        return recent if recent > 0 else self._dialogue_topic_family_count(npc_eid, topic_id, pressure_family_id=pressure_family_id)
 
-    def _dialogue_mark_topic(self, npc_eid, topic_id):
+    def _dialogue_mark_topic(self, npc_eid, topic_id, *, pressure_topic_id=None, pressure_family_id=None):
         topic_key = str(topic_id or "").strip().lower()
         if not topic_key:
             return 0
+        pressure_topic_key = str(pressure_topic_id or topic_key).strip().lower()
         memory = self._dialogue_memory(npc_eid)
         now_tick = self._dialogue_now_tick()
         topic_ticks = memory.get("topic_last_ticks")
@@ -1523,11 +1556,11 @@ class NPCInteractionSystem(System):
         if not isinstance(family_ticks, dict):
             family_ticks = {}
             memory["topic_family_last_ticks"] = family_ticks
-        previous_topic_tick = self._dialogue_tick_value(topic_ticks.get(topic_key))
+        previous_topic_tick = self._dialogue_tick_value(topic_ticks.get(pressure_topic_key))
         topic_recent = self._dialogue_tick_is_recent(previous_topic_tick, now_tick=now_tick)
-        count = self._dialogue_topic_count(npc_eid, topic_key) + 1
-        memory["topic_counts"][topic_key] = count
-        family_key = _dialogue_topic_family(topic_key)
+        count = self._dialogue_topic_count(npc_eid, topic_key, pressure_topic_id=pressure_topic_key) + 1
+        memory["topic_counts"][pressure_topic_key] = count
+        family_key = str(pressure_family_id or _dialogue_topic_family(topic_key) or "").strip().lower()
         family_count = 0
         previous_family_tick = None
         family_recent = False
@@ -1535,15 +1568,17 @@ class NPCInteractionSystem(System):
             family_counts = _dialogue_family_counts(memory)
             previous_family_tick = self._dialogue_tick_value(family_ticks.get(family_key))
             family_recent = self._dialogue_tick_is_recent(previous_family_tick, family=True, now_tick=now_tick)
-            family_count = self._dialogue_topic_family_count(npc_eid, topic_key) + 1
+            family_count = self._dialogue_topic_family_count(npc_eid, topic_key, pressure_family_id=family_key) + 1
             family_counts[family_key] = family_count
             family_ticks[family_key] = now_tick
-        topic_ticks[topic_key] = now_tick
+        topic_ticks[pressure_topic_key] = now_tick
         current_ask_count = count if topic_recent else 1
         current_family_count = family_count if family_recent else 1
         memory["last_topic_repeat_state"] = {
             "topic_id": topic_key,
+            "pressure_topic_id": pressure_topic_key,
             "family_id": family_key,
+            "pressure_family_id": family_key,
             "ask_count": current_ask_count,
             "family_count": current_family_count,
             "lifetime_ask_count": count,
@@ -1585,14 +1620,18 @@ class NPCInteractionSystem(System):
                 unlocked.add(topic_key)
         return unlocked
 
-    def _dialogue_repeat_row_count(self, context, topic_id, ask_count):
+    def _dialogue_repeat_row_count(self, context, topic_id, ask_count, *, pressure_family_id=None):
         topic_id = str(topic_id or "").strip().lower()
         ask_count = max(0, int(ask_count))
         if ask_count <= 0 or bool(context.get("guarded")):
             return 0
         if topic_id in self.REPEAT_PRESSURE_SKIP_TOPICS or topic_id in self.MISSTEP_TOPICS:
             return 0
-        family_count = self._dialogue_recent_topic_family_count(context.get("npc_eid"), topic_id)
+        family_count = self._dialogue_recent_topic_family_count(
+            context.get("npc_eid"),
+            topic_id,
+            pressure_family_id=pressure_family_id,
+        )
         pressure_count = max(ask_count, family_count)
         if pressure_count <= 0:
             return 0
@@ -1607,11 +1646,12 @@ class NPCInteractionSystem(System):
         topic_id = str(row.get("id", "")).strip().lower()
         if not topic_id:
             return None
+        pressure_topic_id = str(row.get("pressure_topic_id", topic_id) or topic_id).strip().lower()
         try:
             repeat_slot = max(0, int(row.get("repeat_slot", 0) or 0))
         except (TypeError, ValueError):
             repeat_slot = 0
-        return (topic_id, repeat_slot)
+        return (topic_id, pressure_topic_id, repeat_slot)
 
     def _dialogue_shuffle_rng(self, context, *, row_count=0):
         npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
@@ -1683,9 +1723,11 @@ class NPCInteractionSystem(System):
             topic_id = str(row.get("id", "")).strip().lower()
             if not topic_id:
                 continue
-            ask_count = self._dialogue_recent_topic_count(npc_eid, topic_id)
-            family_count = self._dialogue_recent_topic_family_count(npc_eid, topic_id)
-            extra = self._dialogue_repeat_row_count(context, topic_id, ask_count)
+            pressure_topic_id = str(row.get("pressure_topic_id", "") or "").strip().lower() or self._dialogue_pressure_topic_key(topic_id, context)
+            pressure_family_id = str(row.get("pressure_family_id", "") or "").strip().lower() or self._dialogue_pressure_family_key(topic_id, context)
+            ask_count = self._dialogue_recent_topic_count(npc_eid, topic_id, pressure_topic_id=pressure_topic_id)
+            family_count = self._dialogue_recent_topic_family_count(npc_eid, topic_id, pressure_family_id=pressure_family_id)
+            extra = self._dialogue_repeat_row_count(context, topic_id, ask_count, pressure_family_id=pressure_family_id)
             if extra <= 0:
                 continue
             ranked.append((
@@ -1726,8 +1768,16 @@ class NPCInteractionSystem(System):
                     row.get("label", row.get("id", "topic")),
                     topic_id=topic_id,
                     repeat_slot=repeat_slot + 1,
-                    ask_count=self._dialogue_recent_topic_count(npc_eid, topic_id),
-                    family_count=self._dialogue_recent_topic_family_count(npc_eid, topic_id),
+                    ask_count=self._dialogue_recent_topic_count(
+                        npc_eid,
+                        topic_id,
+                        pressure_topic_id=str(row.get("pressure_topic_id", "") or "").strip().lower() or self._dialogue_pressure_topic_key(topic_id, context),
+                    ),
+                    family_count=self._dialogue_recent_topic_family_count(
+                        npc_eid,
+                        topic_id,
+                        pressure_family_id=str(row.get("pressure_family_id", "") or "").strip().lower() or self._dialogue_pressure_family_key(topic_id, context),
+                    ),
                 )
                 extra_rows.append(clone)
 
@@ -1859,7 +1909,73 @@ class NPCInteractionSystem(System):
         memory["last_property_id"] = property_id
         memory["last_property_lead_kind"] = str(lead_kind or "").strip().lower()
         memory["last_property_source_eid"] = npc_eid
+        references = memory.get("property_references")
+        if not isinstance(references, dict):
+            references = {}
+            memory["property_references"] = references
+        references[property_id] = {
+            "property_id": property_id,
+            "lead_kind": str(lead_kind or "").strip().lower(),
+            "source_eid": npc_eid,
+            "last_tick": int(getattr(self.sim, "tick", 0) or 0),
+            "name": str(prop.get("name", prop.get("id", "place")) or "place").strip(),
+        }
         return True
+
+    def _dialogue_place_reference_options(self, npc_eid, dialogue_memory=None):
+        memory = dialogue_memory if isinstance(dialogue_memory, dict) else self._dialogue_memory(npc_eid)
+        references = memory.get("property_references")
+        if not isinstance(references, dict):
+            references = {}
+        last_property_id = str(memory.get("last_property_id", "") or "").strip()
+        if last_property_id and last_property_id not in references:
+            references = {
+                **references,
+                last_property_id: {
+                    "property_id": last_property_id,
+                    "lead_kind": str(memory.get("last_property_lead_kind", "") or "").strip().lower(),
+                    "source_eid": memory.get("last_property_source_eid"),
+                    "last_tick": int(memory.get("last_tick", 0) or 0),
+                },
+            }
+
+        options = []
+        for property_id, ref in references.items():
+            property_id = str(property_id or "").strip()
+            if not property_id:
+                continue
+            prop = self.sim.properties.get(property_id)
+            if not isinstance(prop, dict):
+                continue
+            ref = ref if isinstance(ref, dict) else {}
+            try:
+                last_tick = int(ref.get("last_tick", 0) or 0)
+            except (TypeError, ValueError):
+                last_tick = 0
+            name = str(ref.get("name", "") or prop.get("name", prop.get("id", "place"))).strip() or "place"
+            options.append({
+                "property_id": property_id,
+                "prop": prop,
+                "name": name,
+                "lead_kind": str(ref.get("lead_kind", "") or "").strip().lower(),
+                "source_eid": ref.get("source_eid"),
+                "last_tick": last_tick,
+            })
+        options.sort(key=lambda row: (-int(row.get("last_tick", 0) or 0), str(row.get("name", "")).lower()))
+        return tuple(options[:6])
+
+    def _dialogue_context_for_place_option(self, context, option):
+        if not isinstance(context, dict) or not isinstance(option, dict):
+            return dict(context or {})
+        prop = option.get("prop")
+        if not isinstance(prop, dict):
+            return dict(context)
+        out = dict(context)
+        out["referenced_place_prop"] = prop
+        out["referenced_place_id"] = str(option.get("property_id", "") or prop.get("id", "") or "").strip()
+        out["referenced_place_name"] = str(option.get("name", "") or prop.get("name", prop.get("id", "place"))).strip()
+        out["referenced_place_lead_kind"] = str(option.get("lead_kind", "") or "").strip().lower()
+        return out
 
     def _remember_player_contact(self, prop, source_eid, contact_kind, standing, benefits):
         if not prop:
@@ -6940,11 +7056,14 @@ class NPCInteractionSystem(System):
             if linked_prop is not None:
                 current_prop = linked_prop
         referenced_place_prop = None
-        referenced_place_id = str(dialogue_memory.get("last_property_id", "") or "").strip()
-        if referenced_place_id:
-            candidate = self.sim.properties.get(referenced_place_id)
-            if isinstance(candidate, dict):
-                referenced_place_prop = candidate
+        referenced_place_options = self._dialogue_place_reference_options(npc_eid, dialogue_memory)
+        referenced_place_id = ""
+        referenced_place_lead_kind = str(dialogue_memory.get("last_property_lead_kind", "") or "").strip().lower()
+        if referenced_place_options:
+            primary_place = referenced_place_options[0]
+            referenced_place_prop = primary_place.get("prop") if isinstance(primary_place, dict) else None
+            referenced_place_id = str((primary_place or {}).get("property_id", "") or "").strip()
+            referenced_place_lead_kind = str((primary_place or {}).get("lead_kind", referenced_place_lead_kind) or "").strip().lower()
         scene_prop = None
         if isinstance(scene_note, dict):
             scene_property_id = str(scene_note.get("property_id", "") or "").strip()
@@ -7365,8 +7484,10 @@ class NPCInteractionSystem(System):
             "owner_place": owner_place,
             "owner_place_name": owner_place_name,
             "referenced_place_prop": referenced_place_prop,
+            "referenced_place_id": referenced_place_id,
             "referenced_place_name": referenced_place_name,
-            "referenced_place_lead_kind": str(dialogue_memory.get("last_property_lead_kind", "") or "").strip().lower(),
+            "referenced_place_lead_kind": referenced_place_lead_kind,
+            "referenced_place_options": referenced_place_options,
             "organization_eid": organization.get("organization_eid"),
             "organization_name": organization_name_text,
             "organization_kind": str(organization.get("organization_kind", "")).strip().lower(),
@@ -11592,14 +11713,14 @@ class NPCInteractionSystem(System):
             return ""
         return str(lines[rng.randrange(len(lines))]).strip()
 
-    def _dialogue_initiative_line(self, context, topic_id):
+    def _dialogue_initiative_line(self, context, topic_id, *, pressure_topic_id=None):
         topic_id = str(topic_id or "").strip().lower()
         if bool(context.get("guarded")) or topic_id in self.MISSTEP_TOPICS:
             return ""
         npc_eid = context.get("npc_eid")
         if npc_eid is None:
             return ""
-        ask_count = self._dialogue_topic_count(npc_eid, topic_id)
+        ask_count = self._dialogue_topic_count(npc_eid, topic_id, pressure_topic_id=pressure_topic_id)
         if ask_count != 1:
             return ""
 
@@ -11663,11 +11784,11 @@ class NPCInteractionSystem(System):
             return ""
         return self._say(bank_id, context, topic_id=topic_id, count=ask_count, salt="initiative")
 
-    def _apply_dialogue_initiative(self, context, topic_id, response):
+    def _apply_dialogue_initiative(self, context, topic_id, response, *, pressure_topic_id=None):
         response = dict(response or {})
         if response.get("close") or response.get("open_trade"):
             return response
-        initiative = self._dialogue_initiative_line(context, topic_id)
+        initiative = self._dialogue_initiative_line(context, topic_id, pressure_topic_id=pressure_topic_id)
         if not initiative:
             return response
         npc_lines = list(response.get("npc_lines", ()) or ())
@@ -11750,8 +11871,18 @@ class NPCInteractionSystem(System):
             repeat_slot = max(0, int(row.get("repeat_slot", 0) or 0))
         except (TypeError, ValueError):
             repeat_slot = 0
-        ask_count = self._dialogue_recent_topic_count(npc_eid, topic_id) if npc_eid is not None else 0
-        family_count = self._dialogue_recent_topic_family_count(npc_eid, topic_id) if npc_eid is not None else 0
+        pressure_topic_id = str(row.get("pressure_topic_id", "") or "").strip().lower() or self._dialogue_pressure_topic_key(topic_id, context)
+        pressure_family_id = str(row.get("pressure_family_id", "") or "").strip().lower() or self._dialogue_pressure_family_key(topic_id, context)
+        ask_count = (
+            self._dialogue_recent_topic_count(npc_eid, topic_id, pressure_topic_id=pressure_topic_id)
+            if npc_eid is not None
+            else 0
+        )
+        family_count = (
+            self._dialogue_recent_topic_family_count(npc_eid, topic_id, pressure_family_id=pressure_family_id)
+            if npc_eid is not None
+            else 0
+        )
         repeat_pressure = max(0, max(ask_count, family_count) - 1) + repeat_slot
         if repeat_pressure > 0 and topic_id not in self.REPEAT_PRESSURE_SKIP_TOPICS:
             score -= min(0.38, 0.12 * float(repeat_pressure))
@@ -12431,6 +12562,62 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "where_place" and not self._where_place_summary(context):
                 continue
+            if topic_id == "where_place":
+                place_options = tuple(context.get("referenced_place_options", ()) or ())
+                if not place_options and context.get("referenced_place_prop"):
+                    place_options = ({
+                        "property_id": str(context.get("referenced_place_id", "") or "").strip(),
+                        "prop": context.get("referenced_place_prop"),
+                        "name": str(context.get("referenced_place_name", "") or "").strip(),
+                        "lead_kind": str(context.get("referenced_place_lead_kind", "") or "").strip().lower(),
+                    },)
+                for option in place_options:
+                    option_context = self._dialogue_context_for_place_option(context, option)
+                    if not self._where_place_summary(option_context):
+                        continue
+                    memory = self._dialogue_memory(context["npc_eid"])
+                    pressure_topic_id = self._dialogue_pressure_topic_key(topic_id, option_context)
+                    pressure_family_id = self._dialogue_pressure_family_key(topic_id, option_context)
+                    ask_count = self._dialogue_topic_count(
+                        context["npc_eid"],
+                        topic_id,
+                        pressure_topic_id=pressure_topic_id,
+                    )
+                    total_asked = self._dialogue_total_topics_asked(context["npc_eid"])
+                    previous_topic_id = str(memory.get("last_topic_id", "")).strip().lower()
+                    next_count = ask_count + 1
+                    label = _dialogue_topic_menu_label(
+                        topic_id,
+                        seed=self.sim.seed,
+                        npc_eid=context.get("npc_eid"),
+                        count=next_count,
+                        context=option_context,
+                        previous_topic_id=previous_topic_id,
+                        total_asked=total_asked,
+                        opened_count=int(memory.get("opened_count", 0) or 0),
+                    )
+                    place_name = str(option_context.get("referenced_place_name", "") or "").strip()
+                    if place_name and f"({place_name})".lower() not in label.lower():
+                        label = f"{label} ({place_name})"
+                    available.append({
+                        "id": topic_id,
+                        "label": label,
+                        "prompt_text": label,
+                        "player_line": _dialogue_topic_player_line(
+                            topic_id,
+                            seed=self.sim.seed,
+                            npc_eid=context.get("npc_eid"),
+                            count=next_count,
+                            context=option_context,
+                            previous_topic_id=previous_topic_id,
+                            total_asked=total_asked + 1,
+                            line_override=label,
+                        ),
+                        "place_ref_id": str(option_context.get("referenced_place_id", "") or "").strip(),
+                        "pressure_topic_id": pressure_topic_id,
+                        "pressure_family_id": pressure_family_id,
+                    })
+                continue
             if topic_id == "hire" and not context.get("player_business_hire_option"):
                 continue
             if topic_id == "hire_manager" and not context.get("player_business_hire_manager_option"):
@@ -12502,7 +12689,13 @@ class NPCInteractionSystem(System):
             if topic_id == "vouch" and not context.get("vouch_place"):
                 continue
             memory = self._dialogue_memory(context["npc_eid"])
-            ask_count = self._dialogue_topic_count(context["npc_eid"], topic_id)
+            pressure_topic_id = self._dialogue_pressure_topic_key(topic_id, context)
+            pressure_family_id = self._dialogue_pressure_family_key(topic_id, context)
+            ask_count = self._dialogue_topic_count(
+                context["npc_eid"],
+                topic_id,
+                pressure_topic_id=pressure_topic_id,
+            )
             total_asked = self._dialogue_total_topics_asked(context["npc_eid"])
             previous_topic_id = str(memory.get("last_topic_id", "")).strip().lower()
             next_count = ask_count + 1
@@ -12520,6 +12713,8 @@ class NPCInteractionSystem(System):
                 "id": topic_id,
                 "label": label,
                 "prompt_text": label,
+                "pressure_topic_id": pressure_topic_id,
+                "pressure_family_id": pressure_family_id,
                 "player_line": _dialogue_topic_player_line(
                     topic_id,
                     seed=self.sim.seed,
@@ -12845,13 +13040,23 @@ class NPCInteractionSystem(System):
             "social_outcome": "reserved",
         }
 
-    def _resolve_dialog_topic(self, context, topic_id):
+    def _resolve_dialog_topic(self, context, topic_id, *, pressure_topic_id=None, pressure_family_id=None):
         topic_id = str(topic_id or "").strip().lower()
         npc_eid = context["npc_eid"]
         if topic_id == "tutorial_next" and context.get("tutorial_guide"):
-            self._dialogue_mark_topic(npc_eid, topic_id)
+            self._dialogue_mark_topic(
+                npc_eid,
+                topic_id,
+                pressure_topic_id=pressure_topic_id,
+                pressure_family_id=pressure_family_id,
+            )
             return {"npc_lines": [_tutorial_guide_line(self.sim)]}
-        ask_count = self._dialogue_mark_topic(npc_eid, topic_id)
+        ask_count = self._dialogue_mark_topic(
+            npc_eid,
+            topic_id,
+            pressure_topic_id=pressure_topic_id,
+            pressure_family_id=pressure_family_id,
+        )
         self._dialogue_unlock_topics(npc_eid, *_dialogue_topic_unlocks(topic_id))
         if topic_id == "name":
             if context.get("guarded"):
@@ -14048,7 +14253,7 @@ class NPCInteractionSystem(System):
             }
         return {"npc_lines": []}
 
-    def _apply_dialogue_repeat_friction(self, context, topic_id, response):
+    def _apply_dialogue_repeat_friction(self, context, topic_id, response, *, pressure_topic_id=None, pressure_family_id=None):
         topic_id = str(topic_id or "").strip().lower()
         response = dict(response or {})
         npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
@@ -14059,8 +14264,17 @@ class NPCInteractionSystem(System):
         if response.get("open_trade"):
             return response
 
-        ask_count = self._dialogue_current_ask_count(npc_eid, topic_id)
-        family_count = self._dialogue_current_family_count(npc_eid, topic_id)
+        ask_count = self._dialogue_current_ask_count(
+            npc_eid,
+            topic_id,
+            pressure_topic_id=pressure_topic_id,
+        )
+        family_count = self._dialogue_current_family_count(
+            npc_eid,
+            topic_id,
+            pressure_topic_id=pressure_topic_id,
+            pressure_family_id=pressure_family_id,
+        )
         if ask_count <= 1 and family_count <= 1:
             return response
 
@@ -14326,11 +14540,24 @@ class NPCInteractionSystem(System):
             extra_detail_lc=_dialogue_lower_start(detail),
         )
 
-    def _append_dialogue_response(self, context, topic_id, response, *, previous_topic_id="", player_line_override=""):
+    def _append_dialogue_response(
+        self,
+        context,
+        topic_id,
+        response,
+        *,
+        previous_topic_id="",
+        player_line_override="",
+        pressure_topic_id=None,
+    ):
         state = self._dialog_ui_state()
         transcript = list(state.get("transcript", ()) or ())
         player_line = str(player_line_override or "").strip()
-        ask_count = self._dialogue_current_ask_count(context.get("npc_eid"), topic_id)
+        ask_count = self._dialogue_current_ask_count(
+            context.get("npc_eid"),
+            topic_id,
+            pressure_topic_id=pressure_topic_id,
+        )
         if not player_line:
             player_line = _dialogue_topic_player_line(
                 topic_id,
@@ -14671,15 +14898,49 @@ class NPCInteractionSystem(System):
         selected_prompt_text = ""
         if topic_id in self.MISSTEP_TOPICS and isinstance(topic_row, dict):
             selected_row = topic_row
-        if isinstance(selected_row, dict) and str(selected_row.get("id", "")).strip().lower() == topic_id:
+        selected_row_matches = isinstance(selected_row, dict) and str(selected_row.get("id", "")).strip().lower() == topic_id
+        if selected_row_matches:
             player_line_override = str(selected_row.get("player_line") or selected_row.get("label") or "").strip()
             selected_prompt_text = str(selected_row.get("prompt_text") or selected_row.get("label") or "").strip()
+        if topic_id == "where_place" and selected_row_matches:
+            place_ref_id = str(selected_row.get("place_ref_id", "") or "").strip()
+            if place_ref_id:
+                for option in tuple(context.get("referenced_place_options", ()) or ()):
+                    if str((option or {}).get("property_id", "") or "").strip() == place_ref_id:
+                        context = self._dialogue_context_for_place_option(context, option)
+                        break
         if topic_id in self.MISSTEP_TOPICS and selected_prompt_text:
             context = dict(context)
             context["selected_player_prompt_text"] = selected_prompt_text
-        response = self._resolve_dialog_topic(context, topic_id)
-        response = self._apply_dialogue_initiative(context, topic_id, response)
-        response = self._apply_dialogue_repeat_friction(context, topic_id, response)
+        pressure_topic_id = (
+            str((selected_row or {}).get("pressure_topic_id", "") or "").strip().lower()
+            if selected_row_matches
+            else ""
+        ) or self._dialogue_pressure_topic_key(topic_id, context)
+        pressure_family_id = (
+            str((selected_row or {}).get("pressure_family_id", "") or "").strip().lower()
+            if selected_row_matches
+            else ""
+        ) or self._dialogue_pressure_family_key(topic_id, context)
+        response = self._resolve_dialog_topic(
+            context,
+            topic_id,
+            pressure_topic_id=pressure_topic_id,
+            pressure_family_id=pressure_family_id,
+        )
+        response = self._apply_dialogue_initiative(
+            context,
+            topic_id,
+            response,
+            pressure_topic_id=pressure_topic_id,
+        )
+        response = self._apply_dialogue_repeat_friction(
+            context,
+            topic_id,
+            response,
+            pressure_topic_id=pressure_topic_id,
+            pressure_family_id=pressure_family_id,
+        )
         self._remember_revealed_social_lead_names(context, response)
         self._append_dialogue_response(
             context,
@@ -14687,6 +14948,7 @@ class NPCInteractionSystem(System):
             response,
             previous_topic_id=previous_topic_id,
             player_line_override=player_line_override,
+            pressure_topic_id=pressure_topic_id,
         )
         refreshed = self._dialogue_context(npc_eid, allow_distant=allow_distant)
         if not refreshed:

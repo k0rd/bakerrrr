@@ -176,13 +176,15 @@ BUS_TRANSIT_MENU_LIMIT = 8
 BUS_TRANSIT_TOKEN_DISTANCE_STEP = 3
 SHUTTLE_TRANSIT_SEARCH_RADIUS = 3
 SHUTTLE_TRANSIT_MENU_LIMIT = 6
-SHUTTLE_TRANSIT_TOKEN_DISTANCE_STEP = 2
+SHUTTLE_TRANSIT_TOKEN_DISTANCE_STEP = 1
 FERRY_TRANSIT_SEARCH_RADIUS = 10
 FERRY_TRANSIT_MENU_LIMIT = 6
 FERRY_TRANSIT_TOKEN_DISTANCE_STEP = 2
 COACH_TRANSIT_SEARCH_RADIUS = 18
 COACH_TRANSIT_MENU_LIMIT = 8
-COACH_TRANSIT_TOKEN_DISTANCE_STEP = 4
+COACH_TRANSIT_TOKEN_DISTANCE_STEP = 3
+COACH_TRANSIT_FAR_PROBE_COUNT = 10
+COACH_TRANSIT_FAR_PROBE_MIN_DISTANCE = 8
 
 TRANSIT_SERVICE_PROFILES = {
     "rail_transit": {
@@ -386,10 +388,16 @@ TRANSIT_SERVICE_PROFILES = {
         "token_only": True,
         "allow_daypass": True,
         "prefer_tokens": False,
+        "distance_sort": "far",
+        "preferred_min_distance": COACH_TRANSIT_FAR_PROBE_MIN_DISTANCE,
+        "require_preferred_distance": True,
+        "far_probe_count": COACH_TRANSIT_FAR_PROBE_COUNT,
+        "far_probe_min_distance": COACH_TRANSIT_FAR_PROBE_MIN_DISTANCE,
+        "token_base_cost": 2,
         "token_distance_step": COACH_TRANSIT_TOKEN_DISTANCE_STEP,
-        "max_token_cost": 6,
-        "travel_base_hours": 0.7,
-        "travel_hours_per_chunk": 0.35,
+        "max_token_cost": 8,
+        "travel_base_hours": 0.9,
+        "travel_hours_per_chunk": 0.42,
     },
 }
 TRANSIT_SERVICE_IDS = tuple(TRANSIT_SERVICE_PROFILES.keys())
@@ -642,6 +650,167 @@ def _transit_services_connecting_chunks(sim, origin_chunk, target_chunk, *, serv
     return tuple(connected)
 
 
+def _chunk_data_has_transit_node(chunk, node_archetypes, profile):
+    if not isinstance(chunk, dict):
+        return False
+    if bool((profile or {}).get("scan_buildings", True)):
+        for block in tuple(chunk.get("blocks", ()) or ()):
+            if not isinstance(block, dict):
+                continue
+            for building in tuple(block.get("buildings", ()) or ()):
+                if not isinstance(building, dict):
+                    continue
+                if str(building.get("archetype", "") or "").strip().lower() in node_archetypes:
+                    return True
+    if bool((profile or {}).get("scan_sites", True)):
+        for site in tuple(chunk.get("sites", ()) or ()):
+            if not isinstance(site, dict):
+                continue
+            if str(site.get("kind", "") or "").strip().lower() in node_archetypes:
+                return True
+    return False
+
+
+def _transit_offset_has_predicted_node(sim, cx, cy, profile, node_archetypes):
+    world = getattr(sim, "world", None)
+    if world is None:
+        return False
+    key = (int(cx), int(cy))
+    loaded_chunks = getattr(world, "chunks", {})
+    if isinstance(loaded_chunks, dict) and key in loaded_chunks:
+        return _chunk_data_has_transit_node(loaded_chunks.get(key), node_archetypes, profile)
+
+    if not bool((profile or {}).get("scan_sites", True)):
+        return False
+    try:
+        desc = world.overworld_descriptor(cx, cy)
+        area_type = str((desc or {}).get("area_type", "") or "").strip().lower()
+    except (TypeError, ValueError, AttributeError):
+        return False
+    if area_type == "city":
+        return False
+    try:
+        sites = tuple(world.predict_non_city_sites(cx, cy, descriptor=desc) or ())
+    except (TypeError, ValueError, AttributeError):
+        return False
+    for site in sites:
+        if not isinstance(site, dict):
+            continue
+        if str(site.get("kind", "") or "").strip().lower() in node_archetypes:
+            return True
+    return False
+
+
+def _transit_scan_offsets(sim, origin_chunk, service, profile, radius, *, node_archetypes=(), target_count=None):
+    offsets = []
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            distance = _manhattan(0, 0, dx, dy)
+            if distance <= 0 or distance > radius:
+                continue
+            offsets.append((int(dx), int(dy), int(distance)))
+
+    offsets.sort(key=lambda row: (row[2], row[1], row[0]))
+    try:
+        far_probe_count = max(0, int(profile.get("far_probe_count", 0) or 0))
+    except (TypeError, ValueError):
+        far_probe_count = 0
+    if far_probe_count <= 0:
+        return tuple(offsets)
+
+    try:
+        far_min = max(1, int(profile.get("far_probe_min_distance", max(1, radius // 2)) or max(1, radius // 2)))
+    except (TypeError, ValueError):
+        far_min = max(1, radius // 2)
+
+    seed = getattr(sim, "seed", 0)
+    service = str(service or "").strip().lower()
+    try:
+        ox, oy = int(origin_chunk[0]), int(origin_chunk[1])
+    except (TypeError, ValueError, IndexError):
+        ox, oy = 0, 0
+
+    far_offsets = [
+        row for row in offsets
+        if int(row[2]) >= far_min
+        and _transit_offset_has_predicted_node(
+            sim,
+            int(origin_chunk[0]) + int(row[0]),
+            int(origin_chunk[1]) + int(row[1]),
+            profile,
+            node_archetypes,
+        )
+    ]
+    far_offsets.sort(
+        key=lambda row: (
+            -int(row[2]),
+            random.Random(f"{seed}:transit-far-probe:{service}:{ox}:{oy}:{row[0]}:{row[1]}").random(),
+            int(row[1]),
+            int(row[0]),
+        )
+    )
+    try:
+        target_count = max(1, int(target_count))
+    except (TypeError, ValueError):
+        target_count = far_probe_count
+    selected_count = min(far_probe_count, target_count)
+    selected_far = tuple(far_offsets[:selected_count])
+    if bool((profile or {}).get("require_preferred_distance")):
+        return selected_far
+    selected = {(row[0], row[1]) for row in selected_far}
+    return tuple(selected_far) + tuple(row for row in offsets if (row[0], row[1]) not in selected)
+
+
+def _transit_candidate_sort_key(row, profile):
+    try:
+        distance = int(row.get("distance", 9999) or 9999)
+    except (TypeError, ValueError):
+        distance = 9999
+    name = str(row.get("destination_name", "")).strip().lower()
+    chunk = tuple(row.get("chunk", (0, 0)) or (0, 0))
+    node_id = str(row.get("node_id", "")).strip().lower()
+    if str((profile or {}).get("distance_sort", "near") or "near").strip().lower() == "far":
+        try:
+            preferred_min = max(1, int((profile or {}).get("preferred_min_distance", 1) or 1))
+        except (TypeError, ValueError):
+            preferred_min = 1
+        preferred_rank = 0 if distance >= preferred_min else 1
+        return (preferred_rank, -distance, name, chunk, node_id)
+    return (distance, name, chunk, node_id)
+
+
+def _transit_filter_distance_band(candidates, profile, limit):
+    candidates = list(candidates or ())
+    if str((profile or {}).get("distance_sort", "near") or "near").strip().lower() != "far":
+        return candidates
+    try:
+        preferred_min = max(1, int((profile or {}).get("preferred_min_distance", 1) or 1))
+    except (TypeError, ValueError):
+        preferred_min = 1
+    try:
+        fallback_target = max(1, int((profile or {}).get("near_fallback_target", 1) or 1))
+    except (TypeError, ValueError):
+        fallback_target = 1
+    try:
+        limit = max(1, int(limit))
+    except (TypeError, ValueError):
+        limit = len(candidates) or 1
+
+    far_candidates = [
+        row for row in candidates
+        if int(row.get("distance", 0) or 0) >= preferred_min
+    ]
+    if bool((profile or {}).get("require_preferred_distance")):
+        return far_candidates
+    if len(far_candidates) >= min(limit, fallback_target):
+        return far_candidates
+    far_keys = {str(row.get("node_id", "")).strip() for row in far_candidates}
+    return far_candidates + [
+        row for row in candidates
+        if str(row.get("node_id", "")).strip() not in far_keys
+    ]
+
+
 def _transit_destinations(sim, origin_prop, service, *, radius=None, limit=None):
     profile = _transit_service_profile(service)
     if not profile or not isinstance(origin_prop, dict) or getattr(sim, "world", None) is None:
@@ -663,94 +832,50 @@ def _transit_destinations(sim, origin_prop, service, *, radius=None, limit=None)
 
     seen = set()
     candidates = []
-    for dy in range(-radius, radius + 1):
-        for dx in range(-radius, radius + 1):
-            distance = _manhattan(0, 0, dx, dy)
-            if distance <= 0 or distance > radius:
-                continue
-            cx = origin_chunk[0] + dx
-            cy = origin_chunk[1] + dy
-            chunk = sim.world.get_chunk(cx, cy)
-            desc = sim.world.overworld_descriptor(cx, cy)
-            district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
-            origin_x = int(cx) * chunk_size
-            origin_y = int(cy) * chunk_size
-            district_type = str((district or {}).get("district_type", "unknown") or "unknown").strip().lower() or "unknown"
-            settlement_name = str((desc or {}).get("settlement_name", "") or "").strip()
+    for dx, dy, distance in _transit_scan_offsets(
+        sim,
+        origin_chunk,
+        service,
+        profile,
+        radius,
+        node_archetypes=node_archetypes,
+        target_count=limit,
+    ):
+        cx = origin_chunk[0] + dx
+        cy = origin_chunk[1] + dy
+        chunk = sim.world.get_chunk(cx, cy)
+        desc = sim.world.overworld_descriptor(cx, cy)
+        district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+        origin_x = int(cx) * chunk_size
+        origin_y = int(cy) * chunk_size
+        district_type = str((district or {}).get("district_type", "unknown") or "unknown").strip().lower() or "unknown"
+        settlement_name = str((desc or {}).get("settlement_name", "") or "").strip()
 
-            if bool(profile.get("scan_buildings", True)):
-                blocks = tuple((chunk or {}).get("blocks", ()) or ())
-                for block in blocks:
-                    if not isinstance(block, dict):
+        if bool(profile.get("scan_buildings", True)):
+            blocks = tuple((chunk or {}).get("blocks", ()) or ())
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                buildings = tuple(block.get("buildings", ()) or ())
+                building_count = len(buildings)
+                for building_index, building in enumerate(buildings):
+                    archetype = str((building or {}).get("archetype", "") or "").strip().lower()
+                    if archetype not in node_archetypes:
                         continue
-                    buildings = tuple(block.get("buildings", ()) or ())
-                    building_count = len(buildings)
-                    for building_index, building in enumerate(buildings):
-                        archetype = str((building or {}).get("archetype", "") or "").strip().lower()
-                        if archetype not in node_archetypes:
-                            continue
-                        layout = layout_chunk_building(
-                            origin_x=origin_x,
-                            origin_y=origin_y,
-                            chunk_size=chunk_size,
-                            block_grid_x=int(block.get("grid_x", 0) or 0),
-                            block_grid_y=int(block.get("grid_y", 0) or 0),
-                            building_index=building_index,
-                            building=building,
-                            building_count=building_count,
-                        )
-                        if not isinstance(layout, dict):
-                            continue
-                        building_id = world_building_id(cx, cy, building)
-                        node_id = f"building:{building_id}"
-                        if origin_node_id and node_id == origin_node_id:
-                            continue
-                        if node_id in seen:
-                            continue
-                        seen.add(node_id)
-                        entry = dict(layout.get("entry", {}) or {})
-                        stop_name = _transit_stop_name(
-                            (building or {}).get("business_name", ""),
-                            archetype.replace("_", " ").title(),
-                        )
-                        candidates.append({
-                            "node_id": node_id,
-                            "building_id": building_id,
-                            "property_id": _building_property_id(sim, building_id),
-                            "destination_name": stop_name,
-                            "station_name": stop_name,
-                            "node_archetype": archetype,
-                            "chunk": (int(cx), int(cy)),
-                            "distance": int(distance),
-                            "direction_label": _chunk_direction_label(origin_chunk, (cx, cy)),
-                            "district_type": district_type,
-                            "settlement_name": settlement_name,
-                            "entry_x": int(entry.get("x", layout.get("anchor_x", origin_x))),
-                            "entry_y": int(entry.get("y", layout.get("anchor_y", origin_y))),
-                            "entry_z": int(entry.get("z", 0)),
-                        })
-
-            if bool(profile.get("scan_sites", True)):
-                reserved_site_footprints = []
-                for site_index, site in enumerate(tuple((chunk or {}).get("sites", ()) or ())):
-                    if not isinstance(site, dict):
-                        continue
-                    site_kind = str(site.get("kind", "") or "").strip().lower()
-                    if site_kind not in node_archetypes:
-                        continue
-                    layout = layout_chunk_site(
+                    layout = layout_chunk_building(
                         origin_x=origin_x,
                         origin_y=origin_y,
                         chunk_size=chunk_size,
-                        site_index=site_index,
-                        site=site,
-                        reserved_footprints=reserved_site_footprints,
+                        block_grid_x=int(block.get("grid_x", 0) or 0),
+                        block_grid_y=int(block.get("grid_y", 0) or 0),
+                        building_index=building_index,
+                        building=building,
+                        building_count=building_count,
                     )
                     if not isinstance(layout, dict):
                         continue
-                    reserved_site_footprints.append(dict(layout.get("footprint", {})))
-                    site_id = str(site.get("site_id", site_index) or site_index).strip() or str(site_index)
-                    node_id = f"site:{int(cx)}:{int(cy)}:{site_kind}:{site_id}"
+                    building_id = world_building_id(cx, cy, building)
+                    node_id = f"building:{building_id}"
                     if origin_node_id and node_id == origin_node_id:
                         continue
                     if node_id in seen:
@@ -758,16 +883,16 @@ def _transit_destinations(sim, origin_prop, service, *, radius=None, limit=None)
                     seen.add(node_id)
                     entry = dict(layout.get("entry", {}) or {})
                     stop_name = _transit_stop_name(
-                        site.get("name", ""),
-                        site_kind.replace("_", " ").title(),
+                        (building or {}).get("business_name", ""),
+                        archetype.replace("_", " ").title(),
                     )
                     candidates.append({
                         "node_id": node_id,
-                        "building_id": "",
-                        "property_id": _site_property_id(sim, cx, cy, site_kind, site_id),
+                        "building_id": building_id,
+                        "property_id": _building_property_id(sim, building_id),
                         "destination_name": stop_name,
                         "station_name": stop_name,
-                        "node_archetype": site_kind,
+                        "node_archetype": archetype,
                         "chunk": (int(cx), int(cy)),
                         "distance": int(distance),
                         "direction_label": _chunk_direction_label(origin_chunk, (cx, cy)),
@@ -778,14 +903,56 @@ def _transit_destinations(sim, origin_prop, service, *, radius=None, limit=None)
                         "entry_z": int(entry.get("z", 0)),
                     })
 
-    candidates.sort(
-        key=lambda row: (
-            int(row.get("distance", 9999)),
-            str(row.get("destination_name", "")).strip().lower(),
-            tuple(row.get("chunk", (0, 0))),
-            str(row.get("node_id", "")).strip().lower(),
-        )
-    )
+        if bool(profile.get("scan_sites", True)):
+            reserved_site_footprints = []
+            for site_index, site in enumerate(tuple((chunk or {}).get("sites", ()) or ())):
+                if not isinstance(site, dict):
+                    continue
+                site_kind = str(site.get("kind", "") or "").strip().lower()
+                if site_kind not in node_archetypes:
+                    continue
+                layout = layout_chunk_site(
+                    origin_x=origin_x,
+                    origin_y=origin_y,
+                    chunk_size=chunk_size,
+                    site_index=site_index,
+                    site=site,
+                    reserved_footprints=reserved_site_footprints,
+                )
+                if not isinstance(layout, dict):
+                    continue
+                reserved_site_footprints.append(dict(layout.get("footprint", {})))
+                site_id = str(site.get("site_id", site_index) or site_index).strip() or str(site_index)
+                node_id = f"site:{int(cx)}:{int(cy)}:{site_kind}:{site_id}"
+                if origin_node_id and node_id == origin_node_id:
+                    continue
+                if node_id in seen:
+                    continue
+                seen.add(node_id)
+                entry = dict(layout.get("entry", {}) or {})
+                stop_name = _transit_stop_name(
+                    site.get("name", ""),
+                    site_kind.replace("_", " ").title(),
+                )
+                candidates.append({
+                    "node_id": node_id,
+                    "building_id": "",
+                    "property_id": _site_property_id(sim, cx, cy, site_kind, site_id),
+                    "destination_name": stop_name,
+                    "station_name": stop_name,
+                    "node_archetype": site_kind,
+                    "chunk": (int(cx), int(cy)),
+                    "distance": int(distance),
+                    "direction_label": _chunk_direction_label(origin_chunk, (cx, cy)),
+                    "district_type": district_type,
+                    "settlement_name": settlement_name,
+                    "entry_x": int(entry.get("x", layout.get("anchor_x", origin_x))),
+                    "entry_y": int(entry.get("y", layout.get("anchor_y", origin_y))),
+                    "entry_z": int(entry.get("z", 0)),
+                })
+
+    candidates.sort(key=lambda row: _transit_candidate_sort_key(row, profile))
+    candidates = _transit_filter_distance_band(candidates, profile, limit)
     return tuple(candidates[:limit])
 
 

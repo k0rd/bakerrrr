@@ -916,6 +916,10 @@ class EventLogSystem(System):
                 return f"theft of {item_name} at {property_name}"
             return f"theft of {item_name}"
         if incident_type == "contraband":
+            if "/contraband_trade" in f"/{note}".lower():
+                if property_name:
+                    return f"visible contraband trade at {property_name}"
+                return "visible contraband trade"
             if property_name:
                 return f"visible contraband use at {property_name}"
             return "visible contraband use"
@@ -993,6 +997,8 @@ class EventLogSystem(System):
         if source == "offense":
             action_key = reason.split("/", 1)[0].strip().lower()
             context = str(event.data.get("context", "") or "").strip().lower()
+            if context == "contraband_trade":
+                return f"visible contraband trade{place_suffix}" if place_name else "visible contraband trade"
             if context == "contraband_use":
                 return f"visible contraband{place_suffix}" if place_name else "visible contraband"
             action_text = self._action_event_label(action_key, fallback="trouble")
@@ -4388,11 +4394,16 @@ class EventLogSystem(System):
         action_label = self._action_event_label(action)
         target_name = str(event.data.get("target_name", "") or "").strip()
         wildlife_text = f" to {target_name}" if target_name else ""
-        if context == "contraband_use":
-            summary = f"Contraband exposed{site_text}: {action_label}."
+        if context in {"contraband_trade", "contraband_use"}:
+            if context == "contraband_trade":
+                summary = f"Contraband trade witnessed{site_text}: {action_label}."
+                warning = "Warning: obvious contraband trade can alarm nearby people and provoke a harsher response."
+            else:
+                summary = f"Contraband exposed{site_text}: {action_label}."
+                warning = "Warning: obvious contraband use can alarm nearby people and provoke a harsher response."
             self._warn_once(
-                "contraband",
-                "Warning: obvious contraband use can alarm nearby people and provoke a harsher response.",
+                context,
+                warning,
             )
         elif context == "wildlife_harassment":
             summary = f"Wildlife harmed{site_text}: {action_label}{wildlife_text}."
@@ -4503,7 +4514,7 @@ class EventLogSystem(System):
         elif reason == "workshop_chassis_full":
             _log_player_feedback(self.sim, f"Drone workshop chassis bays are full. Cannot stow {item_name}.", kind="pickup")
         elif reason == "workshop_parts_full":
-            _log_player_feedback(self.sim, f"Drone workshop parts bay is full. Cannot stow {item_name}.", kind="pickup")
+            _log_player_feedback(self.sim, f"Drone workshop is full. Cannot stow {item_name}.", kind="pickup")
         elif reason == "not_workshop_part":
             _log_player_feedback(self.sim, f"{item_name} cannot be stowed in the drone workshop.", kind="pickup")
         elif reason == "drone_remove_failed":
@@ -4770,7 +4781,7 @@ class EventLogSystem(System):
         if bool(event.data.get("workshop_only")):
             _log_player_feedback(self.sim, "Drone workshop opened.", kind="interaction")
             return
-        _log_player_feedback(self.sim, f"Drone sheet opened for {drone_label}{suffix}.", kind="interaction")
+        _log_player_feedback(self.sim, f"Drone workshop opened for {drone_label}{suffix}.", kind="interaction")
 
     def on_drone_sheet_blocked(self, event):
         eid = event.data.get("eid") or event.data.get("controller_eid")
@@ -4779,7 +4790,7 @@ class EventLogSystem(System):
         drone_label = self._event_drone_label(event)
         reason = str(event.data.get("reason", "") or "").strip().lower()
         messages = {
-            "ui_busy": "Close the current panel before opening the drone sheet.",
+            "ui_busy": "Close the current panel before opening the drone workshop.",
             "no_manageable_drone": "No deployed drone is available to manage here.",
             "selected_unavailable": "The selected drone is no longer available.",
             "not_adjacent": f"Stand next to {drone_label} for physical work.",
@@ -4787,7 +4798,7 @@ class EventLogSystem(System):
             "drone_cargo_full": f"{drone_label}'s cargo is full.",
             "inventory_full": "Your pack has no room for that item.",
             "workshop_chassis_full": "The drone workshop has no open chassis bay.",
-            "workshop_parts_full": "The drone workshop parts bay is full.",
+            "workshop_parts_full": "The drone workshop is full.",
             "workshop_part_unavailable": "That workshop part is no longer available.",
             "workshop_remove_failed": "That workshop part could not be removed.",
             "missing_position": "Stand in the world before dropping a workshop part.",
@@ -5456,6 +5467,24 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{item_name} needs open adjacent floor.", kind="interaction")
         elif reason == "drone_remove_failed":
             _log_player_feedback(self.sim, f"{item_name} would not leave your pack.", kind="interaction")
+        elif reason == "drone_battery_no_faced_drone":
+            _log_player_feedback(self.sim, f"Face an owned deployed drone before using {item_name}.", kind="interaction")
+        elif reason == "drone_battery_no_adjacent_drone":
+            _log_player_feedback(self.sim, f"Stand next to an owned deployed drone before using {item_name}.", kind="interaction")
+        elif reason == "drone_battery_multiple_adjacent_drones":
+            _log_player_feedback(self.sim, "More than one owned drone is close; use the drone workshop to choose one.", kind="interaction")
+        elif str(reason or "").startswith("drone_battery_swap_"):
+            swap_reason = str(reason or "").removeprefix("drone_battery_swap_")
+            messages = {
+                "selected_unavailable": "That drone is no longer available.",
+                "not_adjacent": "Stand next to the drone before replacing its battery.",
+                "battery_unavailable": "That spare battery is no longer available.",
+                "not_battery": "That is not a drone battery.",
+                "incompatible_battery": f"{item_name} does not fit that drone.",
+                "inventory_full": "Your pack needs room for the old drone battery.",
+                "battery_remove_failed": f"{item_name} could not be removed from your pack.",
+            }
+            _log_player_feedback(self.sim, messages.get(swap_reason, f"{item_name} will not swap into that drone."), kind="interaction")
         elif str(reason or "").startswith("trap_"):
             trap_reason = str(reason or "").removeprefix("trap_")
             if trap_reason == "blocked_tile":
@@ -6979,7 +7008,7 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"Cannot buy {item_name}: drone workshop chassis bays are full.", kind="commerce")
             return
         if reason == "workshop_parts_full":
-            _log_player_feedback(self.sim, f"Cannot buy {item_name}: drone workshop parts bay is full.", kind="commerce")
+            _log_player_feedback(self.sim, f"Cannot buy {item_name}: drone workshop is full.", kind="commerce")
             return
         _log_player_feedback(self.sim, f"Purchase of {item_name} at {store_name} could not be finalized.", kind="commerce")
 

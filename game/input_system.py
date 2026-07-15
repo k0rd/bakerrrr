@@ -109,6 +109,7 @@ from game.dialogue_runtime import (
     _disguise_role_label,
 )
 from game.drone_runtime import (
+    PACKED_DRONE_ITEM_ID,
     drone_profile_for_item,
     drone_state_capabilities,
     drone_state_controlled_by_actor,
@@ -135,6 +136,7 @@ from game.drone_sheet import (
     drone_sheet_tab_rows,
     drone_workshop_chassis_records,
     drop_drone_workshop_part,
+    has_backpack_packed_drone,
     install_workshop_drone_module,
     install_drone_module,
     move_drone_workshop_part_to_pack,
@@ -149,6 +151,7 @@ from game.drone_sheet import (
     swap_workshop_drone_power_center,
     transfer_drone_cargo_to_player,
     transfer_player_cargo_to_drone,
+    unpack_packed_drone_to_workshop,
 )
 from game.drone_programs import (
     activate_drone_program,
@@ -1696,9 +1699,16 @@ class InputSystem(System):
         summary = drone_workshop_summary(workshop, item_catalog=self.catalog)
         return int(summary.get("chassis_used", 0) or 0) > 0 or int(summary.get("parts_used", 0) or 0) > 0
 
+    def _drone_workshop_has_accessible_rows(self):
+        return self._drone_workshop_has_entries() or has_backpack_packed_drone(
+            self.sim,
+            self.player_eid,
+            item_catalog=self.catalog,
+        )
+
     def _refresh_drone_sheet_ui(self, *, announce_unavailable=False):
         state = self._drone_sheet_state()
-        has_workshop_entries = self._drone_workshop_has_entries()
+        has_workshop_entries = self._drone_workshop_has_accessible_rows()
         records = self._drone_sheet_records()
         workshop_records = self._drone_workshop_chassis_records()
         selected_workshop_chassis = str(state.get("workshop_chassis_instance_id", "") or "").strip()
@@ -1843,10 +1853,10 @@ class InputSystem(System):
         zoom_mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
         state = self._drone_sheet_state()
         if zoom_mode == "overworld" or self._drone_sheet_modal_blocked():
-            state["feedback"] = "Drone sheet is not available right now."
+            state["feedback"] = "Drone workshop is not available right now."
             self.sim.emit(Event("drone_sheet_blocked", eid=self.player_eid, controller_eid=self.player_eid, reason="ui_busy"))
             return True
-        has_workshop_entries = self._drone_workshop_has_entries()
+        has_workshop_entries = self._drone_workshop_has_accessible_rows()
         if not self._drone_sheet_records() and has_workshop_entries:
             state["tab"] = "parts"
         record = self._refresh_drone_sheet_ui()
@@ -1855,7 +1865,7 @@ class InputSystem(System):
             self.sim.emit(Event("drone_sheet_blocked", eid=self.player_eid, controller_eid=self.player_eid, reason="no_manageable_drone"))
             return True
         state["open"] = True
-        state["feedback"] = "Drone workshop open." if record is None else "Drone sheet open."
+        state["feedback"] = "Drone workshop open."
         self.sim.emit(Event(
             "drone_sheet_opened",
             eid=self.player_eid,
@@ -1900,7 +1910,7 @@ class InputSystem(System):
         state["tab"] = tab
         state["selected_index"] = 0
         state["scroll"] = 0
-        state["feedback"] = f"Drone sheet: {tab}."
+        state["feedback"] = f"Drone workshop: {tab}."
         self._refresh_drone_sheet_ui(announce_unavailable=True)
         return True
 
@@ -1918,7 +1928,7 @@ class InputSystem(System):
         state["module_side"] = "bay" if str(state.get("module_side", "drone")).strip().lower() == "drone" else "drone"
         state["selected_index"] = 0
         state["scroll"] = 0
-        state["feedback"] = f"Module bay: {'workshop' if state['module_side'] == 'bay' else 'installed'}."
+        state["feedback"] = f"Modules: {'workshop' if state['module_side'] == 'bay' else 'installed'}."
         self._refresh_drone_sheet_ui(announce_unavailable=True)
         return True
 
@@ -1968,6 +1978,44 @@ class InputSystem(System):
             if not instance_id:
                 state["feedback"] = "No workshop part selected."
                 return True
+            action = str(row.get("action", "") or "").strip().lower()
+            if action == "unpack_packed_drone":
+                if not prefer_workbench:
+                    state["feedback"] = "Press Enter to unpack this packed drone; inventory U deploys it."
+                    return True
+                result = unpack_packed_drone_to_workshop(
+                    self.sim,
+                    self.player_eid,
+                    instance_id,
+                    item_catalog=self.catalog,
+                )
+                if bool(result.get("ok")):
+                    item_name = self._drone_sheet_item_name(result)
+                    chassis_entry = result.get("chassis_entry") if isinstance(result.get("chassis_entry"), dict) else {}
+                    state["workshop_chassis_instance_id"] = result.get("instance_id") or chassis_entry.get("instance_id")
+                    state["selected_drone_eid"] = None
+                    state["tab"] = "modules"
+                    state["module_side"] = "bay"
+                    state["selected_index"] = 0
+                    state["scroll"] = 0
+                    state["feedback"] = f"Unpacked {item_name} into the workshop."
+                    self.sim.emit(Event(
+                        "drone_workshop_drone_unpacked",
+                        eid=self.player_eid,
+                        controller_eid=self.player_eid,
+                        item_id=PACKED_DRONE_ITEM_ID,
+                        item_name=item_name,
+                        instance_id=result.get("instance_id"),
+                        parts_added=result.get("parts_added", 0),
+                        battery_item_id=(result.get("battery_entry") or {}).get("item_id") if isinstance(result.get("battery_entry"), dict) else None,
+                    ))
+                else:
+                    reason = result.get("reason", "blocked")
+                    details = "; ".join(str(error) for error in result.get("errors", ()) if str(error).strip())
+                    state["feedback"] = f"Unpack blocked: {str(reason).replace('_', ' ')}{(': ' + details) if details else ''}."
+                    self._emit_drone_sheet_blocked(record, reason, action="parts")
+                self._refresh_drone_sheet_ui(announce_unavailable=True)
+                return True
             entry = row.get("entry") if isinstance(row.get("entry"), dict) else {}
             item_id = str(entry.get("item_id", "") or "").strip().lower()
             profile_kind = str(drone_profile_for_item(item_id, item_catalog=self.catalog).get("kind", "") or "").strip().lower()
@@ -2013,7 +2061,7 @@ class InputSystem(System):
             self._emit_drone_sheet_blocked(record, "selected_unavailable")
             return True
         if not bool(row.get("actionable", False)):
-            state["feedback"] = "That drone sheet row is read-only."
+            state["feedback"] = "That workshop row is read-only."
             return True
 
         is_workbench = bool(record.get("workshop_chassis")) if isinstance(record, dict) else False

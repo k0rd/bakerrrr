@@ -478,7 +478,7 @@ class VisibilitySystem(System):
         # Scale visibility range by ambient light: darker means shorter sight.
         lighting = traits.get("lighting", {}) if isinstance(traits, dict) else {}
         try:
-            ambient = float(lighting.get("player_ambient", 1.0))
+            ambient = float(lighting.get("player_visibility_ambient", lighting.get("player_ambient", 1.0)))
         except (TypeError, ValueError):
             ambient = 1.0
         ambient = max(0.0, min(1.0, ambient))

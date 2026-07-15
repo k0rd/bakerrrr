@@ -25,12 +25,14 @@ from game.drone_runtime import (
     deployed_drone_common_name,
     deployed_drone_render_spec,
     drone_profile_for_item,
+    drone_state_controlled_by_actor,
     find_deployed_drone_for_pickup,
     first_open_drone_deploy_tile,
     is_packed_drone_entry,
     packed_drone_metadata_from_state,
     validate_packed_drone_deploy_entry,
 )
+from game.drone_sheet import swap_drone_battery
 from game.appearance_loadout import (
     clear_appearance_instance,
     equip_appearance_item,
@@ -59,7 +61,7 @@ from game.system_support.container_runtime import (
     release_stowed_items_for_removed_container,
     _unlink_removed_item_from_gear,
 )
-from game.system_support.interaction_ordering import _manhattan
+from game.system_support.interaction_ordering import _manhattan, _normalized_direction
 from game.system_support.item_runtime import (
     _apply_item_effects_to_entity,
     _default_weapon_reserve_ammo,
@@ -584,6 +586,120 @@ class ItemActionRuntime:
 
     def _actor_owner_tag(self, eid):
         return "player" if eid == self.player_eid else "npc"
+
+    def _stored_actor_interact_direction(self, eid):
+        state = getattr(self.sim, "player_interact_directions", None)
+        if not isinstance(state, dict):
+            return None
+        try:
+            key = int(eid)
+        except (TypeError, ValueError):
+            return None
+        remembered = state.get(key)
+        if not isinstance(remembered, dict):
+            return None
+        direction = _normalized_direction(remembered.get("dx", 0), remembered.get("dy", 0))
+        return None if direction == (0, 0) else direction
+
+    def _owned_deployed_drones_for_battery_use(self, eid, x, y, z, *, preferred_dir=None):
+        positions = self.sim.ecs.get(Position)
+        matches = []
+        target = None
+        if preferred_dir is not None:
+            target = (int(x) + int(preferred_dir[0]), int(y) + int(preferred_dir[1]), int(z))
+        for drone_eid, state in self.sim.ecs.get(DroneState).items():
+            if str(getattr(state, "mode", "") or "").strip().lower() != "deployed":
+                continue
+            if not drone_state_controlled_by_actor(state, eid):
+                continue
+            pos = positions.get(drone_eid)
+            if pos is None or int(pos.z) != int(z):
+                continue
+            if target is not None:
+                if (int(pos.x), int(pos.y), int(pos.z)) != target:
+                    continue
+                distance = 1
+            else:
+                distance = _manhattan(int(x), int(y), int(pos.x), int(pos.y))
+                if distance > 1:
+                    continue
+            matches.append((int(distance), int(drone_eid), drone_eid, state))
+        return [
+            {"eid": drone_eid, "state": state}
+            for _distance, _sort_eid, drone_eid, state in sorted(matches, key=lambda row: (row[0], row[1]))
+        ]
+
+    def _use_drone_battery_item(self, eid, x, y, z, inventory, entry, item_def, item_name, *, reason="manual"):
+        profile = drone_profile_for_item(entry.get("item_id"), item_catalog=self.catalog)
+        if profile.get("kind") != "battery":
+            return None
+        preferred = self._stored_actor_interact_direction(eid)
+        matches = self._owned_deployed_drones_for_battery_use(eid, x, y, z, preferred_dir=preferred)
+        if preferred is not None and not matches:
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="drone_battery_no_faced_drone",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+        if preferred is None:
+            matches = self._owned_deployed_drones_for_battery_use(eid, x, y, z)
+            if not matches:
+                self.sim.emit(Event(
+                    "item_use_blocked",
+                    eid=eid,
+                    reason="drone_battery_no_adjacent_drone",
+                    item_id=item_def["id"],
+                    item_name=item_name,
+                ))
+                return False
+            if len(matches) > 1:
+                self.sim.emit(Event(
+                    "item_use_blocked",
+                    eid=eid,
+                    reason="drone_battery_multiple_adjacent_drones",
+                    item_id=item_def["id"],
+                    item_name=item_name,
+                ))
+                return False
+
+        drone_eid = matches[0]["eid"]
+        state = matches[0].get("state")
+        result = swap_drone_battery(
+            self.sim,
+            eid,
+            drone_eid,
+            entry.get("instance_id"),
+            item_catalog=self.catalog,
+        )
+        if not bool(result.get("ok")):
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason=f"drone_battery_swap_{result.get('reason', 'blocked')}",
+                item_id=item_def["id"],
+                item_name=item_name,
+                drone_eid=drone_eid,
+            ))
+            return False
+
+        self.sim.emit(Event(
+            "drone_battery_swapped",
+            eid=eid,
+            controller_eid=eid,
+            drone_eid=drone_eid,
+            chassis_class=getattr(state, "chassis_class", None),
+            new_battery_item_id=result.get("new_battery_item_id"),
+            old_battery_item_id=result.get("old_battery_item_id"),
+            item_name=item_name,
+            battery_charge=result.get("battery_charge"),
+            battery_charge_max=result.get("battery_charge_max"),
+            previous=result.get("previous"),
+            reason=reason,
+        ))
+        return True
 
     def _use_packed_drone(self, eid, x, y, z, inventory, entry, item_def, item_name, *, reason="manual"):
         deploy = validate_packed_drone_deploy_entry(entry, item_catalog=self.catalog)
@@ -1427,6 +1543,20 @@ class ItemActionRuntime:
                 item_name,
                 reason=reason,
             )
+
+        drone_battery_result = self._use_drone_battery_item(
+            eid,
+            x,
+            y,
+            z,
+            inventory,
+            entry,
+            item_def,
+            item_name,
+            reason=reason,
+        )
+        if drone_battery_result is not None:
+            return bool(drone_battery_result)
 
         if _item_weapon_id(item_def):
             return self._toggle_weapon_item(

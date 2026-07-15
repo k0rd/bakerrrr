@@ -30,24 +30,28 @@ PROGRAM_ITEM_ID_BY_KEY = {
     "ice_cutter": "wire_ice_cutter_program",
     "trace_scrubber": "wire_trace_scrubber_program",
     "signal_cloak": "wire_signal_cloak_program",
+    "proxy_route": "wire_proxy_route_program",
+    "tunnel_route": "wire_tunnel_route_program",
     "panic_eject": "wire_panic_eject_program",
     "checksum_ward": "wire_checksum_ward_program",
     "sacrificial_shell": "wire_sacrificial_shell_program",
 }
 
 PROGRAM_SPECS = {
-    "talk": {"target": "user", "label": "Talk", "range": 4},
-    "route_probe": {"target": "scene", "label": "Route Probe", "range": 0},
-    "door_latch": {"target": "node", "label": "Door Latch", "node_kinds": {"door_alarm_relay", "controller"}},
-    "camera_loop": {"target": "node", "label": "Camera Loop", "node_kinds": {"controller", "diagnostic"}},
-    "data_siphon_shell": {"target": "node", "label": "Data Siphon Shell", "node_kinds": {"records"}},
-    "spike": {"target": "ice", "label": "Spike", "range": 10, "damage": 3},
-    "ice_cutter": {"target": "ice", "label": "ICE Cutter", "range": 8, "damage": 5},
-    "trace_scrubber": {"target": "self", "label": "Trace Scrubber", "trace_delta": -5},
-    "signal_cloak": {"target": "self", "label": "Signal Cloak", "effect_turns": 4},
-    "panic_eject": {"target": "self", "label": "Panic Eject"},
-    "checksum_ward": {"target": "self", "label": "Checksum Ward"},
-    "sacrificial_shell": {"target": "self", "label": "Sacrificial Shell"},
+    "talk": {"target": "user", "label": "Talk", "range": 4, "mode": "active"},
+    "route_probe": {"target": "scene", "label": "Route Probe", "range": 0, "mode": "active"},
+    "door_latch": {"target": "node", "label": "Door Latch", "node_kinds": {"door_alarm_relay", "controller"}, "mode": "active"},
+    "camera_loop": {"target": "node", "label": "Camera Loop", "node_kinds": {"controller", "diagnostic"}, "mode": "active"},
+    "data_siphon_shell": {"target": "node", "label": "Data Siphon Shell", "node_kinds": {"records"}, "mode": "active"},
+    "spike": {"target": "ice", "label": "Spike", "range": 10, "damage": 3, "mode": "active"},
+    "ice_cutter": {"target": "ice", "label": "ICE Cutter", "range": 8, "damage": 5, "mode": "active"},
+    "trace_scrubber": {"target": "self", "label": "Trace Scrubber", "trace_delta": -5, "mode": "active"},
+    "signal_cloak": {"target": "self", "label": "Signal Cloak", "effect_turns": 4, "mode": "passive"},
+    "proxy_route": {"target": "self", "label": "Proxy Route", "effect_turns": 999, "trace_absorb": 6, "mode": "passive"},
+    "tunnel_route": {"target": "self", "label": "Tunnel Route", "effect_turns": 6, "trace_reduction": 1, "mode": "passive"},
+    "panic_eject": {"target": "self", "label": "Panic Eject", "mode": "active"},
+    "checksum_ward": {"target": "self", "label": "Checksum Ward", "mode": "passive"},
+    "sacrificial_shell": {"target": "self", "label": "Sacrificial Shell", "mode": "passive"},
 }
 
 ICE_SPECS = {
@@ -60,6 +64,13 @@ ICE_SPECS = {
 }
 
 OFFENSIVE_PROGRAMS = {"door_latch", "camera_loop", "data_siphon_shell", "spike", "ice_cutter"}
+PASSIVE_EFFECT_BY_PROGRAM = {
+    "signal_cloak": "signal_cloak",
+    "proxy_route": "proxy_route",
+    "tunnel_route": "tunnel_route",
+    "checksum_ward": "checksum_ward",
+    "sacrificial_shell": "sacrificial_shell",
+}
 
 
 def _clean_text(value, default=""):
@@ -345,13 +356,17 @@ def initialize_wire_combat_scene(scene, *, interface_metadata=None, security=1):
     security = _int(security or scene.get("security_tier"), 1, minimum=0)
     trace_resistance = _int(interface_metadata.get("trace_resistance"), 0, minimum=0)
     buffer_max = max(1, _int(interface_metadata.get("buffer_size"), 4, minimum=1))
-    initial_trace = max(0, _int(interface_metadata.get("noise_floor"), 0, minimum=0) + max(0, security - 1))
+    trace_noise_floor = max(0, _int(interface_metadata.get("noise_floor"), 0, minimum=0) + max(0, security - 1))
     scene.setdefault("wire_combat_schema_version", WIRE_COMBAT_SCHEMA_VERSION)
     scene["security_tier"] = security
     scene.setdefault("buffer_max", buffer_max)
     scene.setdefault("buffer_current", _int(scene.get("buffer_current"), scene["buffer_max"], minimum=0))
     scene.setdefault("trace_limit", 12 + trace_resistance * 4)
-    scene.setdefault("trace_current", initial_trace)
+    scene.setdefault("trace_noise_floor", trace_noise_floor)
+    scene.setdefault("trace_current", 0)
+    if "trace_awake" not in scene:
+        scene["trace_awake"] = _int(scene.get("trace_current"), 0, minimum=0) > 0
+    scene.setdefault("trace_awake_reason", "")
     scene.setdefault("trace_alert_level", "quiet")
     scene.setdefault("active_effects", [])
     scene.setdefault("program_cooldowns", {})
@@ -445,6 +460,7 @@ def unload_wire_ram_slot(sim, actor_eid, *, index=None, instance_id=None, item_c
     state = wire_state_for_actor(sim, actor_eid, create=False)
     if state is None:
         return {"ok": False, "reason": "missing_wire_state"}
+    scene = ensure_wire_combat_state(sim, actor_eid, item_catalog=item_catalog)
     normalize_wire_ram_slots(state, item_catalog=item_catalog)
     slots = list(getattr(state, "ram_slots", ()) or ())
     target_index = None
@@ -462,6 +478,10 @@ def unload_wire_ram_slot(sim, actor_eid, *, index=None, instance_id=None, item_c
     for idx, row in enumerate(slots):
         row["slot"] = idx
     state.ram_slots = slots
+    if isinstance(scene, dict):
+        if _remove_effects_for_instance(scene, entry.get("instance_id")):
+            scene["last_feedback"] = f"{_program_name(entry, item_catalog=item_catalog)} stops running."
+        state.active_scene = dict(scene)
     state.last_wire_feedback = f"Unloaded {_program_name(entry, item_catalog=item_catalog)} from RAM."
     sim.emit(Event(
         "wire_program_unloaded",
@@ -475,7 +495,7 @@ def unload_wire_ram_slot(sim, actor_eid, *, index=None, instance_id=None, item_c
 def wire_program_rows(sim, actor_eid, *, item_catalog=None):
     item_catalog = item_catalog or ITEM_CATALOG
     state = wire_state_for_actor(sim, actor_eid, create=True)
-    ensure_wire_combat_state(sim, actor_eid, item_catalog=item_catalog)
+    scene = ensure_wire_combat_state(sim, actor_eid, item_catalog=item_catalog)
     rows = []
     for idx, entry in enumerate(getattr(state, "ram_slots", ()) or ()):
         if not isinstance(entry, Mapping):
@@ -487,14 +507,19 @@ def wire_program_rows(sim, actor_eid, *, item_catalog=None):
         durability = _int(metadata.get("durability"), profile.get("durability_max", 1), minimum=0)
         runs = _int(metadata.get("runs"), profile.get("runs_max", 0), minimum=0)
         runs_max = _int(metadata.get("runs_max"), profile.get("runs_max", 0), minimum=0)
-        suffix = f"cd {cooldown}, dur {durability}"
+        mode = str(PROGRAM_SPECS.get(key, {}).get("mode", "active") or "active").strip().lower()
+        suffix = f"{mode}, cd {cooldown}, dur {durability}"
         if runs_max:
             suffix += f", runs {runs}/{runs_max}"
+        effect_kind = PASSIVE_EFFECT_BY_PROGRAM.get(key)
+        if effect_kind and isinstance(scene, Mapping) and _effect_active(scene, effect_kind):
+            suffix += ", running"
         rows.append({
             "index": idx,
             "instance_id": _clean_text(entry.get("instance_id")),
             "item_id": _clean_key(entry.get("item_id")),
             "program_key": key,
+            "mode": mode,
             "entry": dict(entry),
             "label": f"{_program_name(entry, item_catalog=item_catalog)} [{suffix}]",
         })
@@ -602,12 +627,15 @@ def _validate_target(scene, program_key, target):
 def _refresh_trace_alert(scene):
     trace = _int(scene.get("trace_current"), 0, minimum=0)
     limit = max(1, _int(scene.get("trace_limit"), 12, minimum=1))
+    awake = bool(scene.get("trace_awake")) or trace > 0
     if trace >= limit:
         level = "forced"
     elif trace >= int(limit * 0.75):
         level = "hot"
     elif trace >= int(limit * 0.45):
         level = "rising"
+    elif awake:
+        level = "watching"
     else:
         level = "quiet"
     scene["trace_alert_level"] = level
@@ -615,10 +643,49 @@ def _refresh_trace_alert(scene):
     scene["buffer"] = f"{_int(scene.get('buffer_current'), 0)}/{_int(scene.get('buffer_max'), 1)}"
 
 
+def _trace_awake(scene):
+    return bool(scene.get("trace_awake")) or _int(scene.get("trace_current"), 0, minimum=0) > 0
+
+
+def _wake_trace(sim, actor_eid, scene, *, reason="wire_action"):
+    if _trace_awake(scene):
+        return False
+    scene["trace_awake"] = True
+    scene["trace_awake_reason"] = _clean_text(reason, "wire_action")
+    _refresh_trace_alert(scene)
+    sim.emit(Event("wire_trace_awakened", eid=actor_eid, reason=reason))
+    return True
+
+
 def _add_trace(sim, actor_eid, scene, amount, *, reason="wire_action"):
     amount = int(amount)
     if amount == 0:
         return 0
+    if amount > 0:
+        _wake_trace(sim, actor_eid, scene, reason=reason)
+        mitigation = 0
+        if _effect_active(scene, "signal_cloak"):
+            mitigation += 1
+        if _effect_active(scene, "tunnel_route"):
+            mitigation += max(1, _active_effect_strength(scene, "tunnel_route", default=1))
+        proxy = _consume_effect(scene, "proxy_route")
+        if proxy:
+            mitigation += max(1, _int(proxy.get("strength"), 6, minimum=1))
+        if mitigation > 0:
+            before_amount = amount
+            amount = max(0, amount - mitigation)
+            sim.emit(Event(
+                "wire_trace_deflected",
+                eid=actor_eid,
+                reason=reason,
+                before=before_amount,
+                after=amount,
+                mitigation=before_amount - amount,
+                proxy_burned=bool(proxy),
+            ))
+            if amount == 0:
+                _refresh_trace_alert(scene)
+                return 0
     before = _int(scene.get("trace_current"), 0, minimum=0)
     after = max(0, before + amount)
     scene["trace_current"] = after
@@ -644,6 +711,14 @@ def _effect_active(scene, kind):
     return any(isinstance(effect, Mapping) and _clean_key(effect.get("kind")) == key and _int(effect.get("turns"), 0) > 0 for effect in scene.get("active_effects", ()) or ())
 
 
+def _active_effect_strength(scene, kind, *, default=0):
+    key = _clean_key(kind)
+    for effect in scene.get("active_effects", ()) or ():
+        if isinstance(effect, Mapping) and _clean_key(effect.get("kind")) == key and _int(effect.get("turns"), 0) > 0:
+            return _int(effect.get("strength"), default, minimum=0)
+    return int(default)
+
+
 def _consume_effect(scene, kind):
     key = _clean_key(kind)
     effects = []
@@ -659,10 +734,32 @@ def _consume_effect(scene, kind):
     return consumed
 
 
-def _append_effect(scene, kind, *, turns=1, instance_id=""):
+def _append_effect(scene, kind, *, turns=1, instance_id="", strength=0):
     effects = [dict(effect) for effect in scene.get("active_effects", ()) or () if isinstance(effect, Mapping)]
-    effects.append({"kind": _clean_key(kind), "turns": max(1, int(turns)), "instance_id": _clean_text(instance_id)})
+    row = {"kind": _clean_key(kind), "turns": max(1, int(turns)), "instance_id": _clean_text(instance_id)}
+    strength_value = _int(strength, 0, minimum=0)
+    if strength_value > 0:
+        row["strength"] = strength_value
+    effects.append(row)
     scene["active_effects"] = effects
+
+
+def _remove_effects_for_instance(scene, instance_id):
+    iid = _clean_text(instance_id)
+    if not iid:
+        return 0
+    kept = []
+    removed = 0
+    for effect in scene.get("active_effects", ()) or ():
+        if not isinstance(effect, Mapping):
+            continue
+        row = dict(effect)
+        if _clean_text(row.get("instance_id")) == iid:
+            removed += 1
+            continue
+        kept.append(row)
+    scene["active_effects"] = kept
+    return removed
 
 
 def _decrement_effects(scene):
@@ -862,10 +959,14 @@ def advance_wire_combat_turn(sim, actor_eid, *, cause="action", skip_cooldown_in
     scene["wire_turn_index"] = _int(scene.get("wire_turn_index"), 0, minimum=0) + 1
     _decrement_ram_cooldowns(state, skip_instance_id=skip_cooldown_instance_id, item_catalog=item_catalog)
     _decrement_effects(scene)
+    if _check_forced_eject(sim, actor_eid, state, scene, reason=cause):
+        return {"ok": True, "reason": "forced_eject", "scene": None}
+    if not _trace_awake(scene):
+        _refresh_trace_alert(scene)
+        state.active_scene = dict(scene)
+        return {"ok": True, "reason": None, "scene": dict(scene)}
     security = _scene_security(scene)
     passive = max(1, security)
-    if _effect_active(scene, "signal_cloak"):
-        passive = max(0, passive - 1)
     _add_trace(sim, actor_eid, scene, passive, reason=f"passive_{cause}")
     memory_speed = _int(scene.get("interface_memory_speed"), 1, minimum=0)
     for entity in _live_ice_entities(scene):
@@ -874,7 +975,6 @@ def advance_wire_combat_turn(sim, actor_eid, *, cause="action", skip_cooldown_in
         trace = _int(spec.get("trace"), 0, minimum=0)
         buffer_damage = _int(spec.get("buffer"), 0, minimum=0)
         if _effect_active(scene, "signal_cloak"):
-            trace = max(0, trace - 1)
             buffer_damage = max(0, buffer_damage - 1)
         traits = tuple(entity.get("traits", ()) or ())
         if "memory_speed_trace" in traits:
@@ -1030,6 +1130,24 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
     elif program_key == "signal_cloak":
         _append_effect(scene, "signal_cloak", turns=PROGRAM_SPECS[program_key].get("effect_turns", 4), instance_id=entry.get("instance_id"))
         feedback = "Signal cloak softens the link signature."
+    elif program_key == "proxy_route":
+        _append_effect(
+            scene,
+            "proxy_route",
+            turns=PROGRAM_SPECS[program_key].get("effect_turns", 999),
+            instance_id=entry.get("instance_id"),
+            strength=PROGRAM_SPECS[program_key].get("trace_absorb", 6),
+        )
+        feedback = "Proxy route waits to burn against the next trace spike."
+    elif program_key == "tunnel_route":
+        _append_effect(
+            scene,
+            "tunnel_route",
+            turns=PROGRAM_SPECS[program_key].get("effect_turns", 6),
+            instance_id=entry.get("instance_id"),
+            strength=PROGRAM_SPECS[program_key].get("trace_reduction", 1),
+        )
+        feedback = "Tunnel route bleeds trace pressure off the link."
     elif program_key == "checksum_ward":
         _append_effect(scene, "checksum_ward", turns=999, instance_id=entry.get("instance_id"))
         feedback = "Checksum ward waits for the next corrupting hit."

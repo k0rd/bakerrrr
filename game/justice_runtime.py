@@ -34,7 +34,7 @@ INCIDENT_LABELS = {
     "trespass": "trespass",
     "tamper": "tampering",
     "theft": "theft",
-    "contraband": "contraband use",
+    "contraband": "contraband",
     "obstruction": "obstruction",
     "resisting_custody": "resisting custody",
     "unarmed_assault": "unarmed assault",

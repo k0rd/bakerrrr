@@ -4,7 +4,7 @@ from collections import deque
 
 from engine.events import Event
 
-from game.components import CoverState, PlayerModeState, Position
+from game.components import AI, Collider, CoverState, DoorWaitState, NPCWill, PlayerModeState, Position, Vitality
 from game.movement_runtime import _can_step_transition_for, try_move_entity
 from game.opportunities import opportunity_intel_for_observer, reveal_opportunity_to_observer
 from game.property_runtime import (
@@ -14,6 +14,90 @@ from game.property_runtime import (
 from game.system_support.cover_runtime import _effective_cover_value, _threat_positions_for_entity
 from game.system_support.interaction_ordering import _direction_step
 from game.system_support.player_feedback import _log_player_feedback
+
+
+_BUMP_YIELD_BLOCKING_STATES = frozenset({
+    "chasing",
+    "ejecting_target",
+    "protecting",
+    "warning",
+})
+
+
+def _manhattan(ax, ay, bx, by):
+    return abs(int(ax) - int(bx)) + abs(int(ay) - int(by))
+
+
+def _same_eid(a, b):
+    try:
+        return int(a) == int(b)
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _blocked_entity_from_reason(reason):
+    text = str(reason or "").strip().lower()
+    if not text.startswith("blocked_entity:"):
+        return None
+    try:
+        return int(text.split(":", 1)[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _active_door_wait_state(sim, eid):
+    state = sim.ecs.get(DoorWaitState).get(eid)
+    if not isinstance(state, DoorWaitState):
+        return None
+    is_expired = getattr(state, "is_expired", None)
+    if callable(is_expired) and is_expired(getattr(sim, "tick", 0)):
+        return None
+    return state
+
+
+def _npc_should_yield_to_bump(sim, npc_eid, player_eid):
+    ai = sim.ecs.get(AI).get(npc_eid)
+    if ai is None:
+        return False
+    if str(getattr(ai, "role", "") or "").strip().lower() == "wildlife":
+        return False
+    collider = sim.ecs.get(Collider).get(npc_eid)
+    if collider is None or not bool(getattr(collider, "blocks", False)):
+        return False
+    vitality = sim.ecs.get(Vitality).get(npc_eid)
+    if vitality is not None and bool(getattr(vitality, "downed", False)):
+        return False
+    if _active_door_wait_state(sim, npc_eid) is not None:
+        return False
+
+    state = str(getattr(ai, "state", "") or "").strip().lower()
+    if state in _BUMP_YIELD_BLOCKING_STATES and _same_eid(getattr(ai, "target_eid", None), player_eid):
+        return False
+    will = sim.ecs.get(NPCWill).get(npc_eid)
+    intent = str(getattr(will, "intent", "") or "").strip().lower() if will is not None else ""
+    if intent in _BUMP_YIELD_BLOCKING_STATES and _same_eid(getattr(will, "target_eid", None), player_eid):
+        return False
+    return True
+
+
+def _bump_yield_candidates(player_x, player_y, npc_x, npc_y, dx, dy):
+    current_dist = _manhattan(npc_x, npc_y, player_x, player_y)
+    candidates = []
+    if int(dx) != 0:
+        candidates.extend([
+            (int(npc_x) + int(dx), int(npc_y)),
+            (int(npc_x), int(npc_y) - 1),
+            (int(npc_x), int(npc_y) + 1),
+        ])
+    elif int(dy) != 0:
+        candidates.extend([
+            (int(npc_x), int(npc_y) + int(dy)),
+            (int(npc_x) - 1, int(npc_y)),
+            (int(npc_x) + 1, int(npc_y)),
+        ])
+    for candidate_x, candidate_y in candidates:
+        if _manhattan(candidate_x, candidate_y, player_x, player_y) > current_dist:
+            yield candidate_x, candidate_y
 
 
 class PlayerMovementRuntime:
@@ -40,6 +124,45 @@ class PlayerMovementRuntime:
 
     def _mode_state_for(self, eid):
         return self.sim.ecs.get(PlayerModeState).get(eid)
+
+    def _try_bump_yield(self, eid, pos, *, dx, dy, blocked_reason):
+        blocker_eid = _blocked_entity_from_reason(blocked_reason)
+        if blocker_eid is None or blocker_eid == eid:
+            return False
+        blocker_pos = self.sim.ecs.get(Position).get(blocker_eid)
+        if blocker_pos is None or int(blocker_pos.z) != int(pos.z):
+            return False
+        if _manhattan(pos.x, pos.y, blocker_pos.x, blocker_pos.y) != 1:
+            return False
+        if not _npc_should_yield_to_bump(self.sim, blocker_eid, eid):
+            return False
+
+        old_x = int(blocker_pos.x)
+        old_y = int(blocker_pos.y)
+        old_z = int(blocker_pos.z)
+        for candidate_x, candidate_y in _bump_yield_candidates(pos.x, pos.y, old_x, old_y, dx, dy):
+            moved, _reason = try_move_entity(
+                self.sim,
+                eid=blocker_eid,
+                new_x=candidate_x,
+                new_y=candidate_y,
+                new_z=old_z,
+                reason="player_bump_yield",
+            )
+            if moved:
+                self.sim.emit(Event(
+                    "npc_yielded_to_bump",
+                    player_eid=eid,
+                    npc_eid=blocker_eid,
+                    old_x=old_x,
+                    old_y=old_y,
+                    old_z=old_z,
+                    x=candidate_x,
+                    y=candidate_y,
+                    z=old_z,
+                ))
+                return True
+        return False
 
     def set_sneak_mode(self, eid, active, reason="manual"):
         modes = self._mode_state_for(eid)
@@ -525,6 +648,19 @@ class PlayerMovementRuntime:
             reason="player_move",
         )
 
+        if not moved:
+            if self._try_bump_yield(eid, pos, dx=dx, dy=dy, blocked_reason=reason):
+                moved, reason = try_move_entity(
+                    self.sim,
+                    eid=eid,
+                    new_x=target_x,
+                    new_y=target_y,
+                    new_z=pos.z,
+                    reason="player_move",
+                )
+                if moved:
+                    target_x = pos.x
+                    target_y = pos.y
         if not moved:
             blocked_prop = _property_covering(self.sim, target_x, target_y, pos.z)
             self.sim.emit(Event(

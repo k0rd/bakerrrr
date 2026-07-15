@@ -295,6 +295,7 @@ class RunEpilogueLedgerSystem(System):
         action, _, context = note.partition("/")
         labels = {
             "armed_assault": "gunfire",
+            "contraband_trade": "visible contraband trade",
             "contraband_use": "visible contraband use",
             "explosive_discharge": "an explosion",
             "fire_weapon": "gunfire",
@@ -309,7 +310,7 @@ class RunEpilogueLedgerSystem(System):
         victim = self._incident_participant_phrase(incident)
         place = self._incident_place_label(incident)
         if victim:
-            linker = "involving" if base == "visible contraband use" else "against"
+            linker = "involving" if base in {"visible contraband trade", "visible contraband use"} else "against"
             base = f"{base} {linker} {victim}"
         if place:
             base = f"{base} at {place}"

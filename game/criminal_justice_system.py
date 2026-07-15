@@ -706,6 +706,7 @@ class CriminalJusticeSystem(System):
 
     def _incident_type_from_context(self, context):
         return {
+            "contraband_trade": "contraband",
             "contraband_use": "contraband",
             "unarmed_assault": "unarmed_assault",
             "melee_assault": "melee_assault",
@@ -4141,7 +4142,7 @@ class CriminalJusticeSystem(System):
         if offender_eid is None:
             return
         context = str(event.data.get("context", "ordinary") or "").strip().lower() or "ordinary"
-        if context not in {"contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
+        if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
             return
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
@@ -4427,7 +4428,7 @@ class CriminalJusticeSystem(System):
             )
         elif incident_kind == "action_offense":
             context = str(incident.get("context", "") or "").strip().lower() or str(incident.get("merge_subject", "") or "").split(":")[-1].strip().lower()
-            if context not in {"contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
+            if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
                 return
             force_read = None
             effective_severity = severity_score

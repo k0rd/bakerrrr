@@ -25,6 +25,7 @@
     "tamper": 60,
     "not_for_sale_attempt": 10,
     "item_theft": 48,
+    "contraband_trade": 32,
     "contraband_use": 32,
     "unarmed_assault": 14,
     "melee_assault": 28,

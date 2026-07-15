@@ -3802,7 +3802,7 @@ class TradeSystem(System):
                     pos.x,
                     pos.y,
                     pos.z,
-                    context="contraband_use",
+                    context="contraband_trade",
                     score=16,
                 )
         return True
@@ -3860,7 +3860,7 @@ class TradeSystem(System):
                         pos.x,
                         pos.y,
                         pos.z,
-                        context="contraband_use",
+                        context="contraband_trade",
                         score=score,
                         excluded_observer_eids=(contact_eid,),
                     )
@@ -3909,7 +3909,7 @@ class TradeSystem(System):
                     pos.x,
                     pos.y,
                     pos.z,
-                    context="contraband_use",
+                    context="contraband_trade",
                     score=score,
                     excluded_observer_eids=(contact_eid,),
                 )

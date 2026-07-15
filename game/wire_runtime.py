@@ -130,6 +130,7 @@ def normalize_wire_profile(profile=None, *, item_id=None):
         normalized.update({
             "program_key": program_key,
             "program_family": _clean_text(profile.get("program_family"), "utility").lower(),
+            "program_mode": _clean_text(profile.get("program_mode"), "active").lower(),
             "ram_cost": _safe_int(profile.get("ram_cost"), 1, minimum=1),
             "reload_ticks": _safe_int(profile.get("reload_ticks"), 1, minimum=0),
             "noise": _safe_int(profile.get("noise"), 0, minimum=0),

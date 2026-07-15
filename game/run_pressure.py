@@ -366,6 +366,7 @@ class RunPressureSystem(System):
             "trespass": 1,
             "tamper": 3,
             "item_theft": 3,
+            "contraband_trade": 2,
             "contraband_use": 2,
             "wildlife_harassment": 1,
             "wildlife_hunting": 2,
