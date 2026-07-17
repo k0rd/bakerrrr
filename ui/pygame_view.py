@@ -3985,9 +3985,122 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    @staticmethod
+    def _actor_torso_half_widths(px, presentation="mixed", silhouette=""):
+        px = max(1, int(px))
+        presentation = str(presentation or "mixed").strip().lower()
+        silhouette = str(silhouette or "").strip().lower()
+        if presentation == "femme":
+            shoulder_half = max(2, px // 7)
+            hip_half = shoulder_half + {"straight": 0, "soft": 1, "curvy": 2}.get(silhouette, 1)
+        elif presentation == "masc":
+            shoulder_half = max(2, px // 6)
+            hip_half = max(2, px // 7)
+            if silhouette == "broad":
+                shoulder_half += max(1, px // 24)
+            elif silhouette == "lean":
+                hip_half = max(1, hip_half - 1)
+        else:
+            shoulder_half = max(3, px // 6)
+            hip_half = max(3, px // 6)
+            if silhouette == "solid":
+                shoulder_half += max(1, px // 28)
+                hip_half += max(0, px // 32)
+            elif silhouette == "slight":
+                shoulder_half = max(3, shoulder_half - max(0, px // 28))
+                hip_half = max(2, hip_half - max(0, px // 32))
+        return shoulder_half, hip_half
+
+    def _draw_actor_token_overlay_small(self, x, y, glyph, color=None, attrs=0, *, kind="civilian", effects=()):
+        px = self.cell_px
+        cell_x = int(x) * px
+        cell_y = int(y) * px
+        overlay = self.pygame.Surface((px, px), self.pygame.SRCALPHA)
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.04)
+        fill = (frame[0], frame[1], frame[2], 236)
+        edge = self._lightened_rgba(frame, 245, amount=0.28)
+        shadow = self._alpha_color("actor_outline", 196)
+        role_accent = self._alpha_color("actor_role_accent", 206)
+        effect_set = {str(effect).strip().lower() for effect in (effects or ()) if str(effect).strip()}
+
+        def suffix(prefix, default=""):
+            for effect in effect_set:
+                if effect.startswith(prefix):
+                    return effect.removeprefix(prefix)
+            return default
+
+        def q(value):
+            return int(round(float(value) * px / 16.0))
+
+        presentation = suffix("actor_presentation_", "mixed")
+        silhouette = suffix("actor_silhouette_", "")
+        shoulder_half, hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
+        mid_x = px // 2
+        shoulder_y = q(7)
+        waist_y = q(9)
+        hip_y = q(11)
+        foot_y = min(px - 1, q(15))
+
+        # Role marks sit behind a crisp one-pixel person.
+        if kind == "player":
+            halo = self._alpha_color("player", 88)
+            for marker_x, marker_y in (
+                (q(8), q(1)), (q(12), q(3)), (q(14), q(8)), (q(12), q(13)),
+                (q(8), q(15)), (q(3), q(13)), (q(1), q(8)), (q(3), q(3)),
+            ):
+                if 0 <= marker_x < px and 0 <= marker_y < px:
+                    overlay.set_at((marker_x, marker_y), halo)
+        elif kind == "guard":
+            shield = [(mid_x, q(1)), (q(13), q(5)), (q(12), q(13)), (mid_x, q(15)), (q(4), q(13)), (q(3), q(5))]
+            self.pygame.draw.lines(overlay, role_accent, True, shield, 1)
+        elif kind == "scout":
+            diamond = [(mid_x, q(1)), (q(14), mid_x), (mid_x, q(15)), (q(2), mid_x)]
+            self.pygame.draw.lines(overlay, self._lightened_rgba(frame, 112, amount=0.45), True, diamond, 1)
+
+        self._draw_contact_shadow(
+            overlay,
+            self.pygame.Rect(q(5), q(14), max(4, q(6)), max(1, q(1))),
+            alpha=82,
+        )
+
+        # A flat-crowned little face cannot collapse into the pointed circle
+        # produced by pygame's radius-two rasterization.
+        face = [
+            (q(7), q(2)), (q(9), q(2)), (q(10), q(3)), (q(10), q(4)),
+            (q(9), q(5)), (q(7), q(5)), (q(6), q(4)), (q(6), q(3)),
+        ]
+        self.pygame.draw.polygon(overlay, shadow, [(tx + 1, ty + 1) for tx, ty in face])
+        self.pygame.draw.polygon(overlay, fill, face)
+        self.pygame.draw.line(overlay, edge, (q(7), q(2)), (q(9), q(2)), 1)
+        self.pygame.draw.line(overlay, fill, (mid_x, q(5)), (mid_x, shoulder_y), 1)
+
+        # Symmetric bent arms read as relaxed limbs without tilting the body.
+        left_arm = [(mid_x - shoulder_half, shoulder_y), (q(5), q(8)), (q(5), q(10)), (q(6), hip_y)]
+        right_arm = [(mid_x + shoulder_half, shoulder_y), (q(11), q(8)), (q(11), q(10)), (q(10), hip_y)]
+        self.pygame.draw.lines(overlay, fill, False, left_arm, 1)
+        self.pygame.draw.lines(overlay, fill, False, right_arm, 1)
+
+        waist_half = max(1, min(shoulder_half, hip_half) - 1)
+        left_torso = [(mid_x - shoulder_half, shoulder_y), (mid_x - waist_half, waist_y), (mid_x - hip_half, hip_y)]
+        right_torso = [(mid_x + shoulder_half, shoulder_y), (mid_x + waist_half, waist_y), (mid_x + hip_half, hip_y)]
+        self.pygame.draw.lines(overlay, fill, False, left_torso, 1)
+        self.pygame.draw.lines(overlay, fill, False, right_torso, 1)
+        self.pygame.draw.line(overlay, edge, left_torso[0], right_torso[0], 1)
+
+        leg_gap = max(1, q(1))
+        left_leg = [(mid_x - leg_gap, hip_y), (mid_x - leg_gap, q(13)), (q(6), foot_y)]
+        right_leg = [(mid_x + leg_gap, hip_y), (mid_x + leg_gap, q(13)), (q(10), foot_y)]
+        self.pygame.draw.lines(overlay, fill, False, left_leg, 1)
+        self.pygame.draw.lines(overlay, fill, False, right_leg, 1)
+        self.surface.blit(overlay, (cell_x, cell_y))
+        self._draw_actor_identity_rune_overlay(x, y, color=color, attrs=attrs)
+
     def _draw_actor_token_overlay(self, x, y, glyph, color=None, attrs=0, *, kind="civilian", effects=()):
         if self.cell_px <= 10:
             self._draw_actor_token_overlay_legacy(x, y, glyph, color=color, attrs=attrs, kind=kind)
+            return
+        if self.cell_px <= 20:
+            self._draw_actor_token_overlay_small(x, y, glyph, color=color, attrs=attrs, kind=kind, effects=effects)
             return
 
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
@@ -4070,30 +4183,7 @@ class PygameView:
         shoulder_y = head_y + head_r + max(1, px // 18)
         hip_y = px - max(5, px // 4)
         foot_y = px - max(2, px // 12)
-        if presentation == "femme":
-            # Keep this a line figure, but let the waist-and-hip contour read
-            # as an hourglass rather than a closed diamond at normal tile size.
-            shoulder_half = max(2, px // 7)
-            hip_half = shoulder_half + {"straight": 0, "soft": 1, "curvy": 2}.get(silhouette, 1)
-        elif presentation == "masc":
-            shoulder_half = max(2, px // 6)
-            hip_half = max(2, px // 7)
-            if silhouette == "broad":
-                shoulder_half += max(1, px // 24)
-            elif silhouette == "lean":
-                hip_half = max(1, hip_half - 1)
-        elif presentation == "androgynous":
-            shoulder_half = max(3, px // 6)
-            hip_half = max(3, px // 6)
-        else:
-            shoulder_half = max(3, px // 6)
-            hip_half = max(3, px // 6)
-        if presentation not in {"femme", "masc"} and silhouette == "solid":
-            shoulder_half += max(1, px // 28)
-            hip_half += max(0, px // 32)
-        elif presentation not in {"femme", "masc"} and silhouette == "slight":
-            shoulder_half = max(3, shoulder_half - max(0, px // 28))
-            hip_half = max(2, hip_half - max(0, px // 32))
+        shoulder_half, hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
         if kind == "guard":
             shoulder_half += max(0, px // 24)
         if kind == "scout":
@@ -4160,12 +4250,13 @@ class PygameView:
             self.pygame.draw.line(overlay, outline, (top_x + 1, hip_y), (bottom_x + 1, foot_y + 1), stroke_w + 2)
             self.pygame.draw.line(overlay, fill, (top_x, hip_y), (bottom_x, foot_y), max(1, stroke_w + 1))
 
-        self.pygame.draw.circle(overlay, outline, (mid_x + 1, head_y + 1), head_r + max(1, stroke_w))
-        self.pygame.draw.circle(overlay, fill, (mid_x, head_y), head_r)
+        head_rect = self.pygame.Rect(mid_x - head_r, head_y - head_r, max(4, head_r * 2), max(5, head_r * 2 + 1))
+        self.pygame.draw.ellipse(overlay, outline, head_rect.inflate(max(2, stroke_w * 2), max(2, stroke_w * 2)).move(1, 1))
+        self.pygame.draw.ellipse(overlay, fill, head_rect)
         self.pygame.draw.arc(
             overlay,
             edge,
-            (mid_x - head_r + 1, head_y - head_r + 1, max(2, head_r * 2 - 1), max(2, head_r * 2 - 1)),
+            head_rect.inflate(-max(1, stroke_w), -max(1, stroke_w)),
             3.2,
             5.3,
             stroke_w,
@@ -4195,6 +4286,9 @@ class PygameView:
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_actor_hair_overlay(self, x, y, color=None, attrs=0, *, effects=()):
+        if 10 < self.cell_px <= 20:
+            self._draw_actor_hair_overlay_small(x, y, color=color, attrs=attrs, effects=effects)
+            return
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.04)
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
@@ -4222,14 +4316,36 @@ class PygameView:
 
         length = _suffix("actor_hair_length_", "short")
         style = _suffix("actor_hair_style_", "")
-        hair_rect = self.pygame.Rect(
-            mid_x - head_r - 1,
-            head_y - head_r - 1,
-            max(4, (head_r + 1) * 2),
-            max(4, (head_r + 1) * 2),
-        )
-        self.pygame.draw.arc(overlay, shade, hair_rect.move(1, 1), 3.0, 6.35, max(1, stroke_w + 1))
-        self.pygame.draw.arc(overlay, fill, hair_rect, 3.0, 6.35, max(1, stroke_w + 1))
+        # A circle/arc at 16px collapses to a one-pixel peak and makes short
+        # hair read as a pointed helmet. Build a shallow pixel cap instead:
+        # flat enough to read as hair, with the face left open beneath it.
+        cap_top = head_y - head_r
+        cap_left = mid_x - head_r
+        cap_right = mid_x + head_r - 1
+        cap_depth = max(2, head_r // 2 + 1)
+        for cap_row in range(cap_depth):
+            expand = min(1, cap_row)
+            start = (cap_left - expand, cap_top + cap_row)
+            end = (cap_right + expand, cap_top + cap_row)
+            self.pygame.draw.line(overlay, shade, (start[0] + 1, start[1] + 1), (end[0] + 1, end[1] + 1), stroke_w + 1)
+            self.pygame.draw.line(overlay, fill, start, end, stroke_w)
+        if "swept_back" in style or "swept" in style:
+            self.pygame.draw.line(
+                overlay,
+                edge,
+                (cap_left, cap_top + cap_depth - 1),
+                (cap_right + 1, cap_top),
+                stroke_w,
+            )
+            self.pygame.draw.line(
+                overlay,
+                fill,
+                (cap_right + 1, cap_top + 1),
+                (cap_right + 1, head_y),
+                stroke_w,
+            )
+        else:
+            self.pygame.draw.line(overlay, edge, (cap_left, cap_top), (cap_right, cap_top), stroke_w)
 
         side_end = head_y + head_r
         if length == "jaw_length":
@@ -4261,6 +4377,49 @@ class PygameView:
         elif "bob" in style or "jaw_cut" in style or "blunt" in style:
             self.pygame.draw.line(overlay, edge, (mid_x - head_r - 1, side_end), (mid_x + head_r + 1, side_end), stroke_w)
 
+        self.surface.blit(overlay, (cell_x, cell_y))
+
+    def _draw_actor_hair_overlay_small(self, x, y, color=None, attrs=0, *, effects=()):
+        px = self.cell_px
+        cell_x = int(x) * px
+        cell_y = int(y) * px
+        overlay = self.pygame.Surface((px, px), self.pygame.SRCALPHA)
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.03)
+        fill = (frame[0], frame[1], frame[2], 242)
+        edge = self._lightened_rgba(frame, 246, amount=0.24)
+        shade = self._darkened_rgba(frame, 232, amount=0.46)
+        effect_set = {str(effect).strip().lower() for effect in (effects or ()) if str(effect).strip()}
+
+        def suffix(prefix, default=""):
+            for effect in effect_set:
+                if effect.startswith(prefix):
+                    return effect.removeprefix(prefix)
+            return default
+
+        def q(value):
+            return int(round(float(value) * px / 16.0))
+
+        length = suffix("actor_hair_length_", "short")
+        style = suffix("actor_hair_style_", "")
+        # Flat two-row cap: four pixels across at the crown, wider at the
+        # hairline. It frames the face instead of sitting on it like a spike.
+        self.pygame.draw.line(overlay, shade, (q(7), q(2)), (q(9), q(2)), 1)
+        self.pygame.draw.line(overlay, fill, (q(6), q(3)), (q(10), q(3)), 1)
+        if "swept" in style:
+            self.pygame.draw.line(overlay, edge, (q(7), q(3)), (q(9), q(2)), 1)
+            self.pygame.draw.line(overlay, fill, (q(10), q(3)), (q(10), q(4)), 1)
+        elif "one_sided" in style:
+            self.pygame.draw.line(overlay, fill, (q(6), q(3)), (q(6), q(5)), 1)
+        if length not in {"cropped", "short"}:
+            side_end = q(6 if length == "jaw_length" else 8 if length == "shoulder_length" else 10)
+            self.pygame.draw.line(overlay, fill, (q(6), q(3)), (q(6), side_end), 1)
+            self.pygame.draw.line(overlay, fill, (q(10), q(3)), (q(10), side_end), 1)
+        if "bob" in style or "jaw_cut" in style or "blunt" in style:
+            self.pygame.draw.line(overlay, edge, (q(6), q(6)), (q(10), q(6)), 1)
+        elif "side_braid" in style or "braid" in style:
+            self.pygame.draw.line(overlay, fill, (q(6), q(5)), (q(5), q(10)), 1)
+        elif "high_tail" in style or "tied_back" in style or "nape_tie" in style:
+            self.pygame.draw.line(overlay, fill, (q(10), q(4)), (q(12), q(7)), 1)
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_creature_overlay(self, x, y, color=None, attrs=0, *, kind="other", effects=()):
@@ -5542,9 +5701,114 @@ class PygameView:
             diamond = [(x, y - 2), (x + 2, y), (x, y + 2), (x - 2, y)]
             self.pygame.draw.polygon(overlay, stitch, diamond)
 
+    def _draw_actor_outfit_overlay_small(self, x, y, color=None, attrs=0, *, kind="secondary", effects=()):
+        px = self.cell_px
+        cell_x = int(x) * px
+        cell_y = int(y) * px
+        overlay = self.pygame.Surface((px, px), self.pygame.SRCALPHA)
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.04)
+        fill = (frame[0], frame[1], frame[2], 242)
+        edge = self._lightened_rgba(frame, 246, amount=0.30)
+        shade = self._darkened_rgba(frame, 236, amount=0.48)
+        effect_set = {str(effect).strip().lower() for effect in (effects or ()) if str(effect).strip()}
+
+        def suffix(prefix, default=""):
+            for effect in effect_set:
+                if effect.startswith(prefix):
+                    return effect.removeprefix(prefix)
+            return default
+
+        def q(value):
+            return int(round(float(value) * px / 16.0))
+
+        garment = suffix("outfit_type_", "")
+        presentation = suffix("actor_presentation_", "mixed")
+        silhouette = suffix("actor_silhouette_", "")
+        emblem = suffix("outfit_emblem_", "")
+        shoulder_half, hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
+        mid_x = px // 2
+        waist_half = max(1, min(shoulder_half, hip_half) - 1)
+
+        if kind == "base_top":
+            if garment in {"bra", "bralette", "bandeau"}:
+                self.pygame.draw.line(overlay, fill, (mid_x - shoulder_half, q(7)), (mid_x + shoulder_half, q(7)), max(1, q(2)))
+                if garment != "bandeau":
+                    self.pygame.draw.line(overlay, edge, (mid_x - 1, q(6)), (mid_x - 1, q(7)), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x + 1, q(6)), (mid_x + 1, q(7)), 1)
+            else:
+                top_half = max(1, shoulder_half - (1 if garment == "camisole" else 0))
+                bodice = [
+                    (mid_x - top_half, q(7)),
+                    (mid_x + top_half, q(7)),
+                    (mid_x + waist_half, q(9)),
+                    (mid_x + hip_half, q(10)),
+                    (mid_x - hip_half, q(10)),
+                    (mid_x - waist_half, q(9)),
+                ]
+                self.pygame.draw.polygon(overlay, fill, bodice)
+                self.pygame.draw.line(overlay, shade, bodice[0], bodice[1], 1)
+                if garment in {"camisole", "tank_undershirt"}:
+                    self.pygame.draw.line(overlay, edge, (mid_x - 1, q(6)), (mid_x - 1, q(7)), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x + 1, q(6)), (mid_x + 1, q(7)), 1)
+            if emblem:
+                self.pygame.draw.circle(overlay, edge, (mid_x + max(1, q(1)), q(8)), 1)
+        elif kind == "base_bottom":
+            if garment in {"boxers", "boyshorts"}:
+                self.pygame.draw.rect(overlay, fill, self.pygame.Rect(mid_x - hip_half, q(10), max(3, hip_half * 2 + 1), max(2, q(2))))
+            elif garment == "thong":
+                self.pygame.draw.line(overlay, fill, (mid_x - hip_half, q(10)), (mid_x + hip_half, q(10)), 1)
+                self.pygame.draw.line(overlay, fill, (mid_x, q(10)), (mid_x, q(11)), 1)
+            else:
+                briefs = [
+                    (mid_x - hip_half, q(10)),
+                    (mid_x + hip_half, q(10)),
+                    (mid_x + 1, q(12)),
+                    (mid_x - 1, q(12)),
+                ]
+                self.pygame.draw.polygon(overlay, fill, briefs)
+                self.pygame.draw.line(overlay, edge, briefs[0], briefs[1], 1)
+        elif kind in {"inner", "primary"}:
+            if garment in {"coat", "jacket", "blazer", "cardigan"}:
+                coat = self.pygame.Rect(mid_x - shoulder_half - 1, q(6), max(5, (shoulder_half + 1) * 2 + 1), max(5, q(7)))
+                self.pygame.draw.rect(overlay, fill, coat)
+                self.pygame.draw.line(overlay, shade, (mid_x, coat.top), (mid_x, coat.bottom), 1)
+            elif garment == "dress":
+                self.pygame.draw.polygon(overlay, fill, [
+                    (mid_x - shoulder_half, q(6)), (mid_x + shoulder_half, q(6)),
+                    (mid_x + waist_half, q(10)), (mid_x + hip_half + 1, q(13)),
+                    (mid_x - hip_half - 1, q(13)), (mid_x - waist_half, q(10)),
+                ])
+            else:
+                self.pygame.draw.polygon(overlay, fill, [
+                    (mid_x - shoulder_half, q(6)), (mid_x + shoulder_half, q(6)),
+                    (mid_x + waist_half, q(10)), (mid_x - waist_half, q(10)),
+                ])
+                self.pygame.draw.line(overlay, edge, (mid_x - shoulder_half, q(6)), (mid_x + shoulder_half, q(6)), 1)
+        elif kind == "secondary":
+            if garment == "skirt":
+                self.pygame.draw.polygon(overlay, fill, [(mid_x - hip_half, q(10)), (mid_x + hip_half, q(10)), (mid_x + hip_half + 1, q(13)), (mid_x - hip_half - 1, q(13))])
+            else:
+                self.pygame.draw.line(overlay, fill, (mid_x - hip_half, q(10)), (mid_x + hip_half, q(10)), 1)
+                self.pygame.draw.line(overlay, fill, (mid_x - 1, q(10)), (q(6), q(14)), max(1, q(2)))
+                self.pygame.draw.line(overlay, fill, (mid_x + 1, q(10)), (q(10), q(14)), max(1, q(2)))
+        elif kind == "footwear":
+            self.pygame.draw.line(overlay, fill, (q(5), q(15)), (q(7), q(15)), max(1, q(1)))
+            self.pygame.draw.line(overlay, fill, (q(9), q(15)), (q(11), q(15)), max(1, q(1)))
+        elif kind == "headwear":
+            self.pygame.draw.line(overlay, fill, (q(5), q(2)), (q(10), q(2)), max(1, q(2)))
+            self.pygame.draw.line(overlay, edge, (q(8), q(3)), (q(12), q(3)), 1)
+        elif kind == "accessory":
+            self.pygame.draw.circle(overlay, fill, (q(11), q(7)), max(1, q(1)))
+            self.pygame.draw.circle(overlay, edge, (q(11), q(7)), max(1, q(1)), 1)
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _draw_actor_outfit_overlay(self, x, y, color=None, attrs=0, *, kind="secondary", effects=()):
         if self.cell_px <= 10:
             self._draw_actor_outfit_overlay_legacy(x, y, color=color, attrs=attrs, kind=kind)
+            return
+        if self.cell_px <= 20:
+            self._draw_actor_outfit_overlay_small(x, y, color=color, attrs=attrs, kind=kind, effects=effects)
             return
 
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
@@ -5582,11 +5846,14 @@ class PygameView:
         motif_treatment = _suffix("outfit_motif_treatment_", "")
         motif_shape = _suffix("outfit_motif_shape_", "")
         slot = _suffix("outfit_slot_", "")
+        presentation = _suffix("actor_presentation_", "mixed")
+        silhouette = _suffix("actor_silhouette_", "")
         shoulder_y = max(5, int(px * 0.39))
         hip_y = px - max(5, px // 4)
         foot_y = px - max(2, px // 12)
-        body_left = mid_x - max(3, px // 6)
-        body_right = mid_x + max(3, px // 6)
+        actor_shoulder_half, actor_hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
+        body_left = mid_x - actor_hip_half
+        body_right = mid_x + actor_hip_half
 
         if kind == "base_top":
             top_y = shoulder_y + max(1, px // 22)
@@ -5611,18 +5878,23 @@ class PygameView:
                     self.pygame.draw.circle(overlay, shade, band.center, max(1, px // 34))
                 base_rect = band
             else:
-                shoulder_half = max(3, px // (6 if garment == "camisole" else 5))
+                shoulder_half = actor_shoulder_half
+                waist_y = top_y + max(1, (bottom_y - top_y) // 2)
+                waist_half = max(1, min(actor_shoulder_half, actor_hip_half) - max(1, px // 20))
                 bodice = [
                     (mid_x - shoulder_half, top_y),
                     (mid_x + shoulder_half, top_y),
+                    (mid_x + waist_half, waist_y),
                     (body_right, bottom_y),
                     (body_left, bottom_y),
+                    (mid_x - waist_half, waist_y),
                 ]
                 self.pygame.draw.polygon(overlay, outline, [(bx + 1, by + 1) for bx, by in bodice])
                 self.pygame.draw.polygon(overlay, fill, bodice)
                 if garment in {"camisole", "tank_undershirt"}:
+                    strap_top = max(shoulder_y, top_y - max(1, px // 12))
                     for sx in (mid_x - shoulder_half + 1, mid_x + shoulder_half - 1):
-                        self.pygame.draw.line(overlay, edge, (sx, top_y), (sx, max(2, top_y - max(2, px // 10))), stroke_w)
+                        self.pygame.draw.line(overlay, edge, (sx, top_y), (sx, strap_top), stroke_w)
                 neck_depth = max(2, px // (8 if garment == "camisole" else 11))
                 self.pygame.draw.arc(
                     overlay,
@@ -5897,7 +6169,13 @@ class PygameView:
         }
         shadow_surface = self._token_font.render("@", True, shadow_rgb)
         text_surface = self._token_font.render("@", True, text_rgb)
-        if compact:
+        small_tile = self.cell_px <= 20
+        if small_tile:
+            target_h = max(3, int(round(self.cell_px * (0.20 if compact else 0.25))))
+            target_w = max(2, min(3, int(round(text_surface.get_width() * target_h / max(1, text_surface.get_height())))))
+            text_surface = self.pygame.transform.scale(text_surface, (target_w, target_h))
+            shadow_surface = self.pygame.transform.scale(shadow_surface, (target_w, target_h))
+        elif compact:
             def _compact(surface):
                 return self.pygame.transform.scale(
                     surface,
@@ -5906,8 +6184,9 @@ class PygameView:
 
             shadow_surface = _compact(shadow_surface)
             text_surface = _compact(text_surface)
-        shadow_rect = shadow_surface.get_rect(center=(center[0] + 1, center[1] + 1))
-        overlay.blit(shadow_surface, shadow_rect)
+        if not small_tile:
+            shadow_rect = shadow_surface.get_rect(center=(center[0] + 1, center[1] + 1))
+            overlay.blit(shadow_surface, shadow_rect)
         text_rect = text_surface.get_rect(center=center)
         overlay.blit(text_surface, text_rect)
         self.surface.blit(overlay, (cell_x, cell_y))

@@ -778,10 +778,11 @@ def _actor_badge_overlay(sim, eid, *, player_eid=None, ai=None, will=None, socia
     return ()
 
 
-def _actor_outfit_color_overlays(render_colors):
+def _actor_outfit_color_overlays(render_colors, humanoid_profile=None):
     if not isinstance(render_colors, Mapping):
         return ()
     overlays = []
+    actor_effects = _actor_presentation_effects(humanoid_profile)
     rows = (
         ("base_top", "ui_actor_basewear_top"),
         ("base_bottom", "ui_actor_basewear_bottom"),
@@ -801,7 +802,7 @@ def _actor_outfit_color_overlays(render_colors):
             primary_part = render_colors.get("parts", {}).get("primary", {}) if isinstance(render_colors.get("parts"), Mapping) else {}
             if part and primary_part and part.get("slot") == primary_part.get("slot") and part.get("type") == primary_part.get("type"):
                 continue
-        effects = []
+        effects = list(actor_effects)
         for prefix, value in (
             ("outfit_type_", part.get("type")),
             ("outfit_material_", part.get("material")),
@@ -2084,7 +2085,7 @@ class AppearanceManager:
         hair_overlays = ()
         if taxonomy == "hominid":
             hair_overlays = _actor_hair_overlay(humanoid_profile)
-            outfit_overlays = _actor_outfit_color_overlays(appearance_render_colors(self.sim, eid))
+            outfit_overlays = _actor_outfit_color_overlays(appearance_render_colors(self.sim, eid), humanoid_profile=humanoid_profile)
         if taxonomy == "hominid" and str(owned_color or "").strip().lower() in {"human", "guard", "scout", "player"}:
             owned_color = None
         uses_legacy_hominid_placeholder = (
