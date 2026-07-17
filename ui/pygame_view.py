@@ -5811,7 +5811,9 @@ class PygameView:
             if garment in {"coat", "jacket", "blazer", "cardigan"}:
                 coat = self.pygame.Rect(mid_x - shoulder_half - 1, q(6), max(5, (shoulder_half + 1) * 2 + 1), max(5, q(7)))
                 self.pygame.draw.rect(overlay, fill, coat)
-                self.pygame.draw.line(overlay, shade, (mid_x, coat.top), (mid_x, coat.bottom), 1)
+                for button_y in (q(8), q(11)):
+                    if coat.top <= button_y < coat.bottom:
+                        overlay.set_at((mid_x + 1, button_y), shade)
             elif garment == "dress":
                 self.pygame.draw.polygon(overlay, fill, [
                     (mid_x - shoulder_half, q(6)), (mid_x + shoulder_half, q(6)),
@@ -5860,7 +5862,8 @@ class PygameView:
             # trims from disappearing without turning the sprite into noise.
             texture_y = q(9 if kind in {"base_top", "inner", "primary"} else 11)
             if material == "denim":
-                self.pygame.draw.line(overlay, edge, (mid_x, texture_y), (mid_x, min(px - 1, texture_y + q(3))), 1)
+                stitch_y = min(px - 1, texture_y + q(2))
+                self.pygame.draw.line(overlay, edge, (mid_x - q(1), stitch_y), (mid_x + q(1), stitch_y), 1)
             elif material in {"wool", "linen", "canvas", "cotton"}:
                 overlay.set_at((min(px - 1, mid_x + q(1)), min(px - 1, texture_y)), edge)
             elif material == "satin":
