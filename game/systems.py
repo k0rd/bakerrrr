@@ -4787,7 +4787,7 @@ _WORLD_EVENT_CATALOG = {
         "pressure_delta": -6,
         "trade_buy_mult": 1.0,
         "trade_sell_mult": 1.0,
-        "fixture_light_mult": 0.18,
+        "fixture_light_mult": 0.0,
         "flavor_start": (
             "Lights flicker and die. The district plunges into darkness.",
             "A transformer blows somewhere. Emergency lighting only.",

@@ -48,6 +48,7 @@ from game.item_semantics import (
     item_identification_profile,
 )
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name, item_inventory_slot_cost, item_lead_profile
+from game.meaningful_objects_runtime import nearest_item_backed_object_fixture, pickup_meaningful_object_fixture
 from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_runtime import (
@@ -1872,6 +1873,20 @@ class ItemActionRuntime:
 
         ground = self._nearest_ground_item(x, y, z, radius=1)
         if not ground:
+            pos = self.sim.ecs.get(Position).get(eid)
+            object_prop = nearest_item_backed_object_fixture(self.sim, eid, pos) if pos is not None else None
+            if object_prop is not None:
+                result = pickup_meaningful_object_fixture(self.sim, eid, str(object_prop.get("id")))
+                if result.get("ok"):
+                    return
+                self.sim.emit(Event(
+                    "item_pickup_blocked",
+                    eid=eid,
+                    reason=result.get("reason", "pickup_failed"),
+                    item_id="meaningful_object",
+                    item_name=result.get("item_name", object_prop.get("name", "object")),
+                ))
+                return
             drone_record = find_deployed_drone_for_pickup(
                 self.sim,
                 eid,

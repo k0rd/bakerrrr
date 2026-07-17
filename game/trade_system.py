@@ -14,15 +14,9 @@ from game.appearance_loadout import (
 )
 from game.components import Inventory, NPCSocial, PlayerAssets, Position, VehicleState
 from game.cultivation_runtime import seed_packet_metadata
-from game.drone_distribution import (
-    DRONE_ITEM_BASE_VALUES,
-    drone_distribution_metadata,
-    drone_store_item_pool,
-    drone_item_base_value,
-)
+from game.drone_distribution import drone_distribution_metadata, drone_store_item_pool
 from game.wire_distribution import (
     wire_distribution_metadata,
-    wire_item_base_value,
     wire_store_item_pool,
 )
 from game.wire_data_market import (
@@ -36,6 +30,7 @@ from game.fashion_market import (
     with_cosmetic_market_metadata,
 )
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor, item_entry_is_critical_quest_item
+from game.item_valuation import ITEM_BASE_VALUES as SHARED_ITEM_BASE_VALUES, item_fair_value
 from game.items import ITEM_CATALOG
 from game.organization_reputation import organization_instability_profile
 from game.organization_response import property_vigilante_denial
@@ -283,135 +278,7 @@ class TradeSystem(System):
         "used": 0.58,
     }
 
-    ITEM_BASE_VALUES = {
-        "street_ration": 10,
-        "protein_wrap": 11,
-        "raw_game_meat": 6,
-        "bagged_game_meat": 8,
-        "cooked_game_meat": 10,
-        "packaged_game_meat": 14,
-        "noodle_cup": 9,
-        "spark_brew": 14,
-        "calm_patch": 18,
-        "caff_shot": 16,
-        "hydration_salts": 15,
-        "med_gel": 22,
-        "micro_medkit": 18,
-        "trauma_foam": 34,
-        "trauma_autoinjector": 92,
-        "field_restraint_jab": 48,
-        "shiver_patch": 42,
-        "counterfeit_med_gel": 18,
-        "sedative_ampoule": 52,
-        "burner_serum": 46,
-        "focus_inhaler": 30,
-        "synth_focus_tabs": 24,
-        "smoke_tab": 13,
-        "cocaine_bindle": 32,
-        "mdma_capsule": 30,
-        "lsd_blotter": 26,
-        "credstick_chip": 20,
-        "city_pass_token": 7,
-        "transit_daypass": 12,
-        "meal_voucher": 11,
-        "parking_stub": 3,
-        "metro_flyer": 2,
-        "scratch_ticket": 6,
-        "tattoo_service": 85,
-        "pocket_notebook": 5,
-        "deck_of_cards": 7,
-        "phone": 22,
-        "burner_phone": 22,
-        "two_way_radio": 38,
-        "forged_badge": 40,
-        "energy_bar": 9,
-        "bottled_water": 7,
-        "instant_soup_pack": 12,
-        "canteen_coffee": 15,
-        "cheap_whiskey": 10,
-        "mint_strip": 6,
-        "bandage_roll": 11,
-        "field_dressing": 14,
-        "pain_blocker": 19,
-        "scrap_circuit": 14,
-        "battery_pack": 15,
-        "light_ammo_box": 24,
-        "shell_bandolier": 28,
-        "rifle_mag_crate": 32,
-        "rocket_tube_pack": 48,
-        "pocket_multitool": 28,
-        "field_knife": 26,
-        "pruning_shears": 24,
-        "mortar_kit": 36,
-        "kill_bag": 34,
-        "butcher_apron": 48,
-        "botany_apron": 48,
-        "fresh_blossoms": 6,
-        "leaf_clippings": 5,
-        "moss_scrapings": 6,
-        "vine_cuttings": 5,
-        "seed_packet": 10,
-        "plant_pot": 18,
-        "herbal_poultice": 24,
-        "hydrating_tonic": 20,
-        "calming_tincture": 20,
-        "strong_herbal_poultice": 42,
-        "field_restorative": 38,
-        "steadying_draught": 34,
-        "lucky_charm": 9,
-        "lockpick_kit": 36,
-        "prybar": 32,
-        "signal_jammer": 42,
-        "glass_cutter": 34,
-        "hotwire_leads": 30,
-        "cloned_thumb": 52,
-        "black_market_stim": 44,
-        "shiv_knife": 72,
-        "crowbar_club": 84,
-        "telescopic_baton": 92,
-        "trail_machete": 88,
-        "fire_axe": 98,
-        "holdout_pistol": 108,
-        "service_pistol": 146,
-        "rust_revolver": 132,
-        "heavy_revolver": 156,
-        "alley_shotgun": 168,
-        "sawed_off_shotgun": 174,
-        "machine_pistol": 188,
-        "compact_smg": 226,
-        "machine_carbine": 248,
-        "patrol_carbine": 238,
-        "hunting_rifle": 256,
-        "improvised_launcher": 284,
-        "grenade_launcher": 308,
-        "recoilless_launcher": 356,
-        "smoke_grenade": 64,
-        "tear_gas_canister": 82,
-        "toxic_aerosol_canister": 96,
-        "dissociative_aerosol": 112,
-        "hallucinogen_aerosol": 108,
-        "courier_mesh": 42,
-        "padded_jacket": 54,
-        "field_vest": 74,
-        "security_vest": 96,
-        "riot_plates": 124,
-        "ceramic_plate_rig": 158,
-        "undershirt": 8,
-        "tank_undershirt": 9,
-        "bra": 16,
-        "bralette": 18,
-        "camisole": 17,
-        "bandeau": 13,
-        "boxers": 9,
-        "boxer_briefs": 11,
-        "briefs": 8,
-        "boyshorts": 13,
-        "bikini_panties": 14,
-        "cheeky_panties": 16,
-        "thong": 13,
-        "high_waist_panties": 15,
-        **DRONE_ITEM_BASE_VALUES,
-    }
+    ITEM_BASE_VALUES = SHARED_ITEM_BASE_VALUES
 
     DEFAULT_PROFILE = {
         "min_slots": 3,
@@ -2601,9 +2468,10 @@ class TradeSystem(System):
             pressure_bias = item_trade_pressure_bias(self.sim, prop, item_id)
             entry_metadata = with_cosmetic_market_metadata(self.sim, item_id, entry_metadata)
             fashion_quote = cosmetic_fashion_quote(self.sim, item_id, entry_metadata)
-            base = int(max(1, fashion_quote.get("fair_value") or self.ITEM_BASE_VALUES.get(
+            base = int(max(1, fashion_quote.get("fair_value") or item_fair_value(
                 item_id,
-                wire_item_base_value(item_id, default=drone_item_base_value(item_id, default=10)),
+                entry_metadata,
+                item_catalog=ITEM_CATALOG,
             )))
             buy_price = max(
                 1,
@@ -2624,6 +2492,7 @@ class TradeSystem(System):
             item_max_stock = max(item_min_stock, int(round(max_stock * stock_mult)))
             entries.append({
                 "item_id": item_id,
+                "stock_id": f"store:{prop['id']}:{cycle_index}:{item_id}",
                 "metadata": entry_metadata or None,
                 "stock": rng.randint(item_min_stock, item_max_stock),
                 "buy_price": buy_price,
@@ -2685,6 +2554,35 @@ class TradeSystem(System):
                 return entry
         return None
 
+    def _entry_for_stock_id(self, state, stock_id):
+        stock_id = str(stock_id or "").strip()
+        if not stock_id:
+            return None
+        for entry in state.get("entries", []):
+            if str(entry.get("stock_id", "") or "").strip() == stock_id:
+                return entry
+        return None
+
+    def _entry_requires_distinct_stock(self, entry):
+        if not isinstance(entry, dict):
+            return False
+        item_id = str(entry.get("item_id", "") or "").strip().lower()
+        if item_id == "meaningful_object":
+            return True
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        identity_keys = {
+            "display_name",
+            "meaningful_object_id",
+            "object_profile",
+            "custom_name",
+            "weapon_instance",
+            "serial",
+            "item_quality",
+            "item_durability",
+            "item_max_durability",
+        }
+        return any(key in metadata for key in identity_keys)
+
     def _best_buy_entry(self, state, credits, terms=None):
         terms = terms or {"buy_mult": 1.0}
         candidates = [
@@ -2715,22 +2613,19 @@ class TradeSystem(System):
                 price_mult = max(0.0, float(interest.get("price_mult", 1.0)))
             except (TypeError, ValueError):
                 price_mult = 1.0
-        fashion_quote = cosmetic_fashion_quote(self.sim, item_id, metadata)
-        if fashion_quote:
-            if listed:
-                listed_buy = max(1, int(listed.get("buy_price", 1) or 1))
-                listed_sell = max(1, int(listed.get("sell_price", 1) or 1))
-                ratio = max(0.1, min(0.9, listed_sell / listed_buy))
-            else:
-                ratio = float(max(0.1, min(0.85, state.get("unlisted_sell_ratio", 0.3))))
-            base_price = max(1, int(round(int(fashion_quote["fair_value"]) * ratio * price_mult)))
-            return self._effective_sell_price(base_price, terms), bool(listed)
         if listed:
-            base_price = max(1, int(round(int(listed.get("sell_price", 1)) * price_mult)))
-            return self._effective_sell_price(base_price, terms), True
-        base = int(max(1, self.ITEM_BASE_VALUES.get(item_id, 10)))
-        ratio = float(max(0.1, min(0.85, state.get("unlisted_sell_ratio", 0.3))))
-        return self._effective_sell_price(max(1, int(round(base * ratio * price_mult))), terms), False
+            listed_buy = max(1, int(listed.get("buy_price", 1) or 1))
+            listed_sell = max(1, int(listed.get("sell_price", 1) or 1))
+            ratio = max(0.1, min(0.9, listed_sell / listed_buy))
+        else:
+            ratio = float(max(0.1, min(0.85, state.get("unlisted_sell_ratio", 0.3))))
+        fashion_quote = cosmetic_fashion_quote(self.sim, item_id, metadata)
+        base = int(max(1, fashion_quote.get("fair_value") or item_fair_value(
+            item_id,
+            metadata,
+            item_catalog=ITEM_CATALOG,
+        )))
+        return self._effective_sell_price(max(1, int(round(base * ratio * price_mult))), terms), bool(listed)
 
     def _store_accepts_vehicle_trade_in(self, store_prop):
         if not isinstance(store_prop, dict):
@@ -2975,6 +2870,7 @@ class TradeSystem(System):
             }
             rows.append({
                 "item_id": item_id,
+                "instance_id": entry.get("stock_id"),
                 "item_name": item_display_name_for_actor(self.sim, self.player_eid, row_entry, item_catalog=ITEM_CATALOG),
                 "glyph": _item_display_glyph(item_def),
                 "price": 0 if owner_transfer else self._effective_store_buy_price(entry, store, terms),
@@ -4138,7 +4034,7 @@ class TradeSystem(System):
         ))
         return True
 
-    def _trade_buy(self, eid, pos, target_item_id=None):
+    def _trade_buy(self, eid, pos, target_item_id=None, target_stock_id=None):
         assets = self._assets_for(eid)
         inventory = self._inventory_for(eid)
         if not assets:
@@ -4170,8 +4066,12 @@ class TradeSystem(System):
         owner_transfer = self._owner_transfer_enabled(eid, store_prop)
         cheapest = None
         choice = None
-        if target_item_id:
-            choice = self._entry_for_item(store, target_item_id)
+        if target_stock_id or target_item_id:
+            choice = (
+                self._entry_for_stock_id(store, target_stock_id)
+                if target_stock_id
+                else self._entry_for_item(store, target_item_id)
+            )
             if choice and int(choice.get("stock", 0)) <= 0:
                 choice = None
             if not choice:
@@ -4180,6 +4080,7 @@ class TradeSystem(System):
                     eid=eid,
                     reason="item_unavailable",
                     item_id=target_item_id,
+                    stock_id=target_stock_id,
                     property_id=store_prop["id"],
                 ))
                 return False
@@ -4601,18 +4502,24 @@ class TradeSystem(System):
             )
 
         stocked_quantity = int(max(1, removed.get("quantity", 1)))
-        existing = self._entry_for_item(store, item_id)
+        distinct_stock = self._entry_requires_distinct_stock(removed)
+        existing = None if distinct_stock else self._entry_for_item(store, item_id)
         if existing:
             existing["stock"] = int(existing.get("stock", 0)) + stocked_quantity
             if is_appearance_item(removed, item_catalog=ITEM_CATALOG) and not isinstance(existing.get("metadata"), dict):
                 existing["metadata"] = dict(removed.get("metadata") or {})
             stock_now = existing["stock"]
         else:
-            stocked_metadata = dict(removed.get("metadata") or {}) if is_appearance_item(removed, item_catalog=ITEM_CATALOG) else None
-            if stocked_metadata is not None:
+            raw_metadata = removed.get("metadata") if isinstance(removed.get("metadata"), dict) else {}
+            stocked_metadata = dict(raw_metadata) if raw_metadata else None
+            if stocked_metadata is not None and is_appearance_item(removed, item_catalog=ITEM_CATALOG):
                 stocked_metadata = with_cosmetic_market_metadata(self.sim, item_id, stocked_metadata)
             fashion_quote = cosmetic_fashion_quote(self.sim, item_id, stocked_metadata)
-            base = int(max(1, fashion_quote.get("fair_value") or self.ITEM_BASE_VALUES.get(item_id, 10)))
+            base = int(max(1, fashion_quote.get("fair_value") or item_fair_value(
+                item_id,
+                stocked_metadata,
+                item_catalog=ITEM_CATALOG,
+            )))
             buy_mult_lo = float(store.get("buy_mult_lo", 1.0))
             buy_mult_hi = float(store.get("buy_mult_hi", 1.4))
             buy_price = max(1, int(round(base * ((buy_mult_lo + buy_mult_hi) * 0.5))))
@@ -4620,6 +4527,9 @@ class TradeSystem(System):
             sell_price = max(1, int(round(buy_price * sell_ratio)))
             existing = {
                 "item_id": item_id,
+                "stock_id": str(removed.get("instance_id", "") or "").strip() or (
+                    f"stocked:{store_prop['id']}:{int(getattr(self.sim, 'tick', 0) or 0)}:{len(store.get('entries', ()))}"
+                ),
                 "metadata": stocked_metadata,
                 "stock": stocked_quantity,
                 "buy_price": buy_price,
@@ -4755,7 +4665,12 @@ class TradeSystem(System):
                     )
                 return
         if mode == "buy":
-            success = self._trade_buy(self.player_eid, pos, target_item_id=item_id)
+            success = self._trade_buy(
+                self.player_eid,
+                pos,
+                target_item_id=item_id,
+                target_stock_id=instance_id,
+            )
             self._refresh_trade_ui(
                 mode="buy",
                 keep_selection=True,

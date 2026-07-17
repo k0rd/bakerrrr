@@ -4962,6 +4962,7 @@ class InputSystem(System):
         state = self._casino_state()
         if not bool(state.get("open")):
             return False
+        mode = str(state.get("mode", "floor") or "floor").strip().lower()
 
         if key in (ord("?"), ord("/")):
             self._help_state()["open"] = True
@@ -4998,12 +4999,34 @@ class InputSystem(System):
             self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="tab"))
             return True
 
+        if key == KEY_PAGE_UP:
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="scroll_page", direction=-1))
+            return True
+
+        if key == KEY_PAGE_DOWN:
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="scroll_page", direction=1))
+            return True
+
+        if key == KEY_HOME:
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="scroll_home"))
+            return True
+
+        if key == KEY_END:
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="scroll_end"))
+            return True
+
         if key in (KEY_UP, ord("k"), ord("K")):
-            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="move", dx=0, dy=-1))
+            if mode == "result" or bool(state.get("close_pending")):
+                self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="scroll_line", direction=-1))
+            else:
+                self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="move", dx=0, dy=-1))
             return True
 
         if key in (KEY_DOWN, ord("j"), ord("J")):
-            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="move", dx=0, dy=1))
+            if mode == "result" or bool(state.get("close_pending")):
+                self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="scroll_line", direction=1))
+            else:
+                self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="move", dx=0, dy=1))
             return True
 
         if key in (KEY_LEFT, ord("h"), ord("H")):
@@ -5027,7 +5050,11 @@ class InputSystem(System):
             return True
 
         if key in ENTER_KEYS or key in (ord("e"), ord("E")):
-            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="confirm"))
+            self.sim.emit(Event(
+                "casino_ui_action",
+                eid=self.player_eid,
+                action="back" if bool(state.get("close_pending")) else "confirm",
+            ))
             return True
 
         return True

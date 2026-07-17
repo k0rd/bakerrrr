@@ -3985,7 +3985,7 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_actor_token_overlay(self, x, y, glyph, color=None, attrs=0, *, kind="civilian"):
+    def _draw_actor_token_overlay(self, x, y, glyph, color=None, attrs=0, *, kind="civilian", effects=()):
         if self.cell_px <= 10:
             self._draw_actor_token_overlay_legacy(x, y, glyph, color=color, attrs=attrs, kind=kind)
             return
@@ -4003,6 +4003,20 @@ class PygameView:
         edge = self._lightened_rgba(frame, 238, amount=0.3)
         glow = self._lightened_rgba(frame, 104, amount=0.48)
         role_accent = self._alpha_color("actor_role_accent", 188)
+        effect_set = {
+            str(effect).strip().lower()
+            for effect in (effects or ())
+            if str(effect).strip()
+        }
+
+        def _suffix(prefix, default=""):
+            for effect in effect_set:
+                if effect.startswith(prefix):
+                    return effect.removeprefix(prefix)
+            return default
+
+        presentation = _suffix("actor_presentation_", "mixed")
+        visible_build = _suffix("actor_build_", "average")
 
         self._draw_legibility_backing(
             overlay,
@@ -4056,29 +4070,82 @@ class PygameView:
         shoulder_y = head_y + head_r + max(1, px // 18)
         hip_y = px - max(5, px // 4)
         foot_y = px - max(2, px // 12)
-        shoulder_half = max(4, px // (4 if kind == "guard" else 5))
-        hip_half = max(2, px // (7 if kind == "scout" else 6))
-        torso = [
-            (mid_x - shoulder_half, shoulder_y),
-            (mid_x + shoulder_half, shoulder_y),
-            (mid_x + hip_half, hip_y),
-            (mid_x - hip_half, hip_y),
-        ]
+        if presentation == "femme":
+            shoulder_half = max(3, px // 6)
+            hip_half = max(3, px // 5)
+        elif presentation == "masc":
+            shoulder_half = max(3, px // 6)
+            hip_half = max(2, px // 7)
+        elif presentation == "androgynous":
+            shoulder_half = max(3, px // 6)
+            hip_half = max(3, px // 6)
+        else:
+            shoulder_half = max(3, px // 6)
+            hip_half = max(3, px // 6)
+        if visible_build in {"sturdy", "compact"}:
+            shoulder_half += max(1, px // 28)
+            hip_half += max(0, px // 32)
+        elif visible_build == "lean":
+            shoulder_half = max(3, shoulder_half - max(0, px // 28))
+            hip_half = max(2, hip_half - max(0, px // 32))
+        if kind == "guard":
+            shoulder_half += max(0, px // 24)
+        if kind == "scout":
+            shoulder_half = max(3, shoulder_half - max(0, px // 28))
+        body_corner = max(1, px // 16)
+        if presentation == "femme":
+            waist_y = shoulder_y + max(2, (hip_y - shoulder_y) // 2)
+            waist_half = max(2, min(shoulder_half, hip_half) - max(1, px // 20))
+            torso = [
+                (mid_x - shoulder_half + body_corner, shoulder_y),
+                (mid_x + shoulder_half - body_corner, shoulder_y),
+                (mid_x + shoulder_half, shoulder_y + body_corner),
+                (mid_x + waist_half, waist_y),
+                (mid_x + hip_half, hip_y - body_corner),
+                (mid_x + hip_half - body_corner, hip_y),
+                (mid_x - hip_half + body_corner, hip_y),
+                (mid_x - hip_half, hip_y - body_corner),
+                (mid_x - waist_half, waist_y),
+                (mid_x - shoulder_half, shoulder_y + body_corner),
+            ]
+            right_contour = (torso[1], torso[2], torso[3], torso[4], torso[5])
+            left_contour = (torso[0], torso[9], torso[8], torso[7], torso[6])
+        else:
+            torso = [
+                (mid_x - shoulder_half + body_corner, shoulder_y),
+                (mid_x + shoulder_half - body_corner, shoulder_y),
+                (mid_x + shoulder_half, shoulder_y + body_corner),
+                (mid_x + hip_half, hip_y - body_corner),
+                (mid_x + hip_half - body_corner, hip_y),
+                (mid_x - hip_half + body_corner, hip_y),
+                (mid_x - hip_half, hip_y - body_corner),
+                (mid_x - shoulder_half, shoulder_y + body_corner),
+            ]
+            right_contour = (torso[1], torso[2], torso[3], torso[4])
+            left_contour = (torso[0], torso[7], torso[6], torso[5])
 
-        arm_y = min(hip_y - 1, shoulder_y + max(3, px // 5))
-        left_hand = (mid_x - shoulder_half - max(1, px // 12), arm_y)
-        right_hand = (mid_x + shoulder_half + max(1, px // 12), arm_y)
+        arm_y = min(hip_y - 1, shoulder_y + max(3, px // 4))
+        hand_outset = max(1, px // 18)
+        left_hand = (mid_x - shoulder_half - hand_outset, arm_y)
+        right_hand = (mid_x + shoulder_half + hand_outset, arm_y)
         for start, end in (((mid_x - shoulder_half + 1, shoulder_y + 1), left_hand), ((mid_x + shoulder_half - 1, shoulder_y + 1), right_hand)):
             self.pygame.draw.line(overlay, outline, (start[0] + 1, start[1] + 1), (end[0] + 1, end[1] + 1), stroke_w + 2)
             self.pygame.draw.line(overlay, fill, start, end, max(1, stroke_w + 1))
 
-        self.pygame.draw.polygon(overlay, outline, [(tx + 1, ty + 1) for tx, ty in torso])
-        self.pygame.draw.polygon(overlay, fill, torso)
-        self.pygame.draw.lines(overlay, edge, False, torso[:2], max(1, stroke_w))
-        self.pygame.draw.line(overlay, shadow, (mid_x, shoulder_y + 1), (mid_x, hip_y - 1), stroke_w)
+        neck_top = head_y + head_r - 1
+        neck_bottom = shoulder_y + 1
+        self.pygame.draw.line(overlay, outline, (mid_x + 1, neck_top), (mid_x + 1, neck_bottom), stroke_w + 3)
+        self.pygame.draw.line(overlay, fill, (mid_x, neck_top), (mid_x, neck_bottom), stroke_w + 1)
+        for contour in (left_contour, right_contour):
+            shadow_contour = tuple((tx + 1, ty + 1) for tx, ty in contour)
+            self.pygame.draw.lines(overlay, outline, False, shadow_contour, stroke_w + 2)
+            self.pygame.draw.lines(overlay, fill, False, contour, max(1, stroke_w + 1))
+        self.pygame.draw.line(overlay, outline, (torso[0][0] + 1, torso[0][1] + 1), (torso[1][0] + 1, torso[1][1] + 1), stroke_w + 2)
+        self.pygame.draw.line(overlay, edge, torso[0], torso[1], max(1, stroke_w + 1))
 
         leg_gap = max(1, px // 18)
-        for top_x, bottom_x in ((mid_x - leg_gap, mid_x - hip_half), (mid_x + leg_gap, mid_x + hip_half)):
+        stance_half = max(2, px // (6 if kind == "guard" else 7))
+        for top_x, bottom_x in ((mid_x - leg_gap, mid_x - stance_half), (mid_x + leg_gap, mid_x + stance_half)):
             self.pygame.draw.line(overlay, outline, (top_x + 1, hip_y), (bottom_x + 1, foot_y + 1), stroke_w + 2)
             self.pygame.draw.line(overlay, fill, (top_x, hip_y), (bottom_x, foot_y), max(1, stroke_w + 1))
 
@@ -4105,11 +4172,81 @@ class PygameView:
 
         # The old console token survives as a small identifying rune, no longer a mask over the art.
         text_value = str(glyph or "@")[:1] or "@"
-        brightness = (frame[0] * 0.299) + (frame[1] * 0.587) + (frame[2] * 0.114)
-        text_rgb = (18, 22, 26) if brightness >= 150 else (248, 248, 246)
+        text_rgb = (edge[0], edge[1], edge[2])
         text_surface = self._token_font.render(text_value, True, text_rgb)
         text_rect = text_surface.get_rect(center=(mid_x, shoulder_y + max(2, (hip_y - shoulder_y) // 2)))
+        shadow_surface = self._token_font.render(text_value, True, (12, 16, 20))
+        overlay.blit(shadow_surface, text_rect.move(1, 1))
         overlay.blit(text_surface, text_rect)
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
+    def _draw_actor_hair_overlay(self, x, y, color=None, attrs=0, *, effects=()):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.04)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+        px = self.cell_px
+        mid_x = px // 2
+        stroke_w = max(1, px // 24)
+        head_r = max(2, px // 8)
+        head_y = max(head_r + 1, px // 4)
+        shoulder_y = head_y + head_r + max(1, px // 18)
+        fill = (frame[0], frame[1], frame[2], 226)
+        edge = self._lightened_rgba(frame, 238, amount=0.26)
+        shade = self._darkened_rgba(frame, 220, amount=0.5)
+        effect_set = {
+            str(effect).strip().lower()
+            for effect in (effects or ())
+            if str(effect).strip()
+        }
+
+        def _suffix(prefix, default=""):
+            for effect in effect_set:
+                if effect.startswith(prefix):
+                    return effect.removeprefix(prefix)
+            return default
+
+        length = _suffix("actor_hair_length_", "short")
+        style = _suffix("actor_hair_style_", "")
+        hair_rect = self.pygame.Rect(
+            mid_x - head_r - 1,
+            head_y - head_r - 1,
+            max(4, (head_r + 1) * 2),
+            max(4, (head_r + 1) * 2),
+        )
+        self.pygame.draw.arc(overlay, shade, hair_rect.move(1, 1), 3.0, 6.35, max(1, stroke_w + 1))
+        self.pygame.draw.arc(overlay, fill, hair_rect, 3.0, 6.35, max(1, stroke_w + 1))
+
+        side_end = head_y + head_r
+        if length == "jaw_length":
+            side_end += max(1, px // 12)
+        elif length == "shoulder_length":
+            side_end = shoulder_y + max(2, px // 9)
+        elif length == "long":
+            side_end = shoulder_y + max(4, px // 4)
+        if length not in {"cropped", "short"}:
+            for side_x in (mid_x - head_r - 1, mid_x + head_r + 1):
+                self.pygame.draw.line(overlay, shade, (side_x + 1, head_y), (side_x + 1, side_end + 1), stroke_w + 1)
+                self.pygame.draw.line(overlay, fill, (side_x, head_y), (side_x, side_end), stroke_w)
+                if length in {"shoulder_length", "long"}:
+                    turn = -1 if side_x < mid_x else 1
+                    self.pygame.draw.line(overlay, edge, (side_x, side_end), (side_x + turn, side_end - max(1, px // 14)), stroke_w)
+
+        if "high_tail" in style or "tied_back" in style or "nape_tie" in style:
+            tail_x = mid_x + head_r + max(1, px // 14)
+            tail_y = head_y - (max(1, px // 12) if "high" in style else 0)
+            self.pygame.draw.circle(overlay, shade, (tail_x + 1, tail_y + 1), max(1, px // 18))
+            self.pygame.draw.circle(overlay, fill, (tail_x, tail_y), max(1, px // 18))
+            self.pygame.draw.line(overlay, fill, (tail_x, tail_y + 1), (tail_x + max(1, px // 16), tail_y + max(2, px // 8)), stroke_w)
+        elif "side_braid" in style or "braid" in style:
+            braid_x = mid_x - head_r - 1
+            step = max(2, px // 12)
+            for braid_y in range(head_y + head_r, min(px - 2, side_end + max(3, px // 6)), step):
+                self.pygame.draw.circle(overlay, fill, (braid_x, braid_y), max(1, px // 28))
+                braid_x += 1 if (braid_y // step) % 2 else -1
+        elif "bob" in style or "jaw_cut" in style or "blunt" in style:
+            self.pygame.draw.line(overlay, edge, (mid_x - head_r - 1, side_end), (mid_x + head_r + 1, side_end), stroke_w)
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
@@ -7066,6 +7203,9 @@ class PygameView:
         if semantic_key == "ui_actor_identity_rune":
             self._draw_actor_identity_rune_overlay(x, y, color=color, attrs=attrs)
             return semantic_key
+        if semantic_key == "ui_actor_hair":
+            self._draw_actor_hair_overlay(x, y, color=color, attrs=attrs, effects=effects)
+            return semantic_key
         outfit_overlay_kind = {
             "ui_actor_basewear_top": "base_top",
             "ui_actor_basewear_bottom": "base_bottom",
@@ -7184,7 +7324,7 @@ class PygameView:
             ):
                 actor_kind = "civilian"
         if actor_kind:
-            self._draw_actor_token_overlay(x, y, glyph, color=color, attrs=attrs, kind=actor_kind)
+            self._draw_actor_token_overlay(x, y, glyph, color=color, attrs=attrs, kind=actor_kind, effects=effect_set)
             return f"entity_{actor_kind}"
         if semantic_key == "entity_state_downed":
             self._draw_entity_state_overlay(x, y, color=color, attrs=attrs, kind="downed")
@@ -8640,6 +8780,14 @@ class PygameView:
         if self._is_close_event(event):
             self._mark_close_requested()
             return ord("Q")
+        mouse_wheel = getattr(self.pygame, "MOUSEWHEEL", None)
+        if mouse_wheel is not None and event.type == mouse_wheel:
+            wheel_y = int(getattr(event, "y", 0) or 0)
+            if wheel_y > 0:
+                return KEY_PAGE_UP
+            if wheel_y < 0:
+                return KEY_PAGE_DOWN
+            return None
         if event.type != self.pygame.KEYDOWN:
             return None
 

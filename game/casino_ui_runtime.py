@@ -40,6 +40,10 @@ def default_casino_ui_state():
         "subtitle": "",
         "body_lines": [],
         "body_focus_line": -1,
+        "body_scroll": 0,
+        "body_scroll_max": 0,
+        "body_page_size": 1,
+        "body_scroll_manual": False,
         "rail_lines": [],
         "rows": [],
         "selected_index": 0,
@@ -67,6 +71,10 @@ def ensure_casino_ui_state(sim):
     state.setdefault("subtitle", "")
     state.setdefault("body_lines", [])
     state.setdefault("body_focus_line", -1)
+    state.setdefault("body_scroll", 0)
+    state.setdefault("body_scroll_max", 0)
+    state.setdefault("body_page_size", 1)
+    state.setdefault("body_scroll_manual", False)
     state.setdefault("rail_lines", [])
     state.setdefault("rows", [])
     state.setdefault("selected_index", 0)

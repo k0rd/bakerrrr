@@ -10,6 +10,7 @@ from game.appearance_loadout import (
     appearance_color_key,
     appearance_color_word,
     appearance_render_colors,
+    humanoid_render_profile,
     player_appearance_color_key,
     player_appearance_color_word,
 )
@@ -844,6 +845,41 @@ def _actor_outfit_color_overlays(render_colors):
     return tuple(overlays)
 
 
+def _actor_presentation_effects(profile):
+    if not isinstance(profile, Mapping):
+        return ()
+
+    def token(value):
+        return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    effects = []
+    presentation = token(profile.get("presentation"))
+    if presentation in {"femme", "masc", "androgynous", "mixed"}:
+        effects.append(f"actor_presentation_{presentation}")
+    build = token(profile.get("build"))
+    if build:
+        effects.append(f"actor_build_{build}")
+    hair_length = token(profile.get("hair_length"))
+    if hair_length:
+        effects.append(f"actor_hair_length_{hair_length}")
+    hair_style = token(profile.get("hair_style"))
+    if hair_style:
+        effects.append(f"actor_hair_style_{hair_style}")
+    return tuple(effects)
+
+
+def _actor_hair_overlay(profile):
+    if not isinstance(profile, Mapping) or not str(profile.get("hair_length", "") or "").strip():
+        return ()
+    return ({
+        "glyph": " ",
+        "color": str(profile.get("hair_color_key") or "human_charcoal").strip() or "human_charcoal",
+        "color_word": str(profile.get("hair_color") or "").strip().lower() or None,
+        "semantic_id": "ui_actor_hair",
+        "effects": _actor_presentation_effects(profile),
+    },)
+
+
 def _hominid_semantic_id_for_role(catalog, role=""):
     semantic_role = "human"
     if role == "guard":
@@ -853,8 +889,9 @@ def _hominid_semantic_id_for_role(catalog, role=""):
     return catalog.semantic_id_for_key("entities", "hominid", semantic_role, allow_defaults=True)
 
 
-def entity_default_snapshot(identity, *, role="", player=False, catalog=None, seed=None, eid=None, sim=None):
+def entity_default_snapshot(identity, *, role="", player=False, catalog=None, seed=None, eid=None, sim=None, humanoid_profile=None):
     catalog = catalog or get_runtime_semantic_catalog()
+    humanoid_effects = _actor_presentation_effects(humanoid_profile)
 
     if player:
         color = player_appearance_color_key(sim, eid) if sim is not None and eid is not None else None
@@ -866,6 +903,7 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
             semantic_id="entity_player",
             catalog=catalog,
             preferred_categories=("entities",),
+            effects=humanoid_effects,
         )
 
     if not identity:
@@ -905,6 +943,7 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
         semantic_id=semantic_id,
         catalog=catalog,
         preferred_categories=("entities",),
+        effects=humanoid_effects if taxonomy == "hominid" else (),
     )
 
 
@@ -1983,6 +2022,8 @@ class AppearanceManager:
         will = self.sim.ecs.get(NPCWill).get(eid)
         social = self.sim.ecs.get(NPCSocial).get(eid)
         vitality = self.sim.ecs.get(Vitality).get(eid)
+        taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower()
+        humanoid_profile = humanoid_render_profile(self.sim, eid) if taxonomy == "hominid" else {}
 
         player_controlled = player_eid is not None and eid == player_eid
         defaults = entity_default_snapshot(
@@ -1993,6 +2034,7 @@ class AppearanceManager:
             seed=getattr(self.sim, "seed", None),
             eid=eid,
             sim=self.sim,
+            humanoid_profile=humanoid_profile,
         )
         state_semantic = _entity_state_semantic(identity, vitality)
         if state_semantic:
@@ -2028,9 +2070,10 @@ class AppearanceManager:
             and str(defaults.color or "").strip().lower() != "player"
         ):
             owned_color = None
-        taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower()
         outfit_overlays = ()
+        hair_overlays = ()
         if taxonomy == "hominid":
+            hair_overlays = _actor_hair_overlay(humanoid_profile)
             outfit_overlays = _actor_outfit_color_overlays(appearance_render_colors(self.sim, eid))
         if (
             taxonomy == "hominid"
@@ -2071,6 +2114,7 @@ class AppearanceManager:
             visible=bool(defaults.visible) and bool(owned.visible),
             overlays=(
                 tuple(defaults.overlays or ())
+                + tuple(hair_overlays or ())
                 + tuple(outfit_overlays or ())
                 + tuple(state_overlays or ())
                 + tuple(badge_overlays or ())

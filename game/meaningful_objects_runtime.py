@@ -1029,6 +1029,19 @@ def pickup_meaningful_object_fixture(sim: Any, actor_eid: Any, property_id: str)
         y=y,
         z=z,
     ))
+    sim.emit(Event(
+        "item_picked_up",
+        eid=actor_eid,
+        item_id=result.get("item_id"),
+        item_name=item_name,
+        quantity=1,
+        instance_id=result.get("instance_id"),
+        property_id=str(property_id),
+        object_id=object_id or None,
+        x=x,
+        y=y,
+        z=z,
+    ))
 
     if not is_personal_theft:
         return {**result, "object_id": object_id, "theft": False, "item_name": item_name}

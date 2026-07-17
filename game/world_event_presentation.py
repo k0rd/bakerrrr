@@ -127,7 +127,11 @@ def world_event_effect_bits(event, *, ending=False, include_handles=True):
         bits.append(
             "lights are coming back toward normal"
             if ending
-            else ("lights are badly dimmed" if fixture_light_mult <= 0.3 else "lights are dimmed")
+            else (
+                "grid lights are out"
+                if fixture_light_mult <= 0.05
+                else ("lights are badly dimmed" if fixture_light_mult <= 0.3 else "lights are dimmed")
+            )
         )
 
     notice_delta = _int(event.get("observer_notice_delta"), 0)

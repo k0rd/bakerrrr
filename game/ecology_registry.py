@@ -187,6 +187,7 @@ def register_native_flora_line(sim, profile, *, source="bred"):
     plant_id = _key(profile.get("plant_id") or profile.get("id"))
     if not native_id or not plant_id:
         return None
+    existing = (registry.get("flora") or {}).get(native_id) or {}
     identity = {
         "plant_id": plant_id,
         "name": str(profile.get("name") or profile.get("plant_name") or plant_id.replace("_", " ")).strip(),
@@ -220,7 +221,7 @@ def register_native_flora_line(sim, profile, *, source="bred"):
         "source": _key(source, "bred"),
         "identity": identity,
         "effect_channel": effect_channel,
-        "times_realized": max(1, _safe_int((registry.get("flora", {}).get(native_id) or {}).get("times_realized"), 0) + 1),
+        "times_realized": max(1, _safe_int(existing.get("times_realized"), 0) + 1),
     }
     registry.setdefault("flora", {})[native_id] = record
     _save_runtime_registry(sim)
@@ -231,6 +232,7 @@ def register_native_flora_line(sim, profile, *, source="bred"):
         native_id=native_id,
         lineage_name=identity["name"],
         source=record["source"],
+        newly_native=not bool(existing),
     ))
     return copy.deepcopy(record)
 
@@ -401,6 +403,7 @@ def register_native_fauna_line(sim, eid, genome=None, *, source="natural_breedin
         lineage_name=record["presentation"]["common_name"],
         root_animal_id=record["root_animal_id"],
         source=record["source"],
+        newly_native=not bool(existing),
     ))
     return copy.deepcopy(record)
 
@@ -448,10 +451,90 @@ def native_fauna_profiles(sim):
     return tuple(rows)
 
 
+def _appearance_words(value):
+    return str(value or "").strip().lower().replace("_", " ").replace("-", " ")
+
+
+def _fauna_registry_appearance(record):
+    genome = record.get("genome") if isinstance(record.get("genome"), Mapping) else {}
+    expressed = genome.get("expressed") if isinstance(genome.get("expressed"), Mapping) else {}
+    color = _appearance_words(expressed.get("color_word")) or "unknown-color"
+    accent = _appearance_words(expressed.get("accent_color_word"))
+    pattern = _appearance_words(expressed.get("pattern"))
+    build = _appearance_words(expressed.get("build"))
+    display = _appearance_words(expressed.get("display"))
+    root = _appearance_words(record.get("root_animal_id"))
+
+    coat = " ".join(bit for bit in (color, pattern if pattern != "plain" else "") if bit).strip()
+    bits = [f"{coat} coat"]
+    if accent and accent != color:
+        bits.append(f"{accent} accents")
+    if build:
+        bits.append(f"{build} build")
+    if display and display != "none":
+        bits.append(f"{display} display")
+    if root:
+        bits.append(f"{root} body plan")
+    return "; ".join(bits)
+
+
+def _flora_registry_appearance(record):
+    identity = record.get("identity") if isinstance(record.get("identity"), Mapping) else {}
+    genetics = identity.get("genetics_identity") if isinstance(identity.get("genetics_identity"), Mapping) else {}
+    color = _appearance_words(identity.get("color_word") or genetics.get("hue_family"))
+    growth_form = _appearance_words(identity.get("growth_form")) or "plant"
+    bits = [" ".join(bit for bit in (color, growth_form) if bit).strip()]
+    for field, suffix in (
+        ("petal_shape", "petals"),
+        ("leaf_shape", "leaves"),
+        ("blade_shape", "blades"),
+        ("stem_shape", "stems"),
+        ("habit", "habit"),
+        ("texture", "texture"),
+    ):
+        value = _appearance_words(genetics.get(field))
+        if value:
+            bits.append(f"{value} {suffix}")
+    return "; ".join(dict.fromkeys(bit for bit in bits if bit)) or "appearance not recorded"
+
+
+def ecology_species_registry_rows(sim, domain):
+    """Return stable installation-native name/appearance rows for one domain."""
+
+    domain = _key(domain)
+    if domain not in {"flora", "fauna"}:
+        return ()
+    registry = ecology_registry_for_sim(sim)
+    if registry is None:
+        return ()
+    rows = []
+    for native_id, record in (registry.get(domain) or {}).items():
+        if not isinstance(record, Mapping):
+            continue
+        if domain == "fauna":
+            presentation = record.get("presentation") if isinstance(record.get("presentation"), Mapping) else {}
+            name = str(record.get("lineage_name") or presentation.get("common_name") or "local creature").strip()
+            appearance = _fauna_registry_appearance(record)
+        else:
+            identity = record.get("identity") if isinstance(record.get("identity"), Mapping) else {}
+            name = str(record.get("lineage_name") or identity.get("name") or identity.get("plant_name") or "local plant").strip()
+            appearance = _flora_registry_appearance(record)
+        rows.append({
+            "native_id": str(native_id),
+            "domain": domain,
+            "name": name,
+            "appearance": appearance,
+            "times_realized": max(0, _safe_int(record.get("times_realized"), 0)),
+        })
+    rows.sort(key=lambda row: (str(row["name"]).casefold(), str(row["native_id"])))
+    return tuple(rows)
+
+
 __all__ = [
     "ECOLOGY_REGISTRY_PATH",
     "ECOLOGY_REGISTRY_VERSION",
     "ecology_registry_for_sim",
+    "ecology_species_registry_rows",
     "empty_ecology_registry",
     "load_ecology_registry",
     "native_fauna_profiles",

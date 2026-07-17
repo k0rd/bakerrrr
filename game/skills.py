@@ -110,6 +110,11 @@ PLAYER_BIRTH_SPECIALIZATION_MODS = (
     -0.4,
     -0.25,
 )
+NPC_GENERAL_APTITUDE_SIGMA = 1.05
+NPC_GENERAL_APTITUDE_MIN = -2.5
+NPC_GENERAL_APTITUDE_MAX = 2.75
+NPC_GENERAL_APTITUDE_SKILL_SHARE = 0.82
+NPC_INDIVIDUAL_SKILL_SIGMA = 0.62
 
 
 def _num(value, default=5.0):
@@ -139,6 +144,42 @@ def _player_birth_skill_biases(birth_key):
     biases = {}
     for skill_id, delta in zip(skill_ids, PLAYER_BIRTH_SPECIALIZATION_MODS):
         biases[skill_id] = float(delta)
+    return biases
+
+
+def _npc_starting_skill_biases(rng):
+    """Give generated people durable, uneven aptitudes before career shaping.
+
+    A general aptitude moves the whole profile enough for uncommon naturally
+    strong workers to exist. Two talents and two development areas keep that
+    movement from turning every person into a flat high/low stat block.
+    """
+
+    skill_ids = list(ALL_SKILL_IDS)
+    if not skill_ids:
+        return {}
+
+    general = max(
+        float(NPC_GENERAL_APTITUDE_MIN),
+        min(float(NPC_GENERAL_APTITUDE_MAX), float(rng.gauss(0.0, NPC_GENERAL_APTITUDE_SIGMA))),
+    )
+    rng.shuffle(skill_ids)
+    biases = {
+        skill_id: (
+            general * float(NPC_GENERAL_APTITUDE_SKILL_SHARE)
+            + float(rng.gauss(0.0, NPC_INDIVIDUAL_SKILL_SIGMA))
+        )
+        for skill_id in skill_ids
+    }
+
+    if len(skill_ids) >= 1:
+        biases[skill_ids[0]] += float(rng.uniform(0.9, 1.8))
+    if len(skill_ids) >= 2:
+        biases[skill_ids[1]] += float(rng.uniform(0.4, 1.0))
+    if len(skill_ids) >= 3:
+        biases[skill_ids[2]] -= float(rng.uniform(0.8, 1.5))
+    if len(skill_ids) >= 4:
+        biases[skill_ids[3]] -= float(rng.uniform(0.35, 0.85))
     return biases
 
 
@@ -815,6 +856,8 @@ def seed_skill_profile(rng, *, role="", career="", core=None, insight=None, jitt
     role_key = str(role or "").strip().lower()
     career_text = str(career or "").strip().lower().replace(" ", "_")
     birth_biases = _player_birth_skill_biases(birth_key) if role_key == "player" else {}
+    if role_key != "player" and core is None and insight is None:
+        birth_biases = _npc_starting_skill_biases(rng)
     ratings = {}
     floors = {}
     decay_rates = {}

@@ -1556,24 +1556,7 @@ class PlayerInteractionRuntime:
         if object_prop is not None:
             result = pickup_meaningful_object_fixture(self.sim, eid, str(object_prop.get("id")))
             item_name = str(result.get("item_name", "object") or "object").strip()
-            if result.get("ok"):
-                if bool(result.get("theft")) and bool(result.get("witnessed_by_owner")):
-                    _log_player_feedback(
-                        self.sim,
-                        f"You take {item_name}. Someone recognizes it.",
-                        kind="interaction",
-                        dedupe_window=2,
-                        dedupe_key=f"meaningful_object_taken:{result.get('object_id')}",
-                    )
-                else:
-                    _log_player_feedback(
-                        self.sim,
-                        f"You take {item_name}.",
-                        kind="interaction",
-                        dedupe_window=2,
-                        dedupe_key=f"object_fixture_taken:{result.get('instance_id')}",
-                    )
-            elif str(result.get("reason")) == "inventory_full":
+            if not result.get("ok") and str(result.get("reason")) == "inventory_full":
                 _log_player_feedback(
                     self.sim,
                     f"You do not have room for {item_name}.",

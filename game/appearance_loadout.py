@@ -741,7 +741,7 @@ def seed_npc_innate_appearance_from_description(sim, eid, *, seed_token=""):
 
     seed_appearance_skin_marks_from_description(sim, eid, loadout=loadout)
     overrides = dict(getattr(loadout, "body_overrides", {}) or {})
-    for key in ("hair_color", "hair_texture", "hair_length", "hair_style_compact", "hair_style_phrase"):
+    for key in ("style_axis", "stature_compact", "hair_color", "hair_texture", "hair_length", "hair_style_compact", "hair_style_phrase"):
         source_key = "hair_style_compact" if key == "hair_style_compact" else key
         value = _text(profile.get(source_key))
         if value and not _text(overrides.get(key)):
@@ -1520,6 +1520,9 @@ def seed_player_starting_outfit(sim, eid, *, seed_token=""):
     inventory = _inventory_for(sim, eid)
     if loadout is None or inventory is None:
         return ()
+    # Player and NPC icons read the same persisted outward-presentation fields.
+    # Despite its historical name, this helper contains no NPC-only behavior.
+    seed_npc_innate_appearance_from_description(sim, eid, seed_token=seed_token)
     if loadout.slots.get("full_body") or loadout.slots.get("top") or loadout.slots.get("bottom") or loadout.slots.get("shoes"):
         return ()
 
@@ -2620,6 +2623,35 @@ def appearance_render_colors(sim, eid):
     result["words"] = words
     result["word_list"] = tuple(word_list)
     return result
+
+
+def humanoid_render_profile(sim, eid):
+    """Return persisted outward-presentation traits used by the tiny actor art."""
+
+    if sim is None or eid is None:
+        return {}
+    identity = sim.ecs.get(CreatureIdentity).get(eid)
+    if identity is None or _key(getattr(identity, "taxonomy_class", "")) != "hominid":
+        return {}
+    loadout = appearance_loadout_for(sim, eid, create=False)
+    overrides = dict(getattr(loadout, "body_overrides", {}) or {}) if loadout is not None else {}
+    gender_identity = _key(getattr(identity, "gender_identity", ""))
+    presentation = _key(overrides.get("style_axis"))
+    if presentation not in {"femme", "masc", "androgynous", "mixed"}:
+        presentation = {
+            "woman": "femme",
+            "man": "masc",
+            "nonbinary": "mixed",
+        }.get(gender_identity, "mixed")
+    hair_color = _key(overrides.get("hair_color"))
+    return {
+        "presentation": presentation,
+        "build": _key(overrides.get("stature_compact")),
+        "hair_length": _key(overrides.get("hair_length")),
+        "hair_style": _key(overrides.get("hair_style") or overrides.get("hair_style_compact")),
+        "hair_color": hair_color,
+        "hair_color_key": fallback_render_key_for_color_word(hair_color, default="human_charcoal") if hair_color else "human_charcoal",
+    }
 
 
 def appearance_color_key(sim, eid):

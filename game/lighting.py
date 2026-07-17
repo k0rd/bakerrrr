@@ -898,7 +898,7 @@ def _inside_light_factor(sample_building_id, source):
     return 0.0
 
 
-def _world_event_fixture_light_mult(sim, x, y):
+def _world_event_grid_light_mult(sim, x, y):
     traits = getattr(sim, "world_traits", None)
     if not isinstance(traits, dict):
         return 1.0
@@ -927,10 +927,18 @@ def _world_event_fixture_light_mult(sim, x, y):
             continue
         if ex != cx or ey != cy:
             continue
-        try:
-            factor = float(event.get("fixture_light_mult", 1.0))
-        except (TypeError, ValueError):
-            factor = 1.0
+        event_key = str(event.get("key", "") or "").strip().lower()
+        if event_key == "power_outage":
+            # Older saves may still carry the original dimming multiplier. A
+            # power outage is categorical for ordinary grid lighting: natural
+            # darkness remains, while fires and vehicle lights use independent
+            # source kinds and continue to illuminate the scene.
+            factor = 0.0
+        else:
+            try:
+                factor = float(event.get("fixture_light_mult", 1.0))
+            except (TypeError, ValueError):
+                factor = 1.0
         mult *= max(0.0, min(1.0, factor))
 
     # Per-property power cuts from player sabotage.
@@ -987,8 +995,11 @@ def _local_light_contributions(sim, x, y, z=0, inside=False, aperture_bleed=0.0,
 
         falloff = max(0.0, 1.0 - (float(dist) / float(radius + 1)))
         contribution = intensity * falloff
-        if str(source.get("kind", "") or "").strip().lower() == "fixture":
-            contribution *= _world_event_fixture_light_mult(sim, x, y)
+        source_kind = str(source.get("kind", "") or "").strip().lower()
+        if source_kind in {"fixture", "aperture"}:
+            # Grid state belongs to the source's district. This matters at a
+            # chunk edge, where light may spill into a neighboring district.
+            contribution *= _world_event_grid_light_mult(sim, sx, sy)
         if contribution <= 0.0:
             continue
 
@@ -997,7 +1008,7 @@ def _local_light_contributions(sim, x, y, z=0, inside=False, aperture_bleed=0.0,
             if inside_factor <= 0.0:
                 continue
             contribution *= inside_factor
-        elif str(source.get("kind", "") or "").strip().lower() == "aperture":
+        elif source_kind == "aperture":
             contribution *= 0.9 + (0.1 * outside_bleed)
 
         contributions.append((source, _clamp_unit(contribution)))

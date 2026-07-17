@@ -292,6 +292,8 @@ ROLE_FIT_BASE_WEIGHTS = {
         "athletics": 0.16,
     },
 }
+ROLE_FIT_SKILL_STRENGTH = 6.0
+ROLE_FIT_SKILL_TARGET = 6.0
 SOCIAL_ARCHETYPES = {
     "corner_store",
     "gaming_hall",
@@ -1588,6 +1590,43 @@ def _fit_label(score, *, filled=True):
     return "weak"
 
 
+def _fit_skill_signals(weights, skill_values, *, limit=2):
+    weights = dict(weights or {})
+    skill_values = dict(skill_values or {})
+    limit = max(1, int(limit or 0))
+
+    ranked = sorted(
+        weights.keys(),
+        key=lambda skill_id: (
+            -(float(skill_values.get(skill_id, 5.0)) * float(weights.get(skill_id, 0.0))),
+            -float(skill_values.get(skill_id, 5.0)),
+            str(skill_id),
+        ),
+    )
+    strong_skills = tuple(
+        skill_id
+        for skill_id in ranked
+        if float(skill_values.get(skill_id, 5.0)) >= float(ROLE_FIT_SKILL_STRENGTH)
+    )[:limit]
+
+    weak_candidates = [
+        (
+            float(weights.get(skill_id, 0.0))
+            * max(0.0, float(ROLE_FIT_SKILL_TARGET) - float(skill_values.get(skill_id, 5.0))),
+            skill_id,
+        )
+        for skill_id in weights.keys()
+        if skill_id not in strong_skills
+    ]
+    weak_candidates.sort(key=lambda row: (-row[0], row[1]))
+    weak_skills = tuple(
+        skill_id
+        for deficit, skill_id in weak_candidates[:limit]
+        if deficit > 0.0
+    )
+    return strong_skills, weak_skills
+
+
 def player_business_role_fit(sim, actor_eid, prop, role):
     if sim is None or actor_eid is None or not isinstance(prop, dict):
         return None
@@ -1604,23 +1643,7 @@ def player_business_role_fit(sim, actor_eid, prop, role):
         contributions[skill_id] = float(value) * float(weight)
 
     score = float(sum(contributions.values()))
-    strong_skills = tuple(
-        skill_id
-        for skill_id, _value in sorted(
-            contributions.items(),
-            key=lambda row: (-float(row[1]), -float(skill_values.get(row[0], 0.0)), row[0]),
-        )[:2]
-    ) or focus_skills
-
-    weak_candidates = [
-        (
-            float(weights.get(skill_id, 0.0)) * max(0.0, 7.0 - float(skill_values.get(skill_id, 5.0))),
-            skill_id,
-        )
-        for skill_id in weights.keys()
-    ]
-    weak_candidates.sort(key=lambda row: (-row[0], row[1]))
-    weak_skills = tuple(skill_id for deficit, skill_id in weak_candidates[:2] if deficit > 0.0) or focus_skills
+    strong_skills, weak_skills = _fit_skill_signals(weights, skill_values)
 
     return {
         "actor_eid": int(actor_eid),
@@ -1659,7 +1682,7 @@ def player_business_staffing_fit(sim, prop):
                 "score": 0.0,
                 "label": _fit_label(0.0, filled=False),
                 "focus_skills": tuple(focus_skills),
-                "strong_skills": tuple(focus_skills),
+                "strong_skills": (),
                 "weak_skills": tuple(focus_skills),
                 "actor_ids": (),
                 "best_actor_eid": None,
@@ -1684,27 +1707,7 @@ def player_business_staffing_fit(sim, prop):
                 for entry in fits
             ) / float(len(fits))
 
-        strong_skills = tuple(
-            skill_id
-            for skill_id, _value in sorted(
-                average_skill_values.items(),
-                key=lambda row: (
-                    -(float(row[1]) * float(weights.get(row[0], 0.0))),
-                    -float(row[1]),
-                    row[0],
-                ),
-            )[:2]
-        ) or focus_skills
-
-        weak_candidates = [
-            (
-                float(weights.get(skill_id, 0.0)) * max(0.0, 7.0 - float(average_skill_values.get(skill_id, 5.0))),
-                skill_id,
-            )
-            for skill_id in weights.keys()
-        ]
-        weak_candidates.sort(key=lambda row: (-row[0], row[1]))
-        weak_skills = tuple(skill_id for deficit, skill_id in weak_candidates[:2] if deficit > 0.0) or focus_skills
+        strong_skills, weak_skills = _fit_skill_signals(weights, average_skill_values)
 
         result[role] = {
             "role": role,

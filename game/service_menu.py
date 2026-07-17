@@ -21,6 +21,7 @@ from game.casino_ui_runtime import (
     ensure_casino_ui_state,
 )
 from game.finance_services import _nearest_property_with_finance_service
+from game.ecology_registry import ecology_species_registry_rows
 from game.herbal_chemistry_runtime import secondary_trait_labels
 from game.justice_runtime import held_property_snapshot as _justice_held_property_snapshot
 from game.opportunities import SERVICE_JOB_BOARD_SERVICES, service_job_board_offers
@@ -539,6 +540,28 @@ class ServiceMenuSystem(System):
         row = rows[selected]
         return row if isinstance(row, dict) and bool(row.get("selectable", True)) else None
 
+    def _scroll_casino_body(self, *, amount=0, edge=""):
+        state = self._casino_ui_state()
+        try:
+            maximum = max(0, int(state.get("body_scroll_max", 0) or 0))
+        except (TypeError, ValueError):
+            maximum = 0
+        try:
+            current = int(state.get("body_scroll", 0) or 0)
+        except (TypeError, ValueError):
+            current = 0
+
+        edge = str(edge or "").strip().lower()
+        if edge == "home":
+            current = 0
+        elif edge == "end":
+            current = maximum
+        else:
+            current += int(amount or 0)
+        state["body_scroll"] = max(0, min(current, maximum))
+        state["body_scroll_manual"] = True
+        return int(state["body_scroll"])
+
     def _open_casino_ui(
         self,
         *,
@@ -578,6 +601,10 @@ class ServiceMenuSystem(System):
             "subtitle": str(subtitle or "").strip(),
             "body_lines": list(body_lines or ()),
             "body_focus_line": int(body_focus_line) if str(body_focus_line).strip().lstrip("-").isdigit() else -1,
+            "body_scroll": 0,
+            "body_scroll_max": 0,
+            "body_page_size": 1,
+            "body_scroll_manual": False,
             "rail_lines": list(rail_lines or ()),
             "rows": list(rows or ()),
             "hint": str(hint or "").strip(),
@@ -1109,7 +1136,7 @@ class ServiceMenuSystem(System):
         rail_lines.extend([
             "",
             "Result",
-            "Space return",
+            "Space / Enter",
         ])
         self._open_casino_ui(
             mode="result",
@@ -1121,7 +1148,7 @@ class ServiceMenuSystem(System):
             body_focus_line=body_focus_line,
             rail_lines=rail_lines,
             rows=[],
-            hint="Space returns from the result screen.",
+            hint="Space or Enter returns from the result screen.",
             close_pending=True,
             floor_page=state.get("floor_page", "games"),
             service=service,
@@ -1392,10 +1419,13 @@ class ServiceMenuSystem(System):
             "",
             "Straight numbers",
         ])
+        focus_line = -1
         straight_keys = [f"straight:{number}" for number in range(0, CASINO_ROULETTE_NUMBER_MAX + 1)]
         for row_start in range(0, len(straight_keys), 5):
+            line_index = len(body_lines)
             cells = []
-            for key in straight_keys[row_start: row_start + 5]:
+            group = straight_keys[row_start: row_start + 5]
+            for key in group:
                 market = _casino_roulette_market_from_key(key) or {"value": 0}
                 label = f"{int(market.get('value', 0)):02d}"
                 units = int(bets.get(key, 0) or 0)
@@ -1407,6 +1437,8 @@ class ServiceMenuSystem(System):
                 else:
                     cells.append(f" {label} ")
             body_lines.append(" ".join(cells))
+            if cursor_key in group:
+                focus_line = line_index
         body_lines.extend([
             "",
             "Outside board",
@@ -1419,6 +1451,7 @@ class ServiceMenuSystem(System):
             ("column:1", "column:2", "column:3"),
         ]
         for group in outside_groups:
+            line_index = len(body_lines)
             cells = []
             for key in group:
                 market = _casino_roulette_market_from_key(key) or {"label": key}
@@ -1432,6 +1465,8 @@ class ServiceMenuSystem(System):
                 else:
                     cells.append(f" {label} ")
             body_lines.append(" ".join(cells))
+            if cursor_key in group:
+                focus_line = line_index
         rail_lines = self._casino_common_rail_lines(prop, service="roulette", session=session)
         rail_lines.extend([
             "",
@@ -1457,6 +1492,7 @@ class ServiceMenuSystem(System):
             title=f"Roulette: {self._casino_prop_name(prop)}",
             subtitle="Build a slip",
             body_lines=body_lines,
+            body_focus_line=focus_line,
             rail_lines=rail_lines,
             rows=[],
             hint="Move focus, Space adds chips, Backspace removes chips, Enter spins, Esc forfeits posted chips.",
@@ -1470,6 +1506,14 @@ class ServiceMenuSystem(System):
 
     def _open_craps_table(self, prop, session, *, notice=""):
         session = _casino_craps_normalize_session(session)
+        if not session:
+            state = self._casino_ui_state()
+            host_style = str(state.get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
+            if host_style == "floor":
+                self._open_casino_floor(prop, page=state.get("floor_page", "games"), selected_id="game:craps")
+            else:
+                self._return_from_casino_host(prop)
+            return
         cursor_key = str(session.get("cursor_key", "pass") or "pass").strip().lower() if isinstance(session, dict) else "pass"
         bets = dict(session.get("bets", {}) or {}) if isinstance(session, dict) else {}
         phase = str(session.get("phase", "come_out") or "come_out").strip().lower() if isinstance(session, dict) else "come_out"
@@ -3036,8 +3080,8 @@ class ServiceMenuSystem(System):
             coverage = f" across {count} {plural}"
         if label in {"weak", "patchy"} and weak_text:
             if strength_text and strength_text != weak_text:
-                return f"{role_name} fit: {label}{coverage} | strengths {strength_text} | missing {weak_text}."
-            return f"{role_name} fit: {label}{coverage} | missing {weak_text}."
+                return f"{role_name} fit: {label}{coverage} | strengths {strength_text} | needs {weak_text}."
+            return f"{role_name} fit: {label}{coverage} | needs {weak_text}."
         if strength_text:
             return f"{role_name} fit: {label}{coverage} | strengths {strength_text}."
         return f"{role_name} fit: {label}{coverage}."
@@ -4081,6 +4125,42 @@ class ServiceMenuSystem(System):
             "close_pending": False,
             "machine_action": None,
             "service_menu_mode": service,
+            "casino_session": None,
+        })
+
+    def _open_ecology_registry(self, prop, domain):
+        domain = str(domain or "").strip().lower()
+        if domain not in {"flora", "fauna"}:
+            return
+        state = self._dialog_ui_state()
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        prop_name = str(prop.get("name", prop.get("id", "Registry"))).strip() or "Registry"
+        rows = ecology_species_registry_rows(self.sim, domain)
+        domain_title = "Flora" if domain == "flora" else "Fauna"
+        transcript = [f"Installation-native {domain} recorded at {prop_name}."]
+        if rows:
+            transcript.extend(f"{row['name']} -> {row['appearance']}" for row in rows)
+        else:
+            transcript.append(f"No installation-native {domain} lines have been discovered yet.")
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": prop.get("id"),
+            "title": f"{domain_title} Registry: {prop_name}",
+            "subtitle": f"{len(rows)} present line{'s' if len(rows) != 1 else ''}",
+            "transcript": transcript,
+            "topics": [{"id": "service_menu:root", "label": "Back"}],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Names and visible forms are listed here. Population actions will attach to these lines later.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": f"ecology_registry:{domain}",
+            "ecology_registry_rows": [dict(row) for row in rows],
             "casino_session": None,
         })
 
@@ -5347,6 +5427,21 @@ class ServiceMenuSystem(System):
         crash_session = _casino_crash_normalize_session(state.get("session")) if service == "crash" else None
         crash_phase = str(crash_session.get("phase", "")).strip().lower() if isinstance(crash_session, dict) else ""
 
+        if action in {"scroll_line", "scroll_page", "scroll_home", "scroll_end"}:
+            if action == "scroll_home":
+                self._scroll_casino_body(edge="home")
+            elif action == "scroll_end":
+                self._scroll_casino_body(edge="end")
+            elif action == "scroll_page":
+                page_size = max(1, int(state.get("body_page_size", 1) or 1) - 1)
+                self._scroll_casino_body(amount=page_size * (1 if int(event.data.get("direction", 1) or 1) > 0 else -1))
+            else:
+                self._scroll_casino_body(amount=int(event.data.get("direction", 0) or 0))
+            return
+
+        if action in {"confirm", "primary"} and (mode == "result" or bool(state.get("close_pending"))):
+            action = "back"
+
         if action == "tab" and host_style == "floor" and mode in {"floor", "services"}:
             self._open_casino_floor(prop, page="services" if mode == "floor" else "games")
             return
@@ -5982,6 +6077,13 @@ class ServiceMenuSystem(System):
         if option_id == "appearance_style":
             if isinstance(prop, dict):
                 self._open_appearance_style_menu(prop)
+            else:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+            return
+        if option_id in {"fauna_registry", "flora_registry"}:
+            if isinstance(prop, dict):
+                self._open_ecology_registry(prop, "fauna" if option_id == "fauna_registry" else "flora")
             else:
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)

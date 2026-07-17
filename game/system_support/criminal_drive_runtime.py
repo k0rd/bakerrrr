@@ -17,8 +17,9 @@ from game.components import (
     Position,
     Vitality,
 )
-from game.item_semantics import item_legal_status as _item_legal_status, item_tags as _item_tags
+from game.item_semantics import item_legal_status as _item_legal_status
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item
+from game.item_valuation import item_fair_value
 from game.justice_runtime import justice_snapshot
 from game.organization_reputation import organization_instability_profile
 from game.organizations import (
@@ -359,21 +360,7 @@ def _ground_item_base_value(ground, *, sim=None, prop=None):
     item_id = _text(ground.get("item_id")).lower()
     if not item_id:
         return 0.0
-    item_def = ITEM_CATALOG.get(item_id, {})
-    category = _text(item_def.get("category")).lower()
-    tags = set(_item_tags(item_id))
-    base = float(item_def.get("buy_price", item_def.get("value", 0)) or 0.0)
-    if base <= 0.0:
-        if "drug" in tags:
-            base = 26.0
-        elif "medical" in tags or "injectable" in tags:
-            base = 20.0
-        elif category == "tool" or "tool" in tags:
-            base = 18.0
-        elif category == "weapon" or "weapon" in tags:
-            base = 22.0
-        else:
-            base = 10.0
+    base = float(item_fair_value(item_id, ground.get("metadata"), item_catalog=ITEM_CATALOG))
     quantity = max(1, _safe_int(ground.get("quantity"), default=1))
     claim_class = str(classify_item_claim(sim, ground, prop=prop).get("claim_class", "") or "").strip().lower()
     if claim_class in {"public_free", "scene_salvage"}:

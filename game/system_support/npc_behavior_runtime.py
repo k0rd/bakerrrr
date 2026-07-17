@@ -7,8 +7,6 @@ import random
 from engine.sites import site_entry_front_cell
 from engine.events import Event
 from game.components import AI, ArmorLoadout, BehaviorProfile, CriminalDriveState, FinancialProfile, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Occupation, Position, PropertyKnowledge, StatusEffects, Vitality, WeaponLoadout
-from game.drone_distribution import drone_item_base_value
-from game.wire_distribution import wire_item_base_value
 from game.item_semantics import (
     appraise_item_for_actor,
     identify_item_for_actor,
@@ -20,6 +18,7 @@ from game.item_semantics import (
     item_tags as _item_tags,
 )
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name, item_instance_condition
+from game.item_valuation import item_fair_value
 from game.property_access import evaluate_property_access as _evaluate_property_access, world_hour as _world_hour
 from game.property_doors import _actor_is_animal_or_wildlife
 from game.property_runtime import (
@@ -313,31 +312,6 @@ def _seed_pusher_vendor_preferences(behaviors, preferences, *, seed_token="", ro
 
 
 _SHOPPING_QUIRK_ORDER = tuple(sorted(_SHOPPING_QUIRK_PROFILES))
-_STREET_ITEM_VALUE = {
-    "weapon": 46,
-    "firearm": 46,
-    "launcher": 74,
-    "armor": 30,
-    "tool": 24,
-    "device": 20,
-    "communication": 20,
-    "medical": 20,
-    "ammo": 18,
-    "token": 10,
-    "access": 28,
-    "stimulant": 22,
-    "drug": 24,
-}
-_STREET_ITEM_OVERRIDES = {
-    "cocaine_bindle": 32,
-    "mdma_capsule": 30,
-    "lsd_blotter": 26,
-    "black_market_stim": 28,
-    "methamphetamine": 34,
-    "fentanyl_patch": 30,
-    "ketamine_vial": 30,
-    "heroin_syringe": 32,
-}
 _STREET_DEFAULT_VALUE = 14
 _SCAVENGE_CATEGORY_VALUES = {
     "consumable": 9.0,
@@ -1395,29 +1369,11 @@ def _desired_street_buy_item_id(sim, actor_eid, *, district_type="", career=""):
     return pool[chooser.randrange(len(pool))]
 
 
-def _street_item_value(item_id):
+def _street_item_value(item_id, metadata=None):
     item_id = str(item_id or "").strip().lower()
     if not item_id:
         return int(_STREET_DEFAULT_VALUE)
-    if item_id in _STREET_ITEM_OVERRIDES:
-        return int(_STREET_ITEM_OVERRIDES[item_id])
-    drone_value = drone_item_base_value(item_id, default=0)
-    if drone_value > 0:
-        return int(drone_value)
-    wire_value = wire_item_base_value(item_id, default=0)
-    if wire_value > 0:
-        return int(wire_value)
-    item_def = ITEM_CATALOG.get(item_id, {})
-    tags = {
-        str(tag).strip().lower()
-        for tag in item_def.get("tags", ())
-        if str(tag).strip()
-    }
-    category = str(item_def.get("category", "") or "").strip().lower()
-    for tag, value in _STREET_ITEM_VALUE.items():
-        if tag in tags or (category and tag == category):
-            return int(value)
-    return int(_STREET_DEFAULT_VALUE)
+    return int(item_fair_value(item_id, metadata, item_catalog=ITEM_CATALOG))
 
 
 def _street_item_price(entry, *, mult=1.0):
@@ -1425,22 +1381,8 @@ def _street_item_price(entry, *, mult=1.0):
     if not item_id or is_credstick_item(item_id):
         return 0
     quantity = max(1, int((entry or {}).get("quantity", 1) or 1))
-    base = float(_street_item_value(item_id))
-    condition = item_instance_condition(
-        item_id,
-        metadata=(entry or {}).get("metadata"),
-        item_catalog=ITEM_CATALOG,
-    )
-    quality = str(condition.get("quality", "standard") or "").strip().lower() or "standard"
-    quality_mult = {
-        "poor": 0.78,
-        "standard": 1.0,
-        "good": 1.18,
-        "excellent": 1.34,
-    }.get(quality, 1.0)
-    if bool((condition.get("profile") or {}).get("supports_durability")):
-        quality_mult *= 0.72 + (float(condition.get("durability_ratio", 1.0) or 1.0) * 0.4)
-    total = base * quantity * max(0.2, float(mult or 1.0)) * quality_mult
+    base = float(_street_item_value(item_id, (entry or {}).get("metadata")))
+    total = base * quantity * max(0.2, float(mult or 1.0))
     return max(1, int(round(total)))
 
 

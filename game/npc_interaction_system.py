@@ -5628,38 +5628,6 @@ class NPCInteractionSystem(System):
 
     # ── Fence helpers ────────────────────────────────────────────────────────
 
-    _STREET_ITEM_VALUE = {
-        "weapon": 46,
-        "firearm": 46,
-        "launcher": 74,
-        "armor": 30,
-        "tool": 24,
-        "device": 20,
-        "communication": 20,
-        "medical": 20,
-        "ammo": 18,
-        "token": 10,
-        "access": 28,
-        "stimulant": 22,
-        "drug": 24,
-    }
-    _STREET_ITEM_OVERRIDES = {
-        "cocaine_bindle": 32,
-        "mdma_capsule": 30,
-        "lsd_blotter": 26,
-        "black_market_stim": 28,
-        "methamphetamine": 34,
-        "fentanyl_patch": 30,
-        "ketamine_vial": 30,
-        "heroin_syringe": 32,
-    }
-    _STREET_DEFAULT_VALUE = 14
-    _FENCE_ITEM_VALUE = {
-        "weapon": 50, "firearm": 50, "gear": 32, "armor": 32,
-        "tool": 24, "access": 28, "stimulant": 18, "drug": 18,
-    }
-    _FENCE_DEFAULT_VALUE = 14
-
     def _street_behavior_profile(self, npc_eid):
         return self.sim.ecs.get(BehaviorProfile).get(npc_eid)
 
@@ -5672,8 +5640,8 @@ class NPCInteractionSystem(System):
             return default
         return preferences.get(key, default)
 
-    def _street_item_value(self, item_id):
-        return int(_street_item_value(item_id))
+    def _street_item_value(self, item_id, metadata=None):
+        return int(_street_item_value(item_id, metadata))
 
     def _street_item_price(self, entry, *, mult=1.0):
         return int(_street_item_price(entry, mult=mult))
@@ -6127,19 +6095,18 @@ class NPCInteractionSystem(System):
             result.append(entry)
         return result
 
-    def _fence_item_value(self, item_id):
-        item_def = ITEM_CATALOG.get(item_id, {})
-        tags = set(str(t).strip().lower() for t in item_def.get("tags", ()))
-        for tag, val in self._FENCE_ITEM_VALUE.items():
-            if tag in tags:
-                return val
-        return max(self._FENCE_DEFAULT_VALUE, self._street_item_value(item_id))
+    def _fence_item_value(self, item_id, metadata=None):
+        return self._street_item_value(item_id, metadata)
 
     def _fence_payout_preview(self, player_eid):
         items = self._fence_illegal_items(player_eid)
         if not items:
             return 0
-        total = sum(self._fence_item_value(e.get("item_id", "")) for e in items)
+        total = sum(
+            self._fence_item_value(e.get("item_id", ""), e.get("metadata"))
+            * max(1, int(e.get("quantity", 1) or 1))
+            for e in items
+        )
         return max(10, int(total * 0.55))
 
     def _fence_available_for(self, npc_eid, contact_standing, guarded):

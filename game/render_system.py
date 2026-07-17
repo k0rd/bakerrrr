@@ -5172,15 +5172,24 @@ class RenderSystem(System):
                 wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
                 wrapped_body.extend(wrapped)
             body_start = 0
-            if len(wrapped_body) > text_body_h:
+            body_scroll_max = max(0, len(wrapped_body) - text_body_h)
+            if body_scroll_max > 0:
                 try:
                     focus_line = int(casino_ui.get("body_focus_line", -1))
                 except (TypeError, ValueError):
                     focus_line = -1
-                if 0 <= focus_line < len(body_line_anchors):
+                if bool(casino_ui.get("body_scroll_manual")):
+                    try:
+                        body_start = int(casino_ui.get("body_scroll", 0) or 0)
+                    except (TypeError, ValueError):
+                        body_start = 0
+                elif 0 <= focus_line < len(body_line_anchors):
                     focus_wrapped = body_line_anchors[focus_line]
                     body_start = focus_wrapped - max(0, (text_body_h - 2) // 2)
-                body_start = max(0, min(body_start, max(0, len(wrapped_body) - text_body_h)))
+                body_start = max(0, min(body_start, body_scroll_max))
+            casino_ui["body_scroll"] = int(body_start)
+            casino_ui["body_scroll_max"] = int(body_scroll_max)
+            casino_ui["body_page_size"] = int(text_body_h)
             visible_body = wrapped_body[body_start: body_start + text_body_h]
             for idx, line in enumerate(visible_body):
                 self._draw_display_line(body_x, text_body_top + idx, _clip_display_line(line, body_w), body_w)
@@ -5236,6 +5245,8 @@ class RenderSystem(System):
 
             hint = str(casino_ui.get("hint", "")).strip()
             footer = hint or "Casino floor"
+            if int(casino_ui.get("body_scroll_max", 0) or 0) > 0:
+                footer = f"PgUp/PgDn scroll | {footer}"
             self.view.draw_text(panel_x + 2, footer_y, footer[: max(1, panel_w - 4)])
         elif dialog_ui.get("open"):
             panel_w = min(max(62, screen_w - 4), screen_w)

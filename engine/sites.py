@@ -78,7 +78,7 @@ SITE_GAMEPLAY_PROFILES = {
     "butcher_shop": {
         "public": True,
         "is_storefront": True,
-        "site_services": ("butcher_prepare",),
+        "site_services": ("butcher_prepare", "fauna_registry"),
     },
     "breaker_yard": {
         "public": True,
@@ -167,7 +167,7 @@ SITE_GAMEPLAY_PROFILES = {
     "herbalist_camp": {
         "public": True,
         "is_storefront": True,
-        "site_services": ("herbal_care", "herbal_prepare", "herbal_recipe_sales"),
+        "site_services": ("herbal_care", "herbal_prepare", "herbal_recipe_sales", "flora_registry"),
     },
     "dock_shack": {
         "public": True,

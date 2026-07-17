@@ -92,7 +92,9 @@ class RunEpilogueLedgerSystem(System):
         self.casino_rounds = 0
         self.casino_biggest_win = 0
         self.visited_chunks: set[tuple[int, int]] = set()
+        self.discovered_species: list[str] = []
         self._bound_to_sim()
+        self._restore_discovered_species()
         self._subscribe()
 
     def _bound_to_sim(self):
@@ -103,6 +105,7 @@ class RunEpilogueLedgerSystem(System):
                 "casino_net": 0,
                 "casino_rounds": 0,
                 "visited_chunks": 0,
+                "species_discovered": 0,
             }
 
     def _subscribe(self):
@@ -129,6 +132,7 @@ class RunEpilogueLedgerSystem(System):
             "site_service_blocked": self.on_site_service_blocked,
             "overworld_travelled": self.on_overworld_travelled,
             "overworld_discovery_found": self.on_overworld_discovery_found,
+            "ecology_lineage_native": self.on_ecology_lineage_native,
             "weapon_fired": self.on_weapon_fired,
             "melee_attack": self.on_melee_attack,
             "explosion_triggered": self.on_explosion_triggered,
@@ -193,6 +197,42 @@ class RunEpilogueLedgerSystem(System):
         stats["casino_net"] = int(self.casino_net)
         stats["casino_rounds"] = int(self.casino_rounds)
         stats["visited_chunks"] = len(self.visited_chunks)
+        stats["species_discovered"] = len(self.discovered_species)
+
+    def _restore_discovered_species(self):
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            self.sim.world_traits = {}
+            traits = self.sim.world_traits
+        state = traits.get("run_epilogue")
+        if not isinstance(state, dict):
+            state = {}
+            traits["run_epilogue"] = state
+        seen = set()
+        restored = []
+        for raw_name in state.get("discovered_species", ()):
+            name = " ".join(str(raw_name or "").split())
+            key = name.casefold()
+            if not name or key in seen:
+                continue
+            seen.add(key)
+            restored.append(name)
+        self.discovered_species = restored
+        state["discovered_species"] = list(restored)
+        self._refresh_stats()
+
+    def _remember_discovered_species(self, name):
+        clean_name = " ".join(str(name or "").split())
+        if not clean_name:
+            return False
+        known = {existing.casefold() for existing in self.discovered_species}
+        if clean_name.casefold() in known:
+            return False
+        self.discovered_species.append(clean_name)
+        state = self.sim.world_traits.setdefault("run_epilogue", {})
+        state["discovered_species"] = list(self.discovered_species)
+        self._refresh_stats()
+        return True
 
     def _eid_name(self, eid, fallback="someone"):
         try:
@@ -489,6 +529,14 @@ class RunEpilogueLedgerSystem(System):
         label = str(event.data.get("label", event.data.get("name", "a site")) or "a site").strip()
         self._record("overworld_discovery", f"You discovered {label} on the route map.", event, weight=0.55)
 
+    def on_ecology_lineage_native(self, event):
+        if event.data.get("newly_native") is False:
+            return
+        name = event.data.get("lineage_name")
+        if not str(name or "").strip():
+            name = str(event.data.get("native_id", "") or "").split(":", 1)[-1].replace("_", " ")
+        self._remember_discovered_species(name)
+
     def on_weapon_fired(self, event):
         if event.data.get("eid") != self.player_eid and event.data.get("actor_eid") != self.player_eid:
             return
@@ -622,12 +670,16 @@ class RunEpilogueLedgerSystem(System):
         facts_count = len(self.facts)
         incident_summary = self._summarize_incidents()
         knowledge_summary = self._summarize_knowledge()
+        discovered_species = sorted(self.discovered_species, key=str.casefold)
 
         lines.append("What the city remembered:")
 
-        if facts_count <= 0 and not incident_summary and not knowledge_summary:
+        if facts_count <= 0 and not incident_summary and not knowledge_summary and not discovered_species:
             lines.append("  The run left little structured memory behind yet.")
             return lines
+
+        if discovered_species:
+            lines.append("  Species discovered this run: " + ", ".join(discovered_species) + ".")
 
         happened_bits = []
         if self.counts.get("trespass"):
