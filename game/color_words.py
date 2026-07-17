@@ -275,6 +275,7 @@ _CURATED_COLOR_WORD_PALETTE: tuple[ColorWordRow, ...] = (
     _row("peach", (238, 172, 128), tags=("warm", "soft", "light"), weight=3),
     _row("smoke", (124, 128, 136), tags=("neutral", "muted", "cool"), weight=6),
     _row("ash", (176, 178, 182), tags=("neutral", "muted", "light"), weight=6),
+    _row("puddle", (94, 119, 128), tags=("blue", "green", "cool", "muted", "legacy"), weight=0),
 )
 
 COLOR_WORD_ALIASES: dict[str, str] = {

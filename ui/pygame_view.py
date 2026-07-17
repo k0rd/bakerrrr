@@ -4099,6 +4099,8 @@ class PygameView:
         waist_half = max(1, min(shoulder_half, hip_half) - 1)
         left_torso = [(mid_x - shoulder_half, shoulder_y), (mid_x - waist_half, waist_y), (mid_x - hip_half, hip_y)]
         right_torso = [(mid_x + shoulder_half, shoulder_y), (mid_x + waist_half, waist_y), (mid_x + hip_half, hip_y)]
+        torso = [left_torso[0], right_torso[0], right_torso[1], right_torso[2], left_torso[2], left_torso[1]]
+        self.pygame.draw.polygon(overlay, fill, torso)
         self.pygame.draw.lines(overlay, fill, False, left_torso, 1)
         self.pygame.draw.lines(overlay, fill, False, right_torso, 1)
         self.pygame.draw.line(overlay, edge, left_torso[0], right_torso[0], 1)
@@ -4325,6 +4327,7 @@ class PygameView:
         length = _suffix("actor_hair_length_", "short")
         style = _suffix("actor_hair_style_", "")
         side_braid_style = "side_braid" in style or "braid" in style
+        pinned_back_style = "pinned_back" in style
         cap_top = head_y - head_r
         cap_left = mid_x - head_r
         cap_right = mid_x + head_r - 1
@@ -4377,7 +4380,7 @@ class PygameView:
             side_end = shoulder_y + max(2, px // 9)
         elif length == "long":
             side_end = shoulder_y + max(4, px // 4)
-        if length not in {"cropped", "short"} and not side_braid_style:
+        if length not in {"cropped", "short"} and not side_braid_style and not pinned_back_style:
             for side_x in (mid_x - head_r - 1, mid_x + head_r + 1):
                 self.pygame.draw.line(overlay, shade, (side_x + 1, head_y), (side_x + 1, side_end + 1), stroke_w + 1)
                 self.pygame.draw.line(overlay, fill, (side_x, head_y), (side_x, side_end), stroke_w)
@@ -4385,7 +4388,12 @@ class PygameView:
                     turn = -1 if side_x < mid_x else 1
                     self.pygame.draw.line(overlay, edge, (side_x, side_end), (side_x + turn, side_end - max(1, px // 14)), stroke_w)
 
-        if "high_tail" in style or "tied_back" in style or "nape_tie" in style:
+        if pinned_back_style:
+            pin_x = mid_x + head_r + max(1, px // 18)
+            pin_y = head_y
+            self.pygame.draw.line(overlay, fill, (cap_right, cap_top + cap_depth), (pin_x, pin_y), stroke_w)
+            self.pygame.draw.circle(overlay, edge, (pin_x, pin_y), max(1, px // 30))
+        elif "high_tail" in style or "tied_back" in style or "nape_tie" in style:
             tail_x = mid_x + head_r + max(1, px // 14)
             tail_y = head_y - (max(1, px // 12) if "high" in style else 0)
             self.pygame.draw.circle(overlay, shade, (tail_x + 1, tail_y + 1), max(1, px // 18))
@@ -4432,6 +4440,7 @@ class PygameView:
         length = suffix("actor_hair_length_", "short")
         style = suffix("actor_hair_style_", "")
         side_braid_style = "side_braid" in style or "braid" in style
+        pinned_back_style = "pinned_back" in style
         if side_braid_style:
             self.pygame.draw.lines(overlay, fill, False, ((q(6), q(4)), (q(7), q(2)), (q(9), q(2)), (q(10), q(4))), 1)
             self.pygame.draw.line(overlay, edge, (q(7), q(2)), (q(9), q(2)), 1)
@@ -4445,11 +4454,14 @@ class PygameView:
             self.pygame.draw.line(overlay, fill, (q(10), q(3)), (q(10), q(4)), 1)
         elif not side_braid_style and "one_sided" in style:
             self.pygame.draw.line(overlay, fill, (q(6), q(3)), (q(6), q(5)), 1)
-        if length not in {"cropped", "short"} and not side_braid_style:
+        if length not in {"cropped", "short"} and not side_braid_style and not pinned_back_style:
             side_end = q(6 if length == "jaw_length" else 8 if length == "shoulder_length" else 10)
             self.pygame.draw.line(overlay, fill, (q(6), q(3)), (q(6), side_end), 1)
             self.pygame.draw.line(overlay, fill, (q(10), q(3)), (q(10), side_end), 1)
-        if "bob" in style or "jaw_cut" in style or "blunt" in style:
+        if pinned_back_style:
+            self.pygame.draw.line(overlay, fill, (q(10), q(4)), (q(12), q(5)), 1)
+            overlay.set_at((q(11), q(5)), edge)
+        elif "bob" in style or "jaw_cut" in style or "blunt" in style:
             self.pygame.draw.line(overlay, edge, (q(6), q(6)), (q(10), q(6)), 1)
         elif side_braid_style:
             braid = ((q(6), q(5)), (q(5), q(7)), (q(6), q(8)), (q(5), q(10)))
@@ -5770,16 +5782,18 @@ class PygameView:
         waist_half = max(1, min(shoulder_half, hip_half) - 1)
 
         if kind == "base_top":
+            neckline_y = q(8)
+            strap_offset = max(1, shoulder_half - 1)
             if garment in {"bra", "bralette", "bandeau"}:
-                self.pygame.draw.line(overlay, fill, (mid_x - shoulder_half, q(7)), (mid_x + shoulder_half, q(7)), max(1, q(2)))
+                self.pygame.draw.line(overlay, fill, (mid_x - shoulder_half, neckline_y), (mid_x + shoulder_half, neckline_y), max(1, q(1)))
                 if garment != "bandeau":
-                    self.pygame.draw.line(overlay, edge, (mid_x - 1, q(6)), (mid_x - 1, q(7)), 1)
-                    self.pygame.draw.line(overlay, edge, (mid_x + 1, q(6)), (mid_x + 1, q(7)), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, q(6)), (mid_x - strap_offset, neckline_y), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, q(6)), (mid_x + strap_offset, neckline_y), 1)
             else:
                 top_half = max(1, shoulder_half - (1 if garment == "camisole" else 0))
                 bodice = [
-                    (mid_x - top_half, q(7)),
-                    (mid_x + top_half, q(7)),
+                    (mid_x - top_half, neckline_y),
+                    (mid_x + top_half, neckline_y),
                     (mid_x + waist_half, q(9)),
                     (mid_x + hip_half, q(10)),
                     (mid_x - hip_half, q(10)),
@@ -5788,8 +5802,8 @@ class PygameView:
                 self.pygame.draw.polygon(overlay, fill, bodice)
                 self.pygame.draw.line(overlay, shade, bodice[0], bodice[1], 1)
                 if garment in {"camisole", "tank_undershirt"}:
-                    self.pygame.draw.line(overlay, edge, (mid_x - 1, q(6)), (mid_x - 1, q(7)), 1)
-                    self.pygame.draw.line(overlay, edge, (mid_x + 1, q(6)), (mid_x + 1, q(7)), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, q(6)), (mid_x - strap_offset, neckline_y), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, q(6)), (mid_x + strap_offset, neckline_y), 1)
             if emblem:
                 self.pygame.draw.circle(overlay, edge, (mid_x + max(1, q(1)), q(8)), 1)
         elif kind == "base_bottom":
