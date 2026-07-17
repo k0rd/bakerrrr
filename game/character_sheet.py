@@ -246,13 +246,6 @@ def _known_recipe_lines(sim, player_eid):
     return lines
 
 
-def _sheet_biological_sex_label(identity):
-    if identity is None:
-        return "unknown"
-    value = str(getattr(identity, "assigned_sex", "") or "").strip().lower()
-    return value or "unknown"
-
-
 def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     if sim is None or player_eid is None:
         return (
@@ -356,6 +349,7 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
             "",
             "IDENTITY",
             f"Identity {gender_identity} | Pronouns {pronoun_text}",
+            f"Species: {_sheet_species_label(identity)}",
         ])
         if appearance_text:
             summary_lines.append(appearance_text)
@@ -377,14 +371,6 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
                 f"Dex {int(getattr(core, 'dexterity', 0))} | Access {int(getattr(core, 'access', 0))}"
             ),
             f"Charm {int(getattr(core, 'charm', 0))} | Sense {int(getattr(core, 'common_sense', 0))}",
-        ])
-
-    if identity is not None:
-        summary_lines.extend([
-            "",
-            "REPRODUCTION",
-            f"Species: {_sheet_species_label(identity)}",
-            f"Biological sex: {_sheet_biological_sex_label(identity)}",
         ])
 
     loadout_lines = [

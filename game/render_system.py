@@ -658,7 +658,6 @@ _CHARACTER_SECTION_COLORS = (
     "human_rust",
 )
 _CHARACTER_LABEL_PREFIXES = (
-    "Biological sex",
     "Inventory slots",
     "Active effects",
     "Owned props",

@@ -7,16 +7,11 @@ from typing import Mapping, Tuple
 from engine.buildings import building_exterior_profile
 from game.components import AI, CreatureIdentity, NPCSocial, NPCWill, Render, Vitality
 from game.appearance_loadout import (
-    appearance_color_key,
-    appearance_color_word,
     appearance_render_colors,
     humanoid_render_profile,
-    player_appearance_color_key,
-    player_appearance_color_word,
 )
 from game.color_words import clothing_render_key_for_color_word
 from game.dialogue_runtime import active_contractor_record
-from game.human_description import human_render_color_key as _human_render_color_key
 from game.property_runtime import (
     building_id_from_structure,
     finance_services_for_property,
@@ -837,10 +832,33 @@ def _actor_outfit_color_overlays(render_colors):
             "effects": tuple(effects),
         })
     if overlays:
+        # The console rune is printed on the visible torso layer. Carry that
+        # layer's real color and cut so pygame can choose contrast and scale.
+        rune_role = next(
+            (
+                role
+                for role in ("primary", "inner", "base_top")
+                if str(render_colors.get(role) or "").strip()
+            ),
+            "",
+        )
+        rune_part = (
+            render_colors.get("parts", {}).get(rune_role, {})
+            if rune_role and isinstance(render_colors.get("parts"), Mapping)
+            else {}
+        )
+        rune_type = str(rune_part.get("type") or "").strip().lower().replace(" ", "_")
+        rune_effects = []
+        if rune_type:
+            rune_effects.append(f"actor_rune_underlay_type_{rune_type}")
+        if rune_type in {"bra", "bralette"}:
+            rune_effects.append("actor_rune_scale_compact")
         overlays.append({
             "glyph": " ",
-            "color": "actor_highlight",
+            "color": str(render_colors.get(rune_role) or "actor_highlight").strip() or "actor_highlight",
+            "color_word": str(render_colors.get(f"{rune_role}_word") or "").strip().lower() or None,
             "semantic_id": "ui_actor_identity_rune",
+            "effects": tuple(rune_effects),
         })
     return tuple(overlays)
 
@@ -859,6 +877,9 @@ def _actor_presentation_effects(profile):
     build = token(profile.get("build"))
     if build:
         effects.append(f"actor_build_{build}")
+    silhouette = token(profile.get("silhouette"))
+    if silhouette:
+        effects.append(f"actor_silhouette_{silhouette}")
     hair_length = token(profile.get("hair_length"))
     if hair_length:
         effects.append(f"actor_hair_length_{hair_length}")
@@ -892,14 +913,12 @@ def _hominid_semantic_id_for_role(catalog, role=""):
 def entity_default_snapshot(identity, *, role="", player=False, catalog=None, seed=None, eid=None, sim=None, humanoid_profile=None):
     catalog = catalog or get_runtime_semantic_catalog()
     humanoid_effects = _actor_presentation_effects(humanoid_profile)
+    body_color = str((humanoid_profile or {}).get("body_color_key") or "").strip() or "human_monochrome"
 
     if player:
-        color = player_appearance_color_key(sim, eid) if sim is not None and eid is not None else None
-        color_word = player_appearance_color_word(sim, eid) if sim is not None and eid is not None else None
         return _semantic_snapshot(
             "@",
-            color=color or "player",
-            color_word=color_word,
+            color=body_color,
             semantic_id="entity_player",
             catalog=catalog,
             preferred_categories=("entities",),
@@ -917,17 +936,8 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
 
     if taxonomy == "hominid":
         glyph = "@"
-        worn_color = appearance_color_key(sim, eid) if sim is not None and eid is not None else None
-        worn_color_word = appearance_color_word(sim, eid) if sim is not None and eid is not None else None
-        if seed is not None and not worn_color:
-            color = _human_render_color_key(
-                seed,
-                eid=eid,
-                identity=identity,
-                personal_name=getattr(identity, "personal_name", None),
-            ) or color
-        color = worn_color or color or "human"
-        color_word = worn_color_word
+        color = body_color or color or "human_monochrome"
+        color_word = None
         semantic_id = _hominid_semantic_id_for_role(catalog, role=role)
     elif taxonomy in ENTITY_TAXONOMY_SEMANTICS:
         color = color or taxonomy
@@ -2075,11 +2085,7 @@ class AppearanceManager:
         if taxonomy == "hominid":
             hair_overlays = _actor_hair_overlay(humanoid_profile)
             outfit_overlays = _actor_outfit_color_overlays(appearance_render_colors(self.sim, eid))
-        if (
-            taxonomy == "hominid"
-            and str(defaults.color or "").strip().lower().startswith("clothing_")
-            and str(owned_color or "").strip().lower() in {"human", "guard", "scout"}
-        ):
+        if taxonomy == "hominid" and str(owned_color or "").strip().lower() in {"human", "guard", "scout", "player"}:
             owned_color = None
         uses_legacy_hominid_placeholder = (
             taxonomy == "hominid"

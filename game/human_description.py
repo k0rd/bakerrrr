@@ -625,7 +625,17 @@ def _eye_descriptor_color_key(profile):
 
 
 def _complexion_descriptor_color_key(profile):
-    return _COMPLEXION_RENDER_COLOR_KEYS.get(str(profile.get("complexion_phrase", "")).strip().lower()) or None
+    return human_complexion_render_color_key(profile)
+
+
+def human_complexion_render_color_key(profile_or_phrase):
+    """Return the body palette key for a visible complexion description."""
+
+    if isinstance(profile_or_phrase, dict):
+        phrase = profile_or_phrase.get("complexion_phrase", "")
+    else:
+        phrase = profile_or_phrase
+    return _COMPLEXION_RENDER_COLOR_KEYS.get(str(phrase or "").strip().lower()) or None
 
 
 def human_conversation_presentation(seed, *, eid=None, identity=None, personal_name=None):

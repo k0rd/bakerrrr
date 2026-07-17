@@ -4016,7 +4016,7 @@ class PygameView:
             return default
 
         presentation = _suffix("actor_presentation_", "mixed")
-        visible_build = _suffix("actor_build_", "average")
+        silhouette = _suffix("actor_silhouette_", "")
 
         self._draw_legibility_backing(
             overlay,
@@ -4071,21 +4071,27 @@ class PygameView:
         hip_y = px - max(5, px // 4)
         foot_y = px - max(2, px // 12)
         if presentation == "femme":
-            shoulder_half = max(3, px // 6)
-            hip_half = max(3, px // 5)
+            # Keep this a line figure, but let the waist-and-hip contour read
+            # as an hourglass rather than a closed diamond at normal tile size.
+            shoulder_half = max(2, px // 7)
+            hip_half = shoulder_half + {"straight": 0, "soft": 1, "curvy": 2}.get(silhouette, 1)
         elif presentation == "masc":
-            shoulder_half = max(3, px // 6)
+            shoulder_half = max(2, px // 6)
             hip_half = max(2, px // 7)
+            if silhouette == "broad":
+                shoulder_half += max(1, px // 24)
+            elif silhouette == "lean":
+                hip_half = max(1, hip_half - 1)
         elif presentation == "androgynous":
             shoulder_half = max(3, px // 6)
             hip_half = max(3, px // 6)
         else:
             shoulder_half = max(3, px // 6)
             hip_half = max(3, px // 6)
-        if visible_build in {"sturdy", "compact"}:
+        if presentation not in {"femme", "masc"} and silhouette == "solid":
             shoulder_half += max(1, px // 28)
             hip_half += max(0, px // 32)
-        elif visible_build == "lean":
+        elif presentation not in {"femme", "masc"} and silhouette == "slight":
             shoulder_half = max(3, shoulder_half - max(0, px // 28))
             hip_half = max(2, hip_half - max(0, px // 32))
         if kind == "guard":
@@ -4095,7 +4101,7 @@ class PygameView:
         body_corner = max(1, px // 16)
         if presentation == "femme":
             waist_y = shoulder_y + max(2, (hip_y - shoulder_y) // 2)
-            waist_half = max(2, min(shoulder_half, hip_half) - max(1, px // 20))
+            waist_half = max(1, min(shoulder_half, hip_half) - max(1, px // 20))
             torso = [
                 (mid_x - shoulder_half + body_corner, shoulder_y),
                 (mid_x + shoulder_half - body_corner, shoulder_y),
@@ -4125,12 +4131,17 @@ class PygameView:
             left_contour = (torso[0], torso[7], torso[6], torso[5])
 
         arm_y = min(hip_y - 1, shoulder_y + max(3, px // 4))
-        hand_outset = max(1, px // 18)
-        left_hand = (mid_x - shoulder_half - hand_outset, arm_y)
-        right_hand = (mid_x + shoulder_half + hand_outset, arm_y)
-        for start, end in (((mid_x - shoulder_half + 1, shoulder_y + 1), left_hand), ((mid_x + shoulder_half - 1, shoulder_y + 1), right_hand)):
-            self.pygame.draw.line(overlay, outline, (start[0] + 1, start[1] + 1), (end[0] + 1, end[1] + 1), stroke_w + 2)
-            self.pygame.draw.line(overlay, fill, start, end, max(1, stroke_w + 1))
+        arm_outset = max(2, px // 12)
+        left_arm_x = mid_x - shoulder_half - arm_outset
+        right_arm_x = mid_x + shoulder_half + arm_outset
+        arm_paths = (
+            ((mid_x - shoulder_half + 1, shoulder_y + 1), (left_arm_x, shoulder_y + 2), (left_arm_x, arm_y)),
+            ((mid_x + shoulder_half - 1, shoulder_y + 1), (right_arm_x, shoulder_y + 2), (right_arm_x, arm_y)),
+        )
+        for path in arm_paths:
+            shadow_path = tuple((tx + 1, ty + 1) for tx, ty in path)
+            self.pygame.draw.lines(overlay, outline, False, shadow_path, stroke_w + 2)
+            self.pygame.draw.lines(overlay, fill, False, path, max(1, stroke_w + 1))
 
         neck_top = head_y + head_r - 1
         neck_bottom = shoulder_y + 1
@@ -4172,10 +4183,12 @@ class PygameView:
 
         # The old console token survives as a small identifying rune, no longer a mask over the art.
         text_value = str(glyph or "@")[:1] or "@"
-        text_rgb = (edge[0], edge[1], edge[2])
+        body_brightness = (frame[0] * 0.299) + (frame[1] * 0.587) + (frame[2] * 0.114)
+        text_rgb = (20, 24, 28) if body_brightness >= 150 else (246, 248, 246)
         text_surface = self._token_font.render(text_value, True, text_rgb)
         text_rect = text_surface.get_rect(center=(mid_x, shoulder_y + max(2, (hip_y - shoulder_y) // 2)))
-        shadow_surface = self._token_font.render(text_value, True, (12, 16, 20))
+        shadow_rgb = (244, 246, 244) if body_brightness >= 150 else (12, 16, 20)
+        shadow_surface = self._token_font.render(text_value, True, shadow_rgb)
         overlay.blit(shadow_surface, text_rect.move(1, 1))
         overlay.blit(text_surface, text_rect)
 
@@ -5868,15 +5881,33 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_actor_identity_rune_overlay(self, x, y, color=None, attrs=0):
+    def _draw_actor_identity_rune_overlay(self, x, y, color=None, attrs=0, *, effects=()):
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
         overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
         center = (self.cell_px // 2, max(5, int(self.cell_px * 0.55)))
-        shadow_surface = self._token_font.render("@", True, (12, 16, 20))
+        underlay = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.0)
+        brightness = (underlay[0] * 0.299) + (underlay[1] * 0.587) + (underlay[2] * 0.114)
+        text_rgb = (20, 24, 28) if brightness >= 150 else (246, 248, 246)
+        shadow_rgb = (244, 246, 244) if brightness >= 150 else (12, 16, 20)
+        compact = "actor_rune_scale_compact" in {
+            str(effect).strip().lower()
+            for effect in (effects or ())
+            if str(effect).strip()
+        }
+        shadow_surface = self._token_font.render("@", True, shadow_rgb)
+        text_surface = self._token_font.render("@", True, text_rgb)
+        if compact:
+            def _compact(surface):
+                return self.pygame.transform.scale(
+                    surface,
+                    (max(3, int(round(surface.get_width() * 0.76))), max(4, int(round(surface.get_height() * 0.76)))),
+                )
+
+            shadow_surface = _compact(shadow_surface)
+            text_surface = _compact(text_surface)
         shadow_rect = shadow_surface.get_rect(center=(center[0] + 1, center[1] + 1))
         overlay.blit(shadow_surface, shadow_rect)
-        text_surface = self._token_font.render("@", True, (244, 246, 244))
         text_rect = text_surface.get_rect(center=center)
         overlay.blit(text_surface, text_rect)
         self.surface.blit(overlay, (cell_x, cell_y))
@@ -7201,7 +7232,7 @@ class PygameView:
             )
             return color_key
         if semantic_key == "ui_actor_identity_rune":
-            self._draw_actor_identity_rune_overlay(x, y, color=color, attrs=attrs)
+            self._draw_actor_identity_rune_overlay(x, y, color=color, attrs=attrs, effects=effects)
             return semantic_key
         if semantic_key == "ui_actor_hair":
             self._draw_actor_hair_overlay(x, y, color=color, attrs=attrs, effects=effects)

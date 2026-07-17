@@ -18,7 +18,12 @@ from game.fashion_market import (
     record_cosmetic_popularity,
     with_cosmetic_rarity_metadata,
 )
-from game.human_description import build_human_description_profile, human_self_physical_summary, human_render_color_key
+from game.human_description import (
+    build_human_description_profile,
+    human_complexion_render_color_key,
+    human_render_color_key,
+    human_self_physical_summary,
+)
 from game.human_identity import pronoun_format_slots
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG, item_display_name, item_inventory_slot_cost
@@ -723,11 +728,60 @@ def _seeded_makeup_for_profile(profile, rng):
     return global_makeup, regions
 
 
+def _seeded_silhouette_variant(profile, rng):
+    profile = profile if isinstance(profile, dict) else {}
+    presentation = _key(profile.get("style_axis"))
+    stature_phrase = _key(profile.get("stature_phrase"))
+    build = _key(profile.get("stature_compact"))
+    if presentation == "femme":
+        weights = (("straight", 0.34), ("soft", 0.48), ("curvy", 0.18))
+        if "lightly built" in stature_phrase or build == "lean":
+            weights = (("straight", 0.68), ("soft", 0.27), ("curvy", 0.05))
+        elif build in {"sturdy", "compact"}:
+            weights = (("straight", 0.12), ("soft", 0.48), ("curvy", 0.40))
+    elif presentation == "masc":
+        weights = (("lean", 0.30), ("regular", 0.48), ("broad", 0.22))
+        if "lightly built" in stature_phrase or build == "lean":
+            weights = (("lean", 0.66), ("regular", 0.29), ("broad", 0.05))
+        elif build in {"sturdy", "compact"} or "broad-shouldered" in stature_phrase or "square-shouldered" in stature_phrase:
+            weights = (("lean", 0.08), ("regular", 0.36), ("broad", 0.56))
+    else:
+        weights = (("slight", 0.34), ("balanced", 0.48), ("solid", 0.18))
+        if "lightly built" in stature_phrase or build == "lean":
+            weights = (("slight", 0.62), ("balanced", 0.33), ("solid", 0.05))
+        elif build in {"sturdy", "compact"}:
+            weights = (("slight", 0.10), ("balanced", 0.46), ("solid", 0.44))
+    pick = rng.random()
+    running = 0.0
+    for variant, weight in weights:
+        running += float(weight)
+        if pick <= running:
+            return variant
+    return weights[-1][0]
+
+
 def seed_npc_innate_appearance_from_description(sim, eid, *, seed_token=""):
     loadout = appearance_loadout_for(sim, eid, create=True)
     if loadout is None:
         return False
-    if bool(getattr(loadout, "description_appearance_seeded", False)):
+    persisted_profile_keys = (
+        "style_axis",
+        "stature_phrase",
+        "stature_compact",
+        "complexion_phrase",
+        "hair_color",
+        "hair_texture",
+        "hair_length",
+        "hair_style_compact",
+        "hair_style_phrase",
+    )
+    existing_overrides = dict(getattr(loadout, "body_overrides", {}) or {})
+    already_seeded = bool(getattr(loadout, "description_appearance_seeded", False))
+    if (
+        already_seeded
+        and all(_text(existing_overrides.get(key)) for key in persisted_profile_keys)
+        and _text(existing_overrides.get("silhouette_variant"))
+    ):
         return False
     identity = sim.ecs.get(CreatureIdentity).get(eid) if sim is not None else None
     profile = build_human_description_profile(
@@ -740,14 +794,17 @@ def seed_npc_innate_appearance_from_description(sim, eid, *, seed_token=""):
         return False
 
     seed_appearance_skin_marks_from_description(sim, eid, loadout=loadout)
-    overrides = dict(getattr(loadout, "body_overrides", {}) or {})
-    for key in ("style_axis", "stature_compact", "hair_color", "hair_texture", "hair_length", "hair_style_compact", "hair_style_phrase"):
+    overrides = dict(existing_overrides)
+    for key in persisted_profile_keys:
         source_key = "hair_style_compact" if key == "hair_style_compact" else key
         value = _text(profile.get(source_key))
         if value and not _text(overrides.get(key)):
             overrides[key] = value
     if not _text(overrides.get("hair_style")) and _text(profile.get("hair_style_compact")):
         overrides["hair_style"] = _text(profile.get("hair_style_compact"))
+    if not _text(overrides.get("silhouette_variant")):
+        silhouette_rng = random.Random(f"human-silhouette:{getattr(sim, 'seed', 0)}:{eid}:{profile.get('seed_token')}")
+        overrides["silhouette_variant"] = _seeded_silhouette_variant(profile, silhouette_rng)
     rng = random.Random(f"npc-innate-appearance:{getattr(sim, 'seed', 0)}:{eid}:{seed_token}:{profile.get('seed_token')}")
     makeup, regions = _seeded_makeup_for_profile(profile, rng)
     if makeup and not _text(overrides.get("makeup")) and not _tattoo_conflict_regions(loadout):
@@ -759,7 +816,7 @@ def seed_npc_innate_appearance_from_description(sim, eid, *, seed_token=""):
             makeup_regions[region] = value
     loadout.makeup_regions = AppearanceLoadout._clean_overrides(makeup_regions)
     loadout.description_appearance_seeded = True
-    return True
+    return (not already_seeded) or overrides != existing_overrides
 
 
 def appearance_loadout_for(sim, eid, create=False):
@@ -2635,6 +2692,13 @@ def humanoid_render_profile(sim, eid):
         return {}
     loadout = appearance_loadout_for(sim, eid, create=False)
     overrides = dict(getattr(loadout, "body_overrides", {}) or {}) if loadout is not None else {}
+    # Older saves predate persisted complexion/presentation render fields. Fill
+    # them once from the same deterministic description that powers the sheet;
+    # subsequent frames remain a cheap component read.
+    if not _text(overrides.get("complexion_phrase")) or not _text(overrides.get("silhouette_variant")):
+        seed_npc_innate_appearance_from_description(sim, eid, seed_token="render-profile-backfill")
+        loadout = appearance_loadout_for(sim, eid, create=False)
+    overrides = dict(getattr(loadout, "body_overrides", {}) or {}) if loadout is not None else {}
     gender_identity = _key(getattr(identity, "gender_identity", ""))
     presentation = _key(overrides.get("style_axis"))
     if presentation not in {"femme", "masc", "androgynous", "mixed"}:
@@ -2644,13 +2708,17 @@ def humanoid_render_profile(sim, eid):
             "nonbinary": "mixed",
         }.get(gender_identity, "mixed")
     hair_color = _key(overrides.get("hair_color"))
+    complexion_phrase = _key(overrides.get("complexion_phrase"))
     return {
         "presentation": presentation,
         "build": _key(overrides.get("stature_compact")),
+        "silhouette": _key(overrides.get("silhouette_variant")),
         "hair_length": _key(overrides.get("hair_length")),
         "hair_style": _key(overrides.get("hair_style") or overrides.get("hair_style_compact")),
         "hair_color": hair_color,
         "hair_color_key": fallback_render_key_for_color_word(hair_color, default="human_charcoal") if hair_color else "human_charcoal",
+        "complexion_phrase": complexion_phrase,
+        "body_color_key": human_complexion_render_color_key(complexion_phrase) or "human_monochrome",
     }
 
 
