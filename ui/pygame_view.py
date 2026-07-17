@@ -4061,7 +4061,7 @@ class PygameView:
         foot_y = min(px - 1, q(15))
 
         # Occupational marks sit behind a crisp one-pixel person. The player
-        # needs no selection reticle; her body, outfit, and @ identify her.
+        # needs no targeting reticle or identifying watermark.
         if kind == "guard":
             shield = [(mid_x, q(1)), (q(13), q(5)), (q(12), q(13)), (mid_x, q(15)), (q(4), q(13)), (q(3), q(5))]
             self.pygame.draw.lines(overlay, role_accent, True, shield, 1)
@@ -4109,7 +4109,6 @@ class PygameView:
         self.pygame.draw.lines(overlay, fill, False, left_leg, 1)
         self.pygame.draw.lines(overlay, fill, False, right_leg, 1)
         self.surface.blit(overlay, (cell_x, cell_y))
-        self._draw_actor_identity_rune_overlay(x, y, color=color, attrs=attrs)
 
     def _draw_actor_token_overlay(self, x, y, glyph, color=None, attrs=0, *, kind="civilian", effects=()):
         if self.cell_px <= 10:
@@ -6220,6 +6219,12 @@ class PygameView:
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_actor_identity_rune_overlay(self, x, y, color=None, attrs=0, *, effects=()):
+        # At ordinary play scales an @ cannot remain both recognizable and
+        # subordinate to the person; it rasterizes into an object apparently
+        # hanging in front of the torso. Preserve it only for larger detail
+        # views where it can read as an intentional clothing emblem.
+        if self.cell_px <= 28:
+            return
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
         overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
