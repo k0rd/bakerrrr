@@ -5346,6 +5346,15 @@ class EventLogSystem(System):
             return
         item_name = str(event.data.get("item_name", event.data.get("item_id", "item"))).strip() or "item"
         slot = str(event.data.get("slot", "") or "").replace("_", " ").strip()
+        if str(event.data.get("reason", "") or "").strip().lower() == "basewear_replaced":
+            previous = str(event.data.get("previous_item_name", "") or "").strip()
+            wardrobe_note = f"; your {previous} goes into your wardrobe" if previous else ""
+            _log_player_feedback(
+                self.sim,
+                f"You change into {item_name}{wardrobe_note}.",
+                kind="interaction",
+            )
+            return
         suffix = f" ({slot})" if slot else ""
         _log_player_feedback(self.sim, f"Wearing {item_name}{suffix}.", kind="interaction")
 

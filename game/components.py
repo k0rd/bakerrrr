@@ -3890,6 +3890,10 @@ class AppearanceLoadout:
         "shoes",
         "outer",
     )
+    BASEWEAR_SLOTS = (
+        "base_top",
+        "base_bottom",
+    )
 
     def __init__(
         self,
@@ -3897,10 +3901,12 @@ class AppearanceLoadout:
         body_overrides=None,
         skin_marks=None,
         makeup_regions=None,
+        basewear=None,
         skin_marks_seeded=False,
         description_appearance_seeded=False,
     ):
         self.slots = self._clean_slots(slots)
+        self.basewear = self._clean_basewear(basewear)
         self.body_overrides = self._clean_overrides(body_overrides)
         self.skin_marks = self._clean_skin_marks(skin_marks)
         self.makeup_regions = self._clean_overrides(makeup_regions)
@@ -3917,6 +3923,26 @@ class AppearanceLoadout:
                     continue
                 text = str(value or "").strip()
                 clean[key] = text or None
+        return clean
+
+    @staticmethod
+    def _clean_basewear(basewear=None):
+        clean = {slot: None for slot in AppearanceLoadout.BASEWEAR_SLOTS}
+        if not isinstance(basewear, dict):
+            return clean
+        for slot, value in basewear.items():
+            clean_slot = str(slot or "").strip().lower()
+            if clean_slot not in clean or not isinstance(value, dict):
+                continue
+            row = {
+                str(key or "").strip().lower(): stored
+                for key, stored in value.items()
+                if str(key or "").strip()
+            }
+            if not row:
+                continue
+            row["slot"] = clean_slot
+            clean[clean_slot] = row
         return clean
 
     @staticmethod
@@ -3957,6 +3983,7 @@ class AppearanceLoadout:
 
     def normalize(self):
         self.slots = self._clean_slots(getattr(self, "slots", None))
+        self.basewear = self._clean_basewear(getattr(self, "basewear", None))
         self.body_overrides = self._clean_overrides(getattr(self, "body_overrides", None))
         self.skin_marks = self._clean_skin_marks(getattr(self, "skin_marks", None))
         self.makeup_regions = self._clean_overrides(getattr(self, "makeup_regions", None))

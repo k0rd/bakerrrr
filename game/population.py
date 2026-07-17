@@ -1180,6 +1180,7 @@ def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
             item_id,
             seed_token=f"ambient:{getattr(sim, 'seed', 0)}:{eid}:{item_id}:{len(inventory.items)}",
             item_catalog=ITEM_CATALOG,
+            sim=sim,
         ))
         metadata["ambient_spawn"] = True
     added, _instance_id = inventory.add_item(

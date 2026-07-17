@@ -5449,6 +5449,132 @@
     "legal_status": "legal",
     "effects": []
   },
+  "undershirt": {
+    "name": "Undershirt",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_top"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "tank_undershirt": {
+    "name": "Tank Undershirt",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_top"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "bra": {
+    "name": "Bra",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_top"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "bralette": {
+    "name": "Bralette",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_top"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "camisole": {
+    "name": "Camisole",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_top"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "bandeau": {
+    "name": "Bandeau",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_top"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "boxers": {
+    "name": "Boxers",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_bottom"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "boxer_briefs": {
+    "name": "Boxer Briefs",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_bottom"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "briefs": {
+    "name": "Briefs",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_bottom"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "boyshorts": {
+    "name": "Boyshort Panties",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_bottom"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "bikini_panties": {
+    "name": "Bikini Panties",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_bottom"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "cheeky_panties": {
+    "name": "Cheeky Panties",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_bottom"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "thong": {
+    "name": "Thong",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_bottom"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "high_waist_panties": {
+    "name": "High-Waist Panties",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["cosmetic", "clothing", "basewear", "legal"],
+    "appearance_slots": ["base_bottom"],
+    "legal_status": "legal",
+    "effects": []
+  },
   "tee": {
     "name": "Tee",
     "glyph": "[",

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 import pickle
 import re
 import types
 from pathlib import Path
 
 from .events import EventBus
+from .save_paths import SAVE_DIR
 from .sim import Simulation
 from game.appearance import AppearanceManager
 from game.components import Position, VehicleState
@@ -35,14 +35,6 @@ def _inventory_item_instance_ids_from_sim(sim):
 SAVE_VERSION = 2
 
 
-def _default_save_dir():
-    raw = str(os.getenv("BAKERRRR_SAVE_DIR", "") or "").strip()
-    if raw:
-        return Path(raw).expanduser()
-    return Path(__file__).resolve().parents[1] / "saves"
-
-
-SAVE_DIR = _default_save_dir()
 BONES_ARCHIVE_PATH = SAVE_DIR / "bones.json"
 RUN_ECHOES_ARCHIVE_PATH = SAVE_DIR / "run_echoes.json"
 _EXCLUDED_SIM_STATE_KEYS = {
@@ -831,6 +823,10 @@ def restore_simulation(snapshot):
 
 
 def save_character_run(sim, name, save_dir=SAVE_DIR):
+    # Installation-wide registries keep their own files, but an ordinary
+    # save/quit is still a natural durability boundary for batched signals.
+    from game.fashion_market import flush_fashion_market
+
     name = normalize_character_name(name)
     if not name:
         raise ValueError("character name is required")
@@ -839,6 +835,7 @@ def save_character_run(sim, name, save_dir=SAVE_DIR):
         sim.world_traits = {}
     sim.character_name = name
     sim.world_traits["character_name"] = name
+    flush_fashion_market(sim)
 
     payload = snapshot_simulation(sim)
     path = character_save_path(name, save_dir=save_dir)

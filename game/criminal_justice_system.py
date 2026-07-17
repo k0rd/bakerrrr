@@ -3450,6 +3450,7 @@ class CriminalJusticeSystem(System):
             self.JUSTICE_RELEASE_JUMPSUIT_ITEM_ID,
             seed_token=f"booking-release:{getattr(self.sim, 'seed', 0)}:{getattr(self.sim, 'tick', 0)}:{self.player_eid}",
             item_catalog=ITEM_CATALOG,
+            sim=self.sim,
         )
         metadata = dict(metadata or {})
         accent = COSMETIC_COLOR_KEYS.get("safety_orange", "clothing_orange")

@@ -101,6 +101,9 @@ _POLISHED_WORDS = {
     "monochrome",
     "structured",
     "signet",
+    "lacy",
+    "scallop-trimmed",
+    "ribbon-trimmed",
 }
 _FLASHY_WORDS = {
     "bright",
@@ -120,6 +123,9 @@ _FLASHY_WORDS = {
     "bandana",
     "scarf",
     "watch",
+    "daisy",
+    "heart",
+    "star-print",
 }
 _ROUGH_WORDS = {
     "scuffed",
@@ -349,7 +355,58 @@ def _profile_from_loadout(sim, eid):
             "style": style,
         })
 
+    # Intrinsic player basewear only enters social outfit reads when ordinary
+    # clothing does not cover that half of the body. It remains invisible to
+    # this system under a top, bottom, or full-body garment.
+    basewear = dict(getattr(loadout, "basewear", {}) or {})
     armor = sim.ecs.get(ArmorLoadout).get(eid) if sim is not None else None
+    body_armor_covered = bool(
+        armor is not None
+        and getattr(armor, "equipped_instance_id", None)
+        and str(getattr(armor, "slot", "body") or "body").strip().lower() == "body"
+    )
+    full_body_covered = bool(str(slots.get("full_body") or "").strip()) or body_armor_covered
+    for base_slot, cover_slot in (("base_top", "top"), ("base_bottom", "bottom")):
+        if full_body_covered or bool(str(slots.get(cover_slot) or "").strip()):
+            continue
+        profile = dict(basewear.get(base_slot) or {})
+        if not profile:
+            continue
+        color = _key(profile.get("color_word") or profile.get("color"))
+        material = _key(profile.get("material"))
+        style = _key(profile.get("detail") or profile.get("style"))
+        pattern = _key(profile.get("pattern"))
+        emblem = _key(profile.get("emblem"))
+        label = _key(profile.get("label"))
+        appearance_type = _key(profile.get("appearance_type") or profile.get("item_id"))
+        colors.append(color)
+        accent_colors.append(_key(profile.get("accent_color")))
+        materials.append(material)
+        styles.extend(value for value in (style, pattern) if value)
+        labels.append(label)
+        types.append(appearance_type)
+        signature_parts.append(f"{base_slot}:{appearance_type}:{color}:{material}:{style}:{pattern}:{emblem}")
+        _add_profile_tags_from_words(tags, (color, material, style, pattern, emblem, label, appearance_type, base_slot))
+        for palette_tag in tags_for_color_word(color):
+            if palette_tag in _TAG_WEIGHTS:
+                tags.add(palette_tag)
+        if emblem or pattern:
+            tags.add("flashy")
+        if color in _MUTED_COLORS:
+            tags.add("muted")
+        if color in _FLASHY_COLORS:
+            tags.add("flashy")
+        items.append({
+            "slot": base_slot,
+            "type": appearance_type,
+            "label": label,
+            "color": color,
+            "material": material,
+            "style": style,
+            "pattern": pattern,
+            "emblem": emblem,
+        })
+
     if armor is not None and getattr(armor, "equipped_instance_id", None):
         tags.add("armor")
         tags.add("practical")

@@ -30,6 +30,11 @@ from game.wire_data_market import (
     wire_data_store_sell_rows,
 )
 from game.economy import item_market_bias, item_trade_pressure_bias, store_supply_profile
+from game.fashion_market import (
+    cosmetic_demand_profile,
+    cosmetic_fashion_quote,
+    with_cosmetic_market_metadata,
+)
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor, item_entry_is_critical_quest_item
 from game.items import ITEM_CATALOG
 from game.organization_reputation import organization_instability_profile
@@ -391,6 +396,20 @@ class TradeSystem(System):
         "security_vest": 96,
         "riot_plates": 124,
         "ceramic_plate_rig": 158,
+        "undershirt": 8,
+        "tank_undershirt": 9,
+        "bra": 16,
+        "bralette": 18,
+        "camisole": 17,
+        "bandeau": 13,
+        "boxers": 9,
+        "boxer_briefs": 11,
+        "briefs": 8,
+        "boyshorts": 13,
+        "bikini_panties": 14,
+        "cheeky_panties": 16,
+        "thong": 13,
+        "high_waist_panties": 15,
         **DRONE_ITEM_BASE_VALUES,
     }
 
@@ -926,8 +945,8 @@ class TradeSystem(System):
             ),
         },
         "top_shop": {
-            "min_slots": 3,
-            "max_slots": 5,
+            "min_slots": 4,
+            "max_slots": 7,
             "buy_mult_lo": 0.98,
             "buy_mult_hi": 1.32,
             "sell_ratio": 0.46,
@@ -938,11 +957,17 @@ class TradeSystem(System):
                 ("sweater", 12),
                 ("overshirt", 12),
                 ("turtleneck", 10),
+                ("undershirt", 10),
+                ("tank_undershirt", 9),
+                ("bra", 9),
+                ("bralette", 10),
+                ("camisole", 11),
+                ("bandeau", 7),
             ),
         },
         "bottom_shop": {
-            "min_slots": 3,
-            "max_slots": 5,
+            "min_slots": 4,
+            "max_slots": 7,
             "buy_mult_lo": 0.98,
             "buy_mult_hi": 1.32,
             "sell_ratio": 0.46,
@@ -950,6 +975,14 @@ class TradeSystem(System):
                 ("trousers", 16),
                 ("shorts", 12),
                 ("skirt", 12),
+                ("boxers", 9),
+                ("boxer_briefs", 10),
+                ("briefs", 8),
+                ("boyshorts", 9),
+                ("bikini_panties", 9),
+                ("cheeky_panties", 11),
+                ("thong", 8),
+                ("high_waist_panties", 9),
             ),
         },
         "dress_shop": {
@@ -964,6 +997,14 @@ class TradeSystem(System):
                 ("cardigan", 8),
                 ("necklace", 6),
                 ("bracelet", 6),
+                ("bra", 7),
+                ("bralette", 9),
+                ("camisole", 10),
+                ("boyshorts", 8),
+                ("bikini_panties", 8),
+                ("cheeky_panties", 10),
+                ("thong", 7),
+                ("high_waist_panties", 9),
             ),
         },
         "shoe_shop": {
@@ -1063,9 +1104,23 @@ class TradeSystem(System):
                 ("sweater", 12),
                 ("overshirt", 12),
                 ("turtleneck", 9),
+                ("undershirt", 7),
+                ("tank_undershirt", 7),
+                ("bra", 7),
+                ("bralette", 8),
+                ("camisole", 8),
+                ("bandeau", 6),
                 ("trousers", 14),
                 ("shorts", 10),
                 ("skirt", 10),
+                ("boxers", 7),
+                ("boxer_briefs", 8),
+                ("briefs", 6),
+                ("boyshorts", 7),
+                ("bikini_panties", 7),
+                ("cheeky_panties", 9),
+                ("thong", 6),
+                ("high_waist_panties", 7),
                 ("dress", 10),
                 ("boots", 11),
                 ("sneakers", 12),
@@ -1302,6 +1357,11 @@ class TradeSystem(System):
                 ("sweater", 8),
                 ("overshirt", 8),
                 ("turtleneck", 7),
+                ("undershirt", 6),
+                ("tank_undershirt", 5),
+                ("boxers", 5),
+                ("boxer_briefs", 6),
+                ("briefs", 5),
                 ("trousers", 10),
                 ("shorts", 8),
                 ("skirt", 8),
@@ -1451,9 +1511,23 @@ class TradeSystem(System):
                 ("sweater", 9),
                 ("overshirt", 8),
                 ("turtleneck", 6),
+                ("undershirt", 8),
+                ("tank_undershirt", 7),
+                ("bra", 6),
+                ("bralette", 7),
+                ("camisole", 8),
+                ("bandeau", 5),
                 ("trousers", 12),
                 ("shorts", 10),
                 ("skirt", 10),
+                ("boxers", 7),
+                ("boxer_briefs", 7),
+                ("briefs", 6),
+                ("boyshorts", 7),
+                ("bikini_panties", 7),
+                ("cheeky_panties", 8),
+                ("thong", 6),
+                ("high_waist_panties", 7),
                 ("dress", 8),
                 ("boots", 8),
                 ("sneakers", 10),
@@ -1952,9 +2026,26 @@ class TradeSystem(System):
 
     def _effective_store_buy_price(self, entry, store, terms):
         base_price = int(max(1, (entry or {}).get("buy_price", 1) or 1))
+        metadata = (entry or {}).get("metadata") if isinstance((entry or {}).get("metadata"), dict) else {}
+        current_fashion = cosmetic_demand_profile(self.sim, (entry or {}).get("item_id"), metadata)
+        stored_fashion_mult = float(metadata.get("fashion_demand_mult", 1.0) or 1.0) if metadata else 1.0
+        current_fashion_mult = float(current_fashion.get("demand_mult", 1.0) or 1.0) if current_fashion else 1.0
+        fashion_reprice_mult = max(0.8, min(1.35, current_fashion_mult / max(0.1, stored_fashion_mult)))
         pressure_mult = self._pressure_buy_price_mult(store, (entry or {}).get("item_id"))
-        pressured_price = max(1, int(round(base_price * pressure_mult)))
+        pressured_price = max(1, int(round(base_price * fashion_reprice_mult * pressure_mult)))
         return self._effective_buy_price(pressured_price, terms or {"buy_mult": 1.0})
+
+    def _fashion_row_fields(self, item_id, metadata):
+        quote = cosmetic_fashion_quote(self.sim, item_id, metadata)
+        if not quote:
+            return {}
+        return {
+            "fashion_rarity": str(quote.get("rarity_band", "") or "").strip(),
+            "fashion_demand": str(quote.get("demand_label", "") or "").strip(),
+            "fashion_market_note": str(quote.get("market_note", "") or "").strip(),
+            "fashion_player_influence": float(quote.get("player_influence", 0.0) or 0.0),
+            "fashion_npc_influence": float(quote.get("npc_influence", 0.0) or 0.0),
+        }
 
     def _trade_pressure_row_fields(self, store, item_id):
         prop = self._store_prop_for_state(store)
@@ -2486,6 +2577,7 @@ class TradeSystem(System):
                     item_id,
                     seed_token=seed_token,
                     item_catalog=ITEM_CATALOG,
+                    sim=self.sim,
                 )
             else:
                 entry_metadata = {}
@@ -2507,7 +2599,9 @@ class TradeSystem(System):
             )
             bias = item_market_bias(item_id, market_profile)
             pressure_bias = item_trade_pressure_bias(self.sim, prop, item_id)
-            base = int(max(1, self.ITEM_BASE_VALUES.get(
+            entry_metadata = with_cosmetic_market_metadata(self.sim, item_id, entry_metadata)
+            fashion_quote = cosmetic_fashion_quote(self.sim, item_id, entry_metadata)
+            base = int(max(1, fashion_quote.get("fair_value") or self.ITEM_BASE_VALUES.get(
                 item_id,
                 wire_item_base_value(item_id, default=drone_item_base_value(item_id, default=10)),
             )))
@@ -2612,7 +2706,7 @@ class TradeSystem(System):
                 return entry, cheapest
         return None, cheapest
 
-    def _sell_quote(self, item_id, state, terms=None, interest=None):
+    def _sell_quote(self, item_id, state, terms=None, interest=None, metadata=None):
         terms = terms or {"sell_mult": 1.0}
         listed = self._entry_for_item(state, item_id)
         price_mult = 1.0
@@ -2621,6 +2715,16 @@ class TradeSystem(System):
                 price_mult = max(0.0, float(interest.get("price_mult", 1.0)))
             except (TypeError, ValueError):
                 price_mult = 1.0
+        fashion_quote = cosmetic_fashion_quote(self.sim, item_id, metadata)
+        if fashion_quote:
+            if listed:
+                listed_buy = max(1, int(listed.get("buy_price", 1) or 1))
+                listed_sell = max(1, int(listed.get("sell_price", 1) or 1))
+                ratio = max(0.1, min(0.9, listed_sell / listed_buy))
+            else:
+                ratio = float(max(0.1, min(0.85, state.get("unlisted_sell_ratio", 0.3))))
+            base_price = max(1, int(round(int(fashion_quote["fair_value"]) * ratio * price_mult)))
+            return self._effective_sell_price(base_price, terms), bool(listed)
         if listed:
             base_price = max(1, int(round(int(listed.get("sell_price", 1)) * price_mult)))
             return self._effective_sell_price(base_price, terms), True
@@ -2795,7 +2899,13 @@ class TradeSystem(System):
                 )
                 if str(interest.get("interest_actual", "") or "").strip().lower() == INTEREST_REFUSED:
                     continue
-            quote, listed = self._sell_quote(item_id, store, terms=terms, interest=interest)
+            quote, listed = self._sell_quote(
+                item_id,
+                store,
+                terms=terms,
+                interest=interest,
+                metadata=entry.get("metadata"),
+            )
             item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "glyph": "*"})
             display_name = item_display_name_for_actor(self.sim, self.player_eid, entry, item_catalog=ITEM_CATALOG)
             candidates.append({
@@ -2823,6 +2933,7 @@ class TradeSystem(System):
                 "trade_pressure_label": interest.get("trade_pressure_label", ""),
                 "trade_pressure_note": interest.get("trade_pressure_note", ""),
                 "trade_pressure_value": float(interest.get("trade_pressure_value", 0.0) or 0.0),
+                **self._fashion_row_fields(item_id, entry.get("metadata")),
             })
         if not owner_transfer:
             candidates.extend(
@@ -2869,6 +2980,7 @@ class TradeSystem(System):
                 "price": 0 if owner_transfer else self._effective_store_buy_price(entry, store, terms),
                 "stock": int(max(0, entry.get("stock", 0))),
                 "action_label": "withdraw" if owner_transfer else "",
+                **self._fashion_row_fields(item_id, row_entry.get("metadata")),
                 **({} if owner_transfer else self._trade_pressure_row_fields(store, item_id)),
             })
         return rows
@@ -2908,6 +3020,11 @@ class TradeSystem(System):
                 "base_price": row.get("base_price"),
                 "wire_data_family": row.get("wire_data_family", ""),
                 "wire_data_org_context": row.get("wire_data_org_context", ""),
+                "fashion_rarity": row.get("fashion_rarity", ""),
+                "fashion_demand": row.get("fashion_demand", ""),
+                "fashion_market_note": row.get("fashion_market_note", ""),
+                "fashion_player_influence": float(row.get("fashion_player_influence", 0.0) or 0.0),
+                "fashion_npc_influence": float(row.get("fashion_npc_influence", 0.0) or 0.0),
             })
         return rows
 
@@ -2936,7 +3053,8 @@ class TradeSystem(System):
                 interest_text = str(row.get("interest_label", "") or "").strip()
                 risk_text = str(row.get("risk_label", "") or "").strip()
                 pressure_text = str(row.get("trade_pressure_label", "") or "").strip()
-                extra_bits = [bit for bit in (pressure_text, interest_text, risk_text) if bit]
+                fashion_text = str(row.get("fashion_market_note", "") or "").strip()
+                extra_bits = [bit for bit in (fashion_text, pressure_text, interest_text, risk_text) if bit]
                 extra_text = f"; {'; '.join(extra_bits)}" if extra_bits else ""
                 state["inspect_text"] = _item_legend_line(
                     row.get("item_id"),
@@ -2971,6 +3089,7 @@ class TradeSystem(System):
         interest_text = str(row.get("interest_label", "") or "").strip()
         risk_text = str(row.get("risk_label", "") or "").strip()
         pressure_text = str(row.get("trade_pressure_label", "") or "").strip()
+        fashion_text = str(row.get("fashion_market_note", "") or "").strip()
         read_text = ""
         if interest_text:
             read_text = f"; {interest_text}"
@@ -2978,6 +3097,8 @@ class TradeSystem(System):
                 read_text += " (your read)"
         if pressure_text:
             read_text += f"; {pressure_text}"
+        if fashion_text:
+            read_text += f"; {fashion_text}"
         if risk_text:
             read_text += f"; {risk_text}"
         state["inspect_text"] = _item_legend_line(
@@ -4464,6 +4585,7 @@ class TradeSystem(System):
             store,
             terms={"sell_mult": 1.0},
             interest={"price_mult": 1.0 if owner_transfer else best.get("interest_price_mult", 1.0)},
+            metadata=removed.get("metadata"),
         )
         payout = 0 if owner_transfer else int(max(1, best["price"]))
         if not owner_transfer:
@@ -4486,7 +4608,11 @@ class TradeSystem(System):
                 existing["metadata"] = dict(removed.get("metadata") or {})
             stock_now = existing["stock"]
         else:
-            base = int(max(1, self.ITEM_BASE_VALUES.get(item_id, 10)))
+            stocked_metadata = dict(removed.get("metadata") or {}) if is_appearance_item(removed, item_catalog=ITEM_CATALOG) else None
+            if stocked_metadata is not None:
+                stocked_metadata = with_cosmetic_market_metadata(self.sim, item_id, stocked_metadata)
+            fashion_quote = cosmetic_fashion_quote(self.sim, item_id, stocked_metadata)
+            base = int(max(1, fashion_quote.get("fair_value") or self.ITEM_BASE_VALUES.get(item_id, 10)))
             buy_mult_lo = float(store.get("buy_mult_lo", 1.0))
             buy_mult_hi = float(store.get("buy_mult_hi", 1.4))
             buy_price = max(1, int(round(base * ((buy_mult_lo + buy_mult_hi) * 0.5))))
@@ -4494,7 +4620,7 @@ class TradeSystem(System):
             sell_price = max(1, int(round(buy_price * sell_ratio)))
             existing = {
                 "item_id": item_id,
-                "metadata": dict(removed.get("metadata") or {}) if is_appearance_item(removed, item_catalog=ITEM_CATALOG) else None,
+                "metadata": stocked_metadata,
                 "stock": stocked_quantity,
                 "buy_price": buy_price,
                 "sell_price": sell_price,

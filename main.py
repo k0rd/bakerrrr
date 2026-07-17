@@ -65,6 +65,7 @@ from game.components import (
 )
 from game.bones import maybe_seed_bones_for_chunk, prime_bones_runtime
 from game.ecology_registry import prime_ecology_registry
+from game.fashion_market import prime_fashion_market
 from game.economy import (
     LocalTradePressureSystem,
     chunk_economy_profile,
@@ -1785,6 +1786,7 @@ def _run_new_game_legacy(view, character_name):
     prime_bones_runtime(sim)
     prime_run_echoes_runtime(sim)
     prime_ecology_registry(sim)
+    prime_fashion_market(sim)
     run_nonce = _resolve_run_nonce()
     run_rng = random.Random(run_nonce)
     start_chunk_cx, start_chunk_cy = _pick_playtest_start_chunk(sim, run_rng)
@@ -2846,6 +2848,7 @@ def _run_new_game(view, character_name, gender_identity, *, debug_mode=False, cu
     prime_bones_runtime(sim)
     prime_run_echoes_runtime(sim)
     prime_ecology_registry(sim)
+    prime_fashion_market(sim)
     run_nonce = _resolve_run_nonce()
     run_rng = random.Random(run_nonce)
     sim.world_traits["playtest_start"] = {"nonce": run_nonce}
@@ -3012,6 +3015,7 @@ def _run_loaded_game(view, character_name, *, debug_mode=False):
     prime_bones_runtime(sim)
     prime_run_echoes_runtime(sim)
     prime_ecology_registry(sim)
+    prime_fashion_market(sim)
     if not isinstance(getattr(sim, "world_traits", None), dict):
         sim.world_traits = {}
     if sim.character_name:

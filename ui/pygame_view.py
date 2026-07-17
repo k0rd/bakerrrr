@@ -5216,7 +5216,28 @@ class PygameView:
         fill = (frame[0], frame[1], frame[2], 212)
         shine = self._lightened_rgba(frame, 190, amount=0.48)
 
-        if kind == "inner":
+        if kind == "base_top":
+            chest = self.pygame.Rect(
+                max(4, int(px * 0.34)),
+                max(5, int(px * 0.42)),
+                max(5, int(px * 0.32)),
+                max(3, int(px * 0.2)),
+            )
+            self.pygame.draw.rect(overlay, outline, chest.inflate(stroke_w * 2, stroke_w * 2), border_radius=max(1, px // 16))
+            self.pygame.draw.rect(overlay, fill, chest, border_radius=max(1, px // 16))
+            self.pygame.draw.line(overlay, shine, chest.midleft, chest.midright, stroke_w)
+        elif kind == "base_bottom":
+            waist_y = max(7, int(px * 0.62))
+            briefs = [
+                (max(3, int(px * 0.34)), waist_y),
+                (min(px - 3, int(px * 0.66)), waist_y),
+                (px // 2 + max(2, px // 10), min(px - 2, waist_y + max(3, px // 5))),
+                (px // 2 - max(2, px // 10), min(px - 2, waist_y + max(3, px // 5))),
+            ]
+            self.pygame.draw.polygon(overlay, outline, [(bx + 1, by + 1) for bx, by in briefs])
+            self.pygame.draw.polygon(overlay, fill, briefs)
+            self.pygame.draw.line(overlay, shine, briefs[0], briefs[1], stroke_w)
+        elif kind == "inner":
             chest = self.pygame.Rect(
                 max(5, int(px * 0.38)),
                 max(6, int(px * 0.38)),
@@ -5276,6 +5297,101 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_basewear_emblem(self, overlay, center, emblem, frame):
+        emblem = str(emblem or "").strip().lower().replace("_", " ")
+        if not emblem:
+            return
+        x, y = int(center[0]), int(center[1])
+        px = self.cell_px
+        stitch = self._lightened_rgba(frame, 248, amount=0.68)
+        dark = self._darkened_rgba(frame, 244, amount=0.7)
+        thread = max(1, px // 30)
+        tiny = max(1, px // 28)
+
+        if "aster" in emblem or "star" in emblem or "worklight" in emblem:
+            radius = max(2, px // 18)
+            diagonal = max(1, int(radius * 0.7))
+            for dx, dy in (
+                (-radius, 0), (radius, 0), (0, -radius), (0, radius),
+                (-diagonal, -diagonal), (diagonal, -diagonal),
+                (-diagonal, diagonal), (diagonal, diagonal),
+            ):
+                self.pygame.draw.line(overlay, stitch, (x, y), (x + dx, y + dy), thread)
+            self.pygame.draw.circle(overlay, dark, (x, y), tiny)
+        elif "daisy" in emblem:
+            petal_r = max(1, px // 34)
+            offset = max(1, px // 22)
+            for dx, dy in ((-offset, 0), (offset, 0), (0, -offset), (0, offset)):
+                self.pygame.draw.circle(overlay, stitch, (x + dx, y + dy), petal_r)
+            self.pygame.draw.circle(overlay, dark, (x, y), tiny)
+        elif "heart" in emblem:
+            r = max(1, px // 30)
+            self.pygame.draw.circle(overlay, stitch, (x - r, y - r), r + 1)
+            self.pygame.draw.circle(overlay, stitch, (x + r, y - r), r + 1)
+            self.pygame.draw.polygon(overlay, stitch, [(x - r * 2, y - r), (x + r * 2, y - r), (x, y + r * 2)])
+        elif "cherry" in emblem:
+            r = max(1, px // 30)
+            self.pygame.draw.circle(overlay, stitch, (x - r, y + r), r)
+            self.pygame.draw.circle(overlay, stitch, (x + r * 2, y + r), r)
+            self.pygame.draw.line(overlay, dark, (x - r, y), (x, y - r * 2), thread)
+            self.pygame.draw.line(overlay, dark, (x + r * 2, y), (x, y - r * 2), thread)
+        elif "moon" in emblem:
+            r = max(2, px // 22)
+            self.pygame.draw.circle(overlay, stitch, (x, y), r)
+            self.pygame.draw.circle(overlay, frame, (x + max(1, r // 2), y - max(1, r // 3)), max(1, r - 1))
+        elif "lily" in emblem or "cup" in emblem:
+            petal = max(2, px // 22)
+            for dx, dy in ((-petal, 0), (petal, 0), (0, -petal), (0, petal)):
+                self.pygame.draw.ellipse(overlay, stitch, (x + dx - petal // 2, y + dy - petal // 2, petal, petal + 1))
+            self.pygame.draw.circle(overlay, dark, (x, y), tiny)
+        elif "bell" in emblem:
+            bell_w = max(4, px // 9)
+            bell_h = max(3, px // 12)
+            self.pygame.draw.arc(overlay, stitch, (x - bell_w // 2, y - bell_h // 2, bell_w, bell_h), 0.0, 3.15, max(1, thread + 1))
+            self.pygame.draw.line(overlay, stitch, (x, y - bell_h // 2), (x, y + bell_h // 2), thread)
+            self.pygame.draw.circle(overlay, dark, (x, y + bell_h // 2), tiny)
+        elif "poppy" in emblem or "silk" in emblem or "clover" in emblem:
+            petal_r = max(1, px // 28)
+            offset = max(1, px // 25)
+            for dx, dy in ((-offset, -offset), (offset, -offset), (-offset, offset), (offset, offset)):
+                self.pygame.draw.circle(overlay, stitch, (x + dx, y + dy), petal_r)
+            self.pygame.draw.circle(overlay, dark, (x, y), tiny)
+        elif "lace" in emblem:
+            ring_r = max(2, px // 20)
+            self.pygame.draw.circle(overlay, stitch, (x, y), ring_r, thread)
+            for dx, dy in ((-ring_r, 0), (ring_r, 0), (0, -ring_r), (0, ring_r)):
+                self.pygame.draw.circle(overlay, stitch, (x + dx, y + dy), tiny)
+        elif "lightning" in emblem:
+            bolt = [(x + 1, y - max(2, px // 18)), (x - max(1, px // 28), y), (x + max(1, px // 24), y), (x - 1, y + max(2, px // 18))]
+            self.pygame.draw.lines(overlay, stitch, False, bolt, max(1, thread + 1))
+        elif "bee" in emblem:
+            body = self.pygame.Rect(x - max(2, px // 24), y - max(1, px // 34), max(4, px // 12), max(2, px // 17))
+            self.pygame.draw.ellipse(overlay, stitch, body)
+            self.pygame.draw.line(overlay, dark, (body.centerx, body.top), (body.centerx, body.bottom - 1), thread)
+            self.pygame.draw.circle(overlay, stitch, (body.left, body.top), tiny)
+            self.pygame.draw.circle(overlay, stitch, (body.right - 1, body.top), tiny)
+        elif "moth" in emblem:
+            wing = max(2, px // 20)
+            self.pygame.draw.ellipse(overlay, stitch, (x - wing * 2, y - wing, wing * 2, wing * 2))
+            self.pygame.draw.ellipse(overlay, stitch, (x, y - wing, wing * 2, wing * 2))
+            self.pygame.draw.line(overlay, dark, (x, y - wing), (x, y + wing), thread)
+        elif "mushroom" in emblem:
+            cap = self.pygame.Rect(x - max(2, px // 18), y - max(2, px // 22), max(4, px // 9), max(3, px // 14))
+            self.pygame.draw.arc(overlay, stitch, cap, 3.1, 6.25, max(1, thread + 1))
+            self.pygame.draw.line(overlay, stitch, (x, y), (x, y + max(2, px // 18)), thread)
+        elif "strawberry" in emblem:
+            fruit = [(x - max(2, px // 22), y - 1), (x + max(2, px // 22), y - 1), (x, y + max(2, px // 16))]
+            self.pygame.draw.polygon(overlay, stitch, fruit)
+            self.pygame.draw.line(overlay, dark, fruit[0], fruit[1], thread)
+        elif "skull" in emblem:
+            r = max(2, px // 20)
+            self.pygame.draw.circle(overlay, stitch, (x, y), r)
+            self.pygame.draw.circle(overlay, dark, (x - max(1, r // 2), y), tiny)
+            self.pygame.draw.circle(overlay, dark, (x + max(1, r // 2), y), tiny)
+        else:
+            diamond = [(x, y - 2), (x + 2, y), (x, y + 2), (x - 2, y)]
+            self.pygame.draw.polygon(overlay, stitch, diamond)
+
     def _draw_actor_outfit_overlay(self, x, y, color=None, attrs=0, *, kind="secondary", effects=()):
         if self.cell_px <= 10:
             self._draw_actor_outfit_overlay_legacy(x, y, color=color, attrs=attrs, kind=kind)
@@ -5309,6 +5425,12 @@ class PygameView:
         garment = _suffix("outfit_type_", "")
         material = _suffix("outfit_material_", "")
         style = _suffix("outfit_style_", "")
+        detail = _suffix("outfit_detail_", "")
+        pattern = _suffix("outfit_pattern_", "")
+        emblem = _suffix("outfit_emblem_", "")
+        flora_motif = _suffix("outfit_flora_motif_", "")
+        motif_treatment = _suffix("outfit_motif_treatment_", "")
+        motif_shape = _suffix("outfit_motif_shape_", "")
         slot = _suffix("outfit_slot_", "")
         shoulder_y = max(5, int(px * 0.39))
         hip_y = px - max(5, px // 4)
@@ -5316,7 +5438,114 @@ class PygameView:
         body_left = mid_x - max(3, px // 6)
         body_right = mid_x + max(3, px // 6)
 
-        if kind == "inner":
+        if kind == "base_top":
+            top_y = shoulder_y + max(1, px // 22)
+            bottom_y = hip_y - max(1, px // 18)
+            base_rect = self.pygame.Rect(body_left, top_y, max(6, body_right - body_left), max(4, bottom_y - top_y))
+            if garment in {"bra", "bralette", "bandeau"}:
+                band_y = top_y + max(2, px // 10)
+                band_h = max(3, px // 8)
+                band = self.pygame.Rect(body_left - max(1, px // 30), band_y, max(7, body_right - body_left + max(2, px // 15)), band_h)
+                self.pygame.draw.rect(overlay, outline, band.move(1, 1), border_radius=max(1, px // 16))
+                self.pygame.draw.rect(overlay, fill, band, border_radius=max(1, px // 16))
+                if garment != "bandeau":
+                    strap_dx = max(2, px // 10)
+                    for sx in (mid_x - strap_dx, mid_x + strap_dx):
+                        self.pygame.draw.line(overlay, outline, (sx + 1, band.top + 1), (sx + 1, top_y - 1), stroke_w + 1)
+                        self.pygame.draw.line(overlay, edge, (sx, band.top), (sx, top_y - 1), stroke_w)
+                if garment in {"bra", "bralette"}:
+                    cup_w = max(3, band.w // 2)
+                    for cup_x in (band.left, band.centerx):
+                        cup = self.pygame.Rect(cup_x, band.top, cup_w, band.h)
+                        self.pygame.draw.arc(overlay, edge, cup, 0.15, 3.0, stroke_w)
+                    self.pygame.draw.circle(overlay, shade, band.center, max(1, px // 34))
+                base_rect = band
+            else:
+                shoulder_half = max(3, px // (6 if garment == "camisole" else 5))
+                bodice = [
+                    (mid_x - shoulder_half, top_y),
+                    (mid_x + shoulder_half, top_y),
+                    (body_right, bottom_y),
+                    (body_left, bottom_y),
+                ]
+                self.pygame.draw.polygon(overlay, outline, [(bx + 1, by + 1) for bx, by in bodice])
+                self.pygame.draw.polygon(overlay, fill, bodice)
+                if garment in {"camisole", "tank_undershirt"}:
+                    for sx in (mid_x - shoulder_half + 1, mid_x + shoulder_half - 1):
+                        self.pygame.draw.line(overlay, edge, (sx, top_y), (sx, max(2, top_y - max(2, px // 10))), stroke_w)
+                neck_depth = max(2, px // (8 if garment == "camisole" else 11))
+                self.pygame.draw.arc(
+                    overlay,
+                    shade,
+                    (mid_x - max(3, px // 8), top_y - neck_depth, max(6, px // 4), neck_depth * 2),
+                    0.05,
+                    3.1,
+                    stroke_w,
+                )
+            if "lacy" in detail or "scallop" in detail:
+                scallop_y = base_rect.bottom - 1
+                for scallop_x in range(base_rect.left + 1, base_rect.right, max(2, px // 12)):
+                    self.pygame.draw.circle(overlay, edge, (scallop_x, scallop_y), max(1, px // 34), stroke_w)
+            if "striped" in pattern or "pinstriped" in pattern:
+                stripe_gap = max(2, px // (8 if "pin" not in pattern else 12))
+                for stripe_x in range(base_rect.left + 1, base_rect.right, stripe_gap):
+                    self.pygame.draw.line(overlay, edge, (stripe_x, base_rect.top + 1), (stripe_x, base_rect.bottom - 1), stroke_w)
+            elif pattern:
+                for dot_x, dot_y in ((base_rect.left + 2, base_rect.centery), (base_rect.right - 2, base_rect.centery)):
+                    self.pygame.draw.circle(overlay, edge, (dot_x, dot_y), max(1, px // 36))
+            self._draw_material_finish(overlay, base_rect, frame, material=material, seed=len(detail) + len(pattern))
+            self._draw_basewear_emblem(overlay, (base_rect.right - max(2, px // 12), base_rect.centery), emblem, frame)
+
+        elif kind == "base_bottom":
+            high_waist = garment == "high_waist_panties"
+            waist_y = hip_y - max(4 if high_waist else 2, px // (6 if high_waist else 10))
+            lower_y = min(foot_y - 2, waist_y + max(4, px // 5))
+            half = max(3, px // 7)
+            base_rect = self.pygame.Rect(mid_x - half, waist_y, half * 2, max(4, lower_y - waist_y))
+            if garment in {"boxers", "boxer_briefs", "boyshorts"}:
+                leg_h = max(3, px // (6 if garment == "boxers" else 7))
+                leg_w = max(3, px // 8)
+                gap = max(1, px // 30)
+                waistband = self.pygame.Rect(mid_x - leg_w - gap, waist_y, leg_w * 2 + gap * 2, max(2, px // 13))
+                self.pygame.draw.rect(overlay, outline, waistband.move(1, 1), border_radius=max(1, px // 30))
+                self.pygame.draw.rect(overlay, fill, waistband, border_radius=max(1, px // 30))
+                for leg_x in (mid_x - leg_w - gap, mid_x + gap):
+                    leg = self.pygame.Rect(leg_x, waistband.bottom - 1, leg_w, leg_h)
+                    self.pygame.draw.rect(overlay, outline, leg.move(1, 1), border_radius=max(1, px // 30))
+                    self.pygame.draw.rect(overlay, fill, leg, border_radius=max(1, px // 30))
+                base_rect = self.pygame.Rect(waistband.left, waistband.top, waistband.w, leg_h + waistband.h)
+            elif garment == "thong":
+                waistband = self.pygame.Rect(mid_x - half, waist_y, half * 2, max(2, px // 16))
+                self.pygame.draw.rect(overlay, fill, waistband, border_radius=max(1, px // 30))
+                thong = [(waistband.left + 1, waistband.bottom), (waistband.right - 1, waistband.bottom), (mid_x, lower_y)]
+                self.pygame.draw.polygon(overlay, outline, [(tx + 1, ty + 1) for tx, ty in thong])
+                self.pygame.draw.polygon(overlay, fill, thong)
+                base_rect = self.pygame.Rect(waistband.left, waist_y, waistband.w, max(3, lower_y - waist_y))
+            else:
+                briefs = [
+                    (mid_x - half, waist_y),
+                    (mid_x + half, waist_y),
+                    (mid_x + max(2, px // 12), lower_y),
+                    (mid_x - max(2, px // 12), lower_y),
+                ]
+                self.pygame.draw.polygon(overlay, outline, [(bx + 1, by + 1) for bx, by in briefs])
+                self.pygame.draw.polygon(overlay, fill, briefs)
+                self.pygame.draw.line(overlay, edge, briefs[0], briefs[1], stroke_w)
+            if "contrast" in detail or "sporty" in detail or "ribbon" in detail:
+                self.pygame.draw.line(overlay, edge, (base_rect.left, base_rect.top + 1), (base_rect.right - 1, base_rect.top + 1), max(1, stroke_w + 1))
+            if "lacy" in detail or "scallop" in detail:
+                for scallop_x in range(base_rect.left + 1, base_rect.right, max(2, px // 12)):
+                    self.pygame.draw.circle(overlay, edge, (scallop_x, base_rect.bottom - 1), max(1, px // 34), stroke_w)
+            if "striped" in pattern or "pinstriped" in pattern:
+                for stripe_x in range(base_rect.left + 2, base_rect.right, max(2, px // 10)):
+                    self.pygame.draw.line(overlay, edge, (stripe_x, base_rect.top + 1), (stripe_x, base_rect.bottom - 1), stroke_w)
+            elif pattern:
+                for dot_x in (base_rect.left + 2, base_rect.right - 2):
+                    self.pygame.draw.circle(overlay, edge, (dot_x, base_rect.centery), max(1, px // 36))
+            self._draw_material_finish(overlay, base_rect, frame, material=material, seed=len(detail) + len(pattern))
+            self._draw_basewear_emblem(overlay, (base_rect.centerx, base_rect.top + max(2, px // 12)), emblem, frame)
+
+        elif kind == "inner":
             shirt = self.pygame.Rect(body_left, shoulder_y, max(6, body_right - body_left), max(5, hip_y - shoulder_y + 1))
             self.pygame.draw.rect(overlay, outline, shirt.move(1, 1), border_radius=max(1, px // 18))
             self.pygame.draw.rect(overlay, fill, shirt, border_radius=max(1, px // 18))
@@ -5476,6 +5705,29 @@ class PygameView:
                 self.pygame.draw.circle(overlay, edge, charm, max(1, px // 26))
         else:
             self.pygame.draw.circle(overlay, fill, (mid_x, px // 2), max(2, px // 8))
+
+        if flora_motif:
+            center_by_kind = {
+                "base_top": (mid_x + max(2, px // 10), shoulder_y + max(4, px // 6)),
+                "base_bottom": (mid_x, hip_y - max(1, px // 20)),
+                "inner": (mid_x + max(2, px // 10), shoulder_y + max(4, px // 6)),
+                "secondary": (mid_x, hip_y + max(2, px // 10)),
+                "primary": (mid_x + max(2, px // 10), shoulder_y + max(4, px // 6)),
+                "headwear": (mid_x, max(4, px // 5)),
+                "accessory": (mid_x + max(3, px // 7), shoulder_y + max(4, px // 6)),
+            }
+            center = center_by_kind.get(kind, (mid_x, px // 2))
+            motif_mark = motif_shape or flora_motif
+            centers = [center]
+            if motif_treatment == "print":
+                offset = max(3, px // 9)
+                centers = [
+                    (center[0] - offset, center[1]),
+                    (center[0] + offset, center[1]),
+                    (center[0], center[1] + offset),
+                ]
+            for motif_center in centers:
+                self._draw_basewear_emblem(overlay, motif_center, motif_mark, frame)
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
@@ -6815,6 +7067,8 @@ class PygameView:
             self._draw_actor_identity_rune_overlay(x, y, color=color, attrs=attrs)
             return semantic_key
         outfit_overlay_kind = {
+            "ui_actor_basewear_top": "base_top",
+            "ui_actor_basewear_bottom": "base_bottom",
             "ui_actor_outfit_inner": "inner",
             "ui_actor_outfit_secondary": "secondary",
             "ui_actor_outfit_footwear": "footwear",

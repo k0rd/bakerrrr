@@ -787,6 +787,8 @@ def _actor_outfit_color_overlays(render_colors):
         return ()
     overlays = []
     rows = (
+        ("base_top", "ui_actor_basewear_top"),
+        ("base_bottom", "ui_actor_basewear_bottom"),
         ("inner", "ui_actor_outfit_inner"),
         ("secondary", "ui_actor_outfit_secondary"),
         ("footwear", "ui_actor_outfit_footwear"),
@@ -808,7 +810,20 @@ def _actor_outfit_color_overlays(render_colors):
             ("outfit_type_", part.get("type")),
             ("outfit_material_", part.get("material")),
             ("outfit_style_", part.get("style")),
+            ("outfit_detail_", part.get("detail")),
+            ("outfit_pattern_", part.get("pattern")),
+            ("outfit_emblem_", part.get("emblem")),
             ("outfit_slot_", part.get("slot")),
+        ):
+            clean_value = str(value or "").strip().lower().replace(" ", "_")
+            if clean_value:
+                effects.append(f"{prefix}{clean_value}")
+        flora_motif = part.get("flora_motif") if isinstance(part.get("flora_motif"), Mapping) else {}
+        for prefix, value in (
+            ("outfit_flora_motif_", flora_motif.get("plant_id")),
+            ("outfit_motif_treatment_", flora_motif.get("treatment")),
+            ("outfit_motif_shape_", flora_motif.get("petal_shape") or flora_motif.get("leaf_shape")),
+            ("outfit_motif_rarity_", flora_motif.get("rarity")),
         ):
             clean_value = str(value or "").strip().lower().replace(" ", "_")
             if clean_value:

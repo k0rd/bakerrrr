@@ -1239,7 +1239,7 @@ def _metadata_for_uniform_piece(sim, eid, cult, item_id, slot, *, seed_token="")
     uniform = dict(cult.get("uniform", {}) or {})
     primary = _clean_text(uniform.get("primary_color")) or "purple"
     accent = _clean_text(uniform.get("accent_color")) or "white"
-    metadata = cosmetic_variant_metadata(item_id, seed_token=seed_token, item_catalog=ITEM_CATALOG)
+    metadata = cosmetic_variant_metadata(item_id, seed_token=seed_token, item_catalog=ITEM_CATALOG, sim=sim)
     nested = dict(metadata.get(APPEARANCE_METADATA_KEY) or {})
     nested["color"] = primary
     nested["accent_color"] = accent

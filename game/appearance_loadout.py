@@ -11,7 +11,13 @@ from game.appearance_palette import (
     render_key_for_color_word,
 )
 from game.color_words import color_word_display_name
-from game.components import AI, AppearanceLoadout, ArmorLoadout, CreatureIdentity, Inventory, Occupation
+from game.components import AI, AppearanceLoadout, ArmorLoadout, CreatureIdentity, Inventory, Occupation, PlayerControlled
+from game.fashion_market import (
+    choose_cosmetic_flora_motif,
+    cosmetic_flora_motif_phrase,
+    record_cosmetic_popularity,
+    with_cosmetic_rarity_metadata,
+)
 from game.human_description import build_human_description_profile, human_self_physical_summary, human_render_color_key
 from game.human_identity import pronoun_format_slots
 from game.item_semantics import item_display_name_for_actor
@@ -23,7 +29,11 @@ APPEARANCE_WORN_METADATA_KEY = "appearance_worn"
 APPEARANCE_SLOT_METADATA_KEY = "appearance_slot"
 
 APPEARANCE_SLOTS = AppearanceLoadout.VALID_SLOTS
+BASEWEAR_SLOTS = AppearanceLoadout.BASEWEAR_SLOTS
+ALL_APPEARANCE_SLOTS = APPEARANCE_SLOTS + BASEWEAR_SLOTS
 APPEARANCE_SLOT_LABELS = {
+    "base_top": "Base top",
+    "base_bottom": "Base bottom",
     "hat": "Hat",
     "earrings": "Earrings",
     "necklace": "Neck",
@@ -37,6 +47,8 @@ APPEARANCE_SLOT_LABELS = {
     "outer": "Outer",
 }
 APPEARANCE_SLOT_ORDER = (
+    "base_top",
+    "base_bottom",
     "hat",
     "full_body",
     "top",
@@ -63,15 +75,165 @@ OUTFIT_COLOR_PRIORITY = (
     "earrings",
 )
 ARTICLELESS_APPEARANCE_TYPES = frozenset({
+    "bikini_panties",
+    "boxer_briefs",
+    "boxers",
+    "boyshorts",
+    "briefs",
     "boots",
     "earrings",
     "gloves",
+    "cheeky_panties",
+    "high_waist_panties",
     "sandals",
     "shorts",
     "sneakers",
     "trousers",
 })
+BASEWEAR_EMBLEMS = (
+    "bee",
+    "cherry",
+    "daisy",
+    "little heart",
+    "little skull",
+    "moon",
+    "moth",
+    "mushroom",
+    "star",
+    "strawberry",
+    "tiny lightning bolt",
+    "worklight",
+)
+BASEWEAR_ITEM_IDS = {
+    "undershirt": {
+        "label": "undershirt",
+        "slots": ("base_top",),
+        "presentation": "masc",
+        "materials": ("cotton", "ribbed cotton", "modal", "soft jersey"),
+        "details": ("classic", "close-fitting", "ribbed", "soft"),
+        "patterns": ("", "striped", "pinstriped"),
+        "emblem_chance": 0.18,
+    },
+    "tank_undershirt": {
+        "label": "tank undershirt",
+        "slots": ("base_top",),
+        "presentation": "neutral",
+        "materials": ("cotton", "ribbed cotton", "modal", "soft jersey"),
+        "details": ("classic", "low-necked", "ribbed", "trim"),
+        "patterns": ("", "striped", "star-print"),
+        "emblem_chance": 0.22,
+    },
+    "bra": {
+        "label": "bra",
+        "slots": ("base_top",),
+        "presentation": "femme",
+        "materials": ("cotton", "lace", "satin", "soft mesh"),
+        "details": ("lacy", "scallop-trimmed", "ribbon-trimmed", "soft-cup"),
+        "patterns": ("", "little-floral", "dotted"),
+        "emblem_chance": 0.46,
+    },
+    "bralette": {
+        "label": "bralette",
+        "slots": ("base_top",),
+        "presentation": "femme",
+        "materials": ("cotton", "lace", "modal", "soft mesh"),
+        "details": ("lacy", "cross-backed", "scallop-trimmed", "soft"),
+        "patterns": ("", "little-floral", "star-print"),
+        "emblem_chance": 0.5,
+    },
+    "camisole": {
+        "label": "camisole",
+        "slots": ("base_top",),
+        "presentation": "femme",
+        "materials": ("cotton", "lace", "satin", "modal"),
+        "details": ("lacy", "ribbon-trimmed", "scallop-trimmed", "strappy"),
+        "patterns": ("", "little-floral", "dotted"),
+        "emblem_chance": 0.56,
+    },
+    "bandeau": {
+        "label": "bandeau",
+        "slots": ("base_top",),
+        "presentation": "neutral",
+        "materials": ("cotton", "lace", "modal", "soft jersey"),
+        "details": ("simple", "lacy", "ribbed", "scallop-trimmed"),
+        "patterns": ("", "striped", "constellation-print"),
+        "emblem_chance": 0.42,
+    },
+    "boxers": {
+        "label": "boxers",
+        "slots": ("base_bottom",),
+        "presentation": "masc",
+        "materials": ("cotton", "poplin", "soft jersey", "modal"),
+        "details": ("classic", "button-front", "relaxed", "soft"),
+        "patterns": ("", "striped", "pinstriped", "star-print"),
+        "emblem_chance": 0.28,
+    },
+    "boxer_briefs": {
+        "label": "boxer briefs",
+        "slots": ("base_bottom",),
+        "presentation": "masc",
+        "materials": ("cotton", "modal", "ribbed cotton", "soft jersey"),
+        "details": ("classic", "contrast-waistband", "sporty", "trim"),
+        "patterns": ("", "striped", "constellation-print"),
+        "emblem_chance": 0.3,
+    },
+    "briefs": {
+        "label": "briefs",
+        "slots": ("base_bottom",),
+        "presentation": "masc",
+        "materials": ("cotton", "modal", "ribbed cotton", "soft jersey"),
+        "details": ("classic", "contrast-trimmed", "sporty", "soft"),
+        "patterns": ("", "striped", "dotted"),
+        "emblem_chance": 0.3,
+    },
+    "boyshorts": {
+        "label": "boyshort panties",
+        "slots": ("base_bottom",),
+        "presentation": "femme",
+        "materials": ("cotton", "lace", "modal", "soft jersey"),
+        "details": ("lacy", "scallop-trimmed", "sporty", "ribbon-trimmed"),
+        "patterns": ("", "little-floral", "striped"),
+        "emblem_chance": 0.58,
+    },
+    "bikini_panties": {
+        "label": "bikini panties",
+        "slots": ("base_bottom",),
+        "presentation": "femme",
+        "materials": ("cotton", "lace", "satin", "modal"),
+        "details": ("lacy", "scallop-trimmed", "ribbon-trimmed", "soft"),
+        "patterns": ("", "little-floral", "dotted"),
+        "emblem_chance": 0.62,
+    },
+    "cheeky_panties": {
+        "label": "cheeky panties",
+        "slots": ("base_bottom",),
+        "presentation": "femme",
+        "materials": ("cotton", "lace", "satin", "modal"),
+        "details": ("lacy", "scallop-trimmed", "ribbon-trimmed", "soft"),
+        "patterns": ("", "little-floral", "star-print"),
+        "emblem_chance": 0.72,
+    },
+    "thong": {
+        "label": "thong",
+        "slots": ("base_bottom",),
+        "presentation": "femme",
+        "materials": ("cotton", "lace", "satin", "soft mesh"),
+        "details": ("lacy", "scallop-trimmed", "ribbon-trimmed", "simple"),
+        "patterns": ("", "little-floral", "dotted"),
+        "emblem_chance": 0.66,
+    },
+    "high_waist_panties": {
+        "label": "high-waist panties",
+        "slots": ("base_bottom",),
+        "presentation": "femme",
+        "materials": ("cotton", "lace", "satin", "modal"),
+        "details": ("lacy", "scallop-trimmed", "vintage-cut", "soft"),
+        "patterns": ("", "little-floral", "dotted", "constellation-print"),
+        "emblem_chance": 0.6,
+    },
+}
 COSMETIC_ITEM_IDS = {
+    **BASEWEAR_ITEM_IDS,
     "tee": {
         "label": "tee",
         "slots": ("top",),
@@ -458,7 +620,7 @@ def _clean_slots(values):
     slots = []
     for value in values:
         slot = _key(value)
-        if slot in APPEARANCE_SLOTS and slot not in slots:
+        if slot in ALL_APPEARANCE_SLOTS and slot not in slots:
             slots.append(slot)
     return tuple(slots)
 
@@ -612,7 +774,17 @@ def appearance_loadout_for(sim, eid, create=False):
         loadout.normalize()
         if not bool(getattr(loadout, "skin_marks_seeded", False)):
             seed_appearance_skin_marks_from_description(sim, eid, loadout=loadout)
+        if _is_player_appearance_owner(sim, eid):
+            ensure_player_basewear(sim, eid, loadout=loadout)
     return loadout
+
+
+def _is_player_appearance_owner(sim, eid):
+    if sim is None or eid is None:
+        return False
+    if eid == getattr(sim, "player_eid", None):
+        return True
+    return sim.ecs.get(PlayerControlled).get(eid) is not None
 
 
 def _inventory_for(sim, eid):
@@ -654,6 +826,12 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
     material = _key(metadata.get("material") or nested_data.get("material"))
     style = _key(metadata.get("style") or nested_data.get("style"))
     accent = _key(metadata.get("accent_color") or nested_data.get("accent_color"))
+    detail = _key(metadata.get("detail") or nested_data.get("detail"))
+    pattern = _key(metadata.get("pattern") or nested_data.get("pattern"))
+    emblem = _key(metadata.get("emblem") or nested_data.get("emblem"))
+    flora_motif_source = metadata.get("flora_motif") if isinstance(metadata.get("flora_motif"), dict) else nested_data.get("flora_motif")
+    flora_motif = dict(flora_motif_source) if isinstance(flora_motif_source, dict) else {}
+    presentation = _key(metadata.get("presentation") or nested_data.get("presentation") or profile.get("presentation"))
     label = _text(metadata.get("appearance_label") or nested_data.get("label"))
     if not label:
         label = _text(profile.get("label")) or _text(item_def.get("name")) or _title_words(item_id)
@@ -678,6 +856,16 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
         "material": material,
         "style": style,
         "accent_color": accent,
+        "detail": detail,
+        "pattern": pattern,
+        "emblem": emblem,
+        "flora_motif": flora_motif,
+        "presentation": presentation,
+        "fashion_rarity": _key(metadata.get("fashion_rarity") or nested_data.get("fashion_rarity")),
+        "fashion_rarity_score": metadata.get("fashion_rarity_score", nested_data.get("fashion_rarity_score")),
+        "fashion_base_value": metadata.get("fashion_base_value", nested_data.get("fashion_base_value")),
+        "fashion_rarity_value": metadata.get("fashion_rarity_value", nested_data.get("fashion_rarity_value")),
+        "basewear": bool(profile.get("basewear") or item_id in BASEWEAR_ITEM_IDS or any(slot in BASEWEAR_SLOTS for slot in slots)),
     }
 
 
@@ -701,7 +889,42 @@ def is_entry_worn(entry):
     return bool(metadata.get(APPEARANCE_WORN_METADATA_KEY))
 
 
-def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None):
+def is_basewear_item(entry_or_item_id, *, item_catalog=None):
+    if isinstance(entry_or_item_id, dict):
+        item_id = _key(entry_or_item_id.get("item_id"))
+        profile = appearance_metadata_for_entry(entry_or_item_id, item_catalog=item_catalog)
+        return bool(profile.get("basewear") or item_id in BASEWEAR_ITEM_IDS)
+    return _key(entry_or_item_id) in BASEWEAR_ITEM_IDS
+
+
+def _basewear_phrase(profile):
+    profile = profile if isinstance(profile, dict) else {}
+    color_key = _key(profile.get("color_word") or profile.get("color"))
+    color = color_word_display_name(color_key, default=color_key.replace("_", " "))
+    detail = _key(profile.get("detail") or profile.get("style"))
+    pattern = _key(profile.get("pattern"))
+    material = _key(profile.get("material"))
+    label = _text(profile.get("label")) or _text(profile.get("appearance_type")).replace("_", " ")
+    bits = [color]
+    if pattern:
+        bits.append(pattern.replace("_", " "))
+    if detail and detail not in {"plain", "simple", "classic"}:
+        bits.append(detail.replace("_", " "))
+    elif material:
+        bits.append(material.replace("_", " "))
+    bits.append(label)
+    phrase = " ".join(bit for bit in bits if bit)
+    flora_motif = profile.get("flora_motif") if isinstance(profile.get("flora_motif"), dict) else {}
+    motif_phrase = cosmetic_flora_motif_phrase(flora_motif)
+    emblem = _key(profile.get("emblem")).replace("_", " ")
+    if motif_phrase:
+        phrase += f" with {motif_phrase}"
+    elif emblem:
+        phrase += f" with {_indefinite_article_phrase(emblem)} emblem"
+    return phrase
+
+
+def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None, sim=None):
     item_id = _key(item_id)
     profile = COSMETIC_ITEM_IDS.get(item_id)
     if not profile:
@@ -711,15 +934,55 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None):
     slots = tuple(profile.get("slots", ()))
     color = choose_appearance_color_word(rng, slots=slots)
     materials = tuple(profile.get("materials") or ("cotton",))
-    styles = tuple(profile.get("styles") or ("plain",))
+    details = tuple(profile.get("details") or ())
+    styles = tuple(profile.get("styles") or details or ("plain",))
     material = rng.choice(materials)
     style = rng.choice(styles)
+    detail = rng.choice(details) if details else ""
+    patterns = tuple(profile.get("patterns") or ())
+    pattern = rng.choice(patterns) if patterns else ""
+    emblem = ""
+    if item_id in BASEWEAR_ITEM_IDS and rng.random() < float(profile.get("emblem_chance", 0.0) or 0.0):
+        emblem = rng.choice(tuple(profile.get("emblems") or BASEWEAR_EMBLEMS))
+    pattern_key = _key(pattern)
+    emblem_key = _key(emblem)
+    generic_flora_pattern = pattern_key in {"little-floral", "floral", "flower-print"}
+    generic_flora_emblem = emblem_key == "daisy"
+    flora_motif = choose_cosmetic_flora_motif(
+        sim,
+        item_id,
+        seed_token=seed_token,
+        slots=slots,
+        force=generic_flora_pattern or generic_flora_emblem,
+        treatment_hint="print" if generic_flora_pattern else ("embroidery" if generic_flora_emblem else ""),
+    )
+    if flora_motif:
+        pattern = ""
+        emblem = ""
     accent = fallback_render_key_for_color_word(color, default="human_monochrome")
     label = str(profile.get("label", item_id)).strip() or item_id
-    display_parts = [color, material, label]
-    if style and style not in {"plain", "simple"}:
-        display_parts.insert(0, style)
-    display_name = _title_words(" ".join(display_parts))
+    presentation = _key(profile.get("presentation"))
+    if item_id in BASEWEAR_ITEM_IDS:
+        display_name = _title_words(_basewear_phrase({
+            "appearance_type": item_id,
+            "label": label,
+            "color": color,
+            "color_word": color,
+            "material": material,
+            "style": style,
+            "detail": detail,
+            "pattern": pattern,
+            "emblem": emblem,
+            "flora_motif": flora_motif,
+        }))
+    else:
+        display_parts = [color, material, label]
+        if style and style not in {"plain", "simple"}:
+            display_parts.insert(0, style)
+        display_name = _title_words(" ".join(display_parts))
+        motif_phrase = cosmetic_flora_motif_phrase(flora_motif)
+        if motif_phrase:
+            display_name += f" With {_title_words(motif_phrase)}"
     appearance = {
         "type": item_id,
         "label": label,
@@ -729,8 +992,14 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None):
         "material": material,
         "style": style,
         "accent_color": accent,
+        "detail": detail,
+        "pattern": pattern,
+        "emblem": emblem,
+        "flora_motif": dict(flora_motif),
+        "presentation": presentation,
+        "basewear": bool(item_id in BASEWEAR_ITEM_IDS),
     }
-    return {
+    metadata = {
         "appearance_type": item_id,
         "appearance_label": label,
         "appearance_slots": list(slots),
@@ -739,9 +1008,254 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None):
         "material": material,
         "style": style,
         "accent_color": accent,
+        "detail": detail,
+        "pattern": pattern,
+        "emblem": emblem,
+        "flora_motif": dict(flora_motif),
+        "presentation": presentation,
+        "basewear": bool(item_id in BASEWEAR_ITEM_IDS),
         "display_name": display_name,
         APPEARANCE_METADATA_KEY: appearance,
     }
+    return with_cosmetic_rarity_metadata(item_id, metadata)
+
+
+STARTER_BASEWEAR_POOLS = {
+    "masc": {
+        "base_top": ("undershirt", "undershirt", "tank_undershirt", "bandeau"),
+        "base_bottom": ("boxers", "boxer_briefs", "boxer_briefs", "briefs"),
+    },
+    "femme": {
+        "base_top": ("bra", "bralette", "bralette", "camisole", "camisole", "bandeau"),
+        "base_bottom": ("boyshorts", "bikini_panties", "cheeky_panties", "cheeky_panties", "high_waist_panties", "thong"),
+    },
+    "mixed": {
+        "base_top": tuple(item_id for item_id, profile in BASEWEAR_ITEM_IDS.items() if "base_top" in tuple(profile.get("slots", ()))),
+        "base_bottom": tuple(item_id for item_id, profile in BASEWEAR_ITEM_IDS.items() if "base_bottom" in tuple(profile.get("slots", ()))),
+    },
+}
+
+
+def _basewear_state_from_metadata(item_id, metadata, *, starter=False):
+    item_id = _key(item_id)
+    entry = {"item_id": item_id, "metadata": dict(metadata or {})}
+    profile = appearance_metadata_for_entry(entry, item_catalog=ITEM_CATALOG)
+    slots = tuple(profile.get("slots", ()) or ())
+    slot = next((candidate for candidate in slots if candidate in BASEWEAR_SLOTS), "")
+    if not slot:
+        return {}
+    state = {
+        "item_id": item_id,
+        "appearance_type": _key(profile.get("appearance_type")) or item_id,
+        "label": _text(profile.get("label")) or _title_words(item_id),
+        "slot": slot,
+        "color": _key(profile.get("color")) or "charcoal",
+        "color_word": _key(profile.get("color_word") or profile.get("color")) or "charcoal",
+        "material": _key(profile.get("material")) or "cotton",
+        "style": _key(profile.get("style")) or "plain",
+        "detail": _key(profile.get("detail")),
+        "pattern": _key(profile.get("pattern")),
+        "emblem": _key(profile.get("emblem")),
+        "flora_motif": dict(profile.get("flora_motif") or {}) if isinstance(profile.get("flora_motif"), dict) else {},
+        "accent_color": _key(profile.get("accent_color")) or fallback_render_key_for_color_word(profile.get("color_word"), default="human_monochrome"),
+        "presentation": _key(profile.get("presentation")),
+        "basewear": True,
+        "starter_basewear": bool(starter),
+    }
+    state["display_name"] = _title_words(_basewear_phrase(state))
+    return state
+
+
+def _basewear_loose_metadata(state):
+    state = dict(state or {})
+    item_id = _key(state.get("item_id") or state.get("appearance_type"))
+    slot = _key(state.get("slot"))
+    label = _text(state.get("label")) or _text(BASEWEAR_ITEM_IDS.get(item_id, {}).get("label")) or _title_words(item_id)
+    appearance = {
+        "type": _key(state.get("appearance_type")) or item_id,
+        "label": label,
+        "slots": [slot],
+        "color": _key(state.get("color")) or "charcoal",
+        "color_word": _key(state.get("color_word") or state.get("color")) or "charcoal",
+        "material": _key(state.get("material")) or "cotton",
+        "style": _key(state.get("style")) or "plain",
+        "detail": _key(state.get("detail")),
+        "pattern": _key(state.get("pattern")),
+        "emblem": _key(state.get("emblem")),
+        "flora_motif": dict(state.get("flora_motif") or {}) if isinstance(state.get("flora_motif"), dict) else {},
+        "accent_color": _key(state.get("accent_color")) or "human_monochrome",
+        "presentation": _key(state.get("presentation")),
+        "basewear": True,
+    }
+    metadata = {
+        "appearance_type": appearance["type"],
+        "appearance_label": label,
+        "appearance_slots": [slot],
+        "color": appearance["color"],
+        "color_word": appearance["color_word"],
+        "material": appearance["material"],
+        "style": appearance["style"],
+        "detail": appearance["detail"],
+        "pattern": appearance["pattern"],
+        "emblem": appearance["emblem"],
+        "flora_motif": dict(appearance["flora_motif"]),
+        "accent_color": appearance["accent_color"],
+        "presentation": appearance["presentation"],
+        "basewear": True,
+        "display_name": _title_words(_basewear_phrase({**state, "label": label})),
+        APPEARANCE_METADATA_KEY: appearance,
+    }
+    if bool(state.get("starter_basewear")):
+        metadata["starter_basewear"] = True
+        metadata[APPEARANCE_METADATA_KEY]["starter_basewear"] = True
+    return with_cosmetic_rarity_metadata(item_id, metadata)
+
+
+def _basewear_presentation_family(sim, eid):
+    identity = sim.ecs.get(CreatureIdentity).get(eid) if sim is not None else None
+    gender_identity = _key(getattr(identity, "gender_identity", ""))
+    if gender_identity == "woman":
+        return "femme"
+    if gender_identity == "man":
+        return "masc"
+    return "mixed"
+
+
+def ensure_player_basewear(sim, eid, *, loadout=None, seed_token=""):
+    if not _is_player_appearance_owner(sim, eid):
+        return {}
+    if loadout is None:
+        loadout = sim.ecs.get(AppearanceLoadout).get(eid)
+    if loadout is None:
+        return {}
+    basewear = AppearanceLoadout._clean_basewear(getattr(loadout, "basewear", None))
+    missing = [slot for slot in BASEWEAR_SLOTS if not isinstance(basewear.get(slot), dict) or not basewear.get(slot)]
+    if not missing:
+        loadout.basewear = basewear
+        return dict(basewear)
+
+    family = _basewear_presentation_family(sim, eid)
+    pools = STARTER_BASEWEAR_POOLS.get(family, STARTER_BASEWEAR_POOLS["mixed"])
+    rng = random.Random(f"player-basewear:{getattr(sim, 'seed', 0)}:{eid}:{family}:{seed_token}")
+    created = []
+    for slot in missing:
+        pool = tuple(pools.get(slot) or STARTER_BASEWEAR_POOLS["mixed"].get(slot) or ())
+        if not pool:
+            continue
+        item_id = rng.choice(pool)
+        metadata = cosmetic_variant_metadata(
+            item_id,
+            seed_token=f"starter-basewear:{getattr(sim, 'seed', 0)}:{eid}:{family}:{slot}:{seed_token}",
+            item_catalog=ITEM_CATALOG,
+            sim=sim,
+        )
+        if slot == "base_bottom" and isinstance(basewear.get("base_top"), dict) and rng.random() < 0.62:
+            metadata = _metadata_with_color(metadata, color=basewear["base_top"].get("color_word") or basewear["base_top"].get("color"))
+        state = _basewear_state_from_metadata(item_id, metadata, starter=True)
+        if state:
+            basewear[slot] = state
+            created.append(slot)
+
+    if created and not any(
+        _key((basewear.get(slot) or {}).get("emblem"))
+        or bool((basewear.get(slot) or {}).get("flora_motif"))
+        for slot in BASEWEAR_SLOTS
+    ):
+        target_slot = "base_bottom" if isinstance(basewear.get("base_bottom"), dict) else created[-1]
+        target = dict(basewear.get(target_slot) or {})
+        target["emblem"] = rng.choice(BASEWEAR_EMBLEMS)
+        target["display_name"] = _title_words(_basewear_phrase(target))
+        basewear[target_slot] = target
+    loadout.basewear = AppearanceLoadout._clean_basewear(basewear)
+    return dict(loadout.basewear)
+
+
+def player_basewear_profile(sim, eid, slot):
+    slot = _key(slot)
+    if slot not in BASEWEAR_SLOTS:
+        return {}
+    loadout = appearance_loadout_for(sim, eid, create=True)
+    if loadout is None:
+        return {}
+    return dict((getattr(loadout, "basewear", {}) or {}).get(slot) or {})
+
+
+def replace_player_basewear(sim, eid, instance_id):
+    if not _is_player_appearance_owner(sim, eid):
+        return AppearanceEquipResult(False, reason="player_only")
+    loadout = appearance_loadout_for(sim, eid, create=True)
+    inventory, entry = _find_entry_by_instance(sim, eid, instance_id)
+    if loadout is None or inventory is None or entry is None:
+        return AppearanceEquipResult(False, reason="missing_item")
+    if not is_basewear_item(entry, item_catalog=ITEM_CATALOG):
+        return AppearanceEquipResult(False, reason="not_basewear")
+    incoming = _basewear_state_from_metadata(entry.get("item_id"), entry.get("metadata"), starter=False)
+    slot = _key(incoming.get("slot"))
+    if slot not in BASEWEAR_SLOTS:
+        return AppearanceEquipResult(False, reason="invalid_slot")
+    current = dict((getattr(loadout, "basewear", {}) or {}).get(slot) or {})
+    if not current:
+        ensure_player_basewear(sim, eid, loadout=loadout)
+        current = dict((getattr(loadout, "basewear", {}) or {}).get(slot) or {})
+    item_name = _display_name(sim, eid, entry)
+    removed = inventory.remove_item(instance_id=instance_id, quantity=1)
+    if not removed:
+        return AppearanceEquipResult(False, reason="remove_failed", slot=slot, item_name=item_name)
+
+    previous_item_id = _key(current.get("item_id") or current.get("appearance_type"))
+    previous_name = _text(current.get("display_name")) or _title_words(_basewear_phrase(current))
+    if previous_item_id in BASEWEAR_ITEM_IDS:
+        restored, _old_instance_id = inventory.add_item(
+            item_id=previous_item_id,
+            quantity=1,
+            stack_max=ITEM_CATALOG.get(previous_item_id, {}).get("stack_max", 1),
+            instance_factory=sim.new_item_instance_id,
+            owner_eid=eid,
+            owner_tag="player",
+            metadata=_basewear_loose_metadata(current),
+        )
+        if not restored:
+            inventory.add_item(
+                item_id=removed.get("item_id"),
+                quantity=removed.get("quantity", 1),
+                stack_max=ITEM_CATALOG.get(removed.get("item_id"), {}).get("stack_max", 1),
+                instance_id=removed.get("instance_id"),
+                owner_eid=removed.get("owner_eid"),
+                owner_tag=removed.get("owner_tag"),
+                metadata=removed.get("metadata"),
+            )
+            return AppearanceEquipResult(False, reason="pack_full", slot=slot, item_name=item_name)
+
+    loadout.basewear[slot] = incoming
+    record_cosmetic_popularity(
+        sim,
+        entry.get("item_id"),
+        removed.get("metadata"),
+        source="player",
+        source_token=f"basewear:{eid}",
+    )
+    sim.emit(Event(
+        "appearance_basewear_replaced",
+        eid=eid,
+        item_id=entry.get("item_id"),
+        instance_id=str(instance_id),
+        item_name=item_name,
+        slot=slot,
+        previous_item_id=previous_item_id,
+        previous_item_name=previous_name,
+    ))
+    sim.emit(Event(
+        "appearance_item_equipped",
+        eid=eid,
+        item_id=entry.get("item_id"),
+        instance_id=str(instance_id),
+        item_name=item_name,
+        slot=slot,
+        reason="basewear_replaced",
+        previous_item_id=previous_item_id,
+        previous_item_name=previous_name,
+    ))
+    return AppearanceEquipResult(True, action="replaced", slot=slot, item_name=item_name)
 
 
 def tattoo_service_metadata(*, seed_token="", prop=None):
@@ -828,13 +1342,20 @@ def _metadata_with_color(metadata, *, color):
     nested["color_word"] = color
     nested["accent_color"] = accent
     updated[APPEARANCE_METADATA_KEY] = nested
-    label = _text(updated.get("appearance_label") or nested.get("label") or updated.get("appearance_type"))
+    item_id = _key(updated.get("appearance_type") or nested.get("type"))
+    label = _text(updated.get("appearance_label") or nested.get("label") or item_id)
     material = _text(updated.get("material") or nested.get("material"))
     style = _text(updated.get("style") or nested.get("style"))
-    display_parts = [color, material, label]
-    if style and style not in {"plain", "simple"}:
-        display_parts.insert(0, style)
-    updated["display_name"] = _title_words(" ".join(part for part in display_parts if part))
+    if item_id in BASEWEAR_ITEM_IDS:
+        updated["display_name"] = _title_words(_basewear_phrase(appearance_metadata_for_entry({"item_id": item_id, "metadata": updated})))
+    else:
+        display_parts = [color, material, label]
+        if style and style not in {"plain", "simple"}:
+            display_parts.insert(0, style)
+        updated["display_name"] = _title_words(" ".join(part for part in display_parts if part))
+        motif_phrase = cosmetic_flora_motif_phrase(updated.get("flora_motif") or nested.get("flora_motif"))
+        if motif_phrase:
+            updated["display_name"] += f" With {_title_words(motif_phrase)}"
     return updated
 
 
@@ -884,8 +1405,8 @@ def _npc_has_described_outfit(inventory):
     return False
 
 
-def _description_item_metadata(item_id, *, color, profile, slot, seed_token):
-    metadata = cosmetic_variant_metadata(item_id, seed_token=seed_token, item_catalog=ITEM_CATALOG)
+def _description_item_metadata(item_id, *, color, profile, slot, seed_token, sim=None):
+    metadata = cosmetic_variant_metadata(item_id, seed_token=seed_token, item_catalog=ITEM_CATALOG, sim=sim)
     metadata = _metadata_with_color(metadata, color=color)
     metadata = _metadata_with_worn(metadata, worn=True, slot=slot)
     metadata[NPC_DESCRIBED_OUTFIT_METADATA_KEY] = True
@@ -953,6 +1474,7 @@ def seed_npc_described_outfit(sim, eid, *, seed_token=""):
             profile=profile,
             slot=slot,
             seed_token=f"{seed_token}:{eid}:{item_id}:{slot}",
+            sim=sim,
         )
         added, instance_id = inventory.add_item(
             item_id=item_id,
@@ -966,6 +1488,13 @@ def seed_npc_described_outfit(sim, eid, *, seed_token=""):
         if not added or not instance_id:
             continue
         loadout.slots[slot] = str(instance_id).strip()
+        record_cosmetic_popularity(
+            sim,
+            item_id,
+            metadata,
+            source="npc",
+            source_token=f"described:{eid}",
+        )
         seeded.append({
             "item_id": item_id,
             "instance_id": str(instance_id),
@@ -1012,6 +1541,7 @@ def seed_player_starting_outfit(sim, eid, *, seed_token=""):
             item_id,
             seed_token=f"{seed_token}:{item_id}",
             item_catalog=ITEM_CATALOG,
+            sim=sim,
         )
         metadata = _metadata_with_color(metadata, color=color)
         metadata["starter_item"] = True
@@ -1030,7 +1560,7 @@ def seed_player_starting_outfit(sim, eid, *, seed_token=""):
         )
         if not added or not instance_id:
             continue
-        result = equip_appearance_item(sim, eid, instance_id)
+        result = equip_appearance_item(sim, eid, instance_id, record_fashion=False)
         if bool(getattr(result, "ok", False)):
             seeded.append({
                 "item_id": item_id,
@@ -1154,7 +1684,7 @@ def _release_active_container_for_unworn_item(sim, eid, instance_id, *, item_nam
     return release
 
 
-def equip_appearance_item(sim, eid, instance_id, preferred_slot=None):
+def equip_appearance_item(sim, eid, instance_id, preferred_slot=None, *, record_fashion=True):
     loadout = appearance_loadout_for(sim, eid, create=True)
     inventory, entry = _find_entry_by_instance(sim, eid, instance_id)
     if loadout is None or inventory is None or entry is None:
@@ -1171,6 +1701,8 @@ def equip_appearance_item(sim, eid, instance_id, preferred_slot=None):
             return unequip_appearance_slot(sim, eid, slot)
     if not is_appearance_item(entry):
         return AppearanceEquipResult(False, reason="not_appearance_item", item_name=item_name)
+    if is_basewear_item(entry, item_catalog=ITEM_CATALOG):
+        return replace_player_basewear(sim, eid, instance_id)
 
     profile = appearance_metadata_for_entry(entry)
     slots = tuple(profile.get("slots", ()) or ())
@@ -1193,6 +1725,14 @@ def equip_appearance_item(sim, eid, instance_id, preferred_slot=None):
     loadout.slots[target_slot] = str(instance_id).strip()
     metadata = _metadata_with_worn(entry.get("metadata"), worn=True, slot=target_slot)
     inventory.update_item_metadata(instance_id, metadata=metadata, replace=True)
+    if record_fashion:
+        record_cosmetic_popularity(
+            sim,
+            entry.get("item_id"),
+            metadata,
+            source="player" if _is_player_appearance_owner(sim, eid) else "npc",
+            source_token=f"equipped:{eid}",
+        )
     sim.emit(Event(
         "appearance_item_equipped",
         eid=eid,
@@ -1206,6 +1746,8 @@ def equip_appearance_item(sim, eid, instance_id, preferred_slot=None):
 
 def unequip_appearance_slot(sim, eid, slot):
     slot = _key(slot)
+    if slot in BASEWEAR_SLOTS:
+        return AppearanceEquipResult(False, reason="basewear_requires_replacement", slot=slot)
     loadout = appearance_loadout_for(sim, eid, create=False)
     if loadout is None or slot not in APPEARANCE_SLOTS:
         return AppearanceEquipResult(False, reason="invalid_slot", slot=slot)
@@ -1309,6 +1851,12 @@ def _entry_phrase(entry, *, compact=False, article=False):
     profile = appearance_metadata_for_entry(entry)
     if not profile:
         return ""
+    if bool(profile.get("basewear")):
+        phrase = _basewear_phrase(profile)
+        appearance_type = _key(profile.get("appearance_type") or profile.get("type"))
+        if article and appearance_type not in ARTICLELESS_APPEARANCE_TYPES:
+            return _indefinite_article_phrase(phrase)
+        return phrase
     color_key = profile.get("color_word") or profile.get("color", "")
     color = color_word_display_name(color_key, default=str(color_key or ""))
     material = profile.get("material", "")
@@ -1324,10 +1872,35 @@ def _entry_phrase(entry, *, compact=False, article=False):
     if label:
         bits.append(label)
     phrase = " ".join(bit for bit in bits if bit)
+    motif_phrase = cosmetic_flora_motif_phrase(profile.get("flora_motif"))
+    if motif_phrase:
+        phrase += f" with {motif_phrase}"
     appearance_type = _key(profile.get("appearance_type") or profile.get("type"))
     if article and appearance_type not in ARTICLELESS_APPEARANCE_TYPES:
         return _indefinite_article_phrase(phrase)
     return phrase
+
+
+def _entry_display_part(entry, *, compact=False, article=False, fallback_color=None):
+    phrase = _entry_phrase(entry, compact=compact, article=article)
+    if not phrase:
+        return None
+    profile = appearance_metadata_for_entry(entry)
+    metadata = _entry_metadata(entry)
+    color_word = _key(
+        (profile or {}).get("color_word")
+        or (profile or {}).get("color")
+        or metadata.get("color_word")
+        or metadata.get("color")
+    )
+    color = render_key_for_color_word(color_word, default=None) if color_word else None
+    if not color:
+        color = _key((profile or {}).get("accent_color") or metadata.get("accent_color")) or fallback_color
+    return {
+        "text": phrase,
+        "color": color,
+        "color_word": color_word or None,
+    }
 
 
 def _join_with_and(parts):
@@ -1352,41 +1925,69 @@ def _entry_for_slot(sim, eid, slot):
     return inventory.find(instance_id=instance_id) if inventory else None
 
 
-def _outfit_parts(sim, eid):
+def _basewear_display_part(sim, eid, slot, *, article=True):
+    state = player_basewear_profile(sim, eid, slot)
+    if not state:
+        return None
+    phrase = _basewear_phrase(state)
+    appearance_type = _key(state.get("appearance_type") or state.get("item_id"))
+    if article and appearance_type not in ARTICLELESS_APPEARANCE_TYPES:
+        phrase = _indefinite_article_phrase(phrase)
+    color_word = _key(state.get("color_word") or state.get("color"))
+    color = render_key_for_color_word(color_word, default=None) if color_word else None
+    return {
+        "text": phrase,
+        "color": color or _key(state.get("accent_color")) or "human_monochrome",
+        "color_word": color_word or None,
+    }
+
+
+def _outfit_display_parts(sim, eid):
     loadout = appearance_loadout_for(sim, eid, create=False)
     if loadout is None:
         return []
     parts = []
     full_body = _entry_for_slot(sim, eid, "full_body")
     if full_body:
-        phrase = _entry_phrase(full_body, article=True)
-        if phrase:
-            parts.append(phrase)
+        part = _entry_display_part(full_body, article=True)
+        if part:
+            parts.append(part)
     else:
         top = _entry_for_slot(sim, eid, "top")
         bottom = _entry_for_slot(sim, eid, "bottom")
-        top_phrase = _entry_phrase(top, article=True) if top else ""
-        bottom_phrase = _entry_phrase(bottom, article=True) if bottom else ""
-        if top_phrase:
-            parts.append(top_phrase)
-        if bottom_phrase:
-            parts.append(bottom_phrase)
+        top_part = _entry_display_part(top, article=True) if top else None
+        bottom_part = _entry_display_part(bottom, article=True) if bottom else None
+        if not top_part:
+            top_part = _basewear_display_part(sim, eid, "base_top", article=True)
+        if not bottom_part:
+            bottom_part = _basewear_display_part(sim, eid, "base_bottom", article=True)
+        if top_part:
+            parts.append(top_part)
+        if bottom_part:
+            parts.append(bottom_part)
     outer = _entry_for_slot(sim, eid, "outer")
     if outer:
-        phrase = _entry_phrase(outer, article=True)
-        if phrase:
-            parts.append(phrase)
+        part = _entry_display_part(outer, article=True)
+        if part:
+            parts.append(part)
     armor = sim.ecs.get(ArmorLoadout).get(eid) if sim is not None else None
     if armor and getattr(armor, "equipped_instance_id", None):
         name = _text(getattr(armor, "equipped_name", None) or getattr(armor, "equipped_item_id", "armor"))
         if name:
-            parts.append(name)
+            inventory = _inventory_for(sim, eid)
+            armor_entry = inventory.find(instance_id=armor.equipped_instance_id) if inventory else None
+            armor_part = _entry_display_part(armor_entry, article=False, fallback_color="item_armor") if armor_entry else None
+            parts.append(armor_part or {"text": name, "color": "item_armor", "color_word": None})
     shoes = _entry_for_slot(sim, eid, "shoes")
     if shoes:
-        phrase = _entry_phrase(shoes, article=True)
-        if phrase:
-            parts.append(phrase)
+        part = _entry_display_part(shoes, article=True)
+        if part:
+            parts.append(part)
     return parts
+
+
+def _outfit_parts(sim, eid):
+    return [str(part.get("text", "")) for part in _outfit_display_parts(sim, eid) if str(part.get("text", ""))]
 
 
 def _outfit_sentence(sim, eid):
@@ -1398,16 +1999,20 @@ def _outfit_sentence(sim, eid):
     return f"I am wearing {', '.join(parts[:-1])}, and {parts[-1]}."
 
 
-def _adornment_parts(sim, eid):
+def _adornment_display_parts(sim, eid):
     bits = []
     for slot in ("hat", "earrings", "necklace", "bracelet", "ring_left", "ring_right"):
         entry = _entry_for_slot(sim, eid, slot)
         if not entry:
             continue
-        phrase = _entry_phrase(entry, compact=True, article=True)
-        if phrase:
-            bits.append(phrase)
+        part = _entry_display_part(entry, compact=True, article=True)
+        if part:
+            bits.append(part)
     return bits
+
+
+def _adornment_parts(sim, eid):
+    return [str(part.get("text", "")) for part in _adornment_display_parts(sim, eid) if str(part.get("text", ""))]
 
 
 def _adornment_sentence(sim, eid):
@@ -1599,6 +2204,20 @@ def _appearance_text(segments):
     return "".join(str(segment.get("text", "")) for segment in segments if isinstance(segment, dict))
 
 
+def _described_wearable_segments(parts, *, opening, closing):
+    visible_parts = [part for part in tuple(parts or ()) if isinstance(part, dict) and str(part.get("text", "")).strip()]
+    if not visible_parts:
+        return []
+    segments = [_appearance_segment(opening)]
+    for index, part in enumerate(visible_parts):
+        if index:
+            connector = ", and " if index == len(visible_parts) - 1 else ", "
+            segments.append(_appearance_segment(connector))
+        segments.append(_appearance_segment(str(part.get("text", "")), color=part.get("color")))
+    segments.append(_appearance_segment(closing))
+    return segments
+
+
 def human_live_conversation_presentation(sim, eid, *, identity=None, personal_name=None):
     if sim is None or eid is None:
         return {"text": "", "segments": []}
@@ -1651,18 +2270,21 @@ def human_live_conversation_presentation(sim, eid, *, identity=None, personal_na
         verb = "stand" if len(feature_bits) > 1 or (len(feature_bits) == 1 and "eyes" in feature_bits[0]) else "stands"
         segments.append(_appearance_segment(f"{possessive} {_join_with_and(feature_bits)} {verb} out. "))
 
-    extra_sentences = []
     skin = _skin_mark_sentence(loadout, subject=subject, possessive_adj=possessive_lower, have=have, first_person=False)
     makeup = _makeup_sentence_for_subject(loadout, subject=subject, have=have)
-    outfit = _outfit_sentence_for_subject(sim, eid, subject=subject, be=be)
-    adornment = _adornment_sentence_for_subject(sim, eid, subject=subject, have=have)
-    for sentence in (skin, makeup, outfit, adornment):
+    for sentence in (skin, makeup):
         if sentence:
-            extra_sentences.append(sentence)
-    outfit_color = appearance_color_key(sim, eid)
-    for sentence in extra_sentences:
-        color = outfit_color if sentence == outfit else None
-        segments.append(_appearance_segment(sentence + " ", color=color))
+            segments.append(_appearance_segment(sentence + " "))
+    segments.extend(_described_wearable_segments(
+        _outfit_display_parts(sim, eid),
+        opening=f"{subject} {be} wearing ",
+        closing=". ",
+    ))
+    segments.extend(_described_wearable_segments(
+        _adornment_display_parts(sim, eid),
+        opening=f"{subject} {have} ",
+        closing=" on. ",
+    ))
     text = _appearance_text(segments).strip()
     return {"text": text, "segments": [segment for segment in segments if str(segment.get("text", ""))]}
 
@@ -1773,6 +2395,11 @@ def appearance_slot_rows(sim, eid):
     for slot in APPEARANCE_SLOT_ORDER:
         label = APPEARANCE_SLOT_LABELS.get(slot, slot.replace("_", " ").title())
         value = "empty"
+        if slot in BASEWEAR_SLOTS:
+            state = dict((getattr(loadout, "basewear", {}) or {}).get(slot) or {})
+            value = _text(state.get("display_name")) or (_title_words(_basewear_phrase(state)) if state else "protected fallback")
+            rows.append(f"{label}: {value} (replace only)")
+            continue
         instance_id = str(loadout.slots.get(slot) or "").strip()
         if instance_id and inventory is not None:
             entry = inventory.find(instance_id=instance_id)
@@ -1888,6 +2515,34 @@ def _appearance_render_color_part(sim, eid, slot):
         "type": _key(profile.get("appearance_type")) or _key(entry.get("item_id")),
         "material": _key(profile.get("material")),
         "style": _key(profile.get("style")),
+        "detail": _key(profile.get("detail")),
+        "pattern": _key(profile.get("pattern")),
+        "emblem": _key(profile.get("emblem")),
+        "flora_motif": dict(profile.get("flora_motif") or {}) if isinstance(profile.get("flora_motif"), dict) else {},
+    }
+
+
+def _basewear_render_color_part(loadout, slot):
+    state = dict((getattr(loadout, "basewear", {}) or {}).get(slot) or {}) if loadout is not None else {}
+    if not state:
+        return None
+    word = _key(state.get("color_word") or state.get("color"))
+    render_key = _key(state.get("accent_color"))
+    if not render_key and word:
+        render_key = _key(fallback_render_key_for_color_word(word, default=""))
+    if not render_key:
+        return None
+    return {
+        "slot": slot,
+        "word": word,
+        "render_key": render_key,
+        "type": _key(state.get("appearance_type") or state.get("item_id")),
+        "material": _key(state.get("material")),
+        "style": _key(state.get("style")),
+        "detail": _key(state.get("detail")),
+        "pattern": _key(state.get("pattern")),
+        "emblem": _key(state.get("emblem")),
+        "flora_motif": dict(state.get("flora_motif") or {}) if isinstance(state.get("flora_motif"), dict) else {},
     }
 
 
@@ -1909,6 +2564,8 @@ def appearance_render_colors(sim, eid):
         "footwear": None,
         "headwear": None,
         "accessory": None,
+        "base_top": None,
+        "base_bottom": None,
         "dominant_word": None,
         "primary_word": None,
         "inner_word": None,
@@ -1916,6 +2573,8 @@ def appearance_render_colors(sim, eid):
         "footwear_word": None,
         "headwear_word": None,
         "accessory_word": None,
+        "base_top_word": None,
+        "base_bottom_word": None,
         "parts": {},
         "words": {},
         "word_list": (),
@@ -1933,6 +2592,8 @@ def appearance_render_colors(sim, eid):
             eid,
             ("necklace", "bracelet", "ring_left", "ring_right", "earrings"),
         ),
+        "base_top": _basewear_render_color_part(loadout, "base_top"),
+        "base_bottom": _basewear_render_color_part(loadout, "base_bottom"),
     }
     for role, part in parts.items():
         if not part:
@@ -1940,7 +2601,7 @@ def appearance_render_colors(sim, eid):
         result[role] = part["render_key"]
         result[f"{role}_word"] = _key(part.get("word")) or None
         result["parts"][role] = dict(part)
-    for role in ("primary", "inner", "secondary", "footwear", "headwear", "accessory"):
+    for role in ("primary", "inner", "secondary", "footwear", "headwear", "accessory", "base_top", "base_bottom"):
         if result.get(role):
             result["dominant"] = result[role]
             result["dominant_word"] = result.get(f"{role}_word")

@@ -556,6 +556,7 @@ class RunEpilogueLedgerSystem(System):
 
     def on_run_concluded(self, event):
         from game.tutorial import tutorial_no_persistence
+        from game.fashion_market import flush_fashion_market
 
         tutorial = tutorial_no_persistence(self.sim)
         lines = self.build_summary_lines(outcome=str(event.data.get("outcome", "") or ""))
@@ -571,6 +572,7 @@ class RunEpilogueLedgerSystem(System):
             ]
             lines = tutorial_lines + [line for line in lines if str(line).strip()]
         else:
+            flush_fashion_market(self.sim)
             echo_result = archive_run_echoes(
                 self.sim,
                 self.player_eid,

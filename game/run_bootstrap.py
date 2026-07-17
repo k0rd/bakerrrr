@@ -1364,6 +1364,12 @@ def bootstrap_normal_run(
         player,
         seed_token=f"{character_name}:{sim.seed}:bootstrap",
     )
+    player_appearance = sim.ecs.get(AppearanceLoadout).get(player)
+    starter_basewear = {
+        str(slot): dict(profile)
+        for slot, profile in dict(getattr(player_appearance, "basewear", {}) or {}).items()
+        if isinstance(profile, dict) and profile
+    }
 
     street_kit_items = list(profile.street_kit_base)
     if profile.street_kit_variants:
@@ -1425,6 +1431,7 @@ def bootstrap_normal_run(
             for item_id, quantity in street_kit_items
         ],
         "starter_outfit_items": [dict(row) for row in tuple(starter_outfit_items or ())],
+        "starter_basewear": starter_basewear,
         "starter_weapon_id": starter_weapon_id,
         "starter_armor_item_id": starter_armor_item_id,
     }
