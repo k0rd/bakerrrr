@@ -110,6 +110,10 @@ class TileMap:
         self.on_add_entity = None
         self.on_move_entity = None
         self.on_remove_entity = None
+        self.visibility_revision = 0
+        self.visibility_global_revision = 0
+        self.visibility_chunk_size = 16
+        self.visibility_chunk_revisions = {}
         # floor transition index:
         # maps (x,y,z,dz) -> {"x":tx, "y":ty, "z":tz, "kind":kind}
         self.floor_links = {}
@@ -145,7 +149,51 @@ class TileMap:
             return
 
         floor = self.ensure_floor(z)
-        floor[(int(x), int(y))] = tile
+        key = (int(x), int(y))
+        previous = floor.get(key)
+        previous_transparent = True if previous is None else bool(getattr(previous, "transparent", True))
+        floor[key] = tile
+        if previous_transparent != bool(getattr(tile, "transparent", True)):
+            self.mark_visibility_changed(x, y, z)
+
+    def mark_visibility_changed(self, x=None, y=None, z=0):
+        self.visibility_revision = int(getattr(self, "visibility_revision", 0) or 0) + 1
+        if x is None or y is None:
+            self.visibility_global_revision = self.visibility_revision
+            return self.visibility_revision
+        try:
+            size = max(1, int(getattr(self, "visibility_chunk_size", 16) or 16))
+            key = (int(x) // size, int(y) // size, int(z))
+        except (TypeError, ValueError):
+            self.visibility_global_revision = self.visibility_revision
+            return self.visibility_revision
+        revisions = getattr(self, "visibility_chunk_revisions", None)
+        if not isinstance(revisions, dict):
+            revisions = {}
+            self.visibility_chunk_revisions = revisions
+        revisions[key] = self.visibility_revision
+        return self.visibility_revision
+
+    def visibility_signature_for_region(self, x, y, z, radius):
+        try:
+            x = int(x)
+            y = int(y)
+            z = int(z)
+            radius = max(0, int(radius))
+            size = max(1, int(getattr(self, "visibility_chunk_size", 16) or 16))
+        except (TypeError, ValueError):
+            return (int(getattr(self, "visibility_revision", 0) or 0), ())
+        revisions = getattr(self, "visibility_chunk_revisions", None)
+        if not isinstance(revisions, dict):
+            revisions = {}
+        local = []
+        for chunk_y in range((y - radius) // size, ((y + radius) // size) + 1):
+            for chunk_x in range((x - radius) // size, ((x + radius) // size) + 1):
+                local.append(int(revisions.get((chunk_x, chunk_y, z), 0) or 0))
+        return (
+            int(getattr(self, "visibility_global_revision", 0) or 0),
+            tuple(local),
+        )
 
     def is_walkable(self, x, y, z=0):
         tile = self.tile_at(x, y, z)

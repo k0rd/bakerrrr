@@ -23,6 +23,7 @@ WIRE_COMBAT_SCHEMA_VERSION = 1
 PROGRAM_ITEM_ID_BY_KEY = {
     "talk": "wire_talk_program",
     "route_probe": "wire_route_probe_program",
+    "handshake_breaker": "wire_handshake_breaker_program",
     "door_latch": "wire_door_latch_program",
     "camera_loop": "wire_camera_loop_program",
     "data_siphon_shell": "wire_data_siphon_shell_program",
@@ -40,8 +41,9 @@ PROGRAM_ITEM_ID_BY_KEY = {
 PROGRAM_SPECS = {
     "talk": {"target": "user", "label": "Talk", "range": 4, "mode": "active"},
     "route_probe": {"target": "scene", "label": "Route Probe", "range": 0, "mode": "active"},
+    "handshake_breaker": {"target": "node", "label": "Handshake Breaker", "node_kinds": {"controller", "sensor_relay"}, "mode": "active"},
     "door_latch": {"target": "node", "label": "Door Latch", "node_kinds": {"door_alarm_relay", "controller"}, "mode": "active"},
-    "camera_loop": {"target": "node", "label": "Camera Loop", "node_kinds": {"controller", "diagnostic"}, "mode": "active"},
+    "camera_loop": {"target": "node", "label": "Camera Loop", "node_kinds": {"controller", "diagnostic", "sensor_relay"}, "mode": "active"},
     "data_siphon_shell": {"target": "node", "label": "Data Siphon Shell", "node_kinds": {"records"}, "mode": "active"},
     "spike": {"target": "ice", "label": "Spike", "range": 10, "damage": 3, "mode": "active"},
     "ice_cutter": {"target": "ice", "label": "ICE Cutter", "range": 8, "damage": 5, "mode": "active"},
@@ -63,7 +65,7 @@ ICE_SPECS = {
     "corruptor": {"label": "Corruptor", "hp": 6, "buffer": 1, "visual": "ice_corruptor"},
 }
 
-OFFENSIVE_PROGRAMS = {"door_latch", "camera_loop", "data_siphon_shell", "spike", "ice_cutter"}
+OFFENSIVE_PROGRAMS = {"handshake_breaker", "door_latch", "camera_loop", "data_siphon_shell", "spike", "ice_cutter"}
 PASSIVE_EFFECT_BY_PROGRAM = {
     "signal_cloak": "signal_cloak",
     "proxy_route": "proxy_route",
@@ -509,6 +511,8 @@ def wire_program_rows(sim, actor_eid, *, item_catalog=None):
         runs_max = _int(metadata.get("runs_max"), profile.get("runs_max", 0), minimum=0)
         mode = str(PROGRAM_SPECS.get(key, {}).get("mode", "active") or "active").strip().lower()
         suffix = f"{mode}, cd {cooldown}, dur {durability}"
+        if bool(profile.get("dangerous")):
+            suffix += ", hostile"
         if runs_max:
             suffix += f", runs {runs}/{runs_max}"
         effect_kind = PASSIVE_EFFECT_BY_PROGRAM.get(key)
@@ -1019,7 +1023,11 @@ def _mark_program_use(state, entry, *, program_key, item_catalog=None):
     item_catalog = item_catalog or ITEM_CATALOG
     profile = _program_profile(entry.get("item_id"), item_catalog=item_catalog)
     metadata = dict(entry.get("metadata") or {})
-    metadata["ram_reload_ticks_remaining"] = _int(profile.get("reload_ticks"), 0, minimum=0)
+    metadata["ram_reload_ticks_remaining"] = _int(
+        metadata.get("reload_ticks"),
+        profile.get("reload_ticks", 0),
+        minimum=0,
+    )
     durability = _int(metadata.get("durability"), profile.get("durability_max", 1), minimum=0)
     metadata["durability"] = max(0, durability - 1)
     runs_max = _int(metadata.get("runs_max"), profile.get("runs_max", 0), minimum=0)
@@ -1078,10 +1086,10 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
     if not ok:
         sim.emit(Event("wire_program_blocked", eid=actor_eid, reason=reason, program_key=program_key))
         return {"ok": False, "reason": reason}
-    if program_key in {"door_latch", "camera_loop", "data_siphon_shell"}:
+    if program_key in {"handshake_breaker", "door_latch", "camera_loop", "data_siphon_shell"}:
         from game.wire_consequences import wire_physical_effect_preflight
 
-        preflight = wire_physical_effect_preflight(sim, scene, program_key)
+        preflight = wire_physical_effect_preflight(sim, scene, program_key, actor_eid=actor_eid)
         if not preflight.get("ok"):
             reason = str(preflight.get("reason", "blocked") or "blocked")
             sim.emit(Event("wire_program_blocked", eid=actor_eid, reason=reason, program_key=program_key))
@@ -1108,6 +1116,7 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
     _add_trace(sim, actor_eid, scene, trace_add, reason=f"program_{program_key}")
     feedback = f"{PROGRAM_SPECS.get(program_key, {}).get('label', program_key)} runs."
     forced_disconnect_after_run = False
+    forced_disconnect_reason = "wire_network_locked"
     if program_key == "route_probe":
         entities = []
         for entity in _live_ice_entities(scene):
@@ -1180,6 +1189,15 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
         scene["last_hostile_program_instance_id"] = _clean_text(entry.get("instance_id"))
         forced_disconnect_after_run = bool(effect.get("forced_disconnect"))
         feedback = str(effect.get("feedback", "Camera loop blinds one linked feed for a short window.") or "")
+    elif program_key == "handshake_breaker":
+        from game.wire_consequences import apply_wire_physical_effect
+
+        effect = apply_wire_physical_effect(sim, actor_eid, scene, program_key, target=resolved_target)
+        scene["handshake_breaker_primed"] = True
+        scene["last_hostile_program_instance_id"] = _clean_text(entry.get("instance_id"))
+        forced_disconnect_after_run = bool(effect.get("forced_disconnect"))
+        forced_disconnect_reason = str(effect.get("disconnect_reason", forced_disconnect_reason) or forced_disconnect_reason)
+        feedback = str(effect.get("feedback", "Handshake breaker noisily disrupts the external drone link.") or "")
     elif program_key == "data_siphon_shell":
         from game.wire_consequences import apply_wire_physical_effect
         from game.wire_data_market import extract_wire_data_cache
@@ -1234,7 +1252,7 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
     if forced_disconnect_after_run:
         scene["ejection_state"] = {
             "kind": "forced",
-            "reason": "wire_network_locked",
+            "reason": forced_disconnect_reason,
             "trace": scene.get("trace_current"),
             "trace_limit": scene.get("trace_limit"),
             "buffer": scene.get("buffer_current"),
@@ -1243,7 +1261,7 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
         state.last_ejection_state = dict(scene["ejection_state"])
         from game.wire_scene import close_wire_scene
 
-        close_wire_scene(sim, actor_eid, reason="wire_network_locked", disconnect=True)
+        close_wire_scene(sim, actor_eid, reason=forced_disconnect_reason, disconnect=True)
         return {
             "ok": True,
             "reason": None,

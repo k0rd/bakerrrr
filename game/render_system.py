@@ -2285,7 +2285,7 @@ class RenderSystem(System):
         feedback = str(wire_kit_ui.get("feedback", "") or "").strip()
         if feedback:
             self._draw_display_line(panel_x + 2, footer_y - 1, _clip_display_line(feedback, body_w), body_cell_w)
-        hint = f"1-{len(tab_ids)} tabs  Arrows select  Enter/U load-unload  Esc/Q close"
+        hint = f"1-{len(tab_ids)} tabs  Arrows select  Enter act/study  U load-unload  Esc/Q close"
         self.view.draw_text(panel_x + 2, footer_y, _local_clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
         return True
 

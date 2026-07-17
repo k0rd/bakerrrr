@@ -80,15 +80,16 @@ class NPCMemorySystem(System):
         memories = self.sim.ecs.get(NPCMemory)
         needs = self.sim.ecs.get(NPCNeeds)
 
-        for eid, memory in memories.items():
+        nearby_eids = self.sim.entity_ids_in_radius(nx, ny, nz, int(radius) + 4)
+        for eid in nearby_eids:
+            memory = memories.get(eid)
+            if memory is None:
+                continue
             pos = positions.get(eid)
-            if not pos or pos.z != nz:
+            if not pos:
                 continue
 
             dist = _manhattan(pos.x, pos.y, nx, ny)
-            if dist > radius + 4:
-                continue
-
             if not _noise_merits_attention(self.sim, eid, source_eid, nx, ny, nz, cause):
                 continue
 

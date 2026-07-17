@@ -2741,6 +2741,7 @@
       "kind": "chassis",
       "chassis_class": "A",
       "slot_limit": 2,
+      "procedure_slot_limit": 1,
       "weight_limit": 4,
       "base_hp": 12,
       "base_range": 10,
@@ -2765,6 +2766,7 @@
       "kind": "chassis",
       "chassis_class": "B",
       "slot_limit": 3,
+      "procedure_slot_limit": 2,
       "weight_limit": 7,
       "base_hp": 18,
       "base_range": 12,
@@ -2789,6 +2791,7 @@
       "kind": "chassis",
       "chassis_class": "C",
       "slot_limit": 5,
+      "procedure_slot_limit": 2,
       "weight_limit": 14,
       "base_hp": 38,
       "base_range": 14,
@@ -2813,6 +2816,7 @@
       "kind": "chassis",
       "chassis_class": "D",
       "slot_limit": 7,
+      "procedure_slot_limit": 3,
       "weight_limit": 22,
       "base_hp": 68,
       "base_range": 14,
@@ -2837,6 +2841,7 @@
       "kind": "chassis",
       "chassis_class": "E",
       "slot_limit": 9,
+      "procedure_slot_limit": 4,
       "weight_limit": 34,
       "base_hp": 110,
       "base_range": 12,
@@ -4093,6 +4098,41 @@
     },
     "effects": []
   },
+  "vehicle_bus_coupler": {
+    "name": "Vehicle Bus Coupler",
+    "glyph": "=",
+    "stack_max": 1,
+    "category": "wire_interface",
+    "tags": [
+      "wire",
+      "interface",
+      "vehicle",
+      "service",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "wire_interface_profile": {
+      "kind": "vehicle_coupler",
+      "manufacturer": "roadline",
+      "style": "service",
+      "supported_target_classes": [
+        "vehicle_controller"
+      ],
+      "program_slots": 2,
+      "buffer_size": 6,
+      "warning_rating": 3,
+      "trace_resistance": 2,
+      "signature_leakage": 2,
+      "range": 1,
+      "safe_yank": true,
+      "panic_eject_delay": 2,
+      "recovery_delay": 2,
+      "shock_risk": 1,
+      "noise_floor": 2,
+      "default_quality": "standard"
+    },
+    "effects": []
+  },
   "wire_talk_program": {
     "name": "Talk Program",
     "glyph": ";",
@@ -4151,6 +4191,40 @@
       "capabilities": [
         "scan",
         "route_probe"
+      ]
+    },
+    "effects": []
+  },
+  "wire_handshake_breaker_program": {
+    "name": "Handshake Breaker",
+    "glyph": ";",
+    "stack_max": 1,
+    "category": "wireware",
+    "tags": [
+      "wire",
+      "program",
+      "drone",
+      "radio",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "wire_profile": {
+      "kind": "program",
+      "program_key": "handshake_breaker",
+      "program_family": "access",
+      "program_mode": "active",
+      "storage_points": 4,
+      "ram_cost": 2,
+      "reload_ticks": 3,
+      "noise": 5,
+      "trace_cost": 5,
+      "durability_max": 5,
+      "runs_max": 0,
+      "dangerous": true,
+      "capabilities": [
+        "drone_handshake",
+        "link_disrupt",
+        "tamper"
       ]
     },
     "effects": []

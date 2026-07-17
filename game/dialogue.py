@@ -114,6 +114,17 @@ TOPIC_ORDER = (
     "street_buy_accept",
     "street_buy_next",
     "street_buy_decline",
+    "leverage",
+    "leverage_credits",
+    "leverage_trade_terms",
+    "leverage_look_away",
+    "leverage_distraction",
+    "leverage_access_window",
+    "leverage_credentials",
+    "leverage_disable_camera",
+    "leverage_hand_over_item",
+    "leverage_falsify_record",
+    "leverage_arrange_meeting",
     "bye",
     "payoff",
     "fence",
@@ -741,6 +752,72 @@ TOPIC_DEFS = {
     },
     "fence": {
         "label": "I have some things I need to move quietly.",
+        "root": False,
+        "unlocks": (),
+    },
+    "leverage": {
+        "label": "I know what you've been hiding.",
+        "root": True,
+        "unlocks": (
+            "leverage_credits",
+            "leverage_trade_terms",
+            "leverage_look_away",
+            "leverage_distraction",
+            "leverage_access_window",
+            "leverage_credentials",
+            "leverage_disable_camera",
+            "leverage_hand_over_item",
+            "leverage_falsify_record",
+            "leverage_arrange_meeting",
+        ),
+    },
+    "leverage_credits": {
+        "label": "Pay me and I keep the records quiet.",
+        "root": False,
+        "unlocks": (),
+    },
+    "leverage_trade_terms": {
+        "label": "Give me better terms at your counter.",
+        "root": False,
+        "unlocks": (),
+    },
+    "leverage_look_away": {
+        "label": "Look the other way for me.",
+        "root": False,
+        "unlocks": (),
+    },
+    "leverage_distraction": {
+        "label": "Make a distraction and keep people looking elsewhere.",
+        "root": False,
+        "unlocks": (),
+    },
+    "leverage_access_window": {
+        "label": "Open a real access window for me.",
+        "root": False,
+        "unlocks": (),
+    },
+    "leverage_credentials": {
+        "label": "Hand over your credential.",
+        "root": False,
+        "unlocks": (),
+    },
+    "leverage_disable_camera": {
+        "label": "Take one of your cameras offline.",
+        "root": False,
+        "unlocks": (),
+    },
+    "leverage_hand_over_item": {
+        "label": "Hand over something useful.",
+        "root": False,
+        "unlocks": (),
+    },
+    "leverage_falsify_record": {
+        "label": "Put me in the access records.",
+        "root": False,
+        "unlocks": (),
+    },
+    "leverage_arrange_meeting": {
+        "label": "Arrange a meeting with one of your contacts.",
         "root": False,
         "unlocks": (),
     },
@@ -1750,6 +1827,61 @@ PLAYER_TOPIC_BANKS = {
         "What would you pay for goods with no questions?",
         "I need a quiet buyer. Is that you?",
     ),
+    "leverage": (
+        "I have the records. We should talk about what happens if {leverage_audience} sees them.",
+        "I know about this: {leverage_fact}",
+        "You should recognize these records. I decide where they go next.",
+    ),
+    "leverage_credits": (
+        "Pay me {leverage_credits_amount} credits and I keep this contained.",
+        "I want {leverage_credits_amount} credits for my silence.",
+        "Transfer {leverage_credits_amount} credits. Then the records stay with me.",
+    ),
+    "leverage_trade_terms": (
+        "My prices improve at {leverage_trade_property_name}. You make that happen.",
+        "I want favorable terms at {leverage_trade_property_name}.",
+        "Ease the counter rates at {leverage_trade_property_name}, and I keep quiet.",
+    ),
+    "leverage_look_away": (
+        "You are going to look away at {leverage_look_away_property_name}.",
+        "Give me a quiet window at {leverage_look_away_property_name}.",
+        "For a while, you do not see what I do at {leverage_look_away_property_name}.",
+    ),
+    "leverage_distraction": (
+        "Make a distraction. Pull attention away from me.",
+        "Go make yourself conspicuous somewhere else.",
+        "Give everyone nearby something else to watch.",
+    ),
+    "leverage_access_window": (
+        "Open the access window at {leverage_access_property_name}.",
+        "Release the doors at {leverage_access_property_name}. I want a real window.",
+        "Use the {leverage_access_fixture_label} at {leverage_access_property_name} and let me through.",
+    ),
+    "leverage_credentials": (
+        "Hand over the {leverage_credential_item_name} for {leverage_credential_property_name}.",
+        "Your {leverage_credential_item_name}. Give it to me.",
+        "I want the actual {leverage_credential_item_name}, not a promise.",
+    ),
+    "leverage_disable_camera": (
+        "Take the {leverage_camera_name} at {leverage_camera_property_name} offline.",
+        "Blind the {leverage_camera_name}. I want the surveillance gap.",
+        "The {leverage_camera_name} goes dark, or these records travel.",
+    ),
+    "leverage_hand_over_item": (
+        "Hand over your {leverage_item_name}.",
+        "Put the {leverage_item_name} in my hand.",
+        "I am leaving with your {leverage_item_name}.",
+    ),
+    "leverage_falsify_record": (
+        "Put my name in the access records at {leverage_record_property_name}.",
+        "Make the {leverage_record_fixture_label} recognize me at {leverage_record_property_name}.",
+        "For a while, the records at {leverage_record_property_name} say I belong there.",
+    ),
+    "leverage_arrange_meeting": (
+        "Arrange a meeting with {leverage_meeting_lead_name}.",
+        "Put me in touch with your {leverage_meeting_relation}, {leverage_meeting_lead_name}.",
+        "Use your name. I want a meeting with {leverage_meeting_lead_name}.",
+    ),
     "weird": (
         {
             "text": "Do you think pigeons have favorite people?",
@@ -2014,6 +2146,17 @@ PLAYER_CONNECTIVE_SKIP_TOPICS = {
     "bye",
     "payoff",
     "fence",
+    "leverage",
+    "leverage_credits",
+    "leverage_trade_terms",
+    "leverage_look_away",
+    "leverage_distraction",
+    "leverage_access_window",
+    "leverage_credentials",
+    "leverage_disable_camera",
+    "leverage_hand_over_item",
+    "leverage_falsify_record",
+    "leverage_arrange_meeting",
     "hire",
     "hire_manager",
     "hire_staff",
@@ -5038,6 +5181,38 @@ def topic_label(topic_id, context=None):
         if label and hint:
             return f"{label} [{hint}]"
         return label
+
+    if topic_id == "leverage":
+        return "I know what you've been hiding."
+    if topic_id == "leverage_credits":
+        amount = int(context.get("leverage_credits_amount", 0) or 0)
+        return f"Pay me {amount} credits." if amount > 0 else "Pay me for my silence."
+    if topic_id == "leverage_trade_terms":
+        place = str(context.get("leverage_trade_property_name", "your counter") or "your counter").strip()
+        return f"Give me better terms at {place}."
+    if topic_id == "leverage_look_away":
+        place = str(context.get("leverage_look_away_property_name", "this place") or "this place").strip()
+        return f"Look the other way at {place}."
+    if topic_id == "leverage_distraction":
+        return "Make a distraction for me."
+    if topic_id == "leverage_access_window":
+        place = str(context.get("leverage_access_property_name", "this place") or "this place").strip()
+        return f"Open an access window at {place}."
+    if topic_id == "leverage_credentials":
+        credential = str(context.get("leverage_credential_item_name", "credential") or "credential").strip()
+        return f"Hand over your {credential}."
+    if topic_id == "leverage_disable_camera":
+        camera = str(context.get("leverage_camera_name", "camera") or "camera").strip()
+        return f"Take the {camera} offline."
+    if topic_id == "leverage_hand_over_item":
+        item_name = str(context.get("leverage_item_name", "item") or "item").strip()
+        return f"Hand over your {item_name}."
+    if topic_id == "leverage_falsify_record":
+        place = str(context.get("leverage_record_property_name", "this place") or "this place").strip()
+        return f"Put me in the access records at {place}."
+    if topic_id == "leverage_arrange_meeting":
+        name = str(context.get("leverage_meeting_lead_name", "your contact") or "your contact").strip()
+        return f"Arrange a meeting with {name}."
 
     if topic_id == "workplace" and context.get("workplace_here"):
         return "Do you work here?"

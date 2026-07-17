@@ -353,6 +353,19 @@ def dynamic_flora_profile(sim, plant_id):
     return dict(profile) if isinstance(profile, dict) else {}
 
 
+def flora_catalog_for_sim(sim, *, native_only=False):
+    """Return authored flora plus installation-native (or all live) lines."""
+
+    catalog = {plant_id: dict(row) for plant_id, row in load_flora_catalog().items()}
+    for plant_id, profile in ensure_dynamic_flora_profiles(sim).items():
+        if not isinstance(profile, dict):
+            continue
+        if native_only and not str(profile.get("native_lineage_id") or "").strip():
+            continue
+        catalog[_str_key(plant_id)] = dict(profile)
+    return catalog
+
+
 def register_dynamic_flora_profile(sim, profile):
     if sim is None:
         return None
@@ -393,6 +406,12 @@ def register_dynamic_flora_profile(sim, profile):
     row["stability_band"] = _str_key(row.get("stability_band"))
     row["notability"] = _str_key(row.get("notability"))
     row["genetics"] = dict(row.get("genetics") or {}) if isinstance(row.get("genetics"), dict) else {}
+    if _safe_int(row["genetics"].get("schema_version"), 0) != 1:
+        row["genetics"] = normalize_flora_genetics(
+            plant_id,
+            row,
+            seed=getattr(sim, "seed", 0),
+        )
     row["dynamic_flora"] = True
     ensure_dynamic_flora_profiles(sim)[plant_id] = row
     return dict(row)
@@ -876,7 +895,7 @@ def ensure_chunk_flora(sim, chunk, *, property_records=None):
     if key in chunk_records:
         return tuple(chunk_records.get(key, ()) or ())
 
-    catalog = load_flora_catalog()
+    catalog = flora_catalog_for_sim(sim, native_only=True)
     candidates = _candidate_positions(sim, chunk)
     if not candidates:
         chunk_records[key] = []

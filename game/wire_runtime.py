@@ -25,11 +25,13 @@ WIRE_INTERFACE_KINDS = (
     "interface_cable",
     "service_dongle",
     "drone_bridge",
+    "vehicle_coupler",
 )
 WIRE_TARGET_CLASSES = (
     "access_panel",
     "service_terminal",
     "drone_radio",
+    "vehicle_controller",
     "generic_wire",
 )
 

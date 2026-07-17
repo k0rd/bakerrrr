@@ -7012,6 +7012,27 @@ class BusinessPulseSceneSystem(System):
             return "release_dialogue"
         return ""
 
+    def _scene_route_target_occupied(self, eid, target):
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            return False
+        positions = self.sim.ecs.get(Position)
+        for other_eid in self.sim.tilemap.entities_at(int(target[0]), int(target[1]), int(target[2])):
+            if int(other_eid) != int(eid) and positions.get(other_eid) is not None:
+                return True
+        return False
+
+    def _scene_route_yield_point(self, pos, *, reserved=()):
+        if pos is None:
+            return None
+        candidates = self._open_air_support_tiles(
+            (int(pos.x), int(pos.y), int(pos.z)),
+            reserved=reserved,
+            min_radius=1,
+            max_radius=1,
+            limit=1,
+        )
+        return candidates[0] if candidates else None
+
     def _prepare_preserved_scene_actor(self, eid, mode):
         if str(mode or "").strip().lower() != "keep_hired":
             return
@@ -7199,6 +7220,7 @@ class BusinessPulseSceneSystem(System):
         positions = self.sim.ecs.get(Position)
         ais = self.sim.ecs.get(AI)
         wills = self.sim.ecs.get(NPCWill)
+        claimed_yield_points = set()
         for eid, route in list(scene.get("actor_routes", {}).items()):
             pos = positions.get(eid)
             ai = ais.get(eid)
@@ -7225,12 +7247,47 @@ class BusinessPulseSceneSystem(System):
                 continue
             index = int(route.get("index", 0) or 0) % len(points)
             target = points[index]
+            current = (int(pos.x), int(pos.y), int(pos.z))
             if (int(pos.x), int(pos.y), int(pos.z)) == target and len(points) > 1:
                 if int(self.sim.tick) >= int(route.get("next_switch_tick", 0) or 0):
                     index = (index + 1) % len(points)
                     route["index"] = index
                     route["next_switch_tick"] = int(self.sim.tick) + int(route.get("linger_ticks", 18) or 18)
                     target = points[index]
+
+            yield_point = route.get("yield_point")
+            if isinstance(yield_point, (tuple, list)) and len(yield_point) >= 3:
+                yield_point = (int(yield_point[0]), int(yield_point[1]), int(yield_point[2]))
+            else:
+                yield_point = None
+
+            target_occupied = self._scene_route_target_occupied(eid, target)
+            if yield_point is not None and current != yield_point:
+                if not self._scene_route_target_occupied(eid, yield_point):
+                    target = yield_point
+                    claimed_yield_points.add(yield_point)
+                else:
+                    route.pop("yield_point", None)
+                    yield_point = None
+            elif yield_point is not None and target_occupied:
+                # Stay on the sidestep until the intended scene mark clears.
+                target = yield_point
+                claimed_yield_points.add(yield_point)
+            elif yield_point is not None:
+                route.pop("yield_point", None)
+                yield_point = None
+
+            if yield_point is None and target_occupied:
+                yield_point = self._scene_route_yield_point(pos, reserved=claimed_yield_points)
+                if yield_point is not None:
+                    route["yield_point"] = yield_point
+                    claimed_yield_points.add(yield_point)
+                    target = yield_point
+                else:
+                    # Holding the current mark is causally correct and cheap;
+                    # retry shortly in case a passerby clears the route.
+                    target = current
+                route["next_switch_tick"] = int(self.sim.tick) + 2
             if ai.state != "holding" or tuple(ai.target or ()) != tuple(target) or ai.target_eid is not None:
                 _sync_ai_intent(ai, wills.get(eid), self.sim.tick, "holding", target=target, target_eid=None)
 

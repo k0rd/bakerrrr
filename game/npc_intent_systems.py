@@ -95,6 +95,11 @@ from game.npc_self_protection_runtime import (
     active_self_protection_action,
     apply_self_protection_quirk,
 )
+from game.npc_emergency_runtime import (
+    active_emergency_actor_eids,
+    npc_emergency_active,
+    npc_emergency_state,
+)
 from game.place_mood_runtime import strongest_rumor_weather_anchor
 from game.property_access import (
     PropertyIngressResult,
@@ -234,6 +239,7 @@ from game.system_support.access_runtime import _attempt_locked_property_entry_wi
 from game.system_support.criminal_drive_runtime import (
     active_plan_for_actor,
     attempt_criminal_affiliation,
+    clear_criminal_drive_activity,
     criminal_drive_state,
     criminal_affiliation_targets,
     find_registered_item_system,
@@ -433,6 +439,134 @@ def _actor_is_active_street_trade_contact(sim, eid):
         return False
 
 
+def _routine_will_signature(sim, eid, ai, will, needs, *, suppression=None):
+    """Cheap inputs that make an existing routine decision still truthful.
+
+    Movement is intentionally absent: walking toward the chosen target should
+    stay hot without forcing the actor to rediscover why it chose that target.
+    New knowledge, changed needs, work time, possessions, relationships, and
+    property reputation all invalidate the decision before its bounded lease.
+    """
+    target = getattr(ai, "target", None)
+    if isinstance(target, (tuple, list)):
+        target = tuple(target)
+    occupation = sim.ecs.get(Occupation).get(eid)
+    workplace = getattr(occupation, "workplace", None) if occupation is not None else None
+    if isinstance(workplace, dict):
+        workplace_signature = tuple(sorted((str(key), repr(value)) for key, value in workplace.items()))
+    else:
+        workplace_signature = str(workplace or "")
+
+    inventory = sim.ecs.get(Inventory).get(eid)
+    inventory_signature = tuple(sorted(
+        (
+            str(entry.get("item_id", "") or "").strip().lower(),
+            int(entry.get("quantity", 0) or 0),
+            str(entry.get("owner_tag", "") or "").strip().lower(),
+        )
+        for entry in tuple(getattr(inventory, "items", ()) or ())
+        if isinstance(entry, dict) and str(entry.get("item_id", "") or "").strip()
+    ))
+
+    memory = sim.ecs.get(NPCMemory).get(eid)
+    memory_entries = tuple(getattr(memory, "entries", ()) or ())
+    latest_memory = memory_entries[-1] if memory_entries else {}
+    memory_signature = (
+        len(memory_entries),
+        int(latest_memory.get("tick", -1) or -1) if isinstance(latest_memory, dict) else -1,
+        str(latest_memory.get("kind", "") or "").strip().lower() if isinstance(latest_memory, dict) else "",
+    )
+
+    knowledge = sim.ecs.get(NPCOpportunityKnowledge).get(eid)
+    if knowledge is not None:
+        lead_rows = []
+        for kind, rows in dict(getattr(knowledge, "leads_by_kind", {}) or {}).items():
+            for row in tuple(rows or ()):
+                if not isinstance(row, dict):
+                    continue
+                lead_target = row.get("target")
+                if isinstance(lead_target, (tuple, list)):
+                    lead_target = tuple(lead_target)
+                lead_rows.append((
+                    str(kind),
+                    str(row.get("property_id", "") or ""),
+                    lead_target,
+                    str(row.get("service_id", "") or ""),
+                    str(row.get("opportunity_tag", "") or ""),
+                    int(float(row.get("confidence", 0.0) or 0.0) * 10),
+                    int(float(row.get("score", 0.0) or 0.0) // 5),
+                ))
+        knowledge_signature = tuple(sorted(lead_rows, key=repr))
+    else:
+        knowledge_signature = ()
+
+    social = sim.ecs.get(NPCSocial).get(eid)
+    social_signature = tuple(sorted(
+        (
+            int(other_eid),
+            str((bond or {}).get("kind", "") or "").strip().lower(),
+            int(float((bond or {}).get("closeness", 0.0) or 0.0) * 10),
+            int(float((bond or {}).get("trust", 0.0) or 0.0) * 10),
+        )
+        for other_eid, bond in dict(getattr(social, "bonds", {}) or {}).items()
+        if isinstance(bond, dict)
+    ))
+
+    vitality = sim.ecs.get(Vitality).get(eid)
+    effects = sim.ecs.get(StatusEffects).get(eid)
+    reputation_stats = getattr(sim, "business_reputation_stats", None)
+    reputation_revision = (
+        int(reputation_stats.get("_revision", 0) or 0)
+        if isinstance(reputation_stats, dict)
+        else 0
+    )
+    return (
+        str(getattr(ai, "state", "") or "").strip().lower(),
+        target,
+        getattr(ai, "target_eid", None),
+        tuple(int(float(getattr(needs, field, 0.0) or 0.0) // 5) for field in ("energy", "safety", "social", "hunger", "thirst")),
+        tuple(sorted(str(value) for value in tuple(getattr(needs, "critical", ()) or ()))),
+        int(getattr(vitality, "hp", 0) or 0) if vitality is not None else None,
+        bool(getattr(vitality, "downed", False)) if vitality is not None else False,
+        int(float(getattr(suppression, "pressure", 0.0) or 0.0) * 10) if suppression is not None else 0,
+        tuple(sorted(str(key) for key in dict(getattr(effects, "active", {}) or {}).keys())),
+        str(getattr(occupation, "career", "") or "").strip().lower() if occupation is not None else "",
+        workplace_signature,
+        getattr(occupation, "shift_start", None) if occupation is not None else None,
+        getattr(occupation, "shift_end", None) if occupation is not None else None,
+        int(_world_hour(sim)),
+        inventory_signature,
+        memory_signature,
+        knowledge_signature,
+        social_signature,
+        reputation_revision,
+        int(getattr(sim, "next_property_id", 0) or 0),
+    )
+
+
+def _routine_will_signature_state(sim):
+    state = getattr(sim, "_routine_will_signatures", None)
+    if not isinstance(state, dict):
+        state = {}
+        sim._routine_will_signatures = state
+    return state
+
+
+def _remember_routine_will_signature(sim, eid, ai, will, needs=None, *, suppression=None):
+    state = str(getattr(ai, "state", "") or "").strip().lower() if ai is not None else ""
+    signatures = _routine_will_signature_state(sim)
+    if state not in _WILL_COASTING_STATES or ai is None or will is None:
+        signatures.pop(int(eid), None)
+        return None
+    needs = needs if needs is not None else sim.ecs.get(NPCNeeds).get(eid)
+    if needs is None:
+        signatures.pop(int(eid), None)
+        return None
+    signature = _routine_will_signature(sim, eid, ai, will, needs, suppression=suppression)
+    signatures[int(eid)] = signature
+    return signature
+
+
 def _should_skip_live_will_update(sim, eid, ai, will, needs, pos, *, player_pos=None, suppression=None):
     if ai is None or will is None or needs is None or pos is None:
         return False
@@ -466,7 +600,13 @@ def _should_skip_live_will_update(sim, eid, ai, will, needs, pos, *, player_pos=
             )
         ):
             return False
-    return not _will_rethink_due(sim, eid, current_tick=getattr(sim, "tick", 0))
+    if _will_rethink_due(sim, eid, current_tick=getattr(sim, "tick", 0)):
+        return False
+    remembered = _routine_will_signature_state(sim).get(int(eid))
+    if remembered is None:
+        return False
+    current = _routine_will_signature(sim, eid, ai, will, needs, suppression=suppression)
+    return current == remembered
 
 def _emit_move_access_events(*args, **kwargs):
     return _facade()._emit_move_access_events(*args, **kwargs)
@@ -494,6 +634,10 @@ def _npc_combat_metrics(*args, **kwargs):
 
 def _path_next_step(*args, **kwargs):
     return _facade()._path_next_step(*args, **kwargs)
+
+
+def _path_search_failed(*args, **kwargs):
+    return _facade()._path_search_failed(*args, **kwargs)
 
 def _pick_npc_combat_position(*args, **kwargs):
     return _facade()._pick_npc_combat_position(*args, **kwargs)
@@ -775,6 +919,47 @@ def _plan_explicit_behavior_tip_shares(sim, source_eid, pos, tip_kind, payload, 
     )
 
 
+def _hidden_contact_referral_properties(sim):
+    """Index the tiny hidden-contact subset once per simulation tick.
+
+    Active NPC wills may all reconsider during the same tick.  Scanning every
+    registered property for every actor made that richer cadence pay repeatedly
+    for an effectively immutable source graph.  The actor-specific relationship
+    and distance scoring remains live below; only the structural property scan
+    is shared.
+    """
+    properties = getattr(sim, "properties", {})
+    tick = int(getattr(sim, "tick", 0) or 0)
+    signature = (
+        tick,
+        len(properties) if isinstance(properties, dict) else 0,
+        int(getattr(sim, "next_property_id", 0) or 0),
+        bool(getattr(sim, "property_registry_dirty", False)),
+    )
+    cached = getattr(sim, "_hidden_contact_referral_property_cache", None)
+    if isinstance(cached, dict) and cached.get("signature") == signature:
+        return tuple(cached.get("rows", ()))
+
+    rows = []
+    for prop in tuple(properties.values()) if isinstance(properties, dict) else ():
+        if not isinstance(prop, dict):
+            continue
+        metadata = _property_metadata(prop)
+        hidden_kind = str(metadata.get("hidden_contact_kind", "") or "").strip().lower()
+        if hidden_kind not in {"backroom_market", "backroom_clinic"}:
+            continue
+        focus = _property_focus_position(prop)
+        if not focus:
+            continue
+        rows.append((prop, metadata, hidden_kind, tuple(focus)))
+    result = tuple(rows)
+    sim._hidden_contact_referral_property_cache = {
+        "signature": signature,
+        "rows": result,
+    }
+    return result
+
+
 def _hidden_contact_referral_rows(sim, source_eid, pos, *, current_prop=None, workplace_prop=None, home_prop=None, occupation=None):
     if source_eid is None or not pos:
         return ()
@@ -794,16 +979,7 @@ def _hidden_contact_referral_rows(sim, source_eid, pos, *, current_prop=None, wo
             ref_building_ids.add(ref_building_id)
 
     best_by_kind = {}
-    for prop in tuple(sim.properties.values()):
-        if not isinstance(prop, dict):
-            continue
-        metadata = _property_metadata(prop)
-        hidden_kind = str(metadata.get("hidden_contact_kind", "") or "").strip().lower()
-        if hidden_kind not in {"backroom_market", "backroom_clinic"}:
-            continue
-        focus = _property_focus_position(prop)
-        if not focus:
-            continue
+    for prop, metadata, hidden_kind, focus in _hidden_contact_referral_properties(sim):
         fx, fy, fz = focus
         if int(fz) != int(pos.z):
             continue
@@ -2447,6 +2623,7 @@ class NPCWillSystem(System):
                     )
             else:
                 _clear_will_rethink(self.sim, eid)
+            _remember_routine_will_signature(self.sim, eid, ai, will)
             return
 
         ai.state = intent
@@ -2483,6 +2660,8 @@ class NPCWillSystem(System):
             _clear_will_rethink(self.sim, eid)
         else:
             _clear_will_rethink(self.sim, eid)
+
+        _remember_routine_will_signature(self.sim, eid, ai, will)
 
         self.sim.emit(Event(
             "npc_intent_changed",
@@ -4420,6 +4599,25 @@ class NPCInvestigateSystem(System):
         "warning",
         "evading_authority",
     }
+    REPLAN_ON_NO_PATH_STATES = {
+        "scavenging",
+        "selling_scavenged",
+        "casing_target",
+        "committing_property_crime",
+        "rendezvousing_crew",
+        "seeking_criminal_affiliation",
+        "evading_authority",
+        "seeking_safety",
+        "seeking_medical_aid",
+        "seeking_safe_spot",
+        "seeking_shelter",
+        "patrolling",
+        "working",
+        "lounging",
+        "socializing",
+        "shopping",
+        "resting",
+    }
 
     def __init__(self, sim):
         super().__init__(sim)
@@ -4706,6 +4904,45 @@ class NPCInvestigateSystem(System):
         except (TypeError, ValueError):
             return
 
+    def _request_replan_after_failed_path(self, eid, ai, pos, target, *, wills):
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        if state not in self.REPLAN_ON_NO_PATH_STATES or npc_emergency_active(self.sim, eid):
+            return False
+        will = wills.get(eid)
+        _clear_opportunity_active_target(self.sim, eid, state)
+        _invalidate_opportunity_active_target_path(self.sim, eid, state)
+        if state in {
+            "casing_target",
+            "committing_property_crime",
+            "rendezvousing_crew",
+            "seeking_criminal_affiliation",
+        }:
+            drive_state = criminal_drive_state(self.sim, eid, create=False)
+            if drive_state is not None:
+                clear_criminal_drive_activity(drive_state)
+                drive_state.target_scan_tick = -10_000
+                drive_state.target_scan_signature = None
+                drive_state.cached_opportunistic_target = None
+                drive_state.cached_affiliation_targets = ()
+                drive_state.cooldown_until_tick = max(
+                    int(getattr(drive_state, "cooldown_until_tick", 0) or 0),
+                    int(getattr(self.sim, "tick", 0) or 0) + 2,
+                )
+        ai.state = "idle"
+        ai.target = None
+        ai.target_eid = None
+        if will is not None:
+            will.intent = "idle"
+            will.score = 0.0
+            will.target = None
+            will.target_eid = None
+            will.last_tick = int(getattr(self.sim, "tick", 0) or 0) - 1
+        self._clear_live_no_path(eid)
+        _clear_will_rethink(self.sim, eid)
+        _mark_actor_urgent(self.sim, eid, family="will", reason="unreachable_target", ttl_ticks=8)
+        _schedule_actor_due(self.sim, eid, "will", delay_ticks=1, reason="unreachable_target")
+        return True
+
     def _recent_danger_noise_pulse_count(self, eid, *, x, y, z, cause, window_ticks=18, radius=3):
         try:
             eid = int(eid)
@@ -4742,8 +4979,11 @@ class NPCInvestigateSystem(System):
 
     def _nearby_fleeing_humanoid_count(self, eid, *, x, y, z, ais, positions, radius=8):
         count = 0
-        for other_eid, other_ai in ais.items():
+        for other_eid in self.sim.entity_ids_in_radius(x, y, z, radius):
             if other_eid == eid:
+                continue
+            other_ai = ais.get(other_eid)
+            if other_ai is None:
                 continue
             if str(getattr(other_ai, "role", "") or "").strip().lower() == "wildlife":
                 continue
@@ -4844,18 +5084,18 @@ class NPCInvestigateSystem(System):
         wildlife_behaviors = self.sim.ecs.get(WildlifeBehavior)
         vehicle_states = self.sim.ecs.get(VehicleState)
 
-        for eid, ai in ais.items():
+        for eid in self.sim.entity_ids_in_radius(nx, ny, nz, radius):
             if eid == source_eid:
+                continue
+            ai = ais.get(eid)
+            if ai is None:
                 continue
             if _entity_is_downed(self.sim, eid):
                 _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
                 continue
 
             pos = positions.get(eid)
-            if not pos or pos.z != nz:
-                continue
-
-            if _manhattan(pos.x, pos.y, nx, ny) > radius:
+            if not pos:
                 continue
 
             if str(getattr(ai, "role", "") or "").strip().lower() == "wildlife":
@@ -4870,6 +5110,7 @@ class NPCInvestigateSystem(System):
                     (nx, ny, nz),
                     routines.get(eid),
                     behavior,
+                    actor_eid=eid,
                 )
                 if not escape_target:
                     continue
@@ -5824,6 +6065,7 @@ class NPCInvestigateSystem(System):
         if live_timeskip_active:
             candidate_eids = self._pop_due_move_eids()
             candidate_eids.update(self._urgent_move_eids)
+            candidate_eids.update(active_emergency_actor_eids(self.sim))
             self._urgent_move_eids.clear()
             ai_items = [(eid, ais[eid]) for eid in sorted(candidate_eids) if eid in ais]
         else:
@@ -5886,10 +6128,11 @@ class NPCInvestigateSystem(System):
                     self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), int(self.sim.tick) + 1)
                 continue
 
-            if global_stride > 1 and ((stride_phase_tick + eid) % global_stride != 0):
+            emergency_active = npc_emergency_active(self.sim, eid)
+            if not emergency_active and global_stride > 1 and ((stride_phase_tick + eid) % global_stride != 0):
                 continue
 
-            if not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
+            if not emergency_active and not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
                 if live_timeskip_active:
                     self._schedule_move_due(eid, int(getattr(self.sim, "tick", 0)) + 1)
                 continue
@@ -5958,7 +6201,23 @@ class NPCInvestigateSystem(System):
                         weapon=held_weapon,
                         **_npc_status_metric_args(self.sim, eid),
                     )
-                    if not quirk_target_override:
+                    emergency_state = npc_emergency_state(self.sim, eid, create=False)
+                    emergency_fight = bool(
+                        emergency_active
+                        and emergency_state is not None
+                        and str(getattr(emergency_state, "response", "") or "").strip().lower() == "fight"
+                    )
+                    if emergency_fight and not bool(metrics.get("has_ranged")):
+                        # Once a failed escape has become emergency fightback,
+                        # an unarmed actor must close with the threat.  The
+                        # ordinary tactical scorer may quite reasonably prefer
+                        # this frightened actor's current tile, but combining
+                        # that preference with weapon hesitation produces the
+                        # indefinite combat freeze this seam exists to prevent.
+                        tx = int(threat_focus[0])
+                        ty = int(threat_focus[1])
+                        tz = int(threat_focus[2])
+                    elif not quirk_target_override:
                         tactical_target = _pick_npc_combat_position(
                             self.sim,
                             eid,
@@ -6793,6 +7052,16 @@ class NPCInvestigateSystem(System):
                         else:
                             self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
                         continue
+
+            if not step and _path_search_failed(self.sim, eid, pos.x, pos.y, tx, ty, pos.z):
+                if self._request_replan_after_failed_path(
+                    eid,
+                    ai,
+                    pos,
+                    (tx, ty, tz),
+                    wills=wills,
+                ):
+                    continue
 
             moved = False
             blocked_reason = None

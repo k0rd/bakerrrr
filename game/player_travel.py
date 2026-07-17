@@ -685,12 +685,17 @@ class PlayerTravelRuntime:
         owner_tag = str(vehicle_prop.get("owner_tag", "")).strip().lower()
         lock_state = property_lock_state(vehicle_prop)
         has_key = self.action_system._property_key_entry_for(eid, vehicle_prop) is not None
+        metadata = vehicle_prop.get("metadata") if isinstance(vehicle_prop.get("metadata"), dict) else {}
+        wire_ignition_authorized = bool(
+            str(metadata.get("vehicle_wire_ignition_actor_eid", "")) == str(eid)
+            and int(metadata.get("vehicle_wire_ignition_until_tick", 0) or 0) > int(getattr(self.sim, "tick", 0) or 0)
+        )
         owned_by_actor = vehicle_prop.get("owner_eid") == eid or owner_tag == "player"
         public_vehicle = is_public_owner_tag(owner_tag)
         entry_method = "public"
 
         if owned_by_actor:
-            if lock_state["locked"] and not has_key:
+            if lock_state["locked"] and not has_key and not wire_ignition_authorized:
                 self.sim.emit(Event(
                     "vehicle_action_blocked",
                     eid=eid,
@@ -699,9 +704,11 @@ class PlayerTravelRuntime:
                     vehicle_name=_vehicle_label(vehicle_prop),
                 ))
                 return False
-            entry_method = "key" if has_key else "owner"
+            entry_method = "key" if has_key else "wire_authenticated" if wire_ignition_authorized else "owner"
         elif has_key:
             entry_method = "key"
+        elif wire_ignition_authorized:
+            entry_method = "wire_authenticated"
         elif public_vehicle and not lock_state["locked"]:
             entry_method = "public"
         else:
@@ -729,6 +736,9 @@ class PlayerTravelRuntime:
         state.set_in_vehicle(True, tick=self.sim.tick)
         state.medium = medium
         set_vehicle_speed(state, 0, tick=self.sim.tick)
+        if wire_ignition_authorized:
+            metadata.pop("vehicle_wire_ignition_actor_eid", None)
+            metadata.pop("vehicle_wire_ignition_until_tick", None)
 
         if medium == "water" and board_tile != (int(pos.x), int(pos.y), int(pos.z)):
             self._teleport_entity(eid, pos, board_tile[0], board_tile[1], board_tile[2], reason="enter_vehicle")

@@ -29,6 +29,7 @@ from game.drone_runtime import (
     find_deployed_drone_for_pickup,
     first_open_drone_deploy_tile,
     is_packed_drone_entry,
+    normalize_packed_drone_metadata,
     packed_drone_metadata_from_state,
     validate_packed_drone_deploy_entry,
 )
@@ -702,6 +703,12 @@ class ItemActionRuntime:
         return True
 
     def _use_packed_drone(self, eid, x, y, z, inventory, entry, item_def, item_name, *, reason="manual"):
+        from game.technical_research import apply_technical_research_to_entry
+
+        packed_metadata = normalize_packed_drone_metadata(entry.get("metadata"), item_catalog=self.catalog)
+        for module in tuple(packed_metadata.get("modules", ()) or ()):
+            apply_technical_research_to_entry(self.sim, eid, module, item_catalog=self.catalog)
+        entry["metadata"] = packed_metadata
         deploy = validate_packed_drone_deploy_entry(entry, item_catalog=self.catalog)
         if not deploy.get("ok"):
             self.sim.emit(Event(

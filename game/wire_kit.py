@@ -61,7 +61,15 @@ def wire_state_for_actor(sim, actor_eid, *, create=True):
     if state is None and create:
         state = WireState()
         sim.ecs.add(actor_eid, state)
-    return normalize_wire_state(state)
+    state = normalize_wire_state(state)
+    if state is not None:
+        from game.technical_research import apply_technical_research_to_entry
+
+        for entry in tuple(getattr(state, "kit_entries", ()) or ()):
+            apply_technical_research_to_entry(sim, actor_eid, entry, item_catalog=ITEM_CATALOG)
+        for entry in tuple(getattr(state, "ram_slots", ()) or ()):
+            apply_technical_research_to_entry(sim, actor_eid, entry, item_catalog=ITEM_CATALOG)
+    return state
 
 
 def normalize_wire_state(state):
@@ -169,6 +177,9 @@ def refresh_wire_state_interface_capacity(sim, actor_eid, state=None, *, item_ca
             item_id = _clean_item_id(entry.get("item_id"))
             if not is_wire_interface_item(item_id, item_catalog=item_catalog):
                 continue
+            from game.technical_research import apply_technical_research_to_entry
+
+            apply_technical_research_to_entry(sim, actor_eid, entry, item_catalog=item_catalog)
             profile = wire_interface_profile_for_item(item_id, item_catalog=item_catalog)
             metadata = normalize_wire_interface_metadata(
                 entry.get("metadata") if isinstance(entry.get("metadata"), Mapping) else {},
@@ -239,7 +250,7 @@ def wire_kit_status_lines(state, *, item_catalog=None):
     return [
         f"Storage {summary['points_used']}/{summary['capacity_points']} pts across {summary['entries']} entries",
         f"RAM {summary['ram_used']}/{summary['program_slots']} pts | connection {connection}",
-        "Slice 4: RAM-loaded programs can execute inside a WireScene.",
+        "RAM-loaded programs execute from inside a connected WireScene.",
     ]
 
 
@@ -317,6 +328,9 @@ def load_inventory_entry_to_wire_kit(sim, actor_eid, instance_id, *, item_catalo
     item_catalog = item_catalog or ITEM_CATALOG
     if not is_wire_item(entry.get("item_id"), item_catalog=item_catalog):
         return {"ok": False, "reason": "not_wire_item", "entry": dict(entry)}
+    from game.technical_research import apply_technical_research_to_entry
+
+    apply_technical_research_to_entry(sim, actor_eid, entry, item_catalog=item_catalog)
     wire_state = wire_state_for_actor(sim, actor_eid, create=True)
     refresh_wire_state_interface_capacity(sim, actor_eid, wire_state, item_catalog=item_catalog)
     ok, reason = wire_kit_can_accept_entry(wire_state, entry, item_catalog=item_catalog)
@@ -426,11 +440,25 @@ def wire_kit_rows(sim, actor_eid, tab="kit", *, item_catalog=None):
             continue
         if tab != "kit" and _wire_kind_bucket(entry.get("item_id"), item_catalog=item_catalog) != tab:
             continue
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), Mapping) else {}
+        research_action = bool(_wire_kind_bucket(entry.get("item_id"), item_catalog=item_catalog) == "data" and metadata.get("research_consumable"))
+        leverage_action = bool(
+            _wire_kind_bucket(entry.get("item_id"), item_catalog=item_catalog) == "data"
+            and str(metadata.get("data_family", "") or "").strip().lower() == "blackmail"
+            and str(metadata.get("subject_kind", "") or "").strip().lower() == "person"
+            and metadata.get("subject_eid") is not None
+        )
+        label = _row_label(entry, source="kit", item_catalog=item_catalog)
+        if research_action:
+            label = label.replace("-> backpack", "-> study (or sell to broker)")
+        elif leverage_action:
+            subject_name = str(metadata.get("subject_name", "the subject") or "the subject").strip()
+            label = label.replace("-> backpack", f"-> confront {subject_name} (or sell; U unloads)")
         rows.append({
             "kind": "kit",
             "instance_id": str(entry.get("instance_id", "") or ""),
             "entry": dict(entry),
-            "label": _row_label(entry, source="kit", item_catalog=item_catalog),
-            "action": "unload",
+            "label": label,
+            "action": "study" if research_action else ("leverage_hint" if leverage_action else "unload"),
         })
     return rows

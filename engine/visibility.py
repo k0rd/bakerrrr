@@ -107,6 +107,8 @@ def visibility_state(sim):
         "player_radius": 0,
         "player_visible": set(),
         "player_explored": set(),
+        "player_visibility_signature": None,
+        "player_visibility_reused": False,
     }
     sim.visibility_state = state
     return state
@@ -176,15 +178,63 @@ def observer_can_see_position(sim, observer_eid, observer_x, observer_y, observe
 def update_player_visibility(sim, player_eid, x, y, z, radius):
     state = visibility_state(sim)
     _begin_tick(sim, state)
-
-    visible = observer_visible_positions(
-        sim,
-        observer_eid=player_eid,
-        x=x,
-        y=y,
-        z=z,
-        radius=radius,
+    x = _to_int(x)
+    y = _to_int(y)
+    z = _to_int(z)
+    radius = max(1, _to_int(radius, default=8))
+    tilemap = getattr(sim, "tilemap", None)
+    chunk_detail = getattr(sim, "chunk_detail", None)
+    streamed_signature = ()
+    if isinstance(chunk_detail, dict):
+        try:
+            min_chunk = sim.chunk_coords(x - radius, y - radius)
+            max_chunk = sim.chunk_coords(x + radius, y + radius)
+            streamed_signature = tuple(
+                str(chunk_detail.get((chunk_x, chunk_y), "unloaded"))
+                for chunk_y in range(min(int(min_chunk[1]), int(max_chunk[1])), max(int(min_chunk[1]), int(max_chunk[1])) + 1)
+                for chunk_x in range(min(int(min_chunk[0]), int(max_chunk[0])), max(int(min_chunk[0]), int(max_chunk[0])) + 1)
+            )
+        except (AttributeError, TypeError, ValueError):
+            streamed_signature = tuple(sorted(
+                (int(chunk[0]), int(chunk[1]), str(detail))
+                for chunk, detail in chunk_detail.items()
+                if isinstance(chunk, (tuple, list)) and len(chunk) >= 2
+            ))
+    topology_signature = int(getattr(tilemap, "visibility_revision", 0) or 0)
+    topology_for_region = getattr(tilemap, "visibility_signature_for_region", None)
+    if callable(topology_for_region):
+        topology_signature = topology_for_region(x, y, z, radius)
+    signature = (
+        x,
+        y,
+        z,
+        radius,
+        topology_signature,
+        streamed_signature,
     )
+    cached_visible = state.get("player_visible")
+    reused = bool(
+        state.get("player_visibility_signature") == signature
+        and isinstance(cached_visible, set)
+    )
+    if reused:
+        visible = cached_visible
+        state["observers"][_to_int(player_eid, default=-1)] = {
+            "x": x,
+            "y": y,
+            "z": z,
+            "radius": radius,
+            "visible": visible,
+        }
+    else:
+        visible = observer_visible_positions(
+            sim,
+            observer_eid=player_eid,
+            x=x,
+            y=y,
+            z=z,
+            radius=radius,
+        )
 
     explored = state.get("player_explored")
     if not isinstance(explored, set):
@@ -192,8 +242,10 @@ def update_player_visibility(sim, player_eid, x, y, z, radius):
     explored.update(visible)
 
     state["player_eid"] = player_eid
-    state["player_origin"] = (_to_int(x), _to_int(y), _to_int(z))
-    state["player_radius"] = max(1, _to_int(radius, default=8))
+    state["player_origin"] = (x, y, z)
+    state["player_radius"] = radius
     state["player_visible"] = set(visible)
     state["player_explored"] = explored
+    state["player_visibility_signature"] = signature
+    state["player_visibility_reused"] = reused
     return visible

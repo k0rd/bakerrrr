@@ -84,7 +84,16 @@ def _business_reputation_stats(sim):
     if not isinstance(stats, dict):
         stats = {}
         sim.business_reputation_stats = stats
+    stats.setdefault("_revision", 0)
     return stats
+
+
+def _bump_business_reputation_revision(sim):
+    if sim is None:
+        return 0
+    stats = _business_reputation_stats(sim)
+    stats["_revision"] = int(stats.get("_revision", 0) or 0) + 1
+    return int(stats["_revision"])
 
 
 def _business_reputation_tick_cache(sim, key):
@@ -93,10 +102,13 @@ def _business_reputation_tick_cache(sim, key):
     if not isinstance(cache, dict):
         cache = {}
         stats[key] = cache
-    current_tick = int(getattr(sim, "tick", 0) or 0)
-    if int(cache.get("_tick", -1) or -1) != current_tick:
+    signature = (
+        int(stats.get("_revision", 0) or 0),
+        len(getattr(sim, "properties", {}) or {}),
+    )
+    if cache.get("_signature") != signature:
         cache.clear()
-        cache["_tick"] = current_tick
+        cache["_signature"] = signature
     return cache
 
 
@@ -954,11 +966,14 @@ class BusinessReputationSystem(System):
         self.sim.events.subscribe("trade_sold", self.on_trade_sold)
         self.sim.events.subscribe("site_service_used", self.on_site_service_used)
         self.sim.events.subscribe("npc_social_venue_visited", self.on_npc_social_venue_visited)
-        if not hasattr(self.sim, "business_reputation_stats"):
+        if not isinstance(getattr(self.sim, "business_reputation_stats", None), dict):
             self.sim.business_reputation_stats = {
                 "holders": 0,
                 "shares_last_tick": 0,
+                "_revision": 0,
             }
+        else:
+            _business_reputation_stats(self.sim)
 
     def _knowledge_for(self, eid, *, create=False):
         return business_knowledge_for(self.sim, eid, create=create)
@@ -1075,6 +1090,7 @@ class BusinessReputationSystem(System):
             incident_id=incident_id,
         )
         if isinstance(record, dict):
+            _bump_business_reputation_revision(self.sim)
             queue_score = self._queue_score(record)
             if queue_score >= self.MIN_SOCIAL_QUEUE_SCORE:
                 knowledge.queue_property(property_id, score=queue_score, tick=getattr(self.sim, "tick", 0))

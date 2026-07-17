@@ -134,6 +134,15 @@ def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z
         if ingress and ingress.from_inside and actor_inside_same_prop:
             return True
 
+        # Path search only needs the expensive social/credential answer for a
+        # lock that could actually stop this route. Unlocked closed doors are
+        # already plannable by the existing rule below; deriving organization
+        # posture, business reputation, and actor standing for every speculative
+        # A* visit changes no result and can dominate NPC movement cost.
+        lock_state = property_lock_state(prop)
+        if not bool(lock_state.get("locked")):
+            return True
+
         access = _evaluate_property_access(
             sim,
             eid,
@@ -145,9 +154,7 @@ def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z
         )
         if access.permitted:
             return True
-
-        lock_state = property_lock_state(prop)
-        return not bool(lock_state.get("locked"))
+        return False
 
     return not bool(state.get("locked", False))
 

@@ -4,7 +4,9 @@ from game.components import (
     AI,
     AnimalBehaviorContext,
     AnimalMemory,
+    AnimalGenome,
     AnimalPhysicalProfile,
+    AnimalReproduction,
     AnimalSocialProfile,
     AppearanceLoadout,
     ArmorLoadout,
@@ -41,6 +43,8 @@ from game.components import (
     WildlifeBehavior,
 )
 from game.economy import chunk_economy_profile, pick_career_for_workplace
+from game.ecology_registry import native_fauna_profiles
+from game.fauna_genetics import apply_animal_genome_expression, founder_animal_genome
 from game.appearance_loadout import cosmetic_variant_metadata, is_appearance_item, seed_npc_appearance_from_description
 from game.drone_distribution import drone_distribution_metadata
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot
@@ -1845,7 +1849,11 @@ def _creature_profile_weight(profile, descriptor):
     terrains = profile.get("terrains") if isinstance(profile.get("terrains"), dict) else {}
     weight += float(districts.get(district_type, 0.0))
     weight += float(terrains.get(terrain, 0.0))
-    return max(0.0, weight)
+    try:
+        native_weight = float(profile.get("native_weight", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        native_weight = 1.0
+    return max(0.0, weight * max(0.0, native_weight))
 
 
 def _chunk_outdoor_tiles(sim, chunk, z=0):
@@ -2910,6 +2918,32 @@ def _animal_social_profile_for_profile(profile):
     )
 
 
+def _animal_reproduction_for_profile(profile, *, rng, tick, size_score):
+    profile = profile if isinstance(profile, dict) else {}
+    mode = str(profile.get("reproduction_mode", "any_pair") or "any_pair").strip().lower()
+    if bool(profile.get("sterile", False)):
+        mode = "none"
+    role = str(profile.get("gamete_role", "any") or "any").strip().lower()
+    size_score = max(1.0, float(size_score or 1.0))
+    if size_score >= 62.0:
+        gestation_ticks, brood_min, brood_max = 1800, 1, 1
+    elif size_score >= 24.0:
+        gestation_ticks, brood_min, brood_max = 1200, 1, 2
+    elif size_score >= 7.0:
+        gestation_ticks, brood_min, brood_max = 780, 1, 3
+    else:
+        gestation_ticks, brood_min, brood_max = 540, 2, 5
+    return AnimalReproduction(
+        mode=mode,
+        gamete_role=role,
+        maturity_tick=max(0, int(tick)),
+        next_breed_tick=max(0, int(tick)) + int(rng.randint(480, 2400)),
+        gestation_ticks=int(profile.get("gestation_ticks", gestation_ticks) or gestation_ticks),
+        brood_min=int(profile.get("brood_min", brood_min) or brood_min),
+        brood_max=int(profile.get("brood_max", brood_max) or brood_max),
+    )
+
+
 def _spawn_wildlife(sim, rng, profile, position):
     taxonomy = str(profile.get("taxonomy_class", "other")).strip().lower() or "other"
     common_names = tuple(
@@ -2933,6 +2967,23 @@ def _spawn_wildlife(sim, rng, profile, position):
     max_hp = int(rng.randint(int(hp_lo), int(max(hp_lo, hp_hi))))
     speed = round(rng.uniform(float(speed_lo), float(speed_hi)), 2)
     behavior = _wildlife_behavior_for_profile(profile)
+    physical = _animal_physical_profile_for_profile(profile)
+    identity_token = (
+        f"wildlife:{profile.get('id', 'creature')}:"
+        f"{int(home[0])}:{int(home[1])}:{int(home[2])}"
+    )
+    genome = founder_animal_genome(
+        profile,
+        seed=sim.seed,
+        identity_token=identity_token,
+        native_record=profile.get("native_genome"),
+    )
+    reproduction = _animal_reproduction_for_profile(
+        profile,
+        rng=rng,
+        tick=getattr(sim, "tick", 0),
+        size_score=physical.size_score,
+    )
 
     eid = _spawn(
         sim,
@@ -2943,6 +2994,7 @@ def _spawn_wildlife(sim, rng, profile, position):
             species=species,
             creature_type="animal",
             common_name=common_name,
+            coat_variant=profile.get("coat_variant"),
         ),
         AI("wildlife"),
         MovementThrottle(
@@ -2963,7 +3015,7 @@ def _spawn_wildlife(sim, rng, profile, position):
         StatusEffects(),
         Vitality(max_hp=max(6, max_hp)),
         CoverState(),
-        _animal_physical_profile_for_profile(profile),
+        physical,
         _ecology_profile_for_profile(profile),
         _animal_context_for_profile(profile),
         _animal_social_profile_for_profile(profile),
@@ -2977,6 +3029,15 @@ def _spawn_wildlife(sim, rng, profile, position):
         ),
         NPCRoutine(home=home, work=None),
         behavior,
+        genome,
+        reproduction,
+    )
+
+    apply_animal_genome_expression(
+        sim,
+        eid,
+        genome,
+        baseline_is_expressed=bool(profile.get("native_genome")),
     )
 
     ai = sim.ecs.get(AI).get(eid)
@@ -3005,7 +3066,8 @@ def _spawn_chunk_wildlife(sim, chunk, property_records, rng, *, target_count):
             break
 
         weighted = []
-        for profile in AMBIENT_CREATURE_PROFILES:
+        profiles = tuple(AMBIENT_CREATURE_PROFILES) + tuple(native_fauna_profiles(sim))
+        for profile in profiles:
             weight = _creature_profile_weight(profile, descriptor)
             if weight <= 0.0:
                 continue

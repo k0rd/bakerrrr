@@ -7,7 +7,8 @@ from typing import Iterable
 
 from engine.events import Event
 from engine.systems import System
-from game.components import AnimalPhysicalProfile, CreatureIdentity, EcologyProfile, Inventory, PlayerAssets
+from game.components import AnimalGenome, AnimalPhysicalProfile, CreatureIdentity, EcologyProfile, Inventory, PlayerAssets
+from game.fauna_genetics import animal_genome_payload
 from game.items import ITEM_CATALOG, item_display_name
 from game.system_support.awareness_runtime import observation_payload_for_position
 from game.system_support.offense_runtime import _emit_action_offense_event
@@ -93,9 +94,11 @@ def _animal_identity_payload(sim, animal_eid):
     identities = sim.ecs.get(CreatureIdentity)
     physicals = sim.ecs.get(AnimalPhysicalProfile)
     ecologies = sim.ecs.get(EcologyProfile)
+    genomes = sim.ecs.get(AnimalGenome)
     identity = identities.get(animal_eid)
     physical = physicals.get(animal_eid)
     ecology = ecologies.get(animal_eid)
+    genome = genomes.get(animal_eid)
     payload = {}
     if identity:
         payload.update({
@@ -112,6 +115,10 @@ def _animal_identity_payload(sim, animal_eid):
         })
     if ecology:
         payload["ecology_species"] = str(getattr(ecology, "species", "") or "").strip().lower()
+    if genome:
+        payload["fauna_genetics"] = animal_genome_payload(genome)
+        payload["root_animal_id"] = str(getattr(genome, "root_animal_id", "") or "").strip().lower()
+        payload["fauna_lineage_id"] = str(getattr(genome, "lineage_id", "") or "").strip().lower()
     return payload
 
 
@@ -137,6 +144,8 @@ def _payload_huntable(payload):
     if BASE_MEAT_UNITS_BY_SIZE.get(size_class, 0) <= 0:
         return False
     taxonomy = str(payload.get("taxonomy_class", "") or "").strip().lower()
+    if str(payload.get("root_animal_id", "") or "").strip():
+        return True
     if taxonomy in HUNTABLE_TAXONOMY:
         return True
     return bool(_payload_species_tokens(payload).intersection(HUNTABLE_SPECIES))
@@ -164,6 +173,9 @@ def hunting_yield_profile(sim, animal_eid=None, *, payload=None):
         "taxonomy_class": str(payload.get("taxonomy_class", "") or "").strip().lower() or "other",
         "size_score": float(_safe_float(payload.get("size_score", 0.0), 0.0)),
         "juvenile": bool(payload.get("juvenile", False)),
+        "root_animal_id": str(payload.get("root_animal_id", "") or "").strip().lower(),
+        "fauna_lineage_id": str(payload.get("fauna_lineage_id", "") or "").strip().lower(),
+        "fauna_genetics": copy.deepcopy(dict(payload.get("fauna_genetics") or {})),
     }
 
 
@@ -202,6 +214,9 @@ def create_hunting_carcass(sim, *, animal_eid=None, x=0, y=0, z=0, source_eid=No
         "size_score": profile["size_score"],
         "animal_size_class": profile["animal_size_class"],
         "base_units": int(profile["base_units"]),
+        "root_animal_id": profile.get("root_animal_id"),
+        "fauna_lineage_id": profile.get("fauna_lineage_id"),
+        "fauna_genetics": copy.deepcopy(dict(profile.get("fauna_genetics") or {})),
         "x": int(x),
         "y": int(y),
         "z": int(z),
@@ -428,6 +443,9 @@ def field_dress_carcass(sim, eid, carcass_id=None):
         "field_dressing_tool": tool.get("item_id"),
         "kill_bag_used": bool(kill_bag),
         "legal_status": "legal",
+        "source_fauna_root_animal_id": record.get("root_animal_id"),
+        "source_fauna_lineage_id": record.get("fauna_lineage_id"),
+        "source_fauna_genetics": copy.deepcopy(dict(record.get("fauna_genetics") or {})),
     }
     owner_eid, owner_tag = _inventory_owner_for(sim, eid)
     if not _inventory_can_accept(inventory, output_item_id, quantity, metadata=metadata, owner_eid=owner_eid, owner_tag=owner_tag):

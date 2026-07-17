@@ -21,12 +21,14 @@ from game.flora_runtime import (
     flora_at,
     flora_bloom_state,
     flora_harvest_limit,
+    flora_catalog_for_sim,
     load_flora_catalog,
     normalize_flora_harvest_state,
     register_dynamic_flora_profile,
     register_flora_patch,
 )
 from game.herbal_chemistry_runtime import plant_chemistry_class, plant_secondary_traits
+from game.ecology_registry import register_native_flora_line
 from game.items import ITEM_CATALOG, item_display_name
 from game.property_runtime import property_fixture_type
 
@@ -300,7 +302,7 @@ def _row_or_source(source, sim=None):
 
 
 def seed_packet_metadata(sim, *, plant_id=None, seed_token="", source_kind="stock", hybrid=None):
-    catalog = load_flora_catalog()
+    catalog = flora_catalog_for_sim(sim)
     if isinstance(hybrid, Mapping):
         plant_id = _key(hybrid.get("plant_id"))
         row = _row_or_source(hybrid, sim=sim)
@@ -979,10 +981,35 @@ def _parent_profile_for_crossbreed(sim, source):
         "hybrid_generation": _safe_int(source.get("hybrid_generation") or metadata.get("hybrid_generation") or row.get("hybrid_generation"), 0),
         "lineage": dict(source.get("lineage") or metadata.get("lineage") or row.get("lineage") or {}),
         "genetics": dict(genetics or {}),
+        "effect_pool_detached": bool(
+            source.get("effect_pool_detached")
+            or metadata.get("effect_pool_detached")
+            or row.get("effect_pool_detached")
+        ),
     }
     profile["colors"] = (profile["color_key"],)
     if not isinstance(profile["genetics"], Mapping) or _safe_int(profile["genetics"].get("schema_version"), 0) != 1:
         profile["genetics"] = normalize_flora_genetics(plant_id, profile, seed=getattr(sim, "seed", 0))
+    elif bool(profile.get("effect_pool_detached")):
+        identity_genetics = dict(profile["genetics"])
+        fresh_row = dict(profile)
+        fresh_row["genetics"] = {
+            "hue_family": profile.get("color_word"),
+            "main_class": profile.get("chemistry_class"),
+            "secondary_traits": list(profile.get("secondary_traits") or ()),
+        }
+        fresh = normalize_flora_genetics(plant_id, fresh_row, seed=getattr(sim, "seed", 0))
+        for field in ("genes", "carried"):
+            source_groups = identity_genetics.get(field) if isinstance(identity_genetics.get(field), Mapping) else {}
+            target_groups = fresh.get(field) if isinstance(fresh.get(field), dict) else {}
+            for group in ("visual", "handling", "social"):
+                if isinstance(source_groups.get(group), Mapping):
+                    target_groups[group] = dict(source_groups[group])
+            fresh[field] = target_groups
+        if isinstance(identity_genetics.get("lineage"), Mapping):
+            fresh["lineage"] = dict(identity_genetics["lineage"])
+        fresh["identity_only_source"] = True
+        profile["genetics"] = fresh
     return profile
 
 
@@ -1125,6 +1152,9 @@ def crossbreed_with_flora(sim, eid, source, target):
             metadata=removed.get("metadata"),
         )
         return {"ok": False, "reason": "inventory_full", "target_name": target.get("name")}
+    native_profile = dynamic_flora_profile(sim, seed_metadata.get("source_plant_id"))
+    if native_profile:
+        register_native_flora_line(sim, native_profile, source="assisted_crossbreed")
     _update_target_fertility(sim, target, fertility - 1)
     sim.emit(Event(
         "flora_crossbred",
@@ -1383,6 +1413,7 @@ def natural_crossbreed_loaded_flora(sim):
         )
         records[record["id"]] = record
         sync_cultivation_flora_patch(sim, record)
+        register_native_flora_line(sim, profile, source="natural_crossbreed")
         _update_target_fertility(sim, target, _target_fertility_remaining(target) - 1)
         cooldowns[target_id] = now + 2400
         pollen_id = str(pollen.get("id") or "")
@@ -1629,7 +1660,7 @@ def npc_try_gardener_action(sim, eid):
         cooldowns[actor_key] = now + 2400
         return False
     rng = random.Random(f"{getattr(sim, 'seed', 0)}:npc-gardener:{eid}:{chunk}:{now // 2400}")
-    catalog = load_flora_catalog()
+    catalog = flora_catalog_for_sim(sim)
     plant = rng.choice(tuple(catalog.values()))
     source = _source_from_entry(sim, {
         "item_id": SEED_PACKET_ITEM_ID,

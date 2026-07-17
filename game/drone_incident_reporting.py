@@ -10,7 +10,12 @@ from game.drone_recon import (
     drone_has_camera_sensor,
     drone_has_radio_comms,
 )
-from game.drone_runtime import drone_state_controlled_by_actor, drone_state_has_capability
+from game.drone_runtime import (
+    drone_link_disruption_status,
+    drone_sensor_suppression_status,
+    drone_state_controlled_by_actor,
+    drone_state_has_capability,
+)
 from game.items import ITEM_CATALOG
 
 
@@ -143,6 +148,10 @@ def drone_incident_report_rows(sim, incident, event, *, item_catalog=None):
             continue
         pos = positions.get(drone_eid)
         if pos is None or int(getattr(state, "battery_charge", 0) or 0) <= 0:
+            continue
+        if drone_link_disruption_status(state, tick=int(getattr(sim, "tick", 0) or 0)).get("active"):
+            continue
+        if drone_sensor_suppression_status(state, tick=int(getattr(sim, "tick", 0) or 0)).get("active"):
             continue
         if not drone_has_camera_sensor(state, item_catalog=item_catalog):
             continue

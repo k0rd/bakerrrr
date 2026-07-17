@@ -72,7 +72,7 @@ DRONE_PROGRAM_SLOT_TYPES = (
 
 DRONE_PROGRAM_STEP_LIMIT_BY_CLASS = {
     "A": 4,
-    "B": 6,
+    "B": 8,
     "C": 8,
     "D": 10,
     "E": 12,
@@ -873,6 +873,10 @@ def _run_verb(drone_system, controller_eid, drone_eid, state, line):
         metadata["cargo"] = list(state.cargo)
         return {"ok": True, "reason": None, "action": "drop"}
     if op == "REPORT":
+        from game.drone_runtime import drone_link_disruption_status
+
+        if drone_link_disruption_status(state, tick=int(getattr(sim, "tick", 0) or 0)).get("active"):
+            return {"ok": False, "reason": "link_disrupted"}
         if not (drone_state_has_capability(state, "radio") or drone_state_has_capability(state, "comms")):
             return {"ok": False, "reason": "no_radio"}
         sim.emit(Event("drone_program_reported", eid=controller_eid, controller_eid=controller_eid, drone_eid=drone_eid))

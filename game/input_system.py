@@ -117,6 +117,7 @@ from game.dialogue_runtime import (
 )
 from game.drone_runtime import (
     PACKED_DRONE_ITEM_ID,
+    drone_link_disruption_status,
     drone_profile_for_item,
     drone_state_capabilities,
     drone_state_controlled_by_actor,
@@ -189,7 +190,10 @@ from game.wire_connection import (
     active_wire_connection_stale,
     close_wire_connection_shell,
     connect_wire_target,
+    connect_wire_target_ref,
     disconnect_wire_connection,
+    open_wire_drone_connection_shell,
+    open_wire_vehicle_connection_shell,
     open_wire_connection_shell,
     refresh_wire_connection_ui,
     set_preferred_wire_interface,
@@ -209,6 +213,7 @@ from game.wire_scene import (
     close_wire_scene,
     move_wire_avatar,
     open_wire_scene,
+    open_wire_scene_from_connection,
     panic_exit_wire_scene,
     read_wire_scene_node,
     wait_wire_scene,
@@ -218,6 +223,8 @@ from game.wire_scene import (
 from game.wire_consequences import wire_recovery_status
 from game.wire_runtime import is_wire_interface_item
 from game.wire_users import handle_wire_dialogue_choice, wire_dialogue_rows, wire_dialogue_state
+from game.wire_drone_bridge import perform_drone_wire_shell_action
+from game.wire_vehicle_bridge import perform_vehicle_wire_shell_action
 from game.property_doors import (
     _door_action_text,
     _door_close_attempt,
@@ -1023,6 +1030,8 @@ class InputSystem(System):
             self.sim.wire_connection_ui = state
         state.setdefault("open", False)
         state.setdefault("property_id", "")
+        state.setdefault("target_entity_id", None)
+        state.setdefault("target_ref", {})
         state.setdefault("interaction_mode", "physical")
         state.setdefault("target_class", "")
         state.setdefault("selected_index", 0)
@@ -1324,6 +1333,8 @@ class InputSystem(System):
                 continue
             if not drone_state_has_capability(state, "remote_control", item_catalog=self.catalog):
                 continue
+            if drone_link_disruption_status(state, tick=int(getattr(self.sim, "tick", 0) or 0)).get("active"):
+                continue
             pos = positions.get(drone_eid)
             if pos is None or int(pos.z) != int(player_pos.z):
                 continue
@@ -1342,6 +1353,35 @@ class InputSystem(System):
                 "distance": int(distance),
                 "capabilities": capabilities,
                 "camera": camera,
+                "label": self._drone_command_label(state),
+            })
+        return sorted(records, key=lambda row: (int(row.get("distance", 0)), int(row.get("eid", 0))))
+
+    def _disrupted_drone_command_records(self):
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if player_pos is None:
+            return []
+        positions = self.sim.ecs.get(Position)
+        records = []
+        for drone_eid, state in self.sim.ecs.get(DroneState).items():
+            if str(getattr(state, "mode", "") or "").strip().lower() != "deployed":
+                continue
+            if not drone_state_controlled_by_actor(state, self.player_eid):
+                continue
+            if not drone_state_has_capability(state, "remote_control", item_catalog=self.catalog):
+                continue
+            link = drone_link_disruption_status(state, tick=int(getattr(self.sim, "tick", 0) or 0))
+            if not link.get("active"):
+                continue
+            pos = positions.get(drone_eid)
+            if pos is None or int(pos.z) != int(player_pos.z):
+                continue
+            records.append({
+                "eid": drone_eid,
+                "state": state,
+                "position": pos,
+                "distance": int(_manhattan(player_pos.x, player_pos.y, pos.x, pos.y)),
+                "remaining": int(link.get("remaining", 0)),
                 "label": self._drone_command_label(state),
             })
         return sorted(records, key=lambda row: (int(row.get("distance", 0)), int(row.get("eid", 0))))
@@ -1367,11 +1407,23 @@ class InputSystem(System):
             if bool(state.get("open")):
                 state["open"] = False
                 if announce_unavailable:
+                    disrupted = next(
+                        (
+                            row
+                            for row in self._disrupted_drone_command_records()
+                            if row.get("eid") == selected
+                        ),
+                        None,
+                    )
+                    reason = "link_disrupted" if disrupted else "selected_unavailable"
+                    if disrupted:
+                        state["feedback"] = "The selected drone's external link is disrupted. Inspect it physically; an adjacent owner can use Shift+W to resync."
                     self.sim.emit(Event(
                         "drone_command_blocked",
                         eid=self.player_eid,
                         controller_eid=self.player_eid,
-                        reason="selected_unavailable",
+                        drone_eid=(disrupted or {}).get("eid"),
+                        reason=reason,
                     ))
             return None
         if bool(state.get("open")):
@@ -1388,13 +1440,25 @@ class InputSystem(System):
             return True
         record = self._refresh_drone_command_ui()
         if record is None:
-            state["feedback"] = "No commandable deployed drone."
-            self.sim.emit(Event("drone_command_blocked", eid=self.player_eid, controller_eid=self.player_eid, reason="no_commandable_drone"))
+            disrupted = self._disrupted_drone_command_records()
+            if disrupted:
+                nearest = disrupted[0]
+                state["feedback"] = "A controlled drone's external link is disrupted. Inspect it physically; an adjacent owner can use Shift+W to resync."
+                self.sim.emit(Event(
+                    "drone_command_blocked",
+                    eid=self.player_eid,
+                    controller_eid=self.player_eid,
+                    drone_eid=nearest.get("eid"),
+                    reason="link_disrupted",
+                ))
+            else:
+                state["feedback"] = "No commandable deployed drone."
+                self.sim.emit(Event("drone_command_blocked", eid=self.player_eid, controller_eid=self.player_eid, reason="no_commandable_drone"))
             return True
         state["open"] = True
         self._sync_linked_drone_camera(record)
         state["status_lines"] = self._drone_status_lines(record)
-        state["feedback"] = "Movement keys command the selected drone. [/] cycles. X links sensors."
+        state["feedback"] = "Movement keys command the selected drone. [/] cycles. X links sensors. Shift+W opens Wire."
         self.sim.emit(Event(
             "drone_command_opened",
             eid=self.player_eid,
@@ -1671,6 +1735,18 @@ class InputSystem(System):
             self._refresh_drone_command_ui(announce_unavailable=True)
             return True
         record = self._selected_drone_command_record()
+        if key == ord("W"):
+            drone_eid = (record or {}).get("eid") if isinstance(record, dict) else None
+            if drone_eid is not None and open_wire_drone_connection_shell(
+                self.sim,
+                self.player_eid,
+                drone_eid,
+                item_catalog=self.catalog,
+            ):
+                self._close_drone_command_ui()
+                return True
+            state["feedback"] = "Selected drone has no live Wire target."
+            return True
         if key in (ord("x"), ord("X")):
             self._open_drone_camera_ui(record)
             return True
@@ -2744,13 +2820,15 @@ class InputSystem(System):
             return item_display_name(entry.get("item_id"), metadata=entry.get("metadata"), item_catalog=self.catalog)
         return "wire entry"
 
-    def _activate_selected_wire_kit_row(self):
+    def _activate_selected_wire_kit_row(self, *, force_unload=False):
         state = self._wire_kit_state()
         row = self._selected_wire_kit_row()
         if not row:
             state["feedback"] = "Nothing selected."
             return True
         action = str(row.get("action", "") or "").strip().lower()
+        if force_unload and str(row.get("kind", "") or "").strip().lower() == "kit":
+            action = "unload"
         instance_id = str(row.get("instance_id", "") or "").strip()
         if action == "load":
             result = load_inventory_entry_to_wire_kit(self.sim, self.player_eid, instance_id, item_catalog=self.catalog)
@@ -2772,7 +2850,28 @@ class InputSystem(System):
                 self.sim.emit(Event("wire_kit_blocked", eid=self.player_eid, reason=result.get("reason", "blocked")))
             self._refresh_wire_kit_ui()
             return True
-        state["feedback"] = "Wire entries are not executable in this slice."
+        if action == "study":
+            from game.wire_data_market import study_wire_data_entry
+
+            result = study_wire_data_entry(
+                self.sim,
+                self.player_eid,
+                instance_id,
+                item_catalog=self.catalog,
+            )
+            if result.get("ok"):
+                state["feedback"] = str(result.get("feedback", "Technical research learned."))
+            else:
+                state["feedback"] = f"Cannot study: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_kit_ui()
+            return True
+        if action == "leverage_hint":
+            metadata = dict((row.get("entry") or {}).get("metadata") or {})
+            subject_name = str(metadata.get("subject_name", "the subject") or "the subject").strip()
+            state["feedback"] = f"Talk to {subject_name} while this evidence remains in your wire kit; a broker may buy it instead."
+            self._refresh_wire_kit_ui()
+            return True
+        state["feedback"] = "Wire-kit entries are stored here; load programs into RAM and run them inside a connected WireScene."
         return True
 
     def _handle_wire_kit_input(self, physical_input, zoom_mode):
@@ -2819,8 +2918,10 @@ class InputSystem(System):
             idx = key - ord("1")
             if idx < len(WIRE_KIT_TABS):
                 return self._set_wire_kit_tab(WIRE_KIT_TABS[idx])
-        if key in ENTER_KEYS or key in (ord("u"), ord("U")):
+        if key in ENTER_KEYS:
             return self._activate_selected_wire_kit_row()
+        if key in (ord("u"), ord("U")):
+            return self._activate_selected_wire_kit_row(force_unload=True)
         self._refresh_wire_kit_ui()
         return True
 
@@ -2915,16 +3016,26 @@ class InputSystem(System):
             state["feedback"] = lines[0] if lines else "No preview available."
             return True
         if action == "connect":
-            if not isinstance(prop, dict):
-                state["feedback"] = "Fixture is no longer here."
+            target_ref = state.get("target_ref") if isinstance(state.get("target_ref"), dict) else {}
+            if target_ref:
+                result = connect_wire_target_ref(
+                    self.sim,
+                    self.player_eid,
+                    target_ref,
+                    item_catalog=self.catalog,
+                    deliberate=bool(state.get("deliberate")),
+                )
+            elif isinstance(prop, dict):
+                result = connect_wire_target(
+                    self.sim,
+                    self.player_eid,
+                    prop,
+                    item_catalog=self.catalog,
+                    deliberate=bool(state.get("deliberate")),
+                )
+            else:
+                state["feedback"] = "Target is no longer here."
                 return True
-            result = connect_wire_target(
-                self.sim,
-                self.player_eid,
-                prop,
-                item_catalog=self.catalog,
-                deliberate=bool(state.get("deliberate")),
-            )
             if result.get("ok"):
                 state["feedback"] = "Wire shell connected. No wire scene is entered yet."
             else:
@@ -2937,6 +3048,32 @@ class InputSystem(System):
             result = disconnect_wire_connection(self.sim, self.player_eid, reason="manual")
             state["feedback"] = "Disconnected." if result.get("ok") else "No active connection."
             self._refresh_wire_connection_ui()
+            return True
+        if action in {"drone_diagnostics", "drone_request_return", "drone_restore_sensors", "drone_restore_link"}:
+            target_ref = state.get("target_ref") if isinstance(state.get("target_ref"), dict) else {}
+            result = perform_drone_wire_shell_action(self.sim, self.player_eid, target_ref, action)
+            if result.get("lines"):
+                state["status_lines"] = list(result.get("lines") or ())
+            if result.get("ok"):
+                state["feedback"] = str(result.get("feedback") or (result.get("lines") or ("Handshake complete.",))[0])
+            else:
+                state["feedback"] = f"Drone Wire action blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_connection_ui()
+            if result.get("lines"):
+                state["status_lines"] = list(result.get("lines") or ())
+            return True
+        if action in {"vehicle_diagnostics", "vehicle_toggle_lock", "vehicle_prime_ignition", "vehicle_toggle_tracker"}:
+            target_ref = state.get("target_ref") if isinstance(state.get("target_ref"), dict) else {}
+            result = perform_vehicle_wire_shell_action(self.sim, self.player_eid, target_ref, action)
+            if result.get("lines"):
+                state["status_lines"] = list(result.get("lines") or ())
+            if result.get("ok"):
+                state["feedback"] = str(result.get("feedback") or (result.get("lines") or ("Vehicle controller read complete.",))[0])
+            else:
+                state["feedback"] = f"Vehicle Wire action blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_connection_ui()
+            if result.get("lines"):
+                state["status_lines"] = list(result.get("lines") or ())
             return True
         if action == "cycle_interface":
             return self._cycle_wire_connection_interface()
@@ -3018,11 +3155,7 @@ class InputSystem(System):
 
     def _open_wire_scene_from_connection(self):
         state = self._wire_connection_state()
-        prop = self._wire_connection_property()
-        if not isinstance(prop, dict):
-            state["feedback"] = "Fixture is no longer here."
-            return True
-        result = open_wire_scene(self.sim, self.player_eid, prop, item_catalog=self.catalog)
+        result = open_wire_scene_from_connection(self.sim, self.player_eid, item_catalog=self.catalog)
         if result.get("ok"):
             scene_state = self._wire_scene_state()
             scene_state["open"] = True
@@ -5885,6 +6018,61 @@ class InputSystem(System):
         state["purpose"] = "inspect"
         return True
 
+    def _visible_wire_drone_at_look_cursor(self):
+        state = self._look_state()
+        if not state.get("active") or str(state.get("mode", "city")).lower() != "city":
+            return None
+        if str(state.get("purpose", "inspect")).lower() != "inspect":
+            return None
+        try:
+            x = int(state.get("x", 0))
+            y = int(state.get("y", 0))
+            z = int(state.get("z", 0))
+        except (TypeError, ValueError):
+            return None
+        visibility = getattr(self.sim, "visibility_state", None)
+        player_visible = visibility.get("player_visible", set()) if isinstance(visibility, dict) else set()
+        if (x, y, z) not in set(player_visible or ()):
+            return None
+        drones = self.sim.ecs.get(DroneState)
+        candidates = []
+        for other_eid in self.sim.tilemap.entities_at(x, y, z):
+            drone_state = drones.get(other_eid)
+            if drone_state is None:
+                continue
+            if str(getattr(drone_state, "mode", "") or "").strip().lower() != "deployed":
+                continue
+            candidates.append(int(other_eid))
+        return min(candidates) if candidates else None
+
+    def _visible_wire_vehicle_at_look_cursor(self):
+        state = self._look_state()
+        if not state.get("active") or str(state.get("mode", "city")).lower() != "city":
+            return None
+        if str(state.get("purpose", "inspect")).lower() != "inspect":
+            return None
+        try:
+            x = int(state.get("x", 0))
+            y = int(state.get("y", 0))
+            z = int(state.get("z", 0))
+        except (TypeError, ValueError):
+            return None
+        visibility = getattr(self.sim, "visibility_state", None)
+        player_visible = visibility.get("player_visible", set()) if isinstance(visibility, dict) else set()
+        if (x, y, z) not in set(player_visible or ()):
+            return None
+        candidates = [
+            prop
+            for prop in getattr(self.sim, "properties", {}).values()
+            if isinstance(prop, dict)
+            and str(prop.get("kind", "") or "").strip().lower() == "vehicle"
+            and int(prop.get("x", -999999)) == x
+            and int(prop.get("y", -999999)) == y
+            and int(prop.get("z", 0)) == z
+        ]
+        candidates.sort(key=lambda prop: str(prop.get("id", "")))
+        return candidates[0] if candidates else None
+
     def _handle_look_input(self, key, zoom_mode):
         state = self._look_state()
         if not state.get("active"):
@@ -6065,6 +6253,26 @@ class InputSystem(System):
             if key == ord("x"):
                 self._emit_cursor_examine(announce=True)
                 return True
+            return True
+
+        if key == ord("W"):
+            drone_eid = self._visible_wire_drone_at_look_cursor()
+            if drone_eid is not None and open_wire_drone_connection_shell(
+                self.sim,
+                self.player_eid,
+                drone_eid,
+                item_catalog=self.catalog,
+            ):
+                self._deactivate_look_mode()
+                return True
+            vehicle = self._visible_wire_vehicle_at_look_cursor()
+            if vehicle is not None and open_wire_vehicle_connection_shell(
+                self.sim,
+                self.player_eid,
+                vehicle,
+                item_catalog=self.catalog,
+            ):
+                self._deactivate_look_mode()
             return True
 
         if key in ENTER_KEYS or key == ord("x"):

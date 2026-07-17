@@ -1,11 +1,17 @@
-"""Shared procedure vocabulary for autonomous drone behavior."""
+"""Legacy direct-command intents for autonomous drone behavior.
+
+Richer authored routines such as patrol, watch, retrieve, distract, and alarm
+work live exclusively in :mod:`game.drone_programs`. Keeping this registry
+limited to direct command intents prevents the legacy runner from advertising a
+second, mostly-stubbed procedure language.
+"""
 
 from __future__ import annotations
 
 from game.drone_runtime import drone_state_has_capability
 
 
-DRONE_PROCEDURE_REGISTRY = {
+LEGACY_DRONE_INTENT_REGISTRY = {
     "hold": {
         "label": "hold position",
         "capabilities": (),
@@ -26,52 +32,10 @@ DRONE_PROCEDURE_REGISTRY = {
         "label": "scout target point",
         "capabilities": ("mapping",),
     },
-    "watch_doorway": {
-        "label": "watch doorway",
-        "capabilities": ("camera",),
-        "implemented": False,
-    },
-    "watch_person": {
-        "label": "watch person",
-        "capabilities": ("camera",),
-        "implemented": False,
-    },
-    "retrieve_item": {
-        "label": "retrieve item",
-        "capabilities": ("cargo",),
-        "implemented": False,
-    },
-    "carry_item_to_owner": {
-        "label": "carry item to owner",
-        "capabilities": ("cargo",),
-        "implemented": False,
-    },
-    "distract": {
-        "label": "distract/noise",
-        "capabilities": ("speaker",),
-        "implemented": False,
-    },
-    "disable_alarm": {
-        "label": "disable alarm panel",
-        "capabilities": ("alarm_probe",),
-        "implemented": False,
-    },
-    "search_room": {
-        "label": "search room",
-        "capabilities": ("mapping",),
-        "implemented": False,
-    },
-    "patrol": {
-        "label": "patrol small route",
-        "capabilities": ("mapping",),
-        "implemented": False,
-    },
-    "flee": {
-        "label": "flee/evade",
-        "capabilities": (),
-        "implemented": False,
-    },
 }
+
+# Compatibility name for callers that imported the original registry.
+DRONE_PROCEDURE_REGISTRY = LEGACY_DRONE_INTENT_REGISTRY
 
 DRONE_PROCEDURE_ALIASES = {
     "": "",
@@ -83,13 +47,6 @@ DRONE_PROCEDURE_ALIASES = {
     "follow_owner": "follow",
     "return_home": "return",
     "home": "return",
-    "watch": "watch_doorway",
-    "watch_door": "watch_doorway",
-    "retrieve": "retrieve_item",
-    "carry": "carry_item_to_owner",
-    "noise": "distract",
-    "alarm": "disable_alarm",
-    "evade": "flee",
 }
 
 
@@ -110,8 +67,9 @@ def drone_procedure_label(key):
 
 
 def drone_procedure_implemented(key):
-    definition = drone_procedure_definition(key)
-    return bool(definition) and bool(definition.get("implemented", True))
+    """Return whether ``key`` is executable by the legacy intent runner."""
+
+    return bool(drone_procedure_definition(key))
 
 
 def drone_procedure_missing_capability(state, key, *, item_catalog=None):

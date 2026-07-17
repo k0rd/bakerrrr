@@ -9,6 +9,7 @@ from game.drone_runtime import (
     drone_deploy_tile_is_threshold,
     drone_deploy_tile_open,
     drone_destroyed_drop_resolution,
+    drone_link_disruption_status,
     drone_state_controlled_by_actor,
     drone_state_has_capability,
 )
@@ -389,7 +390,7 @@ class DroneSystem(System):
         if controller_eid is None:
             return self._procedure_blocked(None, drone_eid, state, procedure_key, "missing_controller")
         if not drone_procedure_implemented(procedure_key):
-            return self._procedure_blocked(controller_eid, drone_eid, state, procedure_key, "procedure_not_implemented")
+            return self._procedure_blocked(controller_eid, drone_eid, state, procedure_key, "unknown_procedure")
         missing = drone_procedure_missing_capability(state, procedure_key)
         if missing:
             return self._procedure_blocked(controller_eid, drone_eid, state, procedure_key, missing)
@@ -406,15 +407,45 @@ class DroneSystem(System):
 
     def update(self):
         from game.drone_combat import tick_drone_weapon_cooldowns
-        from game.drone_factions import seed_loaded_faction_drones, tick_faction_drone_combat
+        from game.drone_factions import retask_npc_drones_from_owner_will, seed_loaded_faction_drones, tick_faction_drone_combat
 
         seed_loaded_faction_drones(self.sim)
+        retask_npc_drones_from_owner_will(self.sim)
         for drone_eid in list(self.sim.ecs.get(DroneState).keys()):
             state = self.sim.ecs.get(DroneState).get(drone_eid)
             if state is not None:
+                self._expire_external_link_disruption(drone_eid, state)
                 tick_drone_weapon_cooldowns(state, tick=int(getattr(self.sim, "tick", 0) or 0))
             self.run_drone_procedure(drone_eid)
         tick_faction_drone_combat(self.sim, self)
+
+    def _expire_external_link_disruption(self, drone_eid, state):
+        metadata = getattr(state, "source_metadata", None)
+        if not isinstance(metadata, dict):
+            return False
+        until_tick = _int(metadata.get("external_link_disrupted_until_tick"), 0)
+        now = int(getattr(self.sim, "tick", 0) or 0)
+        if until_tick <= 0 or until_tick > now:
+            return False
+        source_kind = str(metadata.get("external_link_disruption_source_kind", "") or "").strip().lower()
+        source_eid = metadata.get("external_link_disruption_source_eid")
+        from game.drone_runtime import set_drone_link_disruption
+
+        set_drone_link_disruption(state, until_tick=0)
+        controller_eid = self._controller_for_state(state)
+        self.sim.emit(Event(
+            "drone_wire_link_restored",
+            eid=controller_eid,
+            controller_eid=getattr(state, "controller_eid", None),
+            owner_eid=getattr(state, "owner_eid", None),
+            drone_eid=drone_eid,
+            reason="natural_expiry",
+            source_kind="wire_link_expiry",
+            disruption_source_kind=source_kind,
+            disruption_source_eid=source_eid,
+            restored_tick=now,
+        ))
+        return True
 
     def _movement_blocked(self, controller_eid, drone_eid, reason, *, x=None, y=None, z=None, dx=0, dy=0):
         self.sim.emit(Event(
@@ -558,6 +589,17 @@ class DroneSystem(System):
                 controller_eid,
                 drone_eid,
                 "not_controller",
+                command=command,
+                x=getattr(pos, "x", None),
+                y=getattr(pos, "y", None),
+                z=getattr(pos, "z", None),
+            )
+        link = drone_link_disruption_status(state, tick=int(getattr(self.sim, "tick", 0) or 0))
+        if link.get("active"):
+            return self._command_blocked(
+                controller_eid,
+                drone_eid,
+                "link_disrupted",
                 command=command,
                 x=getattr(pos, "x", None),
                 y=getattr(pos, "y", None),

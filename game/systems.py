@@ -2412,9 +2412,207 @@ def _guard_grace_suppresses_memory_entry(sim, npc_eid, entry, offender_eid):
         return False
     return _dialogue_guard_grace_active(sim, npc_eid, property_id)
 
+def _monotonic_path_nodes(sx, sy, tx, ty, *, diagonal_phase="early"):
+    """Return one shortest open-grid route, excluding the start node."""
+
+    sx = int(sx)
+    sy = int(sy)
+    tx = int(tx)
+    ty = int(ty)
+    dx_total = abs(tx - sx)
+    dy_total = abs(ty - sy)
+    step_x = 1 if tx > sx else (-1 if tx < sx else 0)
+    step_y = 1 if ty > sy else (-1 if ty < sy else 0)
+    length = max(dx_total, dy_total)
+    if length <= 0:
+        return ()
+
+    diagonal_count = min(dx_total, dy_total)
+    if diagonal_phase == "late":
+        diagonal_steps = set(range(length - diagonal_count, length))
+    elif diagonal_phase == "spread" and diagonal_count > 0:
+        diagonal_steps = {
+            min(length - 1, int(((index + 0.5) * length) / diagonal_count))
+            for index in range(diagonal_count)
+        }
+    else:
+        diagonal_steps = set(range(diagonal_count))
+
+    x = sx
+    y = sy
+    nodes = []
+    x_major = dx_total >= dy_total
+    for index in range(length):
+        if x_major:
+            x += step_x
+            if index in diagonal_steps:
+                y += step_y
+        else:
+            y += step_y
+            if index in diagonal_steps:
+                x += step_x
+        nodes.append((int(x), int(y)))
+    return tuple(nodes)
+
+
+def _direct_verified_path_step(sim, eid, sx, sy, tx, ty, z, *, max_distance=32):
+    """Use current collision truth to prove a short route before searching."""
+
+    distance = _grid_distance(sx, sy, tx, ty)
+    if distance <= 0 or distance > int(max_distance):
+        return None, False
+
+    seen = set()
+    for phase in ("early", "late", "spread"):
+        nodes = _monotonic_path_nodes(sx, sy, tx, ty, diagonal_phase=phase)
+        if not nodes or nodes in seen:
+            continue
+        seen.add(nodes)
+        from_x = int(sx)
+        from_y = int(sy)
+        route_valid = True
+        for index, (to_x, to_y) in enumerate(nodes):
+            step_ok, reason = _can_step_transition_for(
+                sim,
+                moving_eid=eid,
+                from_x=from_x,
+                from_y=from_y,
+                to_x=to_x,
+                to_y=to_y,
+                z=z,
+            )
+            if not step_ok:
+                reason_text = str(reason or "").strip().lower()
+                terminal_block = index == len(nodes) - 1 and (
+                    reason_text == "blocked_tile"
+                    or reason_text.startswith("blocked_entity:")
+                )
+                if terminal_block:
+                    # A coordinate occupied by any actor, or an intrinsically
+                    # blocked destination tile, cannot be entered from some
+                    # more imaginative direction.  The proven prefix is the
+                    # best reachable approach.  Asking A* to rediscover that
+                    # fact otherwise floods the search area, especially when
+                    # two scene actors have temporarily claimed each other's
+                    # positions.
+                    return (nodes[0] if index > 0 else None), True
+                route_valid = False
+                break
+            from_x = int(to_x)
+            from_y = int(to_y)
+        if route_valid:
+            return nodes[0], True
+    return None, False
+
+
+def _path_step_cache(sim):
+    cache = getattr(sim, "_npc_path_step_cache", None)
+    if isinstance(cache, dict):
+        return cache
+    cache = {}
+    sim._npc_path_step_cache = cache
+    return cache
+
+
+def _path_search_failures(sim):
+    state = getattr(sim, "_npc_path_search_failures", None)
+    if isinstance(state, dict):
+        return state
+    state = {}
+    sim._npc_path_search_failures = state
+    return state
+
+
+def _clear_path_search_failure(sim, eid):
+    _path_search_failures(sim).pop(eid, None)
+
+
+def _note_path_search_failure(sim, eid, sx, sy, tx, ty, z):
+    _path_search_failures(sim)[eid] = {
+        "start": (int(sx), int(sy), int(z)),
+        "target": (int(tx), int(ty), int(z)),
+        "tick": int(getattr(sim, "tick", 0) or 0),
+    }
+
+
+def _path_search_failed(sim, eid, sx, sy, tx, ty, z):
+    entry = _path_search_failures(sim).get(eid)
+    return bool(
+        isinstance(entry, dict)
+        and entry.get("start") == (int(sx), int(sy), int(z))
+        and entry.get("target") == (int(tx), int(ty), int(z))
+    )
+
+
+def _cached_path_step(sim, eid, sx, sy, tx, ty, z):
+    cache = _path_step_cache(sim)
+    entry = cache.get(eid)
+    if not isinstance(entry, dict):
+        return None, False
+    signature = (int(tx), int(ty), int(z))
+    expected_start = (int(sx), int(sy), int(z))
+    remaining = entry.get("remaining")
+    if entry.get("target") != signature or entry.get("expected_start") != expected_start or not isinstance(remaining, list) or not remaining:
+        cache.pop(eid, None)
+        return None, False
+    next_x, next_y = int(remaining[0][0]), int(remaining[0][1])
+    step_ok, _reason = _can_step_transition_for(
+        sim,
+        moving_eid=eid,
+        from_x=int(sx),
+        from_y=int(sy),
+        to_x=next_x,
+        to_y=next_y,
+        z=int(z),
+    )
+    if not step_ok:
+        cache.pop(eid, None)
+        return None, False
+    remaining.pop(0)
+    if remaining:
+        entry["expected_start"] = (next_x, next_y, int(z))
+    else:
+        cache.pop(eid, None)
+    _clear_path_search_failure(sim, eid)
+    return (next_x, next_y), True
+
+
+def _remember_path_remainder(sim, eid, *, target, first_step, remaining):
+    cache = _path_step_cache(sim)
+    if not remaining:
+        cache.pop(eid, None)
+        return
+    if len(cache) > 4096:
+        cache.clear()
+    cache[eid] = {
+        "target": (int(target[0]), int(target[1]), int(target[2])),
+        "expected_start": (int(first_step[0]), int(first_step[1]), int(target[2])),
+        "remaining": [(int(node[0]), int(node[1])) for node in remaining],
+    }
+
+
 def _path_next_step(sim, eid, sx, sy, tx, ty, z, max_nodes=512):
     if sx == tx and sy == ty:
+        _path_step_cache(sim).pop(eid, None)
+        _clear_path_search_failure(sim, eid)
         return None
+
+    cached_step, cached = _cached_path_step(sim, eid, sx, sy, tx, ty, z)
+    if cached:
+        return cached_step
+
+    direct_step, proven = _direct_verified_path_step(
+        sim,
+        eid,
+        sx,
+        sy,
+        tx,
+        ty,
+        z,
+    )
+    if proven:
+        _clear_path_search_failure(sim, eid)
+        return direct_step
 
     start = (sx, sy)
     goal = (tx, ty)
@@ -2481,13 +2679,26 @@ def _path_next_step(sim, eid, sx, sy, tx, ty, z, max_nodes=512):
             heapq.heappush(open_heap, (new_cost + score, score, counter, node))
 
     if best == start:
+        _path_step_cache(sim).pop(eid, None)
+        _note_path_search_failure(sim, eid, sx, sy, tx, ty, z)
         return None
 
+    reverse_path = []
     cursor = best
-    while parents[cursor] is not None and parents[cursor] != start:
+    while cursor != start:
+        reverse_path.append(cursor)
         cursor = parents[cursor]
-
-    return cursor
+    path = list(reversed(reverse_path))
+    first_step = path[0]
+    _remember_path_remainder(
+        sim,
+        eid,
+        target=(tx, ty, z),
+        first_step=first_step,
+        remaining=path[1:],
+    )
+    _clear_path_search_failure(sim, eid)
+    return first_step
 
 
 def _district_floor_glyph(sim, x, y):
@@ -2585,6 +2796,9 @@ def _trade_contact_terms(sim, viewer_eid, prop):
     pressure_sell = float(effects.get("trade_sell_mult", 1.0))
     skill_terms = _trade_skill_terms(sim, viewer_eid)
     org_terms = _organization_terms_for_property(sim, prop)
+    from game.person_leverage import coerced_trade_terms
+
+    leverage_terms = coerced_trade_terms(sim, viewer_eid, prop)
 
     # World event trade modifiers for the store's chunk.
     prop_x = int(prop.get("x", 0)) if isinstance(prop, dict) else 0
@@ -2607,7 +2821,8 @@ def _trade_contact_terms(sim, viewer_eid, prop):
                 pressure_buy
                 * event_buy
                 * float(skill_terms.get("buy_mult", 1.0))
-                * float(org_terms.get("buy_mult", 1.0)),
+                * float(org_terms.get("buy_mult", 1.0))
+                * float(leverage_terms.get("buy_mult", 1.0)),
             ),
         ),
         "sell_mult": max(
@@ -2617,10 +2832,11 @@ def _trade_contact_terms(sim, viewer_eid, prop):
                 pressure_sell
                 * event_sell
                 * float(skill_terms.get("sell_mult", 1.0))
-                * float(org_terms.get("sell_mult", 1.0)),
+                * float(org_terms.get("sell_mult", 1.0))
+                * float(leverage_terms.get("sell_mult", 1.0)),
             ),
         ),
-        "source_eid": None,
+        "source_eid": leverage_terms.get("source_eid") if leverage_terms.get("active") else None,
         "note": "",
     }
     if pressure_tier in {"medium", "high"}:
@@ -2633,6 +2849,8 @@ def _trade_contact_terms(sim, viewer_eid, prop):
     ]
     if event_labels:
         note_bits.append("local: " + ", ".join(event_labels))
+    if leverage_terms.get("note"):
+        note_bits.append(str(leverage_terms.get("note")))
     if note_bits:
         base["note"] = "; ".join(note_bits)
     if not entry:
@@ -2660,7 +2878,8 @@ def _trade_contact_terms(sim, viewer_eid, prop):
             * max(0.75, pressure_buy)
             * event_buy
             * float(skill_terms.get("buy_mult", 1.0))
-            * float(org_terms.get("buy_mult", 1.0)),
+            * float(org_terms.get("buy_mult", 1.0))
+            * float(leverage_terms.get("buy_mult", 1.0)),
         ),
     )
     sell_mult = max(
@@ -2671,7 +2890,8 @@ def _trade_contact_terms(sim, viewer_eid, prop):
             * max(0.6, pressure_sell)
             * event_sell
             * float(skill_terms.get("sell_mult", 1.0))
-            * float(org_terms.get("sell_mult", 1.0)),
+            * float(org_terms.get("sell_mult", 1.0))
+            * float(leverage_terms.get("sell_mult", 1.0)),
         ),
     )
 
@@ -2687,6 +2907,8 @@ def _trade_contact_terms(sim, viewer_eid, prop):
         note_bits.append(f"attention {pressure_tier}")
     if event_labels:
         note_bits.append("local: " + ", ".join(event_labels))
+    if leverage_terms.get("note"):
+        note_bits.append(str(leverage_terms.get("note")))
 
     return {
         "buy_mult": buy_mult,
@@ -3753,7 +3975,15 @@ def _shatter_window_for_projectile(sim, offender_eid, x, y, z, *, damage_amount=
     return True
 
 def _resolve_ai_target(sim, ai):
-    if ai.target_eid is not None:
+    state = str(getattr(ai, "state", "") or "").strip().lower()
+    coordinate_target_states = {
+        "evading_authority",
+        "leaving_property",
+        "seeking_safe_spot",
+        "seeking_safety",
+        "seeking_shelter",
+    }
+    if ai.target_eid is not None and state not in coordinate_target_states:
         target_pos = sim.ecs.get(Position).get(ai.target_eid)
         if target_pos:
             ai.target = (target_pos.x, target_pos.y, target_pos.z)

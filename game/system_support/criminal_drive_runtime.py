@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from engine.sites import site_entry_front_cell
 from engine.events import Event
 from game.components import (
     AI,
@@ -589,6 +590,14 @@ def crime_target_profile(sim, actor_eid, prop, *, plan_kind="petty_theft", curre
         target_y = _safe_int(valuable_item.get("y"), default=fy)
         target_z = _safe_int(valuable_item.get("z"), default=fz)
 
+    casing_x, casing_y, casing_z = int(fx), int(fy), int(fz)
+    entry = metadata.get("entry") if isinstance(metadata.get("entry"), dict) else None
+    entry_front = site_entry_front_cell(entry)
+    if entry_front is not None:
+        front_x, front_y, front_z = int(entry_front[0]), int(entry_front[1]), int(entry_front[2])
+        if sim.tilemap.in_bounds(front_x, front_y) and sim.tilemap.is_walkable(front_x, front_y, front_z):
+            casing_x, casing_y, casing_z = front_x, front_y, front_z
+
     return {
         "property_id": property_id,
         "property_name": _text(prop.get("name")) or property_id,
@@ -596,6 +605,9 @@ def crime_target_profile(sim, actor_eid, prop, *, plan_kind="petty_theft", curre
         "y": int(target_y),
         "z": int(target_z),
         "target_ground_item_id": target_ground_item_id,
+        "casing_x": int(casing_x),
+        "casing_y": int(casing_y),
+        "casing_z": int(casing_z),
         "softness": float(softness),
         "value": float(value),
         "exposure": float(exposure),
@@ -1018,27 +1030,24 @@ def update_criminal_drive_state(sim, actor_eid, *, current_tick=None, active_pla
     affiliation_target = ()
     if should_scan_targets:
         target_signature = _actor_target_scan_signature(sim, actor_eid)
-        cached_scan = None
-        if _live_lodging_active(sim):
-            cached_scan = _cached_target_scan(
-                state,
-                target_signature,
-                current_tick=current_tick,
-                max_age=48,
-            )
+        cached_scan = _cached_target_scan(
+            state,
+            target_signature,
+            current_tick=current_tick,
+            max_age=48 if _live_lodging_active(sim) else 10,
+        )
         if cached_scan is not None:
             opportunistic_target, affiliation_target = cached_scan
         else:
             opportunistic_target = choose_crime_target(sim, actor_eid, plan_kind="petty_theft")
             affiliation_target = criminal_affiliation_targets(sim, actor_eid)
-            if _live_lodging_active(sim):
-                _store_target_scan(
-                    state,
-                    target_signature,
-                    opportunistic_target,
-                    affiliation_target,
-                    current_tick=current_tick,
-                )
+            _store_target_scan(
+                state,
+                target_signature,
+                opportunistic_target,
+                affiliation_target,
+                current_tick=current_tick,
+            )
     state.pressure = float(pressure)
     state.confidence = float(confidence)
     state.affiliation_interest = float(affiliation_interest)
@@ -1103,9 +1112,14 @@ def update_criminal_drive_state(sim, actor_eid, *, current_tick=None, active_pla
     elif isinstance(opportunistic_target, dict):
         state.current_target_property_id = _text(opportunistic_target.get("property_id")) or None
         state.current_target_ground_item_id = _text(opportunistic_target.get("target_ground_item_id")) or None
-        state.current_target_x = _safe_int(opportunistic_target.get("x"), default=0)
-        state.current_target_y = _safe_int(opportunistic_target.get("y"), default=0)
-        state.current_target_z = _safe_int(opportunistic_target.get("z"), default=0)
+        if float(confidence) < 0.46:
+            state.current_target_x = _safe_int(opportunistic_target.get("casing_x"), default=opportunistic_target.get("x", 0))
+            state.current_target_y = _safe_int(opportunistic_target.get("casing_y"), default=opportunistic_target.get("y", 0))
+            state.current_target_z = _safe_int(opportunistic_target.get("casing_z"), default=opportunistic_target.get("z", 0))
+        else:
+            state.current_target_x = _safe_int(opportunistic_target.get("x"), default=0)
+            state.current_target_y = _safe_int(opportunistic_target.get("y"), default=0)
+            state.current_target_z = _safe_int(opportunistic_target.get("z"), default=0)
         state.current_activity_kind = "opportunistic_theft"
         state.current_activity_stage = "targeting"
         state.current_activity_summary = criminal_activity_summary(

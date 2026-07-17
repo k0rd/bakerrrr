@@ -85,6 +85,10 @@ def drone_workshop_for_actor(sim, actor_eid, *, create=True, migrate_inventory=F
         sim.ecs.add(actor_eid, workshop)
     if workshop is not None:
         normalize_drone_workshop(workshop)
+        from game.technical_research import apply_technical_research_to_entry
+
+        for entry in tuple(getattr(workshop, "parts", ()) or ()) + tuple(getattr(workshop, "chassis_slots", ()) or ()):
+            apply_technical_research_to_entry(sim, actor_eid, entry, item_catalog=item_catalog)
         if migrate_inventory:
             migrate_inventory_drone_parts_to_workshop(sim, actor_eid, item_catalog=item_catalog)
     return workshop
@@ -237,6 +241,8 @@ def migrate_inventory_drone_parts_to_workshop(sim, actor_eid, *, item_catalog=No
     if inventory is None or workshop is None:
         return {"moved": 0, "blocked": 0, "blocked_reason": None}
     item_catalog = item_catalog or ITEM_CATALOG
+    from game.technical_research import apply_technical_research_to_entry
+
     moved = 0
     blocked = 0
     blocked_reason = None
@@ -246,6 +252,7 @@ def migrate_inventory_drone_parts_to_workshop(sim, actor_eid, *, item_catalog=No
         item_id = _clean_item_id(entry.get("item_id"))
         if not is_drone_workshop_part(item_id, item_catalog=item_catalog):
             continue
+        apply_technical_research_to_entry(sim, actor_eid, entry, item_catalog=item_catalog)
         ok, reason = drone_workshop_can_accept_entry(workshop, entry, item_catalog=item_catalog)
         if not ok:
             blocked += 1
@@ -276,6 +283,9 @@ def move_inventory_part_to_workshop(sim, actor_eid, instance_id, *, item_catalog
     item_catalog = item_catalog or ITEM_CATALOG
     if not is_drone_workshop_part(entry.get("item_id"), item_catalog=item_catalog):
         return {"ok": False, "reason": "not_workshop_part", "entry": dict(entry)}
+    from game.technical_research import apply_technical_research_to_entry
+
+    apply_technical_research_to_entry(sim, actor_eid, entry, item_catalog=item_catalog)
     workshop = drone_workshop_for_actor(sim, actor_eid, create=True, item_catalog=item_catalog)
     ok, reason = drone_workshop_can_accept_entry(workshop, entry, item_catalog=item_catalog)
     if not ok:

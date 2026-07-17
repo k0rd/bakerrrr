@@ -9,6 +9,7 @@ from game.checks import (
 )
 from game.components import (
     AI,
+    AnimalGenome,
     CoreStats,
     CreatureIdentity,
     DroneState,
@@ -22,7 +23,7 @@ from game.components import (
     SkillProfile,
     Vitality,
 )
-from game.drone_runtime import drone_state_capabilities
+from game.drone_runtime import drone_link_disruption_status, drone_state_capabilities
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
 from game.flora_runtime import flora_at, flora_look_text
@@ -86,6 +87,9 @@ def _drone_look_detail_bits(sim, drone_eid, state):
     mode = str(getattr(state, "mode", "") or "").strip().lower()
     if mode:
         bits.append(f"mode:{mode}")
+    link = drone_link_disruption_status(state, tick=int(getattr(sim, "tick", 0) or 0))
+    if link.get("active"):
+        bits.append(f"link:disrupted({int(link.get('remaining', 0))})")
     procedure = str(getattr(state, "procedure_key", "") or "").strip().lower()
     if procedure:
         bits.append(f"intent:{procedure}")
@@ -475,6 +479,34 @@ class PlayerLookRuntime:
                 text = self._line_with_suffix(text, f"  {focus_read}")
         elif focus_read:
             text = self._line_with_suffix(text, f"  {focus_read}")
+        if purpose == "inspect":
+            visibility = getattr(self.sim, "visibility_state", None)
+            player_visible = visibility.get("player_visible", set()) if isinstance(visibility, dict) else set()
+            if (x, y, z) in set(player_visible or ()):
+                drone_states = self.sim.ecs.get(DroneState)
+                radio_drone_visible = False
+                for target_eid in self.sim.tilemap.entities_at(x, y, z):
+                    drone_state = drone_states.get(target_eid)
+                    if drone_state is None:
+                        continue
+                    if str(getattr(drone_state, "mode", "") or "").strip().lower() != "deployed":
+                        continue
+                    capabilities = set(drone_state_capabilities(drone_state, item_catalog=ITEM_CATALOG))
+                    if {"radio", "comms"} & capabilities:
+                        radio_drone_visible = True
+                        break
+                if radio_drone_visible:
+                    text = self._line_with_suffix(text, "  Wire: Shift+W opens the radio handshake.")
+                vehicle_visible = any(
+                    isinstance(prop, dict)
+                    and str(prop.get("kind", "") or "").strip().lower() == "vehicle"
+                    and int(prop.get("x", -999999)) == int(x)
+                    and int(prop.get("y", -999999)) == int(y)
+                    and int(prop.get("z", 0)) == int(z)
+                    for prop in getattr(self.sim, "properties", {}).values()
+                )
+                if vehicle_visible:
+                    text = self._line_with_suffix(text, "  Wire: Shift+W opens the local vehicle controller.")
         self.set_look_inspect_text(text)
         self.sim.emit(Event(
             "cursor_examined",
@@ -712,6 +744,23 @@ class PlayerLookRuntime:
                 ),
                 player_eid=eid,
             ))
+            genome = self.sim.ecs.get(AnimalGenome).get(npc_eid)
+            if genome is not None and detail_level >= 1:
+                expressed = dict(getattr(genome, "expressed", {}) or {})
+                phenotype_bits = [
+                    str(expressed.get("color_word") or "unknown").replace("_", " "),
+                    str(expressed.get("pattern") or "plain").replace("_", " "),
+                    str(expressed.get("build") or "balanced").replace("_", " "),
+                ]
+                display = str(expressed.get("display") or "none").replace("_", " ")
+                abilities = [str(value).replace("_", " ") for value in tuple(expressed.get("abilities") or ())]
+                genetics_text = "phenotype:" + "/".join(phenotype_bits)
+                if display != "none":
+                    genetics_text += f"  display:{display}"
+                if abilities:
+                    genetics_text += "  biology:" + "/".join(abilities)
+                genetics_text += f"  root:{str(getattr(genome, 'root_animal_id', 'other root')).replace('_', ' ')}"
+                lines.append("Fauna genetics: " + genetics_text)
 
             career_text = self._career_label(npc_occupation)
             workplace_prop = self._workplace_property(self.sim, occupation=npc_occupation, routine=npc_routine)

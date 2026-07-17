@@ -6,12 +6,14 @@ from engine.visibility import observer_visible_positions, visibility_state
 
 from game.components import CreatureIdentity, DroneState, Position, Vitality
 from game.drone_runtime import (
-    drone_profile_for_item,
+    drone_link_disruption_status,
+    drone_sensor_suppression_status,
     drone_state_capabilities,
     drone_state_controlled_by_actor,
     drone_state_has_capability,
 )
 from game.system_support.fire_runtime import fire_cell_state
+from game.technical_research import drone_module_profile_with_research
 
 
 DRONE_LINKED_CAMERA_RADIUS = 8
@@ -96,7 +98,7 @@ def _module_sensor_mode(module, *, item_catalog=None):
     if not isinstance(module, dict):
         return None
     item_id = str(module.get("item_id", "") or "").strip().lower()
-    profile = drone_profile_for_item(item_id, item_catalog=item_catalog)
+    profile = drone_module_profile_with_research(module, item_catalog=item_catalog)
     if profile.get("kind") != "module":
         return None
     capabilities = {
@@ -333,6 +335,28 @@ def _linked_sensor_base_status(sim, controller_eid, drone_eid, *, mode=None, rad
     pos = sim.ecs.get(Position).get(drone_eid)
     if pos is None:
         return {"ok": False, "reason": "missing_position", "state": state, "visible": set(), "radius": default_radius}
+    link = drone_link_disruption_status(state, tick=int(getattr(sim, "tick", 0) or 0))
+    if link.get("active"):
+        return {
+            "ok": False,
+            "reason": "link_disrupted",
+            "state": state,
+            "position": pos,
+            "visible": set(),
+            "radius": default_radius,
+            "remaining": int(link.get("remaining", 0)),
+        }
+    suppression = drone_sensor_suppression_status(state, tick=int(getattr(sim, "tick", 0) or 0))
+    if suppression.get("active"):
+        return {
+            "ok": False,
+            "reason": "sensor_suppressed",
+            "state": state,
+            "position": pos,
+            "visible": set(),
+            "radius": default_radius,
+            "remaining": int(suppression.get("remaining", 0)),
+        }
     controller_pos = sim.ecs.get(Position).get(controller_eid)
     if controller_pos is None:
         return {"ok": False, "reason": "missing_controller_position", "state": state, "position": pos, "visible": set(), "radius": default_radius}
@@ -493,6 +517,28 @@ def autonomous_mapping_status(sim, recipient_eid, drone_eid, *, radius=DRONE_LIN
     pos = sim.ecs.get(Position).get(drone_eid)
     if pos is None:
         return {"ok": False, "reason": "missing_position", "state": state, "visible": set(), "radius": int(radius)}
+    link = drone_link_disruption_status(state, tick=int(getattr(sim, "tick", 0) or 0))
+    if link.get("active"):
+        return {
+            "ok": False,
+            "reason": "link_disrupted",
+            "state": state,
+            "position": pos,
+            "visible": set(),
+            "radius": int(radius),
+            "remaining": int(link.get("remaining", 0)),
+        }
+    suppression = drone_sensor_suppression_status(state, tick=int(getattr(sim, "tick", 0) or 0))
+    if suppression.get("active"):
+        return {
+            "ok": False,
+            "reason": "sensor_suppressed",
+            "state": state,
+            "position": pos,
+            "visible": set(),
+            "radius": int(radius),
+            "remaining": int(suppression.get("remaining", 0)),
+        }
     if recipient_eid is not None and not drone_state_controlled_by_actor(state, recipient_eid):
         return {"ok": False, "reason": "not_controller", "state": state, "position": pos, "visible": set(), "radius": int(radius)}
     if not drone_has_mapping_procedure(state, item_catalog=item_catalog):

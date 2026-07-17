@@ -1349,6 +1349,16 @@ def _known_person_connection_text(sim, player_eid, person_eid, entry):
             return f"You have met them around {property_name}."
         return "You have spoken directly."
 
+    benefits = {
+        str(bit or "").strip().lower()
+        for bit in tuple(entry.get("benefits", ()) or ())
+        if str(bit or "").strip()
+    }
+    if "wire_record" in benefits:
+        if property_name:
+            return f"Identified in records acquired from {property_name}."
+        return "Identified in acquired records."
+
     return "<unknown>"
 
 
@@ -1371,7 +1381,13 @@ def build_known_people_report(sim, player_eid, *, limit=None):
         entry = raw_entry if isinstance(raw_entry, dict) else {}
         met_directly = bool(entry.get("met_directly", False))
         introduced = bool(entry.get("introduced", False))
-        if not met_directly and not introduced:
+        benefits = {
+            str(bit or "").strip().lower()
+            for bit in tuple(entry.get("benefits", ()) or ())
+            if str(bit or "").strip()
+        }
+        known_from_records = "wire_record" in benefits
+        if not met_directly and not introduced and not known_from_records:
             continue
 
         try:
@@ -1428,6 +1444,8 @@ def build_known_people_report(sim, player_eid, *, limit=None):
             fact_lines.append("Introduced, but not met in person yet.")
         elif met_directly:
             fact_lines.append("Spoken to directly.")
+        elif known_from_records:
+            fact_lines.append("Identified through acquired records; not met in person.")
         benefit_labels = contact_benefit_labels(tuple(entry.get("benefits", ()) or ()))
         if benefit_labels:
             fact_lines.append("Known for " + ", ".join(benefit_labels) + ".")
@@ -1446,6 +1464,7 @@ def build_known_people_report(sim, player_eid, *, limit=None):
             "first_tick": row_first_tick,
             "introduced": introduced,
             "met_directly": met_directly,
+            "known_from_records": known_from_records,
             "legend_line": name,
             "fact_lines": tuple(fact_lines),
             "history_lines": tuple(history_lines),
@@ -1464,13 +1483,13 @@ def build_known_people_report(sim, player_eid, *, limit=None):
         rows = rows[: max(1, int(limit))]
 
     lines = [
-        "People you have met in person or been properly introduced to.",
+        "People you have met, been introduced to, or identified through acquired records.",
         "",
     ]
     if not rows:
         lines.extend([
             "No known people right now.",
-            "Talk to people or get formally introduced to start filling this ledger.",
+            "Talk to people, get introduced, or recover records to start filling this ledger.",
         ])
         return {
             "title": "Known People",

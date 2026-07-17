@@ -21,6 +21,7 @@ from game.color_words import (
 
 
 GENETICS_SCHEMA_VERSION = 1
+DEFAULT_EFFECT_BUDGET = 4
 
 PARENT_ROLE_ANY = "any"
 PARENT_ROLE_SEED = "seed_parent"
@@ -75,6 +76,26 @@ EFFECT_TRAIT_IDS = frozenset(
         "+clear_eyes",
     )
 )
+EFFECT_TRAIT_COSTS = {
+    "potentiator": 1,
+    "diluter": 1,
+    "stabilizer": 1,
+    "spoiler": 1,
+    "binder": 1,
+    "fader": 1,
+    "+nourish": 2,
+    "+hydrate": 2,
+    "+mend": 2,
+    "+warm": 2,
+    "+steady": 2,
+    "+calm": 2,
+    "+focus": 2,
+    "+stanch": 2,
+    "+clear_eyes": 2,
+    "+antitoxin": 3,
+    "+coverhop": 3,
+    "+barkskin": 3,
+}
 
 SHAPE_AXES = ("petal_shape", "blade_shape", "stem_shape", "leaf_shape", "habit", "texture")
 VALID_GROWTH_FORMS = frozenset(("flower", "grass", "reed", "moss", "lichen", "vine", "shrub", "fern"))
@@ -378,6 +399,69 @@ def _ensure_effect_trait_alleles(genetics, traits):
     return genome
 
 
+def flora_effect_trait_cost(trait_id):
+    return max(0, _safe_int(EFFECT_TRAIT_COSTS.get(_key(trait_id)), 0))
+
+
+def _apply_effect_budget(genome, expressed_state, *, seed, lineage_hash):
+    """Cap expressed biological effects while retaining overflow as carriers."""
+
+    budget = max(1, _safe_int(genome.get("effect_budget"), DEFAULT_EFFECT_BUDGET))
+    expressed = expressed_state.get("expressed") if isinstance(expressed_state.get("expressed"), Mapping) else {}
+    effects = expressed.get("effects") if isinstance(expressed.get("effects"), Mapping) else {}
+    traits = tuple(dict.fromkeys(
+        _key(value)
+        for value in tuple(effects.get("traits") or ())
+        if _key(value) in EFFECT_TRAIT_COSTS
+    ))
+    allele_rows = tuple((((genome.get("genes") or {}).get("effects") or {}).get("traits") or ()))
+    dominance = {}
+    for row in allele_rows:
+        if not isinstance(row, Mapping):
+            continue
+        trait = _key(row.get("value"))
+        dominance[trait] = max(dominance.get(trait, 0.0), _safe_float(row.get("dominance"), 0.0))
+    ranked = sorted(
+        traits,
+        key=lambda trait: (
+            -dominance.get(trait, 0.0),
+            _stable_unit(seed, lineage_hash, trait, "effect-budget"),
+            trait,
+        ),
+    )
+    kept = []
+    used = 0
+    for trait in ranked:
+        cost = flora_effect_trait_cost(trait)
+        if cost <= 0 or used + cost > budget:
+            continue
+        kept.append(trait)
+        used += cost
+    expressed.setdefault("effects", {})["traits"] = tuple(kept)
+    expressed_state["expressed"] = expressed
+
+    overflow = set(traits) - set(kept)
+    if overflow:
+        carried = expressed_state.get("carried") if isinstance(expressed_state.get("carried"), Mapping) else {}
+        carried = copy.deepcopy(dict(carried))
+        carried_rows = list(((carried.setdefault("effects", {})).get("traits") or ()))
+        carried_tokens = {
+            (_key(row.get("value")), str(row.get("id", "")))
+            for row in carried_rows
+            if isinstance(row, Mapping)
+        }
+        for row in allele_rows:
+            token = (_key(row.get("value")), str(row.get("id", ""))) if isinstance(row, Mapping) else ("", "")
+            if token[0] in overflow and token not in carried_tokens:
+                carried_rows.append(copy.deepcopy(dict(row)))
+                carried_tokens.add(token)
+        carried["effects"]["traits"] = carried_rows
+        expressed_state["carried"] = carried
+    genome["effect_budget"] = budget
+    genome["effect_cost_used"] = used
+    return expressed_state
+
+
 def _legacy_genes_for_row(plant_id, row, raw_genetics, seed):
     color = _color_value(row, raw_genetics)
     shape = _shape_value(row, raw_genetics)
@@ -475,11 +559,21 @@ def normalize_flora_genetics(plant_id, row, *, seed=0):
     genome["genome_id"] = str(genome.get("genome_id") or f"flora:{plant_key}:v1")
     genome["lineage"] = _lineage_for(plant_key, raw_genetics, seed)
     genome["genes"] = _normalize_genes(genome.get("genes"), plant_key, row, raw_genetics, seed)
+    genome["effect_budget"] = max(
+        1,
+        _safe_int(raw_genetics.get("effect_budget", row.get("effect_budget")), DEFAULT_EFFECT_BUDGET),
+    )
 
     expressed_state = express_flora_genetics(
         genome,
         seed=seed,
         generation=_safe_int(genome.get("lineage", {}).get("generation"), 0),
+        lineage_hash=str(genome.get("lineage", {}).get("lineage_hash") or ""),
+    )
+    expressed_state = _apply_effect_budget(
+        genome,
+        expressed_state,
+        seed=seed,
         lineage_hash=str(genome.get("lineage", {}).get("lineage_hash") or ""),
     )
     genome["expressed"] = expressed_state["expressed"]
@@ -956,6 +1050,13 @@ def inherit_flora_genetics(seed_parent, pollen_parent, *, seed, child_plant_id, 
         },
         "genes": child_genes,
         "mutation_profile": str(mutation_profile or "none").strip().lower() or "none",
+        "effect_budget": max(
+            1,
+            min(
+                _safe_int(seed_genetics.get("effect_budget"), DEFAULT_EFFECT_BUDGET),
+                _safe_int(pollen_genetics.get("effect_budget"), DEFAULT_EFFECT_BUDGET),
+            ),
+        ),
     }
     if str(mutation_profile or "").strip().lower() == "gentle":
         mutation = _gentle_mutation(genome, seed=seed, generation=generation, lineage_hash=lineage_hash)
@@ -973,6 +1074,12 @@ def inherit_flora_genetics(seed_parent, pollen_parent, *, seed, child_plant_id, 
         genome,
         seed=seed,
         generation=generation,
+        lineage_hash=lineage_hash,
+    )
+    expressed_state = _apply_effect_budget(
+        genome,
+        expressed_state,
+        seed=seed,
         lineage_hash=lineage_hash,
     )
     genome["expressed"] = expressed_state["expressed"]
@@ -1023,6 +1130,16 @@ def validate_flora_genetics(genetics) -> list[str]:
         return [f"genetics.schema_version must be {GENETICS_SCHEMA_VERSION}"]
     if not str(genetics.get("genome_id") or "").strip():
         errors.append("genetics.genome_id must be a non-empty string")
+    effect_budget = max(0, _safe_int(genetics.get("effect_budget"), 0))
+    expressed = genetics.get("expressed") if isinstance(genetics.get("expressed"), Mapping) else {}
+    effects = expressed.get("effects") if isinstance(expressed.get("effects"), Mapping) else {}
+    effect_cost = sum(flora_effect_trait_cost(trait) for trait in tuple(effects.get("traits") or ()))
+    if effect_budget < 1:
+        errors.append("genetics.effect_budget must be at least 1")
+    if effect_cost > effect_budget:
+        errors.append(f"genetics expressed effect cost {effect_cost} exceeds budget {effect_budget}")
+    if _safe_int(genetics.get("effect_cost_used"), effect_cost) != effect_cost:
+        errors.append("genetics.effect_cost_used does not match expressed effects")
     genes = genetics.get("genes")
     if not isinstance(genes, Mapping):
         errors.append("genetics.genes must be an object")

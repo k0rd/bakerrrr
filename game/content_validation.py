@@ -484,13 +484,13 @@ def _validate_drone_profile(report, source, item_path, profile):
         return
 
     if kind == "chassis":
-        required = ("chassis_class", "slot_limit", "weight_limit", "base_hp", "base_range", "base_glyph", "base_color")
+        required = ("chassis_class", "slot_limit", "procedure_slot_limit", "weight_limit", "base_hp", "base_range", "base_glyph", "base_color")
         for key in required:
             if key not in profile:
                 report.error(source, profile_path + [key], f"chassis profile requires {key}")
         if "chassis_class" in profile:
             _validate_drone_chassis_class(report, source, profile_path + ["chassis_class"], profile.get("chassis_class"))
-        for key in ("slot_limit", "weight_limit", "base_hp", "base_range"):
+        for key in ("slot_limit", "procedure_slot_limit", "weight_limit", "base_hp", "base_range"):
             if key in profile:
                 _validate_int(report, source, profile_path + [key], profile.get(key), minimum=1, field_name=key)
         if "base_glyph" in profile:

@@ -277,6 +277,7 @@ from game.property_access import (
     property_status_text as _property_status_text,
     world_hour as _world_hour,
 )
+from game.person_leverage import person_leverage_dialogue_context, resolve_person_leverage_demand
 from game.dialogue_pressure import (
     dialogue_family_counts as _dialogue_family_counts,
     dialogue_topic_family as _dialogue_topic_family,
@@ -472,6 +473,7 @@ class NPCInteractionSystem(System):
         "store_buy_policy",
         "street_appraise",
         "street_buy",
+        "leverage",
         "bye",
         "purpose",
         "apologize",
@@ -552,6 +554,17 @@ class NPCInteractionSystem(System):
         "street_buy",
         "payoff",
         "fence",
+        "leverage",
+        "leverage_credits",
+        "leverage_trade_terms",
+        "leverage_look_away",
+        "leverage_distraction",
+        "leverage_access_window",
+        "leverage_credentials",
+        "leverage_disable_camera",
+        "leverage_hand_over_item",
+        "leverage_falsify_record",
+        "leverage_arrange_meeting",
         "hire_runner",
         "contract",
         "backup_kill",
@@ -567,6 +580,17 @@ class NPCInteractionSystem(System):
         "contract",
         "payoff",
         "fence",
+        "leverage",
+        "leverage_credits",
+        "leverage_trade_terms",
+        "leverage_look_away",
+        "leverage_distraction",
+        "leverage_access_window",
+        "leverage_credentials",
+        "leverage_disable_camera",
+        "leverage_hand_over_item",
+        "leverage_falsify_record",
+        "leverage_arrange_meeting",
     }
     MENU_REPEAT_ROW_BUDGET = 3
     DIALOGUE_TOPIC_REPEAT_COOLDOWN_HOURS = 1.0
@@ -579,6 +603,17 @@ class NPCInteractionSystem(System):
         "leave",
         "payoff",
         "fence",
+        "leverage",
+        "leverage_credits",
+        "leverage_trade_terms",
+        "leverage_look_away",
+        "leverage_distraction",
+        "leverage_access_window",
+        "leverage_credentials",
+        "leverage_disable_camera",
+        "leverage_hand_over_item",
+        "leverage_falsify_record",
+        "leverage_arrange_meeting",
         "opportunities",
         "fallout",
         "objective",
@@ -6308,6 +6343,44 @@ class NPCInteractionSystem(System):
             return "waiting on you"
         return "passive cover"
 
+    def _start_coerced_distraction(self, npc_eid, *, duration=90):
+        positions = self.sim.ecs.get(Position)
+        npc_pos = positions.get(npc_eid)
+        player_pos = positions.get(self.player_eid)
+        if npc_pos is None or player_pos is None:
+            return False
+        contractors = getattr(self.sim, "contractors", None)
+        if not isinstance(contractors, dict):
+            self.sim.contractors = {}
+            contractors = self.sim.contractors
+        existing = contractors.get(npc_eid)
+        if isinstance(existing, dict) and int(existing.get("until", 0) or 0) > int(self.sim.tick):
+            return False
+        target = self._distraction_waypoint(npc_pos, player_pos)
+        rec = {
+            "hired_tick": int(self.sim.tick),
+            "until": int(self.sim.tick) + max(1, int(duration)),
+            "cost": 0,
+            "job": "coerced_distraction",
+            "ally_eid": self.player_eid,
+            "order": "distraction",
+            "order_target": tuple(target),
+            "order_wait_ticks": max(1, int(duration)),
+            "order_wait_started": int(self.sim.tick),
+            "coerced": True,
+        }
+        contractors[npc_eid] = rec
+        self._assign_contractor_distraction(npc_eid, player_pos, rec)
+        self.sim.emit(Event(
+            "person_leverage_action_started",
+            eid=self.player_eid,
+            subject_eid=npc_eid,
+            action="distraction",
+            duration=max(1, int(duration)),
+            target=tuple(target),
+        ))
+        return True
+
     # ── End fence helpers ────────────────────────────────────────────────────
 
     def _trade_context(self, npc_eid, workplace_prop, current_prop):
@@ -7375,6 +7448,16 @@ class NPCInteractionSystem(System):
         if organization_name_text and organization_name_text.lower() != owner_place_name.lower():
             subtitle_bits.append(organization_name_text)
         human = identity is None or str(identity.taxonomy_class or "hominid").strip().lower() == "hominid"
+        leverage_context = person_leverage_dialogue_context(
+            self.sim,
+            self.player_eid,
+            npc_eid,
+            current_prop=current_prop,
+            workplace_prop=workplace_prop,
+            owned_prop=owned_prop,
+            trade_available=bool(trade_context),
+            social_leads=social_leads,
+        )
         speech_style = _dialogue_speaker_style(
             self.sim.seed,
             npc_eid,
@@ -7454,6 +7537,7 @@ class NPCInteractionSystem(System):
             "payoff_cost": f"{max(self.PAYOFF_BASE_COST, int(pressure.get('attention', 0)) * 2)} credits",
             "fence_available": self._fence_available_for(npc_eid, contact_standing, guarded),
             "fence_payout_preview": self._fence_payout_preview(self.player_eid),
+            **leverage_context,
             "street_appraise_available": street_appraise_available,
             "street_appraise_preview": street_appraise_preview,
             "street_buy_available": street_buy_available,
@@ -12666,6 +12750,22 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "fence" and not context.get("fence_available"):
                 continue
+            if topic_id == "leverage" and not context.get("leverage_available"):
+                continue
+            leverage_availability = {
+                "leverage_credits": "leverage_credits_available",
+                "leverage_trade_terms": "leverage_trade_terms_available",
+                "leverage_look_away": "leverage_look_away_available",
+                "leverage_distraction": "leverage_distraction_available",
+                "leverage_access_window": "leverage_access_window_available",
+                "leverage_credentials": "leverage_credentials_available",
+                "leverage_disable_camera": "leverage_disable_camera_available",
+                "leverage_hand_over_item": "leverage_hand_over_item_available",
+                "leverage_falsify_record": "leverage_falsify_record_available",
+                "leverage_arrange_meeting": "leverage_arrange_meeting_available",
+            }
+            if topic_id in leverage_availability and not context.get(leverage_availability[topic_id]):
+                continue
             if topic_id == "street_appraise" and not context.get("street_appraise_available"):
                 continue
             if topic_id == "street_buy" and not context.get("street_buy_available"):
@@ -12950,6 +13050,54 @@ class NPCInteractionSystem(System):
             "newly_learned": bool(changed),
             "contact_context": self._introduction_context_text(lead),
         }
+
+    def _apply_coerced_introduction(self, context, effect):
+        if not isinstance(effect, dict):
+            return False
+        lead_eid = effect.get("lead_eid")
+        lead_name = str(effect.get("lead_name", "") or "").strip()
+        source_eid = context.get("npc_eid") if isinstance(context, dict) else None
+        if lead_eid is None or not lead_name or source_eid is None:
+            return False
+        standing = 0.28
+        changed = self._remember_player_person_contact(
+            lead_eid,
+            source_eid=source_eid,
+            relation_kind=str(effect.get("relation_kind", "contact") or "contact").strip().lower(),
+            standing=standing,
+            property_id=str(effect.get("property_id", "") or "").strip() or None,
+            introduced=True,
+            benefits={"known_name", "coerced_introduction"},
+        )
+        if changed:
+            self.sim.emit(Event(
+                "contact_learned",
+                eid=self.player_eid,
+                npc_eid=source_eid,
+                referred_eid=lead_eid,
+                referred_name=lead_name,
+                relation_kind=str(effect.get("relation_kind", "contact") or "contact").strip().lower(),
+                property_id=str(effect.get("property_id", "") or "").strip() or None,
+                contact_kind="coerced_introduction",
+                standing=standing,
+                introduced=True,
+                benefits=("known_name", "coerced_introduction"),
+            ))
+        self._remember_player_relationship_episode(
+            lead_eid,
+            kind="introduced_under_pressure",
+            valence="neutral",
+            summary=f"{context.get('npc_name', 'A contact')} arranged a meeting with {lead_name} under pressure.",
+            property_id=str(effect.get("property_id", "") or "").strip() or None,
+            other_person_eid=source_eid,
+            source_topic="leverage_arrange_meeting",
+            source_eid=source_eid,
+            relation_kind=str(effect.get("relation_kind", "contact") or "contact").strip().lower(),
+            standing=standing,
+            introduced=True,
+            benefits={"known_name", "coerced_introduction"},
+        )
+        return True
 
     def _dialogue_contact_response(self, context, *, vouch=False):
         topic_id = "vouch" if vouch else "contacts"
@@ -13929,6 +14077,129 @@ class NPCInteractionSystem(System):
                     return {"npc_lines": ["Fine. Keep it. If you want me to look over the rest, ask."]}
                 return {"npc_lines": ["Fine. Keep it moving unless you want to make a different offer."]}
             return {"npc_lines": ["Then we do not have business right now."]}
+        if topic_id == "leverage":
+            fact = str(context.get("leverage_fact", "the records speak for themselves") or "the records speak for themselves").strip()
+            audience = str(context.get("leverage_audience", "the people who matter") or "the people who matter").strip()
+            return {
+                "npc_lines": [
+                    f"I know what those records say. Keep {audience} out of this. What do you want?"
+                    if fact
+                    else "You have my attention. What do you want?"
+                ]
+            }
+        leverage_demands = {
+            "leverage_credits": "credits",
+            "leverage_trade_terms": "trade_terms",
+            "leverage_look_away": "look_away",
+            "leverage_distraction": "distraction",
+            "leverage_access_window": "access_window",
+            "leverage_credentials": "credentials",
+            "leverage_disable_camera": "disable_camera",
+            "leverage_hand_over_item": "hand_over_item",
+            "leverage_falsify_record": "falsify_record",
+            "leverage_arrange_meeting": "arrange_meeting",
+        }
+        if topic_id in leverage_demands:
+            demand = leverage_demands[topic_id]
+            result = resolve_person_leverage_demand(
+                self.sim,
+                self.player_eid,
+                npc_eid,
+                demand,
+                current_prop=context.get("current_prop"),
+                workplace_prop=context.get("workplace_prop"),
+                owned_prop=context.get("owned_prop"),
+                trade_available=bool(context.get("trade_available")),
+                social_leads=context.get("social_leads", ()),
+            )
+            if not result.get("ok"):
+                return {"npc_lines": ["That demand no longer attaches to anything you can prove."]}
+            complied = bool(result.get("complied"))
+            self._shift_dialogue_bond(
+                npc_eid,
+                trust_delta=-0.12 if complied else -0.17,
+                closeness_delta=-0.05 if complied else -0.08,
+                guarded=True,
+            )
+            property_id = str(result.get("property_id", "") or "").strip() or None
+            if complied:
+                if demand == "credits":
+                    line = f"Fine. {int(result.get('payout', 0))} credits. I want those records contained."
+                    summary = f"They paid you {int(result.get('payout', 0))} credits under pressure."
+                elif demand == "trade_terms":
+                    place = str(result.get("property_name", "the counter") or "the counter").strip()
+                    line = f"At {place}, your rates improve. Do not mistake that for goodwill."
+                    summary = f"They yielded favorable counter terms at {place} under pressure."
+                elif demand == "look_away":
+                    place = str(result.get("property_name", "the property") or "the property").strip()
+                    line = f"For a little while at {place}, I will be looking somewhere else. The cameras and everyone else are your problem."
+                    summary = f"They agreed to look away briefly at {place}."
+                elif demand == "distraction":
+                    duration = int((result.get("effect") or {}).get("duration", 90) or 90)
+                    started = self._start_coerced_distraction(npc_eid, duration=duration)
+                    line = "Fine. Watch the room. It is about to look the other way."
+                    if not started:
+                        line = "I agreed. Something else has me pinned here; the distraction cannot start cleanly."
+                    summary = "They agreed under pressure to create a distraction."
+                elif demand == "access_window":
+                    place = str(result.get("property_name", "the property") or "the property").strip()
+                    line = f"Fine. The access controller at {place} is released for a short window. Move before it closes."
+                    summary = f"They opened a temporary live access window at {place}."
+                elif demand == "credentials":
+                    effect = result.get("effect") or {}
+                    item_name = str(effect.get("item_name", "credential") or "credential").strip()
+                    place = str(result.get("property_name", "their workplace") or "their workplace").strip()
+                    line = f"Take the {item_name}. It is real, and it belongs to {place}."
+                    summary = f"They handed over their actual {item_name} for {place}."
+                elif demand == "disable_camera":
+                    effect = result.get("effect") or {}
+                    camera_name = str(effect.get("camera_name", "camera") or "camera").strip()
+                    place = str(result.get("property_name", "the property") or "the property").strip()
+                    line = f"The {camera_name} at {place} is dark for now. That is the only surveillance gap you get from me."
+                    summary = f"They took the {camera_name} at {place} offline under pressure."
+                elif demand == "hand_over_item":
+                    effect = result.get("effect") or {}
+                    item_name = str(effect.get("item_name", "item") or "item").strip()
+                    line = f"Take the {item_name}. Now get it out of my sight."
+                    summary = f"They surrendered their actual {item_name} under pressure."
+                elif demand == "falsify_record":
+                    place = str(result.get("property_name", "the property") or "the property").strip()
+                    line = f"The access record at {place} recognizes you for a little while. Do not expect it to survive an audit."
+                    summary = f"They inserted a temporary false access record for you at {place}."
+                else:
+                    effect = result.get("effect") or {}
+                    lead_name = str(effect.get("lead_name", "the contact") or "the contact").strip()
+                    applied = self._apply_coerced_introduction(context, effect)
+                    line = f"You have a meeting with {lead_name}. My name gets you the first minute; what happens after that is yours."
+                    if not applied:
+                        line = f"I will arrange the meeting with {lead_name}, but the contact trail is not settling cleanly yet."
+                    summary = f"They arranged a meeting with {lead_name} under pressure."
+                self._remember_player_relationship_episode(
+                    npc_eid,
+                    kind=f"blackmail_{demand}",
+                    valence="negative",
+                    summary=summary,
+                    property_id=property_id,
+                    source_topic=topic_id,
+                    relation_kind="wire_record",
+                    standing=0.0,
+                    met_directly=True,
+                    benefits={"known_name", "wire_record"},
+                )
+                return {"npc_lines": [line], "close": demand == "distraction"}
+            self._remember_player_relationship_episode(
+                npc_eid,
+                kind=f"blackmail_{demand}_refused",
+                valence="negative",
+                summary=f"They refused your demand for {demand.replace('_', ' ')} despite the records.",
+                property_id=property_id,
+                source_topic=topic_id,
+                relation_kind="wire_record",
+                standing=0.0,
+                met_directly=True,
+                benefits={"known_name", "wire_record"},
+            )
+            return {"npc_lines": ["No. Release it if you are going to. I am done feeding you."], "close": True}
         if topic_id == "payoff":
             npc_eid = context.get("npc_eid")
             cost_amount = int(context.get("payoff_cost_amount", self.PAYOFF_BASE_COST))
@@ -15215,12 +15486,22 @@ class NPCInteractionSystem(System):
                 npc_eid,
                 rec.get("ally_eid", self.player_eid),
             )
-            self.sim.emit(Event(
-                "contractor_task_complete",
-                npc_eid=npc_eid,
-                job=rec.get("job", "distraction"),
-                hired_tick=rec.get("hired_tick", 0),
-            ))
+            job = str(rec.get("job", "distraction") or "distraction").strip().lower()
+            if job == "coerced_distraction":
+                self.sim.emit(Event(
+                    "person_leverage_action_complete",
+                    eid=rec.get("ally_eid", self.player_eid),
+                    subject_eid=npc_eid,
+                    action="distraction",
+                    started_tick=rec.get("hired_tick", 0),
+                ))
+            else:
+                self.sim.emit(Event(
+                    "contractor_task_complete",
+                    npc_eid=npc_eid,
+                    job=rec.get("job", "distraction"),
+                    hired_tick=rec.get("hired_tick", 0),
+                ))
         positions = self.sim.ecs.get(Position)
         for npc_eid, rec in list(contractors.items()):
             job = str(rec.get("job", "distraction") or "distraction").strip().lower()
@@ -15228,7 +15509,7 @@ class NPCInteractionSystem(System):
                 continue
             ally_eid = rec.get("ally_eid", self.player_eid)
             ally_pos = positions.get(ally_eid)
-            if job == "distraction":
+            if job in {"distraction", "coerced_distraction"}:
                 self._assign_contractor_distraction(npc_eid, ally_pos)
             elif job == "surrendered":
                 order = self._contractor_order_mode(rec)

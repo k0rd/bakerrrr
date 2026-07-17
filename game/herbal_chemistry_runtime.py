@@ -16,6 +16,7 @@ from engine.visibility import has_line_of_sight
 from game.components import Inventory, PlayerAssets, Position
 from game.flora_runtime import (
     dynamic_flora_profile,
+    ensure_dynamic_flora_profiles,
     flora_harvest_context,
     flora_harvest_remaining,
     flora_harvest_updates_after_pick,
@@ -24,6 +25,7 @@ from game.flora_runtime import (
     load_flora_catalog,
     normalize_flora_harvest_state,
 )
+from game.ecology_registry import native_flora_effect_channels
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor
 from game.items import ITEM_CATALOG, item_display_name, prepare_item_stack_metadata
 from game.json_metadata import split_object_document
@@ -371,12 +373,32 @@ def _weighted_choice(rng, rows):
     return rows[-1][0]
 
 
+def _herbal_flora_catalog(sim):
+    """Compose authored and live flora while preserving the loader test seam."""
+
+    catalog = {plant_id: dict(row) for plant_id, row in load_flora_catalog().items()}
+    for plant_id, profile in ensure_dynamic_flora_profiles(sim).items():
+        if isinstance(profile, dict):
+            catalog[_key(plant_id)] = dict(profile)
+    return catalog
+
+
 def herbal_chemistry_profiles(sim):
     state = getattr(sim, "herbal_chemistry_profiles", None)
     seed = int(getattr(sim, "seed", 0) or 0)
-    catalog = load_flora_catalog()
+    catalog = _herbal_flora_catalog(sim)
     catalog_marker = ",".join(sorted(catalog.keys()))
-    if isinstance(state, dict) and state.get("seed") == seed and state.get("catalog_marker") == catalog_marker:
+    native_channels = native_flora_effect_channels(sim)
+    effect_marker = repr(tuple(
+        (row.get("native_id"), row.get("chemistry_class"), tuple(row.get("secondary_traits") or ()))
+        for row in native_channels
+    ))
+    if (
+        isinstance(state, dict)
+        and state.get("seed") == seed
+        and state.get("catalog_marker") == catalog_marker
+        and state.get("native_effect_marker") == effect_marker
+    ):
         return dict(state.get("plants", {}) or {})
 
     rng = random.Random(f"{seed}:herbal-chemistry:v1")
@@ -385,7 +407,13 @@ def herbal_chemistry_profiles(sim):
     assignments = {}
     for plant_id in plant_ids:
         row = catalog[plant_id]
-        weights = _plant_bias_weights(row)
+        # A remembered cultivar keeps its body/shape, but its chemistry is a
+        # fresh independent draw in every new world.
+        weights = (
+            {class_id: 1.0 for class_id in CHEMISTRY_CLASSES}
+            if bool(row.get("effect_pool_detached"))
+            else _plant_bias_weights(row)
+        )
         assignments[plant_id] = _weighted_choice(rng, tuple(weights.items())) or "mending"
 
     target_count = max(1, min(3, len(plant_ids) // max(1, len(CHEMISTRY_CLASSES))))
@@ -409,9 +437,29 @@ def herbal_chemistry_profiles(sim):
             assignments[candidate] = class_id
             protected.add(candidate)
 
+    # Remembered effect channels re-enter the run-wide pool independently of
+    # their original cultivar identity.  Avoid the source identity whenever a
+    # second plant exists, so a familiar shape never becomes solved chemistry.
+    for index, channel in enumerate(native_channels):
+        class_id = _key(channel.get("chemistry_class"))
+        if class_id not in CHEMISTRY_CLASSES or not plant_ids:
+            continue
+        source_id = next(
+            (
+                plant_id
+                for plant_id, row in catalog.items()
+                if str(row.get("native_lineage_id") or "") == str(channel.get("native_id") or "")
+            ),
+            "",
+        )
+        targets = [plant_id for plant_id in plant_ids if plant_id != source_id] or list(plant_ids)
+        target_rng = random.Random(f"{seed}:native-flora-effect:{channel.get('native_id')}:{index}")
+        assignments[targets[target_rng.randrange(len(targets))]] = class_id
+
     sim.herbal_chemistry_profiles = {
         "seed": seed,
         "catalog_marker": catalog_marker,
+        "native_effect_marker": effect_marker,
         "plants": dict(assignments),
     }
     return dict(assignments)
@@ -466,8 +514,13 @@ def _secondary_trait_fallback(seed, plant_id, class_id, row):
 def herbal_secondary_trait_profiles(sim):
     state = getattr(sim, "herbal_secondary_trait_profiles", None)
     seed = int(getattr(sim, "seed", 0) or 0)
-    catalog = load_flora_catalog()
+    catalog = _herbal_flora_catalog(sim)
     catalog_marker = _catalog_marker(catalog)
+    native_channels = native_flora_effect_channels(sim)
+    effect_marker = repr(tuple(
+        (row.get("native_id"), tuple(row.get("secondary_traits") or ()))
+        for row in native_channels
+    ))
     class_assignments = herbal_chemistry_profiles(sim)
     chemistry_marker = ",".join(
         f"{plant_id}:{class_assignments.get(plant_id, '')}"
@@ -478,6 +531,7 @@ def herbal_secondary_trait_profiles(sim):
         and state.get("seed") == seed
         and state.get("catalog_marker") == catalog_marker
         and state.get("chemistry_marker") == chemistry_marker
+        and state.get("native_effect_marker") == effect_marker
     ):
         return {
             _key(plant_id): tuple(_key(trait) for trait in tuple(traits or ()) if _key(trait) in SECONDARY_TRAITS)
@@ -487,17 +541,40 @@ def herbal_secondary_trait_profiles(sim):
     assignments = {}
     for plant_id in sorted(catalog):
         row = catalog[plant_id]
-        explicit = _expressed_genetic_secondary_traits(row)
+        explicit = () if bool(row.get("effect_pool_detached")) else _expressed_genetic_secondary_traits(row)
         if explicit:
             assignments[plant_id] = tuple(explicit)
             continue
         class_id = class_assignments.get(plant_id, "") or "mending"
         assignments[plant_id] = (_secondary_trait_fallback(seed, plant_id, class_id, row),)
 
+    plant_ids = sorted(catalog)
+    for index, channel in enumerate(native_channels):
+        traits = tuple(
+            _key(trait)
+            for trait in tuple(channel.get("secondary_traits") or ())
+            if _key(trait) in SECONDARY_TRAITS
+        )
+        if not traits or not plant_ids:
+            continue
+        source_id = next(
+            (
+                plant_id
+                for plant_id, row in catalog.items()
+                if str(row.get("native_lineage_id") or "") == str(channel.get("native_id") or "")
+            ),
+            "",
+        )
+        targets = [plant_id for plant_id in plant_ids if plant_id != source_id] or list(plant_ids)
+        target_rng = random.Random(f"{seed}:native-flora-secondary:{channel.get('native_id')}:{index}")
+        target_id = targets[target_rng.randrange(len(targets))]
+        assignments[target_id] = tuple(dict.fromkeys(tuple(assignments.get(target_id, ())) + traits))
+
     sim.herbal_secondary_trait_profiles = {
         "seed": seed,
         "catalog_marker": catalog_marker,
         "chemistry_marker": chemistry_marker,
+        "native_effect_marker": effect_marker,
         "plants": {plant_id: list(traits) for plant_id, traits in assignments.items()},
     }
     return dict(assignments)
@@ -506,7 +583,7 @@ def herbal_secondary_trait_profiles(sim):
 def plant_chemistry_class(sim, plant_id):
     plant_id = _key(plant_id)
     profile = dynamic_flora_profile(sim, plant_id) if plant_id else {}
-    if profile:
+    if profile and not bool(profile.get("effect_pool_detached")):
         class_id = _key(profile.get("chemistry_class")) or _expressed_genetic_chemistry_class(profile)
         if class_id in CHEMISTRY_CLASSES:
             return class_id
@@ -516,7 +593,7 @@ def plant_chemistry_class(sim, plant_id):
 def plant_secondary_traits(sim, plant_id):
     plant_id = _key(plant_id)
     profile = dynamic_flora_profile(sim, plant_id) if plant_id else {}
-    if profile:
+    if profile and not bool(profile.get("effect_pool_detached")):
         explicit = tuple(
             _key(trait)
             for trait in tuple(profile.get("secondary_traits") or ())
@@ -785,7 +862,7 @@ def _reveal_recipe_plants(sim, eid, recipe, *, prop=None, limit=2):
     required = tuple(dict.fromkeys(str(class_id or "").strip().lower() for class_id in tuple(recipe.get("required_classes", ()) or ()) if str(class_id or "").strip()))
     if not required:
         return ()
-    catalog = load_flora_catalog()
+    catalog = _herbal_flora_catalog(sim)
     assignments = herbal_chemistry_profiles(sim)
     nearby_by_class = {class_id: [] for class_id in required}
     for row in _plants_near_actor(sim, eid):

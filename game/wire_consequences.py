@@ -365,8 +365,33 @@ def _find_linked_camera_id(sim, scene):
 
 def apply_wire_physical_effect(sim, actor_eid, scene, program_key, *, target=None):
     program_key = _key(program_key)
-    if program_key not in {"door_latch", "camera_loop", "data_siphon_shell"}:
+    if program_key not in {"handshake_breaker", "door_latch", "camera_loop", "data_siphon_shell"}:
         return {"ok": False, "reason": "no_physical_effect"}
+    if _key((scene or {}).get("target_kind")) == "drone":
+        if program_key not in {"camera_loop", "handshake_breaker"}:
+            return {"ok": False, "reason": "unsupported_drone_wire_effect"}
+        from game.wire_drone_bridge import apply_drone_wire_camera_loop, apply_drone_wire_handshake_breaker
+
+        effect = (
+            apply_drone_wire_handshake_breaker(sim, actor_eid, scene)
+            if program_key == "handshake_breaker"
+            else apply_drone_wire_camera_loop(sim, actor_eid, scene)
+        )
+        if effect.get("ok"):
+            sim.emit(Event(
+                "wire_physical_effect_applied",
+                eid=actor_eid,
+                program_key=program_key,
+                target_id=effect.get("target_id"),
+                target_entity_id=effect.get("target_id"),
+                scene_id=(scene or {}).get("scene_id"),
+                feedback=effect.get("feedback"),
+            ))
+        return effect
+    if _key((scene or {}).get("target_kind")) == "vehicle":
+        return {"ok": False, "reason": "unsupported_vehicle_wire_effect"}
+    if program_key == "handshake_breaker":
+        return {"ok": False, "reason": "requires_drone_radio_target"}
     target_prop = _effect_target_property(sim, scene)
     if not isinstance(target_prop, dict):
         return {"ok": False, "reason": "missing_physical_target"}
@@ -444,10 +469,22 @@ def apply_wire_physical_effect(sim, actor_eid, scene, program_key, *, target=Non
     }
 
 
-def wire_physical_effect_preflight(sim, scene, program_key):
+def wire_physical_effect_preflight(sim, scene, program_key, *, actor_eid=None):
     program_key = _key(program_key)
-    if program_key not in {"door_latch", "camera_loop", "data_siphon_shell"}:
+    if program_key not in {"handshake_breaker", "door_latch", "camera_loop", "data_siphon_shell"}:
         return {"ok": True, "reason": None}
+    if _key((scene or {}).get("target_kind")) == "drone":
+        if program_key not in {"camera_loop", "handshake_breaker"}:
+            return {"ok": False, "reason": "unsupported_drone_wire_effect"}
+        from game.wire_drone_bridge import drone_wire_camera_loop_preflight, drone_wire_handshake_breaker_preflight
+
+        if program_key == "handshake_breaker":
+            return drone_wire_handshake_breaker_preflight(sim, actor_eid, scene)
+        return drone_wire_camera_loop_preflight(sim, scene)
+    if _key((scene or {}).get("target_kind")) == "vehicle":
+        return {"ok": False, "reason": "unsupported_vehicle_wire_effect"}
+    if program_key == "handshake_breaker":
+        return {"ok": False, "reason": "requires_drone_radio_target"}
     target_prop = _effect_target_property(sim, scene)
     if not isinstance(target_prop, dict):
         return {"ok": False, "reason": "missing_physical_target"}

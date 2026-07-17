@@ -25,8 +25,8 @@ class Simulation:
         map_height=32,
         max_floors=3,
         chunk_size=16,
-        active_chunk_radius=1,
-        loaded_chunk_radius=2,
+        active_chunk_radius=2,
+        loaded_chunk_radius=3,
     ):
 
         self.seed = seed
@@ -36,6 +36,7 @@ class Simulation:
         self.world = World(seed)
         self.tilemap = TileMap(map_width, map_height, max_floors=max_floors)
         self.chunk_size = chunk_size
+        self.simulation_resolution_version = 2
         self.active_chunk_radius = active_chunk_radius
         self.loaded_chunk_radius = loaded_chunk_radius
         self.active_chunk = None
@@ -59,6 +60,7 @@ class Simulation:
         self.property_cover_index = {}
         self.property_order = {}
         self.next_property_order = 0
+        self._properties_in_radius_cache = {}
         self.door_states = {}
         self.fixture_power_cuts = {}
         self.camera_disabled = {}
@@ -89,7 +91,7 @@ class Simulation:
         self.turn_advance_requested = False
         self.zoom_mode = "city"
         self.city_anchor_by_chunk = {}
-        self.npc_move_tick_stride = 2
+        self.npc_move_tick_stride = 1
         self.world_traits = {}
         self.organization_index = {}
         self.world_rumors = []
@@ -117,6 +119,8 @@ class Simulation:
             "player_radius": 0,
             "player_visible": set(),
             "player_explored": set(),
+            "player_visibility_signature": None,
+            "player_visibility_reused": False,
         }
 
         self.systems = []
@@ -171,6 +175,8 @@ class Simulation:
             self.entity_chunk_membership = {}
         if not isinstance(getattr(self, "entity_identity_records", None), dict):
             self.entity_identity_records = {}
+        if not isinstance(getattr(self, "_properties_in_radius_cache", None), dict):
+            self._properties_in_radius_cache = {}
         if not isinstance(getattr(self, "flora_patches", None), dict):
             self.flora_patches = {}
         if not isinstance(getattr(self, "chunk_flora_records", None), dict):
@@ -214,6 +220,13 @@ class Simulation:
         tilemap = getattr(self, "tilemap", None)
         if tilemap is None:
             return
+        if not hasattr(tilemap, "visibility_revision"):
+            tilemap.visibility_revision = 0
+        if not hasattr(tilemap, "visibility_global_revision"):
+            tilemap.visibility_global_revision = int(getattr(tilemap, "visibility_revision", 0) or 0)
+        if not isinstance(getattr(tilemap, "visibility_chunk_revisions", None), dict):
+            tilemap.visibility_chunk_revisions = {}
+        tilemap.visibility_chunk_size = max(1, int(getattr(self, "chunk_size", 16) or 16))
         tilemap.on_add_entity = self._on_tilemap_add_entity
         tilemap.on_move_entity = self._on_tilemap_move_entity
         tilemap.on_remove_entity = self._on_tilemap_remove_entity
@@ -290,6 +303,66 @@ class Simulation:
         if key is None:
             return ()
         return tuple(sorted(self.chunk_entity_index.get(key, ())))
+
+    def entity_ids_in_radius(self, x, y, z=0, radius=0):
+        """Return positioned entities inside an exact local Manhattan radius.
+
+        The maintained chunk index supplies the broad phase.  Position-bearing
+        entities can briefly precede tilemap placement while a scene is being
+        constructed, so the fallback below also considers only those currently
+        absent from the index rather than making local reads silently incomplete.
+        """
+        try:
+            x = int(x)
+            y = int(y)
+            z = int(z)
+            radius = max(0, int(radius))
+            min_chunk = self.chunk_coords(x - radius, y - radius)
+            max_chunk = self.chunk_coords(x + radius, y + radius)
+        except (AttributeError, TypeError, ValueError):
+            return ()
+
+        positions = self.ecs.get(Position)
+        if not positions:
+            return ()
+
+        min_chunk_x = min(int(min_chunk[0]), int(max_chunk[0]))
+        max_chunk_x = max(int(min_chunk[0]), int(max_chunk[0]))
+        min_chunk_y = min(int(min_chunk[1]), int(max_chunk[1]))
+        max_chunk_y = max(int(min_chunk[1]), int(max_chunk[1]))
+        candidate_eids = set()
+        chunk_index = getattr(self, "chunk_entity_index", None)
+        if isinstance(chunk_index, dict):
+            for chunk_y in range(min_chunk_y, max_chunk_y + 1):
+                for chunk_x in range(min_chunk_x, max_chunk_x + 1):
+                    candidate_eids.update(chunk_index.get((chunk_x, chunk_y), ()) or ())
+
+        membership = getattr(self, "entity_chunk_membership", None)
+        if not isinstance(membership, dict) or len(membership) < len(positions):
+            for eid, pos in positions.items():
+                if isinstance(membership, dict) and eid in membership:
+                    continue
+                try:
+                    chunk_x, chunk_y = self.chunk_coords(int(pos.x), int(pos.y))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if min_chunk_x <= int(chunk_x) <= max_chunk_x and min_chunk_y <= int(chunk_y) <= max_chunk_y:
+                    candidate_eids.add(eid)
+
+        exact_eids = []
+        for eid in candidate_eids:
+            pos = positions.get(eid)
+            if pos is None:
+                continue
+            try:
+                if int(pos.z) != z:
+                    continue
+                distance = abs(int(pos.x) - x) + abs(int(pos.y) - y)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if distance <= radius:
+                exact_eids.append(eid)
+        return tuple(sorted(exact_eids))
 
     def rebuild_chunk_entity_index(self):
         self.chunk_entity_index = {}
@@ -548,6 +621,7 @@ class Simulation:
             return False
 
         if bool(state.get("broken", False)):
+            visibility_changed = not bool(getattr(tile, "transparent", True))
             tile.walkable = True
             tile.transparent = True
             tile.set_appearance(
@@ -555,9 +629,12 @@ class Simulation:
                 color="feature_breach",
                 semantic_id="feature_breach",
             )
+            if visibility_changed:
+                self.tilemap.mark_visibility_changed(x, y, z)
             return True
 
         is_open = bool(state.get("open", False))
+        visibility_changed = bool(getattr(tile, "transparent", True)) != bool(is_open)
         tile.walkable = bool(is_open)
         tile.transparent = bool(is_open)
         tile.set_appearance(
@@ -565,6 +642,8 @@ class Simulation:
             color="feature_door",
             semantic_id="feature_door",
         )
+        if visibility_changed:
+            self.tilemap.mark_visibility_changed(x, y, z)
         return True
 
     def _door_aperture_context_valid(self, x, y, z=0, *, tile=None):
@@ -732,7 +811,10 @@ class Simulation:
                 report["player_drone_protected"] = tuple(sorted(player_drone_protected))
 
         if isinstance(report, dict):
-            warmth_protected = set(warmth_protected_chunks(self, report.get("unloaded", ())))
+            from game.npc_emergency_runtime import emergency_protected_chunks
+
+            emergency_protected = set(emergency_protected_chunks(self, report.get("unloaded", ())))
+            warmth_protected = set(warmth_protected_chunks(self, report.get("unloaded", ()))) | emergency_protected
             attention_state = actor_attention_state(self)
             social_warmth_protected = set(attention_state.get("social_warmth_protected_chunks", set()) or ())
             area_warmth_protected = set(attention_state.get("area_warmth_protected_chunks", set()) or ())
@@ -764,6 +846,7 @@ class Simulation:
             report["warmth_protected"] = tuple(sorted(warmth_protected))
             report["social_warmth_protected"] = tuple(sorted(social_warmth_protected))
             report["area_warmth_protected"] = tuple(sorted(area_warmth_protected))
+            report["emergency_protected"] = tuple(sorted(emergency_protected))
             report["loaded_count"] = len(self.world.loaded_chunks)
             report["active_count"] = sum(1 for data in self.world.loaded_chunks.values() if data.get("detail") == "active")
             report["changed"] = bool(report.get("changed")) or bool(warmth_protected)
@@ -1168,6 +1251,7 @@ class Simulation:
 
     def rebuild_spatial_indexes(self):
         self.rebuild_chunk_entity_index()
+        self._invalidate_properties_in_radius_cache()
         self.property_anchor_index = {}
         self.property_cover_index = {}
         self.property_order = {}
@@ -1193,11 +1277,13 @@ class Simulation:
             prop["z"] = int(z)
         except (TypeError, ValueError):
             self._index_property_record(property_id, prop)
+            self._invalidate_properties_in_radius_cache()
             return False
         metadata = prop.get("metadata")
         if isinstance(metadata, dict):
             metadata["chunk"] = self.chunk_coords(int(prop["x"]), int(prop["y"]))
         self._index_property_record(property_id, prop)
+        self._invalidate_properties_in_radius_cache()
         self._sync_property_chunk_record(property_id, prop)
         return True
 
@@ -1274,6 +1360,13 @@ class Simulation:
             set(str(property_id) for property_id in property_ids),
             key=lambda property_id: self.property_order.get(property_id, 10**9),
         )
+
+    def _invalidate_properties_in_radius_cache(self):
+        cache = getattr(self, "_properties_in_radius_cache", None)
+        if isinstance(cache, dict):
+            cache.clear()
+        else:
+            self._properties_in_radius_cache = {}
 
     def _ordered_ground_item_ids(self, ground_item_ids):
         return sorted(
@@ -2832,7 +2925,11 @@ class Simulation:
             "metadata": metadata or {},
         }
         self._index_property_record(property_id, self.properties[property_id])
+        self._invalidate_properties_in_radius_cache()
         self.property_registry_dirty = True
+        reputation_stats = getattr(self, "business_reputation_stats", None)
+        if isinstance(reputation_stats, dict):
+            reputation_stats["_revision"] = int(reputation_stats.get("_revision", 0) or 0) + 1
 
         return property_id
 
@@ -2853,7 +2950,11 @@ class Simulation:
 
         self._unindex_property_record(property_id, removed)
         self.property_order.pop(property_id, None)
+        self._invalidate_properties_in_radius_cache()
         self.property_registry_dirty = True
+        reputation_stats = getattr(self, "business_reputation_stats", None)
+        if isinstance(reputation_stats, dict):
+            reputation_stats["_revision"] = int(reputation_stats.get("_revision", 0) or 0) + 1
 
         stores = getattr(self, "stores", None)
         if isinstance(stores, dict):
@@ -2911,16 +3012,40 @@ class Simulation:
         if key is None:
             return []
         x, y, z = key
+        try:
+            radius = int(r)
+        except (TypeError, ValueError):
+            return []
+        cache = getattr(self, "_properties_in_radius_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._properties_in_radius_cache = cache
+        cache_key = (x, y, z, radius)
+        property_ids = cache.get(cache_key)
+        if property_ids is not None:
+            return [
+                self.properties[property_id]
+                for property_id in property_ids
+                if property_id in self.properties
+            ]
+
         matched_ids = []
-        for dy in range(-int(r), int(r) + 1):
-            for dx in range(-int(r), int(r) + 1):
-                if abs(dx) + abs(dy) > int(r):
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                if abs(dx) + abs(dy) > radius:
                     continue
                 matched_ids.extend(self.property_anchor_index.get((x + dx, y + dy, z), ()))
-        return [
-            self.properties[property_id]
+        property_ids = tuple(
+            property_id
             for property_id in self._ordered_property_ids(matched_ids)
             if property_id in self.properties
+        )
+        if len(cache) >= 16_384:
+            cache.clear()
+        cache[cache_key] = property_ids
+        return [
+            self.properties[property_id]
+            for property_id in property_ids
         ]
 
     def new_item_instance_id(self):

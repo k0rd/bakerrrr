@@ -35,16 +35,24 @@ class EnvironmentalHazardSystem(System):
             yield prop
 
     def _hazards_at(self, x, y, z):
-        for prop in self._hazard_properties():
-            try:
-                if (
-                    int(prop.get("x", 0)) == int(x)
-                    and int(prop.get("y", 0)) == int(y)
-                    and int(prop.get("z", 0)) == int(z)
-                ):
-                    yield prop
-            except (TypeError, ValueError):
+        try:
+            key = (int(x), int(y), int(z))
+        except (TypeError, ValueError):
+            return
+        # Movement checks need hazards at one exact cell. Simulation already
+        # maintains this anchor index through property register/move/remove and
+        # save/chunk rebuilds, so do not rescan every realized property for
+        # every moving actor.
+        anchor_index = getattr(self.sim, "property_anchor_index", {})
+        properties = getattr(self.sim, "properties", {})
+        for property_id in tuple(anchor_index.get(key, ()) or ()):
+            prop = properties.get(property_id)
+            if not isinstance(prop, dict) or str(prop.get("kind", "")).strip().lower() != "asset":
                 continue
+            metadata = prop.get("metadata")
+            if not isinstance(metadata, dict) or not str(metadata.get("hazard_profile", "") or "").strip():
+                continue
+            yield prop
 
     def _apply_hazard(self, prop, eid, pos):
         if prop is None or pos is None:

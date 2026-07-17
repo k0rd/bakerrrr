@@ -60,6 +60,10 @@ def load_npc_name_catalog(path=NPC_NAMES_PATH):
 
 
 CATALOG = load_npc_name_catalog()
+_DEFAULT_HUMAN_NAME_POOL = (
+    tuple(CATALOG.get("human", {}).get("first_names", ()) or DEFAULT_NAME_CATALOG["human"]["first_names"]),
+    tuple(CATALOG.get("human", {}).get("last_names", ()) or DEFAULT_NAME_CATALOG["human"]["last_names"]),
+)
 
 
 def _normalize_name(value):
@@ -75,6 +79,8 @@ def human_descriptor(role=None, career=None):
 
 
 def _human_name_pool(catalog=None):
+    if catalog is None or catalog is CATALOG:
+        return _DEFAULT_HUMAN_NAME_POOL
     source = catalog if isinstance(catalog, dict) else CATALOG
     human = source.get("human", {}) if isinstance(source, dict) else {}
     fallback = DEFAULT_NAME_CATALOG["human"]

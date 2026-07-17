@@ -516,6 +516,8 @@ class VisibilitySystem(System):
             "player_radius": 0,
             "player_visible": set(),
             "player_explored": set(),
+            "player_visibility_signature": None,
+            "player_visibility_reused": False,
         }
         self.sim.visibility_state = state
         return state
@@ -532,6 +534,8 @@ class VisibilitySystem(System):
             state["player_origin"] = None
             state["player_radius"] = 0
             state["player_visible"] = set()
+            state["player_visibility_signature"] = None
+            state["player_visibility_reused"] = False
             return
 
         _update_player_visibility(

@@ -529,6 +529,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("drone_weapon_blocked", self.on_drone_weapon_blocked)
         self.sim.events.subscribe("drone_procedure_ran", self.on_drone_procedure_ran)
         self.sim.events.subscribe("drone_procedure_blocked", self.on_drone_procedure_blocked)
+        self.sim.events.subscribe("drone_wire_link_disrupted", self.on_drone_wire_link_disrupted)
+        self.sim.events.subscribe("drone_wire_link_restored", self.on_drone_wire_link_restored)
         self.sim.events.subscribe("drone_sheet_opened", self.on_drone_sheet_opened)
         self.sim.events.subscribe("drone_sheet_blocked", self.on_drone_sheet_blocked)
         self.sim.events.subscribe("drone_cargo_transferred", self.on_drone_cargo_transferred)
@@ -667,6 +669,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("vehicle_exited", self.on_vehicle_exited)
         self.sim.events.subscribe("vehicle_onramp_nearby", self.on_vehicle_onramp_nearby)
         self.sim.events.subscribe("vehicle_action_blocked", self.on_vehicle_action_blocked)
+        self.sim.events.subscribe("vehicle_wire_lock_changed", self.on_vehicle_wire_lock_changed)
+        self.sim.events.subscribe("vehicle_wire_ignition_primed", self.on_vehicle_wire_ignition_primed)
+        self.sim.events.subscribe("vehicle_wire_tracker_changed", self.on_vehicle_wire_tracker_changed)
         self.sim.events.subscribe("vehicle_collision", self.on_vehicle_collision)
         self.sim.events.subscribe("vehicle_crash", self.on_vehicle_crash)
         self.sim.events.subscribe("vehicle_explosion_armed", self.on_vehicle_explosion_armed)
@@ -4640,6 +4645,7 @@ class EventLogSystem(System):
             "not_deployed": "No deployed drone responds.",
             "not_controller": f"{drone_label} does not answer your controller.",
             "no_remote_control": f"{drone_label} has no remote receiver.",
+            "link_disrupted": f"{drone_label}'s external link is disrupted. Inspect it physically; an adjacent owner can use Shift+W to resync.",
             "unknown_command": f"{drone_label} does not know that command.",
         }
         _log_player_feedback(self.sim, messages.get(reason, f"{drone_label} cannot accept commands right now."), kind="interaction")
@@ -4741,7 +4747,6 @@ class EventLogSystem(System):
         reason = str(event.data.get("reason", "") or "").strip().lower()
         messages = {
             "unknown_procedure": f"{drone_label} does not know the {procedure_label} procedure.",
-            "procedure_not_implemented": f"{drone_label} cannot run {procedure_label} yet.",
             "missing_controller": f"{drone_label} has no controller for {procedure_label}.",
             "missing_position": f"{drone_label} has no usable position for {procedure_label}.",
             "missing_target": f"{drone_label} has no target for {procedure_label}.",
@@ -4770,6 +4775,37 @@ class EventLogSystem(System):
             "item_unavailable": f"{drone_label} cannot reach that item for {procedure_label}.",
         }
         _log_player_feedback(self.sim, messages.get(reason, f"{drone_label} cannot run {procedure_label}."), kind="interaction")
+
+    def on_drone_wire_link_disrupted(self, event):
+        if self.player_eid not in {
+            event.data.get("eid"),
+            event.data.get("responsible_eid"),
+            event.data.get("controller_eid"),
+            event.data.get("owner_eid"),
+        }:
+            return
+        drone_label = self._event_drone_label(event)
+        _log_player_feedback(
+            self.sim,
+            f"{drone_label}'s external link is disrupted; onboard autonomy remains active.",
+            kind="danger",
+        )
+
+    def on_drone_wire_link_restored(self, event):
+        if self.player_eid not in {
+            event.data.get("eid"),
+            event.data.get("controller_eid"),
+            event.data.get("owner_eid"),
+        }:
+            return
+        drone_label = self._event_drone_label(event)
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        message = (
+            f"{drone_label}'s external link is restored by physical resync."
+            if reason == "physical_resync"
+            else f"{drone_label}'s external link recovers."
+        )
+        _log_player_feedback(self.sim, message, kind="interaction")
 
     def on_drone_sheet_opened(self, event):
         eid = event.data.get("eid") or event.data.get("controller_eid")
@@ -7356,6 +7392,24 @@ class EventLogSystem(System):
             dedupe_window=8,
             dedupe_key=f"vehicle-onramp-nearby:{ramp_id or 'unknown'}:{int(auto_ramp_enter)}",
         )
+
+    def on_vehicle_wire_lock_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        name = str(event.data.get("vehicle_name", "vehicle") or "vehicle").strip()
+        self.sim.log.add(f"{name}'s controller {'locks' if event.data.get('locked') else 'unlocks'} the vehicle.")
+
+    def on_vehicle_wire_ignition_primed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        name = str(event.data.get("vehicle_name", "vehicle") or "vehicle").strip()
+        self.sim.log.add(f"{name}'s ignition accepts a short local service authorization.")
+
+    def on_vehicle_wire_tracker_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        name = str(event.data.get("vehicle_name", "vehicle") or "vehicle").strip()
+        self.sim.log.add(f"{name}'s tracker enters {'active' if event.data.get('enabled') else 'standby'} state.")
 
     def on_vehicle_action_blocked(self, event):
         if event.data.get("eid") != self.player_eid:

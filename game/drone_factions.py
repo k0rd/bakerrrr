@@ -21,7 +21,11 @@ from game.components import (
     Vitality,
 )
 from game.drone_combat import drone_weapon_status
-from game.drone_programs import activate_drone_program, built_in_drone_program
+from game.drone_programs import (
+    activate_drone_program,
+    built_in_drone_program,
+    installed_drone_program_cards,
+)
 from game.drone_runtime import (
     deployed_drone_render_spec,
     drone_profile_for_item,
@@ -33,8 +37,21 @@ from game.system_support.combat_targeting_runtime import _entity_is_weapon_targe
 
 DRONE_FACTION_MAX_PER_CHUNK = 1
 DRONE_FACTION_SOURCE_CONTEXT = "npc_faction_seed"
+NPC_DRONE_RETASK_COOLDOWN = 12
+NPC_DRONE_REPEAT_ACTION_COOLDOWN = 24
 ARMED_SECURITY_KINDS = frozenset({"justice", "security", "corporate", "gang", "cult", "bodyguard", "enforcer"})
 UTILITY_KINDS = frozenset({"scout", "rural", "civic", "utility"})
+NPC_DRONE_DANGER_INTENTS = frozenset({"chasing", "ejecting_target", "investigating", "protecting"})
+NPC_DRONE_WITHDRAWAL_INTENTS = frozenset({
+    "evading_authority",
+    "leaving_property",
+    "seeking_medical_aid",
+    "seeking_safe_spot",
+    "seeking_safety",
+    "seeking_shelter",
+})
+NPC_DRONE_COVERT_INTENTS = frozenset({"casing_target", "committing_property_crime", "rendezvousing_crew"})
+NPC_DRONE_WATCH_INTENTS = frozenset({"helping_victim", "reporting_incident", "warning"})
 DRONE_FACTION_SEED_CHANCE_BY_KIND = {
     "justice": 0.45,
     "security": 0.35,
@@ -191,12 +208,13 @@ def _observer_loadout(chassis="a", *, procedure="hold"):
     if chassis == "b":
         return {
             "chassis_item_id": "drone_chassis_b",
-            "power_center_item_id": "drone_power_core_mk2",
+            "power_center_item_id": "drone_power_core_mk3",
             "battery_item_id": "drone_battery_standard",
             "modules": [
                 "drone_camera_module",
                 "drone_radio_module",
-                "drone_follow_procedure_module" if procedure == "follow" else "drone_mapping_procedure_module",
+                "drone_follow_procedure_module",
+                "drone_mapping_procedure_module",
             ],
             "procedure_key": "follow" if procedure == "follow" else "mapping",
         }
@@ -218,6 +236,7 @@ def _armed_loadout(chassis="c", *, armor=False, radio=False, elite_sensor=False)
         modules = [
             "drone_camera_module",
             "drone_remote_receiver_module",
+            "drone_follow_procedure_module",
             "drone_pistol_module",
             "drone_ammo_rack_module",
         ]
@@ -237,6 +256,7 @@ def _armed_loadout(chassis="c", *, armor=False, radio=False, elite_sensor=False)
             "drone_camera_module",
             "drone_radio_module",
             "drone_remote_receiver_module",
+            "drone_follow_procedure_module",
             "drone_pistol_module",
             "drone_ammo_rack_module",
             "drone_armor_shell_module",
@@ -252,15 +272,48 @@ def _armed_loadout(chassis="c", *, armor=False, radio=False, elite_sensor=False)
         }
     return {
         "chassis_item_id": "drone_chassis_c",
-        "power_center_item_id": "drone_power_core_mk3",
+        "power_center_item_id": "drone_power_core_mk4",
         "battery_item_id": "drone_battery_standard",
         "modules": [
             "drone_camera_module",
             "drone_remote_receiver_module",
+            "drone_follow_procedure_module",
             "drone_pistol_module",
             "drone_ammo_rack_module",
         ],
         "procedure_key": "hold",
+    }
+
+
+def _covert_loadout():
+    return {
+        "chassis_item_id": "drone_chassis_b",
+        "power_center_item_id": "drone_power_core_mk3",
+        "battery_item_id": "drone_battery_standard",
+        "modules": [
+            "drone_camera_module",
+            "drone_speaker_module",
+            "drone_alarm_probe_module",
+            "drone_follow_procedure_module",
+            "drone_mapping_procedure_module",
+        ],
+        "procedure_key": "follow",
+    }
+
+
+def _utility_cargo_loadout():
+    return {
+        "chassis_item_id": "drone_chassis_b",
+        "power_center_item_id": "drone_power_core_mk3",
+        "battery_item_id": "drone_battery_standard",
+        "modules": [
+            "drone_camera_module",
+            "drone_radio_module",
+            "drone_cargo_clamp_module",
+            "drone_follow_procedure_module",
+            "drone_mapping_procedure_module",
+        ],
+        "procedure_key": "logistics",
     }
 
 
@@ -291,6 +344,8 @@ def _loadout_for_kind(kind, rng):
         if tier == "a":
             return _observer_loadout("a")
         if tier == "b":
+            if kind in {"gang", "cult"} and rng.randrange(3) == 0:
+                return _covert_loadout()
             return _observer_loadout("b", procedure="follow")
         if tier == "d":
             return _armed_loadout("d", armor=(kind in {"bodyguard", "enforcer"}))
@@ -299,24 +354,20 @@ def _loadout_for_kind(kind, rng):
     core = "drone_power_core_mk1" if chassis == "drone_chassis_a" else "drone_power_core_mk2"
     battery = "drone_battery_light" if chassis == "drone_chassis_a" else "drone_battery_standard"
     procedure = "mapping" if rng.randint(0, 1) else "follow"
-    modules = [
-        "drone_sonar_module" if chassis == "drone_chassis_a" else "drone_camera_module",
-        "drone_remote_receiver_module" if chassis == "drone_chassis_a" else "drone_radio_module",
-    ]
+    if chassis == "drone_chassis_b" and rng.randrange(4) == 0:
+        return _utility_cargo_loadout()
     if chassis == "drone_chassis_b":
-        modules.append("drone_mapping_procedure_module")
-    if procedure == "follow" and chassis == "drone_chassis_b":
-        modules = [
-            "drone_camera_module",
-            "drone_radio_module",
-            "drone_follow_procedure_module",
-        ]
+        return _observer_loadout("b", procedure=procedure)
+    modules = [
+        "drone_sonar_module",
+        "drone_remote_receiver_module",
+    ]
     return {
         "chassis_item_id": chassis,
         "power_center_item_id": core,
         "battery_item_id": battery,
         "modules": modules,
-        "procedure_key": procedure if chassis == "drone_chassis_b" else "hold",
+        "procedure_key": "hold",
     }
 
 
@@ -343,6 +394,7 @@ def _seeded_task_for_loadout(kind, metadata, rng):
     has_radio = bool({"drone_radio_module", "drone_comms_module"} & module_ids)
     has_mapping_procedure = "drone_mapping_procedure_module" in module_ids
     has_follow_procedure = "drone_follow_procedure_module" in module_ids
+    has_cargo = "drone_cargo_clamp_module" in module_ids
 
     if armed:
         if kind in {"bodyguard", "enforcer"}:
@@ -350,6 +402,8 @@ def _seeded_task_for_loadout(kind, metadata, rng):
         if has_radio:
             return "guard_zone"
         return "protect_operator"
+    if procedure_key == "logistics" and has_cargo and has_follow_procedure:
+        return "seek_item_and_return"
     if procedure_key in {"mapping", "scout"} and has_mapping_procedure:
         return _roll_weighted_choice(rng, ((68, "map_area_loop"), (32, "patrol_route")))
     if procedure_key == "follow" and has_follow_procedure:
@@ -401,9 +455,27 @@ def _activate_seeded_task(sim, owner_eid, drone_eid, state, task_id):
     task_id = _clean(task_id)
     if not task_id:
         return None
+    installed_ids = {
+        _clean(card.get("id"))
+        for card in installed_drone_program_cards(state)
+        if isinstance(card, dict) and card.get("id")
+    }
+    if task_id not in installed_ids:
+        metadata = getattr(state, "source_metadata", None)
+        if not isinstance(metadata, dict):
+            metadata = {}
+            state.source_metadata = metadata
+        metadata["npc_drone_task"] = task_id
+        metadata["npc_drone_task_activation_ok"] = False
+        metadata["npc_drone_task_blocked_reason"] = "program_not_installed"
+        return {"ok": False, "reason": "program_not_installed"}
     program = built_in_drone_program(task_id)
     if not isinstance(program, dict):
         return None
+    if task_id in {"follow_operator", "protect_operator", "watch_person"}:
+        state.target_eid = owner_eid
+    else:
+        state.target_eid = None
     bindings = _seeded_task_bindings(sim, owner_eid, drone_eid, state, task_id)
     result = activate_drone_program(
         state,
@@ -424,6 +496,178 @@ def _activate_seeded_task(sim, owner_eid, drone_eid, state, task_id):
     else:
         metadata.pop("npc_drone_task_blocked_reason", None)
     return result
+
+
+def _installed_task_ids(state):
+    return {
+        _clean(card.get("id"))
+        for card in installed_drone_program_cards(state)
+        if isinstance(card, dict) and card.get("id")
+    }
+
+
+def _nearby_alarm_target(sim, drone_eid, *, radius=1):
+    pos = sim.ecs.get(Position).get(drone_eid)
+    if pos is None:
+        return None
+    matches = []
+    for prop in tuple(getattr(sim, "properties", {}).values()):
+        if not isinstance(prop, dict):
+            continue
+        metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+        role = _clean(metadata.get("interaction_role") or prop.get("interaction_role"))
+        fixture_type = _clean(metadata.get("fixture_type") or prop.get("fixture_type") or prop.get("archetype"))
+        if role != "alarm_target" and "alarm" not in fixture_type:
+            continue
+        prop_id = str(prop.get("id", "") or "")
+        disabled = getattr(sim, "camera_disabled", {})
+        disabled_until = _int(disabled.get(prop_id), 0) if isinstance(disabled, dict) else 0
+        if disabled_until > int(getattr(sim, "tick", 0) or 0):
+            continue
+        try:
+            target = (_int(prop.get("x")), _int(prop.get("y")), _int(prop.get("z")))
+        except (TypeError, ValueError):
+            continue
+        if target[2] != int(pos.z):
+            continue
+        distance = abs(target[0] - int(pos.x)) + abs(target[1] - int(pos.y))
+        if distance <= int(max(0, radius)):
+            matches.append((distance, prop_id, prop))
+    matches.sort(key=lambda row: (row[0], row[1]))
+    return matches[0][2] if matches else None
+
+
+def _owner_will_state(sim, owner_eid):
+    ai = sim.ecs.get(AI).get(owner_eid)
+    will = sim.ecs.get(NPCWill).get(owner_eid)
+    candidates = (
+        _clean(getattr(will, "intent", "")) if will is not None else "",
+        _clean(getattr(ai, "state", "")) if ai is not None else "",
+    )
+    intent = next((value for value in candidates if value and value != "idle"), "idle")
+    return intent, _owner_active_target(sim, owner_eid)
+
+
+def _desired_npc_drone_task(sim, owner_eid, drone_eid, state, *, intent=None, active_target=None):
+    available = _installed_task_ids(state)
+    if not available:
+        return None, "idle", None
+    if intent is None:
+        intent, active_target = _owner_will_state(sim, owner_eid)
+    armed = bool(drone_weapon_status(state, item_catalog=ITEM_CATALOG).get("armed"))
+    module_ids = {
+        _clean(module.get("item_id"))
+        for module in tuple(getattr(state, "modules", ()) or ())
+        if isinstance(module, dict)
+    }
+
+    if active_target is not None:
+        if armed and "protect_operator" in available:
+            return "protect_operator", intent, active_target
+        if "watch_person" in available:
+            return "watch_person", intent, active_target
+    if intent in NPC_DRONE_COVERT_INTENTS:
+        if "disable_alarm" in available and _nearby_alarm_target(sim, drone_eid) is not None:
+            return "disable_alarm", intent, None
+        if "distract" in available:
+            return "distract", intent, None
+        if "watch_person" in available:
+            return "watch_person", intent, None
+    if intent == "scavenging" and "drone_cargo_clamp_module" in module_ids and "seek_item_and_return" in available:
+        return "seek_item_and_return", intent, None
+    if intent in NPC_DRONE_WITHDRAWAL_INTENTS:
+        if "follow_operator" in available:
+            return "follow_operator", intent, None
+        if armed and "protect_operator" in available:
+            return "protect_operator", intent, None
+    if intent in NPC_DRONE_DANGER_INTENTS:
+        if armed and "protect_operator" in available:
+            return "protect_operator", intent, None
+        if "watch_person" in available:
+            return "watch_person", intent, None
+    if intent in NPC_DRONE_WATCH_INTENTS and "watch_person" in available:
+        return "watch_person", intent, None
+
+    metadata = getattr(state, "source_metadata", {})
+    baseline = _clean(metadata.get("npc_drone_base_task")) if isinstance(metadata, dict) else ""
+    if baseline in available:
+        return baseline, intent, None
+    for fallback in ("follow_operator", "guard_zone", "patrol_route", "map_area_loop", "watch_person"):
+        if fallback in available:
+            return fallback, intent, None
+    return None, intent, None
+
+
+def retask_npc_drones_from_owner_will(sim):
+    """Translate changing NPC intent into bounded, installed drone routines."""
+
+    now = int(getattr(sim, "tick", 0) or 0)
+    retasked = 0
+    for drone_eid, state in list(sim.ecs.get(DroneState).items()):
+        metadata = getattr(state, "source_metadata", None)
+        if not isinstance(metadata, dict) or not bool(metadata.get("npc_will_driven")):
+            continue
+        owner_eid = getattr(state, "owner_eid", None) or getattr(state, "controller_eid", None)
+        if owner_eid is None or owner_eid == getattr(sim, "player_eid", None):
+            continue
+        if sim.ecs.get(AI).get(owner_eid) is None and sim.ecs.get(NPCWill).get(owner_eid) is None:
+            continue
+        intent, active_target = _owner_will_state(sim, owner_eid)
+        will_signature = (intent, active_target)
+        raw_signature = metadata.get("npc_drone_owner_will_signature", ())
+        previous_signature = tuple(raw_signature) if isinstance(raw_signature, (list, tuple)) else ()
+        metadata["npc_drone_owner_intent"] = intent
+        metadata["npc_drone_owner_target_eid"] = active_target
+        metadata["npc_drone_owner_will_signature"] = will_signature
+        current = _clean(getattr(state, "procedure_program_id", ""))
+        status = _clean(getattr(state, "procedure_status", ""))
+        last_retask = _int(metadata.get("npc_drone_last_retask_tick"), -9999)
+        if previous_signature == will_signature:
+            if current and status in {"", "running"}:
+                continue
+            if not current:
+                continue
+            retry_cooldown = NPC_DRONE_REPEAT_ACTION_COOLDOWN if current in {"disable_alarm", "distract"} else NPC_DRONE_RETASK_COOLDOWN
+            if now - last_retask < retry_cooldown:
+                continue
+
+        desired, intent, active_target = _desired_npc_drone_task(
+            sim,
+            owner_eid,
+            drone_eid,
+            state,
+            intent=intent,
+            active_target=active_target,
+        )
+        if not desired:
+            continue
+
+        if current == desired and status in {"", "running"}:
+            continue
+        cooldown = NPC_DRONE_REPEAT_ACTION_COOLDOWN if current == desired else NPC_DRONE_RETASK_COOLDOWN
+        urgent = active_target is not None and desired in {"protect_operator", "watch_person"}
+        if not urgent and now - last_retask < cooldown:
+            continue
+
+        previous = current or None
+        result = _activate_seeded_task(sim, owner_eid, drone_eid, state, desired)
+        metadata["npc_drone_last_retask_tick"] = now
+        if not result or not result.get("ok"):
+            continue
+        metadata["npc_drone_last_retask_from"] = previous
+        metadata["npc_drone_last_retask_intent"] = intent
+        retasked += 1
+        sim.emit(Event(
+            "npc_drone_retasked",
+            eid=owner_eid,
+            owner_eid=owner_eid,
+            drone_eid=drone_eid,
+            previous_task=previous,
+            task=desired,
+            intent=intent,
+            target_eid=active_target,
+        ))
+    return retasked
 
 
 def _source_instance_id(sim, chunk, owner_eid, kind, ordinal):
@@ -486,6 +730,8 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
         "home": (int(pos.x), int(pos.y), int(pos.z)),
         "target_eid": owner_eid if metadata.get("procedure_key") == "follow" else None,
         "npc_drone_task": seeded_task,
+        "npc_drone_base_task": seeded_task,
+        "npc_will_driven": True,
         "paint": {
             "primary_color": "black" if kind in {"gang", "cult", "bodyguard", "enforcer"} else "white",
             "secondary_color": "red" if kind in {"justice", "security"} else "green",
@@ -627,7 +873,7 @@ def tick_faction_drone_combat(sim, drone_system):
             drone_eid,
             target_eid=target_eid,
             weapon_kind=status.get("primary_weapon") or "auto",
-            require_remote=True,
+            require_remote=False,
             require_camera=True,
             consume_turn=False,
         )
@@ -664,6 +910,7 @@ __all__ = [
     "DRONE_FACTION_SOURCE_CONTEXT",
     "catch_up_faction_drones_for_chunk",
     "owner_drone_seed_eligible",
+    "retask_npc_drones_from_owner_will",
     "seed_loaded_faction_drones",
     "tick_faction_drone_combat",
 ]

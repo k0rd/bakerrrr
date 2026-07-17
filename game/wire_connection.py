@@ -16,9 +16,18 @@ from game.wire_runtime import (
     wire_interface_profile_for_item,
 )
 from game.wire_consequences import wire_connection_blockers, wire_security_lockout_status, wire_recovery_status
+from game.wire_targets import (
+    drone_wire_target_ref,
+    property_wire_target_ref,
+    resolve_wire_target,
+    vehicle_wire_target_ref,
+    wire_target_has_live_radio,
+    wire_target_identity,
+    wire_target_ref_from_connection,
+)
 
 
-WIRE_CONNECTION_TARGET_CLASSES = {"access_panel", "service_terminal"}
+WIRE_CONNECTION_TARGET_CLASSES = {"access_panel", "service_terminal", "vehicle_controller"}
 
 
 def _clean_text(value, default=""):
@@ -62,6 +71,8 @@ def wire_target_class_for_property(prop, *, deliberate=False):
     if not isinstance(prop, Mapping):
         return ""
     metadata = prop.get("metadata") if isinstance(prop.get("metadata"), Mapping) else {}
+    if deliberate and _clean_id(prop.get("kind")) == "vehicle":
+        return "vehicle_controller"
     explicit_role = _clean_id(metadata.get("interaction_role"))
     fixture_type = _clean_id(metadata.get("fixture_type"))
     target_class = explicit_role if explicit_role in WIRE_CONNECTION_TARGET_CLASSES else ""
@@ -85,6 +96,10 @@ def _inventory_entries(sim, actor_eid):
     inventory = sim.ecs.get(Inventory).get(actor_eid)
     if inventory is None:
         return ()
+    from game.technical_research import apply_technical_research_to_entry
+
+    for entry in tuple(getattr(inventory, "items", ()) or ()):
+        apply_technical_research_to_entry(sim, actor_eid, entry, item_catalog=ITEM_CATALOG)
     return tuple(entry for entry in getattr(inventory, "items", ()) or () if isinstance(entry, Mapping))
 
 
@@ -187,6 +202,56 @@ def _reachable_fixture(sim, actor_eid, prop):
     return dist <= 1
 
 
+def _reachable_target(sim, actor_eid, target, interface=None):
+    pos = _actor_position(sim, actor_eid)
+    if pos is None or not isinstance(target, Mapping):
+        return False
+    try:
+        target_z = int(target.get("z", pos.z))
+        distance = abs(int(pos.x) - int(target.get("x", pos.x))) + abs(int(pos.y) - int(target.get("y", pos.y)))
+    except (TypeError, ValueError):
+        return False
+    if int(pos.z) != target_z:
+        return False
+    if str(target.get("kind", "property") or "property") == "drone":
+        metadata = dict((interface or {}).get("metadata") or {}) if isinstance(interface, Mapping) else {}
+        profile = dict((interface or {}).get("profile") or {}) if isinstance(interface, Mapping) else {}
+        range_limit = _int(metadata.get("range"), _int(profile.get("range"), 0))
+        return bool(range_limit > 0 and distance <= range_limit)
+    return distance <= 1
+
+
+def _property_target_record(prop, *, target_class):
+    if not isinstance(prop, Mapping):
+        return None
+    metadata = dict(prop.get("metadata") or {}) if isinstance(prop.get("metadata"), Mapping) else {}
+    linked_id = _clean_text(property_linked_property_id(prop))
+    is_vehicle = target_class == "vehicle_controller" and _clean_id(prop.get("kind")) == "vehicle"
+    ref = (
+        vehicle_wire_target_ref(prop, target_class=target_class)
+        if is_vehicle
+        else property_wire_target_ref(prop, target_class=target_class)
+    )
+    if not ref:
+        return None
+    return {
+        "ref": ref,
+        "identity": wire_target_identity(ref),
+        "kind": "vehicle" if is_vehicle else "property",
+        "target_class": target_class,
+        "name": _clean_text(prop.get("name"), target_class.replace("_", " ") or "wire target"),
+        "x": _int(prop.get("x"), 0),
+        "y": _int(prop.get("y"), 0),
+        "z": _int(prop.get("z"), 0),
+        "metadata": metadata,
+        "property": prop,
+        "vehicle": prop if is_vehicle else None,
+        "vehicle_id": _clean_text(prop.get("id")) if is_vehicle else "",
+        "linked_property_id": linked_id,
+        "source": prop,
+    }
+
+
 def _linked_target_status(sim, prop, target_class):
     linked_id = property_linked_property_id(prop)
     if target_class == "access_panel":
@@ -239,9 +304,29 @@ def _risk_phrase(value, *, warning_rating):
     return "likely high"
 
 
-def wire_connection_preflight(sim, actor_eid, prop, *, item_catalog=None, deliberate=False):
+def _wire_connection_preflight_target(sim, actor_eid, target, *, item_catalog=None, deliberate=False):
     item_catalog = item_catalog or ITEM_CATALOG
-    target_class = wire_target_class_for_property(prop, deliberate=deliberate)
+    if not isinstance(target, Mapping):
+        return {
+            "ok": False,
+            "target_class": "",
+            "target_ref": {},
+            "target_identity": "",
+            "target_property_id": "",
+            "target_entity_id": None,
+            "target_name": "wire target",
+            "reachable": False,
+            "interface": None,
+            "compatible_interfaces": (),
+            "reasons": ("target_unavailable",),
+            "preview_lines": ("Target: unavailable.",),
+            "target_status": {},
+            "skills": {},
+            "deliberate": bool(deliberate),
+        }
+    target_class = _clean_id(target.get("target_class"))
+    target_ref = dict(target.get("ref") or {})
+    target_identity = _clean_text(target.get("identity") or wire_target_identity(target_ref))
     state = wire_state_for_actor(sim, actor_eid, create=True)
     records = compatible_wire_interface_records(sim, actor_eid, target_class, item_catalog=item_catalog) if target_class else ()
     selected = select_wire_interface_record(
@@ -251,10 +336,37 @@ def wire_connection_preflight(sim, actor_eid, prop, *, item_catalog=None, delibe
         preferred_instance_id=getattr(state, "equipped_interface_instance_id", None),
         item_catalog=item_catalog,
     ) if target_class else None
-    reachable = _reachable_fixture(sim, actor_eid, prop)
-    target_status = _linked_target_status(sim, prop, target_class) if target_class else {}
+    reachable = _reachable_target(sim, actor_eid, target, selected)
+    if target.get("kind") == "property":
+        prop = target.get("property") if isinstance(target.get("property"), Mapping) else {}
+        target_status = _linked_target_status(sim, prop, target_class) if target_class else {}
+    elif target.get("kind") == "vehicle":
+        prop = target.get("property") if isinstance(target.get("property"), Mapping) else {}
+        metadata = dict(target.get("metadata") or {})
+        target_status = {
+            "linked_property_id": "",
+            "linked_live": True,
+            "label": _clean_text(target.get("name"), "vehicle controller"),
+            "vehicle_id": target.get("vehicle_id") or prop.get("id"),
+            "locked": bool(metadata.get("property_locked", False)),
+            "lock_tier": _int(metadata.get("property_lock_tier"), 1),
+            "tracker_installed": bool(metadata.get("vehicle_tracker_installed", False)),
+            "tracker_enabled": bool(metadata.get("vehicle_tracker_enabled", False)),
+            "usable": bool(metadata.get("vehicle_usable", True)) and _int(metadata.get("durability"), 0) > 0,
+        }
+    else:
+        target_status = {
+            "linked_property_id": "",
+            "linked_live": True,
+            "label": _clean_text(target.get("name"), "deployed drone"),
+            "drone_eid": target.get("drone_eid"),
+            "stable_id": (target_ref or {}).get("stable_id", ""),
+            "radio_live": wire_target_has_live_radio(target, tick=int(getattr(sim, "tick", 0) or 0)),
+        }
     network_ref = {
-        "target_property_id": str((prop or {}).get("id", "") or ""),
+        "target_property_id": str((target.get("property") or {}).get("id", "") or "") if target.get("kind") in {"property", "vehicle"} else "",
+        "target_entity_id": target.get("drone_eid") if target.get("kind") == "drone" else None,
+        "target_identity": target_identity,
         "target_class": target_class,
         "linked_property_id": target_status.get("linked_property_id", ""),
     }
@@ -266,19 +378,21 @@ def wire_connection_preflight(sim, actor_eid, prop, *, item_catalog=None, delibe
     reasons = []
     if not target_class:
         reasons.append("not_wire_target")
-    if not reachable:
-        reasons.append("not_adjacent")
+    if not reachable and (target.get("kind") != "drone" or selected is not None):
+        reasons.append("out_of_range" if target.get("kind") == "drone" else "not_adjacent")
     if not selected:
         reasons.append("no_compatible_interface")
     if target_class == "access_panel" and not bool(target_status.get("linked_live")):
         reasons.append("target_link_unclear")
+    if target.get("kind") == "drone" and not bool(target_status.get("radio_live")):
+        reasons.append("target_radio_unavailable")
     for blocker in wire_connection_blockers(sim, actor_eid, network_ref):
         if blocker not in reasons:
             reasons.append(blocker)
 
     metadata = dict((selected or {}).get("metadata") or {})
     warning_rating = _int(metadata.get("warning_rating"), 0)
-    target_label = _clean_text(target_status.get("label"), "target")
+    target_label = _clean_text(target_status.get("label") or target.get("name"), "target")
     preview_lines = []
     if selected:
         quality = _clean_id(metadata.get("quality")) or "standard"
@@ -295,6 +409,7 @@ def wire_connection_preflight(sim, actor_eid, prop, *, item_catalog=None, delibe
     if target_class:
         live_text = "known linked" if target_status.get("linked_live") else "link unclear"
         preview_lines.append(f"Target: {target_class.replace('_', ' ')} at {target_label}; {live_text}.")
+    prop = target.get("property") if isinstance(target.get("property"), Mapping) else {}
     context_hint = _service_terminal_context_hint(prop) if target_class == "service_terminal" else ""
     if context_hint:
         preview_lines.append(context_hint)
@@ -304,6 +419,24 @@ def wire_connection_preflight(sim, actor_eid, prop, *, item_catalog=None, delibe
     recovery = wire_recovery_status(sim, actor_eid)
     if recovery.get("active"):
         preview_lines.append(f"Body/interface recovery: {int(recovery.get('remaining', 0))} ticks remain.")
+    if target.get("kind") == "drone":
+        drone_metadata = dict(target.get("metadata") or {})
+        battery = _int(drone_metadata.get("battery_charge"), 0)
+        battery_max = _int(drone_metadata.get("battery_charge_max"), 0)
+        procedure = _clean_text(drone_metadata.get("procedure_program_id") or drone_metadata.get("procedure_key"), "idle")
+        preview_lines.append(f"Drone link: battery {battery}/{battery_max}; routine {procedure.replace('_', ' ')}.")
+    elif target.get("kind") == "vehicle":
+        vehicle_metadata = dict(target.get("metadata") or {})
+        fuel = _int(vehicle_metadata.get("fuel"), 0)
+        fuel_capacity = _int(vehicle_metadata.get("fuel_capacity"), 0)
+        durability = _int(vehicle_metadata.get("durability"), 0)
+        lock_label = "locked" if target_status.get("locked") else "unlocked"
+        tracker_label = (
+            "active" if target_status.get("tracker_enabled") else "standby"
+        ) if target_status.get("tracker_installed") else "not installed"
+        preview_lines.append(
+            f"Vehicle bus: {lock_label}, tracker {tracker_label}, fuel {fuel}/{fuel_capacity}, condition {durability}/10."
+        )
     preview_lines.append(
         f"Skill read: intrusion {skills['intrusion']:.1f}, mechanics {skills['mechanics']:.1f}, perception {skills['perception']:.1f}."
     )
@@ -313,8 +446,12 @@ def wire_connection_preflight(sim, actor_eid, prop, *, item_catalog=None, delibe
     return {
         "ok": bool(target_class and reachable and selected and not reasons),
         "target_class": target_class,
+        "target_ref": target_ref,
+        "target_identity": target_identity,
+        "target_kind": _clean_id(target.get("kind")),
         "target_property_id": str((prop or {}).get("id", "") or ""),
-        "target_name": _clean_text((prop or {}).get("name"), target_class.replace("_", " ") if target_class else "wire target"),
+        "target_entity_id": target.get("drone_eid") if target.get("kind") == "drone" else None,
+        "target_name": _clean_text(target.get("name"), target_class.replace("_", " ") if target_class else "wire target"),
         "reachable": bool(reachable),
         "interface": selected,
         "compatible_interfaces": records,
@@ -326,24 +463,79 @@ def wire_connection_preflight(sim, actor_eid, prop, *, item_catalog=None, delibe
     }
 
 
-def _active_connection_matches(state, prop):
+def wire_connection_preflight(sim, actor_eid, prop, *, item_catalog=None, deliberate=False):
+    target_class = wire_target_class_for_property(prop, deliberate=deliberate)
+    target = _property_target_record(prop, target_class=target_class) if target_class else None
+    return _wire_connection_preflight_target(
+        sim,
+        actor_eid,
+        target,
+        item_catalog=item_catalog,
+        deliberate=deliberate,
+    )
+
+
+def wire_connection_preflight_ref(sim, actor_eid, target_ref, *, item_catalog=None, deliberate=False):
+    target = resolve_wire_target(sim, target_ref)
+    return _wire_connection_preflight_target(
+        sim,
+        actor_eid,
+        target,
+        item_catalog=item_catalog,
+        deliberate=deliberate,
+    )
+
+
+def _active_connection_matches_ref(state, target_ref):
     active = getattr(state, "active_connection", None)
-    return isinstance(active, Mapping) and str(active.get("target_property_id", "") or "") == str((prop or {}).get("id", "") or "")
+    if not isinstance(active, Mapping):
+        return False
+    return bool(
+        wire_target_identity(wire_target_ref_from_connection(active))
+        and wire_target_identity(wire_target_ref_from_connection(active)) == wire_target_identity(target_ref)
+    )
 
 
-def wire_connection_rows(sim, actor_eid, prop, *, item_catalog=None, deliberate=False):
+def _wire_connection_rows_for_target(sim, actor_eid, target, *, item_catalog=None, deliberate=False):
     state = wire_state_for_actor(sim, actor_eid, create=True)
-    preflight = wire_connection_preflight(sim, actor_eid, prop, item_catalog=item_catalog, deliberate=deliberate)
-    connected = _active_connection_matches(state, prop)
+    preflight = _wire_connection_preflight_target(
+        sim,
+        actor_eid,
+        target,
+        item_catalog=item_catalog,
+        deliberate=deliberate,
+    )
+    target_ref = preflight.get("target_ref") if isinstance(preflight.get("target_ref"), Mapping) else {}
+    connected = _active_connection_matches_ref(state, target_ref)
     target_class = str(preflight.get("target_class", "") or "")
-    normal_label = "Normal panel use" if target_class == "access_panel" else "Normal service use"
-    rows = [
-        {"action": "normal_use", "label": f"{normal_label}: run the existing fixture behavior."},
-        {"action": "preview", "label": "Connect preview: " + "; ".join(preflight.get("preview_lines", ())[:2])},
-    ]
+    target_kind = str(preflight.get("target_kind", "") or "")
+    rows = []
+    if target_kind in {"property", "vehicle"}:
+        if target_kind == "vehicle":
+            normal_label = "Normal vehicle use"
+        else:
+            normal_label = "Normal panel use" if target_class == "access_panel" else "Normal service use"
+        rows.append({"action": "normal_use", "label": f"{normal_label}: run the existing fixture behavior."})
+    rows.append({"action": "preview", "label": "Connect preview: " + "; ".join(preflight.get("preview_lines", ())[:2])})
+    if target_kind == "drone" and not connected:
+        from game.wire_drone_bridge import drone_wire_shell_rows
+
+        rows.extend(
+            row
+            for row in drone_wire_shell_rows(sim, actor_eid, target_ref)
+            if row.get("action") == "drone_restore_link"
+        )
     if connected:
+        if target_kind == "drone":
+            from game.wire_drone_bridge import drone_wire_shell_rows
+
+            rows.extend(drone_wire_shell_rows(sim, actor_eid, target_ref))
+        elif target_kind == "vehicle":
+            from game.wire_vehicle_bridge import vehicle_wire_shell_rows
+
+            rows.extend(vehicle_wire_shell_rows(sim, actor_eid, target_ref))
         rows.append({"action": "enter_wire_scene", "label": "Enter wire layer: project the local systems graph."})
-        rows.append({"action": "disconnect", "label": "Disconnect from this fixture."})
+        rows.append({"action": "disconnect", "label": f"Disconnect from {preflight.get('target_name', 'target')}."})
     else:
         reason = ", ".join(str(reason).replace("_", " ") for reason in preflight.get("reasons", ()) or ())
         suffix = "" if preflight.get("ok") else f" [{reason or 'blocked'}]"
@@ -357,19 +549,41 @@ def wire_connection_rows(sim, actor_eid, prop, *, item_catalog=None, deliberate=
     return rows, preflight
 
 
+def wire_connection_rows(sim, actor_eid, prop, *, item_catalog=None, deliberate=False):
+    target_class = wire_target_class_for_property(prop, deliberate=deliberate)
+    target = _property_target_record(prop, target_class=target_class) if target_class else None
+    return _wire_connection_rows_for_target(
+        sim,
+        actor_eid,
+        target,
+        item_catalog=item_catalog,
+        deliberate=deliberate,
+    )
+
+
 def refresh_wire_connection_ui(sim, actor_eid, *, item_catalog=None):
     state = getattr(sim, "wire_connection_ui", None)
     if not isinstance(state, dict) or not bool(state.get("open")):
         return []
-    prop = getattr(sim, "properties", {}).get(str(state.get("property_id", "") or ""))
-    if not isinstance(prop, Mapping):
+    target_ref = state.get("target_ref") if isinstance(state.get("target_ref"), Mapping) else {}
+    if not target_ref and state.get("property_id"):
+        target_ref = {
+            "kind": "property",
+            "property_id": state.get("property_id"),
+            "target_class": state.get("target_class"),
+        }
+    target = resolve_wire_target(sim, target_ref)
+    if not isinstance(target, Mapping):
         state["open"] = False
         disconnect_wire_connection(sim, actor_eid, reason="target_unloaded")
         return []
-    rows, preflight = wire_connection_rows(
+    state["target_ref"] = dict(target.get("ref") or target_ref)
+    state["property_id"] = str((target.get("property") or {}).get("id", "") or "") if target.get("kind") in {"property", "vehicle"} else ""
+    state["target_entity_id"] = target.get("drone_eid") if target.get("kind") == "drone" else None
+    rows, preflight = _wire_connection_rows_for_target(
         sim,
         actor_eid,
-        prop,
+        target,
         item_catalog=item_catalog,
         deliberate=bool(state.get("deliberate")),
     )
@@ -387,6 +601,11 @@ def open_wire_connection_shell(sim, actor_eid, prop, *, interaction_mode="physic
     target_class = wire_target_class_for_property(prop, deliberate=deliberate)
     if not target_class:
         return False
+    target_ref = (
+        vehicle_wire_target_ref(prop, target_class=target_class)
+        if target_class == "vehicle_controller"
+        else property_wire_target_ref(prop, target_class=target_class)
+    )
     state = getattr(sim, "wire_connection_ui", None)
     if not isinstance(state, dict):
         state = {}
@@ -394,6 +613,8 @@ def open_wire_connection_shell(sim, actor_eid, prop, *, interaction_mode="physic
     state.update({
         "open": True,
         "property_id": str(prop.get("id", "") or ""),
+        "target_entity_id": None,
+        "target_ref": target_ref,
         "interaction_mode": str(interaction_mode or "physical").strip().lower() or "physical",
         "target_class": target_class,
         "deliberate": bool(deliberate),
@@ -406,6 +627,51 @@ def open_wire_connection_shell(sim, actor_eid, prop, *, interaction_mode="physic
     return True
 
 
+def open_wire_drone_connection_shell(sim, actor_eid, drone_eid, *, item_catalog=None):
+    target_ref = drone_wire_target_ref(sim, drone_eid)
+    target = resolve_wire_target(sim, target_ref)
+    if not isinstance(target, Mapping):
+        return False
+    state = getattr(sim, "wire_connection_ui", None)
+    if not isinstance(state, dict):
+        state = {}
+        sim.wire_connection_ui = state
+    state.update({
+        "open": True,
+        "property_id": "",
+        "target_entity_id": target.get("drone_eid"),
+        "target_ref": dict(target.get("ref") or target_ref),
+        "interaction_mode": "wire_remote",
+        "target_class": "drone_radio",
+        "deliberate": True,
+        "selected_index": 0,
+        "scroll": 0,
+        "feedback": "Drone radio handshake ready.",
+    })
+    refresh_wire_connection_ui(sim, actor_eid, item_catalog=item_catalog)
+    sim.emit(Event(
+        "wire_connection_opened",
+        eid=actor_eid,
+        target_entity_id=target.get("drone_eid"),
+        target_stable_id=(target.get("ref") or {}).get("stable_id"),
+        target_class="drone_radio",
+    ))
+    return True
+
+
+def open_wire_vehicle_connection_shell(sim, actor_eid, vehicle_prop, *, item_catalog=None):
+    if not isinstance(vehicle_prop, Mapping) or _clean_id(vehicle_prop.get("kind")) != "vehicle":
+        return False
+    return open_wire_connection_shell(
+        sim,
+        actor_eid,
+        vehicle_prop,
+        interaction_mode="wire_vehicle",
+        item_catalog=item_catalog,
+        deliberate=True,
+    )
+
+
 def close_wire_connection_shell(sim):
     state = getattr(sim, "wire_connection_ui", None)
     if isinstance(state, dict):
@@ -416,6 +682,21 @@ def close_wire_connection_shell(sim):
 
 def connect_wire_target(sim, actor_eid, prop, *, item_catalog=None, deliberate=False):
     preflight = wire_connection_preflight(sim, actor_eid, prop, item_catalog=item_catalog, deliberate=deliberate)
+    return _connect_wire_preflight(sim, actor_eid, preflight, item_catalog=item_catalog, deliberate=deliberate)
+
+
+def connect_wire_target_ref(sim, actor_eid, target_ref, *, item_catalog=None, deliberate=False):
+    preflight = wire_connection_preflight_ref(
+        sim,
+        actor_eid,
+        target_ref,
+        item_catalog=item_catalog,
+        deliberate=deliberate,
+    )
+    return _connect_wire_preflight(sim, actor_eid, preflight, item_catalog=item_catalog, deliberate=deliberate)
+
+
+def _connect_wire_preflight(sim, actor_eid, preflight, *, item_catalog=None, deliberate=False):
     state = wire_state_for_actor(sim, actor_eid, create=True)
     if not preflight.get("ok"):
         reason = (preflight.get("reasons") or ("blocked",))[0]
@@ -431,7 +712,11 @@ def connect_wire_target(sim, actor_eid, prop, *, item_catalog=None, deliberate=F
     )
     state.active_connection = {
         "status": "shell_connected",
-        "target_property_id": str(prop.get("id", "") or ""),
+        "target_ref": dict(preflight.get("target_ref") or {}),
+        "target_identity": str(preflight.get("target_identity", "") or ""),
+        "target_property_id": str(preflight.get("target_property_id", "") or ""),
+        "target_entity_id": preflight.get("target_entity_id"),
+        "target_stable_id": str((preflight.get("target_ref") or {}).get("stable_id", "") or ""),
         "target_name": preflight.get("target_name", ""),
         "target_class": preflight.get("target_class", ""),
         "linked_property_id": preflight.get("target_status", {}).get("linked_property_id", ""),
@@ -445,7 +730,9 @@ def connect_wire_target(sim, actor_eid, prop, *, item_catalog=None, deliberate=F
     sim.emit(Event(
         "wire_connection_connected",
         eid=actor_eid,
-        property_id=prop.get("id"),
+        property_id=preflight.get("target_property_id") or None,
+        target_entity_id=preflight.get("target_entity_id"),
+        target_identity=preflight.get("target_identity"),
         target_class=preflight.get("target_class"),
         interface_instance_id=interface.get("instance_id"),
     ))
@@ -474,7 +761,18 @@ def active_wire_connection_stale(sim, actor_eid):
     active = getattr(state, "active_connection", None) if state is not None else None
     if not isinstance(active, Mapping):
         return False
-    prop = getattr(sim, "properties", {}).get(str(active.get("target_property_id", "") or ""))
-    if not isinstance(prop, Mapping):
+    target = resolve_wire_target(sim, wire_target_ref_from_connection(active))
+    if not isinstance(target, Mapping):
         return True
-    return not _reachable_fixture(sim, actor_eid, prop)
+    selected = select_wire_interface_record(
+        sim,
+        actor_eid,
+        str(active.get("target_class", "") or ""),
+        preferred_instance_id=active.get("interface_instance_id"),
+        item_catalog=ITEM_CATALOG,
+    )
+    if not _reachable_target(sim, actor_eid, target, selected):
+        return True
+    if target.get("kind") == "drone" and not wire_target_has_live_radio(target, tick=int(getattr(sim, "tick", 0) or 0)):
+        return True
+    return False

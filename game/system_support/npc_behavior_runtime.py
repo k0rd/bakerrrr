@@ -21,6 +21,7 @@ from game.item_semantics import (
 )
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name, item_instance_condition
 from game.property_access import evaluate_property_access as _evaluate_property_access, world_hour as _world_hour
+from game.property_doors import _actor_is_animal_or_wildlife
 from game.property_runtime import (
     property_covering as _property_covering,
     property_focus_position as _property_focus_position,
@@ -667,9 +668,11 @@ def _npc_behavior_search_cache(sim):
     if not isinstance(state, dict):
         state = {
             "lodging_targets": {},
+            "shopping_targets": {},
         }
         sim.npc_behavior_search_cache = state
     state.setdefault("lodging_targets", {})
+    state.setdefault("shopping_targets", {})
     return state
 
 
@@ -1829,6 +1832,42 @@ def _resolve_street_appraise_between_actors(sim, appraiser_eid, subject_eid):
 def _ground_item_pickup_is_safe(sim, actor_eid, ground):
     entitlement = item_entitlement_for_actor(sim, actor_eid, ground)
     return bool(entitlement and entitlement.get("lawful_take"))
+
+
+def _ground_item_target_is_reachable(sim, actor_eid, pos, ground):
+    if pos is None or not isinstance(ground, dict):
+        return False
+    try:
+        x = int(ground.get("x"))
+        y = int(ground.get("y"))
+        z = int(ground.get("z", pos.z))
+    except (TypeError, ValueError):
+        return False
+    if int(pos.z) != z:
+        return False
+    traversable, _reason = _is_traversable_for(sim, actor_eid, x, y, z)
+    if not traversable:
+        return False
+
+    target_prop = _property_covering(sim, x, y, z)
+    if not isinstance(target_prop, dict):
+        return True
+    origin_prop = _property_covering(sim, int(pos.x), int(pos.y), int(pos.z))
+    target_id = str(target_prop.get("id", "") or "").strip()
+    origin_id = str((origin_prop or {}).get("id", "") or "").strip() if isinstance(origin_prop, dict) else ""
+    if target_id and target_id == origin_id:
+        return True
+    if _actor_is_animal_or_wildlife(sim, actor_eid):
+        return False
+    access = _cached_behavior_property_access(
+        sim,
+        actor_eid,
+        target_prop,
+        x=x,
+        y=y,
+        z=z,
+    )
+    return bool(access.permitted or access.can_use_services)
 
 
 def _inventory_can_accept_credsticks(inventory, *, owner_eid):
@@ -3087,6 +3126,48 @@ def _find_shopping_target(sim, actor_eid, pos, *, radius=None, work_active=False
         radius = 10
 
     needs = sim.ecs.get(NPCNeeds).get(actor_eid)
+    inventory_signature = tuple(sorted(
+        (
+            str(entry.get("item_id", "") or "").strip().lower(),
+            int(entry.get("quantity", 0) or 0),
+        )
+        for entry in tuple(getattr(inventory, "items", ()) or ())
+        if str(entry.get("item_id", "") or "").strip()
+    ))
+    weapon_loadout = sim.ecs.get(WeaponLoadout).get(actor_eid)
+    armor_loadout = sim.ecs.get(ArmorLoadout).get(actor_eid)
+    current_weapon = weapon_loadout.current_weapon() if weapon_loadout is not None else None
+    needs_signature = tuple(
+        int(float(getattr(needs, field, 0.0) or 0.0) // 5)
+        for field in ("energy", "safety", "social", "hunger", "thirst")
+    ) if needs is not None else ()
+    signature = (
+        int(pos.x),
+        int(pos.y),
+        int(pos.z),
+        int(radius),
+        bool(work_active),
+        str(preferred_property_id or "").strip(),
+        round(float(preferred_score_bonus or 0.0), 3),
+        int(_inventory_liquid_credits(inventory)),
+        inventory_signature,
+        needs_signature,
+        int(getattr(vitality, "hp", 0) or 0) if vitality is not None else None,
+        str(current_weapon or ""),
+        round(float(getattr(armor_loadout, "damage_reduction", 0.0) or 0.0), 3) if armor_loadout is not None else None,
+        int(_world_hour(sim)),
+    )
+    now = int(getattr(sim, "tick", 0) or 0)
+    shopping_cache = _npc_behavior_search_cache(sim).setdefault("shopping_targets", {})
+    cached = shopping_cache.get(int(actor_eid))
+    if (
+        isinstance(cached, dict)
+        and cached.get("signature") == signature
+        and now - int(cached.get("tick", now)) <= 4
+    ):
+        result = cached.get("result")
+        return dict(result) if isinstance(result, dict) else None
+
     options = trade_system.npc_purchase_options(
         actor_eid,
         pos,
@@ -3145,6 +3226,11 @@ def _find_shopping_target(sim, actor_eid, pos, *, radius=None, work_active=False
             best["item_id"],
         ):
             best = candidate
+    shopping_cache[int(actor_eid)] = {
+        "signature": signature,
+        "tick": now,
+        "result": dict(best) if isinstance(best, dict) else None,
+    }
     return best
 
 
@@ -3939,6 +4025,8 @@ def _find_ground_credit_target(sim, actor_eid, pos, *, radius=None):
             continue
         if not _ground_item_pickup_is_safe(sim, actor_eid, ground):
             continue
+        if not _ground_item_target_is_reachable(sim, actor_eid, pos, ground):
+            continue
         distance = _manhattan(pos.x, pos.y, ground.get("x"), ground.get("y"))
         credits = credstick_total_credits(
             quantity=ground.get("quantity", 1),
@@ -3983,6 +4071,8 @@ def _find_scavenge_ground_item_target(sim, actor_eid, pos, *, radius=None):
         if not item_id or is_credstick_item(item_id):
             continue
         if not _ground_item_pickup_is_safe(sim, actor_eid, ground):
+            continue
+        if not _ground_item_target_is_reachable(sim, actor_eid, pos, ground):
             continue
         if not _scavenge_item_matches_preferences(sim, actor_eid, ground):
             continue

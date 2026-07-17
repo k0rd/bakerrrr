@@ -16,6 +16,7 @@ from game.components import (
 from game.drone_recon import drone_has_camera_sensor, linked_camera_status
 from game.drone_runtime import (
     drone_hull_damage_absorb,
+    drone_link_disruption_status,
     drone_profile_for_item,
     drone_state_controlled_by_actor,
     drone_state_has_capability,
@@ -487,6 +488,8 @@ def fire_drone_weapon(
         return _block(sim, controller_eid, drone_eid, "unknown_weapon", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
     if not drone_state_controlled_by_actor(state, controller_eid):
         return _block(sim, controller_eid, drone_eid, "not_controller", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
+    if require_remote and drone_link_disruption_status(state, tick=int(getattr(sim, "tick", 0) or 0)).get("active"):
+        return _block(sim, controller_eid, drone_eid, "link_disrupted", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
     if require_remote and not drone_state_has_capability(state, "remote_control", item_catalog=item_catalog):
         return _block(sim, controller_eid, drone_eid, "no_remote_control", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
     if require_camera and not drone_has_camera_sensor(state, item_catalog=item_catalog):

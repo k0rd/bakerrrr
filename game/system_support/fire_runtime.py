@@ -756,6 +756,7 @@ def _mark_terrain_burned(sim, key, *, behavior=None):
     if getattr(tile, "semantic_id", None) == "terrain_burned":
         return True
     if hasattr(tile, "set_appearance"):
+        visibility_changed = not bool(getattr(tile, "transparent", True))
         tile.set_appearance(
             glyph=".",
             color="terrain_burned",
@@ -764,6 +765,8 @@ def _mark_terrain_burned(sim, key, *, behavior=None):
         )
         tile.walkable = True
         tile.transparent = True
+        if visibility_changed and hasattr(sim.tilemap, "mark_visibility_changed"):
+            sim.tilemap.mark_visibility_changed(key[0], key[1], key[2])
     else:
         sim.tilemap.set_tile(
             key[0],

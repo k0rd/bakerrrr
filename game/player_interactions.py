@@ -3,7 +3,8 @@
 from engine.events import Event
 
 from game.appearance_loadout import is_entry_worn
-from game.components import AI, Position, SuppressionState, Vitality
+from game.components import AI, AnimalGenome, AnimalReproduction, CreatureIdentity, Position, SuppressionState, Vitality
+from game.fauna_breeding import assist_fauna_breeding
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
 from game.herbal_chemistry_runtime import harvest_flora_patch, nearest_harvestable_flora
@@ -210,6 +211,90 @@ class PlayerInteractionRuntime:
         elif dy > 0:
             dy = 1
         return None if (dx, dy) == (0, 0) else (dx, dy)
+
+    def _nearest_fauna_for_breeding(self, eid, pos, *, preferred_dir=None, exact_direction=False, target=None):
+        target_coords = self._interact_target_coords(
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+            target=target,
+        )
+        candidates = []
+        positions = self.sim.ecs.get(Position)
+        vitalities = self.sim.ecs.get(Vitality)
+        for animal_eid, genome in self.sim.ecs.get(AnimalGenome).items():
+            if animal_eid == eid or genome is None or animal_eid not in self.sim.ecs.get(AnimalReproduction):
+                continue
+            animal_pos = positions.get(animal_eid)
+            if animal_pos is None or int(animal_pos.z) != int(pos.z):
+                continue
+            if target_coords is not None and (
+                int(animal_pos.x), int(animal_pos.y), int(animal_pos.z)
+            ) != tuple(target_coords):
+                continue
+            distance = _manhattan(int(pos.x), int(pos.y), int(animal_pos.x), int(animal_pos.y))
+            if distance > 1:
+                continue
+            vitality = vitalities.get(animal_eid)
+            if vitality is not None and (bool(getattr(vitality, "downed", False)) or int(getattr(vitality, "hp", 0) or 0) <= 0):
+                continue
+            candidates.append((
+                self.action_system._interaction_target_sort_key(
+                    eid,
+                    pos,
+                    int(animal_pos.x),
+                    int(animal_pos.y),
+                    stable_tiebreaker=(int(animal_eid),),
+                ),
+                animal_eid,
+            ))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda row: row[0])
+        return candidates[0][1]
+
+    def _assist_fauna_pairing(self, eid, animal_eid):
+        state = getattr(self.sim, "fauna_breeding_assist_selection", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.fauna_breeding_assist_selection = state
+        first_eid = state.get(int(eid))
+        identity = self.sim.ecs.get(CreatureIdentity).get(animal_eid)
+        animal_name = str(getattr(identity, "common_name", "") or "animal").strip().lower()
+        if first_eid is None or first_eid not in self.sim.ecs.get(AnimalGenome):
+            state[int(eid)] = animal_eid
+            _log_player_feedback(
+                self.sim,
+                f"You mark the {animal_name} for assisted pairing; interact with a compatible second animal.",
+                kind="interaction",
+                dedupe_window=1,
+                dedupe_key=f"fauna_pair_first:{eid}:{animal_eid}",
+            )
+            return True
+        if int(first_eid) == int(animal_eid):
+            state.pop(int(eid), None)
+            _log_player_feedback(self.sim, "You clear the assisted pairing.", kind="interaction", dedupe_window=1)
+            return True
+        result = assist_fauna_breeding(self.sim, eid, first_eid, animal_eid)
+        if result.get("ok"):
+            state.pop(int(eid), None)
+            _log_player_feedback(
+                self.sim,
+                f"The {animal_name} accepts the assisted pairing.",
+                kind="interaction",
+                dedupe_window=1,
+                dedupe_key=f"fauna_pair_ok:{first_eid}:{animal_eid}",
+            )
+            return True
+        reason = str(result.get("reason", "blocked") or "blocked").replace("_", " ")
+        _log_player_feedback(
+            self.sim,
+            f"That pairing will not take: {reason}.",
+            kind="interaction",
+            dedupe_window=1,
+            dedupe_key=f"fauna_pair_blocked:{first_eid}:{animal_eid}:{reason}",
+        )
+        return True
 
     def nearest_downed_actor(self, eid, pos, *, preferred_dir=None, exact_direction=False, target=None):
         target_coords = self._interact_target_coords(
@@ -1363,6 +1448,16 @@ class PlayerInteractionRuntime:
             target=target,
         )
         if downed_actor is not None and self.player_stabilize_downed_actor(eid, pos, downed_actor):
+            return
+
+        fauna = self._nearest_fauna_for_breeding(
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+            target=target,
+        )
+        if fauna is not None and self._assist_fauna_pairing(eid, fauna):
             return
 
         carcass = nearest_hunting_carcass(

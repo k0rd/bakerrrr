@@ -1685,6 +1685,64 @@ def clear_controller_intrusion(prop):
     return changed
 
 
+def grant_controller_access_record(
+    prop,
+    actor_eid,
+    *,
+    tick=0,
+    duration=0,
+    source="",
+    issued_by_eid=None,
+):
+    if not isinstance(prop, dict) or actor_eid is None:
+        return False
+    duration_ticks = max(0, _int_or_default(duration, 0))
+    if duration_ticks <= 0:
+        return False
+    metadata = _property_metadata(prop)
+    records = metadata.get("controller_temporary_access_records")
+    if not isinstance(records, dict):
+        records = {}
+        metadata["controller_temporary_access_records"] = records
+    actor_key = str(_int_or_default(actor_eid, 0))
+    records[actor_key] = {
+        "actor_eid": _int_or_default(actor_eid, 0),
+        "issued_tick": _int_or_default(tick, 0),
+        "until_tick": _int_or_default(tick, 0) + duration_ticks,
+        "source": str(source or "temporary_access_record").strip().lower() or "temporary_access_record",
+        "issued_by_eid": _int_or_default(issued_by_eid, 0) if issued_by_eid is not None else None,
+    }
+    return True
+
+
+def controller_access_record_for_actor(sim, actor_eid, prop):
+    if not isinstance(prop, dict) or actor_eid is None:
+        return None
+    metadata = _property_metadata(prop)
+    records = metadata.get("controller_temporary_access_records")
+    if not isinstance(records, dict):
+        return None
+    actor_key = str(_int_or_default(actor_eid, 0))
+    record = records.get(actor_key)
+    if not isinstance(record, dict):
+        return None
+    tick = _int_or_default(getattr(sim, "tick", 0) if sim is not None else 0, 0)
+    until_tick = max(0, _int_or_default(record.get("until_tick"), 0))
+    if until_tick <= tick:
+        records.pop(actor_key, None)
+        if not records:
+            metadata.pop("controller_temporary_access_records", None)
+        return None
+    return {
+        **dict(record),
+        "active": True,
+        "until_tick": until_tick,
+        "remaining_ticks": max(0, until_tick - tick),
+        "standing": 0.96,
+        "standing_reason": "falsified_access_record",
+    }
+
+
 def controller_intrusion_state(sim, prop):
     if not isinstance(prop, dict):
         return {
@@ -1814,6 +1872,54 @@ def _holder_credential_for_role(role, credential_mode):
     return "mechanical_key", 1
 
 
+def _property_access_controller_runtime_cache(sim):
+    if sim is None:
+        return None
+    tick = int(getattr(sim, "tick", 0) or 0)
+    state = getattr(sim, "_property_access_controller_cache", None)
+    if not isinstance(state, dict) or int(state.get("tick", -1) or -1) != tick:
+        state = {"tick": tick, "rows": {}}
+        sim._property_access_controller_cache = state
+    return state.setdefault("rows", {})
+
+
+def _property_access_controller_cache_key(sim, prop, metadata, hour):
+    organization_runtime = (
+        getattr(sim, "world_traits", {}).get("organization_runtime_cache", {})
+        if sim is not None and isinstance(getattr(sim, "world_traits", None), dict)
+        else {}
+    )
+    player_business = metadata.get("player_business")
+    business_revision = (
+        int(player_business.get("_cache_revision", 0) or 0)
+        if isinstance(player_business, dict)
+        else 0
+    )
+    return (
+        str(prop.get("id", "") or "") or f"prop-object:{id(prop)}",
+        int(hour) % 24,
+        prop.get("owner_eid"),
+        str(prop.get("owner_tag", "") or ""),
+        str(metadata.get("archetype", "") or ""),
+        bool(metadata.get("public")),
+        bool(metadata.get("is_storefront")),
+        repr(metadata.get("finance_services")),
+        repr(metadata.get("site_services")),
+        bool(metadata.get("site_services_replace_defaults", False)),
+        bool(metadata.get("site_services_extend_defaults", False)),
+        str(metadata.get("access_controller_kind", "") or ""),
+        repr(metadata.get("access_controller_hours")),
+        str(metadata.get("access_controller_credential_mode", "") or ""),
+        metadata.get("access_controller_required_tier"),
+        metadata.get("access_controller_security_tier"),
+        str(metadata.get("controller_intrusion_mode", "") or ""),
+        int(metadata.get("controller_intrusion_until_tick", 0) or 0),
+        metadata.get("controller_intrusion_actor_eid"),
+        business_revision,
+        int(organization_runtime.get("revision", 0) or 0) if isinstance(organization_runtime, dict) else 0,
+    )
+
+
 def _authorized_holders_for_property(sim, prop, owner_eid, credential_mode):
     holders = []
     seen = set()
@@ -1890,6 +1996,15 @@ def property_access_controller(sim, prop, hour=None):
         }
 
     metadata = _property_metadata(prop)
+    if hour is None:
+        hour = world_hour(sim) if sim is not None else DEFAULT_START_HOUR
+    hour = int(hour) % 24
+    cache = _property_access_controller_runtime_cache(sim)
+    cache_key = _property_access_controller_cache_key(sim, prop, metadata, hour)
+    cached = cache.get(cache_key) if isinstance(cache, dict) else None
+    if isinstance(cached, dict):
+        return cached
+
     owner_eid = prop.get("owner_eid")
     owner_tag = str(prop.get("owner_tag", "") or "").strip().lower()
     access_level = property_access_level(prop)
@@ -1943,10 +2058,6 @@ def property_access_controller(sim, prop, hour=None):
         if opening_window is not None:
             schedule_source = "timer"
 
-    if hour is None:
-        hour = world_hour(sim) if sim is not None else DEFAULT_START_HOUR
-    hour = int(hour) % 24
-
     open_now = None
     if opening_window is not None:
         open_now = bool(_hour_in_window(hour, opening_window))
@@ -1960,7 +2071,7 @@ def property_access_controller(sim, prop, hour=None):
         if intrusion.get("open_override"):
             open_now = True
 
-    return {
+    result = {
         "kind": kind,
         "authority_eid": owner_eid,
         "authority_tag": owner_tag,
@@ -1985,6 +2096,9 @@ def property_access_controller(sim, prop, hour=None):
         "intrusion_actor_eid": intrusion.get("actor_eid"),
         "intrusion_source_item_id": str(intrusion.get("source_item_id", "") or "").strip().lower(),
     }
+    if isinstance(cache, dict):
+        cache[cache_key] = result
+    return result
 
 
 def sync_property_access_controller(sim, prop, hour=None):
@@ -2117,6 +2231,13 @@ def _player_owns_property(sim, actor_eid, prop):
 def _credential_holder_standing(sim, actor_eid, prop):
     if actor_eid is None or not prop:
         return 0.0, ""
+
+    access_record = controller_access_record_for_actor(sim, actor_eid, prop)
+    if access_record:
+        return float(access_record.get("standing", 0.0) or 0.0), (
+            str(access_record.get("standing_reason", "") or "").strip().lower()
+            or "falsified_access_record"
+        )
 
     intrusion_access = controller_intrusion_access_for_actor(sim, actor_eid, prop)
     if intrusion_access:

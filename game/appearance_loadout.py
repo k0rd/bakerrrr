@@ -1885,6 +1885,9 @@ def _appearance_render_color_part(sim, eid, slot):
         "slot": slot,
         "word": word,
         "render_key": render_key,
+        "type": _key(profile.get("appearance_type")) or _key(entry.get("item_id")),
+        "material": _key(profile.get("material")),
+        "style": _key(profile.get("style")),
     }
 
 
@@ -1913,6 +1916,7 @@ def appearance_render_colors(sim, eid):
         "footwear_word": None,
         "headwear_word": None,
         "accessory_word": None,
+        "parts": {},
         "words": {},
         "word_list": (),
     }
@@ -1935,6 +1939,7 @@ def appearance_render_colors(sim, eid):
             continue
         result[role] = part["render_key"]
         result[f"{role}_word"] = _key(part.get("word")) or None
+        result["parts"][role] = dict(part)
     for role in ("primary", "inner", "secondary", "footwear", "headwear", "accessory"):
         if result.get(role):
             result["dominant"] = result[role]

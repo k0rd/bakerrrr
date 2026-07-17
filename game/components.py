@@ -655,6 +655,31 @@ class AI:
         self.target_eid = None
 
 
+class NPCEmergencyState:
+    """Sparse, persistent state for an unresolved immediate threat.
+
+    Ordinary NPC intent may deliberate on a broad set of concerns.  This
+    component exists only while an actor must keep producing survival actions,
+    including when the fight is outside the player's local detail bubble.
+    """
+
+    def __init__(self, threat_eid=None, *, tick=0, damage=0):
+        try:
+            self.threat_eid = int(threat_eid) if threat_eid is not None else None
+        except (TypeError, ValueError):
+            self.threat_eid = None
+        self.active = self.threat_eid is not None
+        self.started_tick = int(tick or 0)
+        self.last_damage_tick = int(tick or 0)
+        self.expires_tick = int(tick or 0) + 36
+        self.damage_count = 1 if int(damage or 0) > 0 else 0
+        self.response = "assessing"
+        self.last_position = None
+        self.last_safer_tick = int(tick or 0)
+        self.last_threat_distance = None
+        self.force_attack_after_tick = int(tick or 0)
+
+
 class CreatureIdentity:
     GLYPH_BY_TAXONOMY = {
         "hominid": "H",
@@ -2031,6 +2056,93 @@ class AnimalPhysicalProfile:
     speed_score: float
     injury_score: float = 0.0
     juvenile: bool = False
+
+
+class AnimalGenome:
+    """Save-safe inherited identity for one non-human animal.
+
+    ``root_animal_id`` is the reproductive compatibility boundary.  It is a
+    generic body-plan lineage (herd grazer, swarm scuttler, and so on), not a
+    requirement that the world use an Earth species name.  ``genes`` retains
+    inherited alleles while ``expressed`` owns the phenotype used by the live
+    simulation and renderer.
+    """
+
+    SCHEMA_VERSION = 1
+
+    def __init__(
+        self,
+        *,
+        genome_id,
+        root_animal_id,
+        lineage_id,
+        genes=None,
+        expressed=None,
+        parent_genome_ids=None,
+        parent_lineage_ids=None,
+        generation=0,
+        trait_budget=6,
+        trait_cost_used=0,
+        mutation_signature="",
+        native_lineage_id="",
+    ):
+        self.schema_version = self.SCHEMA_VERSION
+        self.genome_id = str(genome_id or "").strip()
+        self.root_animal_id = str(root_animal_id or "other_root").strip().lower() or "other_root"
+        self.lineage_id = str(lineage_id or self.genome_id).strip() or self.genome_id
+        self.genes = dict(genes or {})
+        self.expressed = dict(expressed or {})
+        self.parent_genome_ids = tuple(
+            str(value).strip()
+            for value in tuple(parent_genome_ids or ())
+            if str(value).strip()
+        )
+        self.parent_lineage_ids = tuple(
+            str(value).strip()
+            for value in tuple(parent_lineage_ids or ())
+            if str(value).strip()
+        )
+        self.generation = max(0, int(generation or 0))
+        self.trait_budget = max(0, int(trait_budget or 0))
+        self.trait_cost_used = max(0, int(trait_cost_used or 0))
+        self.mutation_signature = str(mutation_signature or "").strip().lower()
+        self.native_lineage_id = str(native_lineage_id or "").strip().lower()
+
+
+class AnimalReproduction:
+    """Sparse reproductive state for a fauna actor.
+
+    Roles are deliberately neutral (``a``/``b``) because root animals may be
+    invented, sex-changing, or otherwise unlike familiar Earth examples.
+    """
+
+    def __init__(
+        self,
+        *,
+        mode="paired",
+        gamete_role="a",
+        maturity_tick=0,
+        next_breed_tick=0,
+        gestation_ticks=1200,
+        brood_min=1,
+        brood_max=1,
+        gestation=None,
+        assisted_by_eid=None,
+    ):
+        mode = str(mode or "paired").strip().lower() or "paired"
+        self.mode = mode if mode in {"paired", "any_pair", "none"} else "paired"
+        role = str(gamete_role or "a").strip().lower() or "a"
+        self.gamete_role = role if role in {"a", "b", "any"} else "a"
+        self.maturity_tick = max(0, int(maturity_tick or 0))
+        self.next_breed_tick = max(0, int(next_breed_tick or 0))
+        self.gestation_ticks = max(1, int(gestation_ticks or 1))
+        self.brood_min = max(1, int(brood_min or 1))
+        self.brood_max = max(self.brood_min, int(brood_max or self.brood_min))
+        self.gestation = dict(gestation or {}) if isinstance(gestation, dict) else {}
+        try:
+            self.assisted_by_eid = int(assisted_by_eid) if assisted_by_eid is not None else None
+        except (TypeError, ValueError):
+            self.assisted_by_eid = None
 
 
 @dataclass

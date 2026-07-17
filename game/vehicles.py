@@ -409,6 +409,8 @@ def vehicle_metadata(
         "cover_value": 0.46,
         "public": bool(str(owner_tag).strip().lower() == "public"),
         "vehicle_usable": True,
+        "vehicle_tracker_installed": bool(data.get("vehicle_tracker_installed", str(data.get("quality", "used")).strip().lower() == "new")),
+        "vehicle_tracker_enabled": bool(data.get("vehicle_tracker_enabled", str(data.get("quality", "used")).strip().lower() == "new")),
         "vehicle_owner_tag": str(owner_tag or "public").strip().lower() or "public",
         "chunk": chunk_value,
     }

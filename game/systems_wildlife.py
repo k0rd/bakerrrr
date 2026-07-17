@@ -10,6 +10,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
+from game.components import AnimalGenome
 from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
 from game.system_support.player_feedback import _log_player_feedback
@@ -31,6 +32,7 @@ Vitality = _systems.Vitality
 WildlifeSocialState = _systems.WildlifeSocialState
 WeaponLoadout = _systems.WeaponLoadout
 _actor_is_animal_or_wildlife = _systems._actor_is_animal_or_wildlife
+_can_step_transition_for = _systems._can_step_transition_for
 _clamp = _systems._clamp
 _grid_distance = _systems._grid_distance
 _has_line_of_sight = _systems._has_line_of_sight
@@ -94,6 +96,25 @@ _WILDLIFE_PANIC_DAMAGE_KINDS = frozenset({
     "vehicle",
     "vehicle_crash",
 })
+
+
+def _nearby_actor_positions(sim, pos, *, radius):
+    """Return position-bearing actors inside a local wildlife sense radius."""
+    positions = sim.ecs.get(Position)
+    if pos is None or not positions:
+        return ()
+    try:
+        radius = max(0, int(radius))
+    except (AttributeError, TypeError, ValueError):
+        return tuple(positions.items())
+    nearby = getattr(sim, "entity_ids_in_radius", None)
+    if not callable(nearby):
+        return tuple(positions.items())
+    return tuple(
+        (eid, positions[eid])
+        for eid in nearby(pos.x, pos.y, pos.z, radius)
+        if eid in positions
+    )
 
 _VENOMOUS_CREATURE_PROFILES = {
     "water_moccasin": {
@@ -337,15 +358,16 @@ class AnimalSocialSystem(System):
 
         positions = self.sim.ecs.get(Position)
         memories = self.sim.ecs.get(AnimalMemory)
-        for eid, memory in memories.items():
+        for eid in self.sim.entity_ids_in_radius(nx, ny, nz, radius + 3):
+            memory = memories.get(eid)
+            if memory is None:
+                continue
             if not _actor_is_animal_or_wildlife(self.sim, eid):
                 continue
             pos = positions.get(eid)
-            if not pos or int(pos.z) != int(nz):
+            if not pos:
                 continue
             dist = _manhattan(pos.x, pos.y, nx, ny)
-            if dist > radius + 3:
-                continue
             intensity = max(0.12, 1.0 - (dist / float(max(1, radius + 1))))
             memory.remember(
                 tick=self.sim.tick,
@@ -691,6 +713,59 @@ class CreatureHazardSystem(System):
         return None
 
     def _venom_profile_for_entity(self, eid, identity):
+        genome = self.sim.ecs.get(AnimalGenome).get(eid)
+        expressed = getattr(genome, "expressed", {}) if genome is not None else {}
+        abilities = {
+            str(value).strip().lower()
+            for value in ((expressed or {}).get("abilities") or ())
+            if str(value).strip()
+        }
+        lineage_key = str(getattr(genome, "lineage_id", "") or "genetic_creature").strip().lower().replace(":", "_")
+        if "shock_glands" in abilities:
+            return {
+                "status": "bioelectric_shock",
+                "source_item": f"{lineage_key}_shock_glands",
+                "duration": 9,
+                "chance": 0.2,
+                "cooldown": 34,
+                "chip_damage": 2,
+                "safety_hit": -4.4,
+                "energy_hit": -3.2,
+                "modifiers": {"energy_tick_delta": -0.12, "move_speed_mult": -0.22},
+                "species_key": lineage_key,
+                "hazard_kind": "shock_glands",
+                "damage_kind": "shock",
+            }
+        if "toxic_hide" in abilities:
+            return {
+                "status": "skin_toxin",
+                "source_item": f"{lineage_key}_toxic_hide",
+                "duration": 22,
+                "chance": 0.3,
+                "cooldown": 38,
+                "chip_damage": 1,
+                "safety_hit": -3.4,
+                "energy_hit": -1.5,
+                "modifiers": {"safety_tick_delta": -0.13, "energy_tick_delta": -0.07, "move_speed_mult": -0.1},
+                "species_key": lineage_key,
+                "hazard_kind": "toxic_hide",
+                "damage_kind": "toxin",
+            }
+        if "venomous_bite" in abilities:
+            return {
+                "status": "venom",
+                "source_item": f"{lineage_key}_venom",
+                "duration": 28,
+                "chance": 0.23,
+                "cooldown": 42,
+                "chip_damage": 1,
+                "safety_hit": -3.4,
+                "energy_hit": -1.5,
+                "modifiers": {"safety_tick_delta": -0.13, "energy_tick_delta": -0.08, "move_speed_mult": -0.11},
+                "species_key": lineage_key,
+                "hazard_kind": "venomous_bite",
+                "damage_kind": "venom",
+            }
         species_key = self._venom_species_key(eid, identity)
         if not species_key:
             return None
@@ -822,7 +897,7 @@ class CreatureHazardSystem(System):
                 target_eid=target_eid,
                 source_eid=source_eid,
                 weapon_id=f"{species_key}_venom_contact",
-                damage_kind="venom",
+                damage_kind=str(venom_profile.get("damage_kind", "venom") or "venom"),
                 raw_damage=chip_damage,
                 damage=chip_damage,
                 cover_absorb=0.0,
@@ -837,7 +912,7 @@ class CreatureHazardSystem(System):
             "creature_hazard_triggered",
             source_eid=source_eid,
             target_eid=target_eid,
-            hazard_kind="venom",
+            hazard_kind=str(venom_profile.get("hazard_kind", "venom") or "venom"),
             species=species_key,
             status=status_name,
             x=target_pos.x,
@@ -849,9 +924,7 @@ class CreatureHazardSystem(System):
     def _maybe_apply_venom_contact(self, moved_eid, moved_pos, identities, vitalities):
         moved_identity = identities.get(moved_eid)
         moved_profile = self._venom_profile_for_entity(moved_eid, moved_identity)
-        positions = self.sim.ecs.get(Position)
-
-        for other_eid, other_pos in positions.items():
+        for other_eid, other_pos in _nearby_actor_positions(self.sim, moved_pos, radius=1):
             if other_eid == moved_eid:
                 continue
             if other_pos.z != moved_pos.z:
@@ -926,7 +999,7 @@ class CreatureHazardSystem(System):
             moved_identity = identities.get(moved_eid)
             moved_is_toxic = self._is_toxic_feline(moved_identity, toxic_coat)
 
-            for other_eid, other_pos in positions.items():
+            for other_eid, other_pos in _nearby_actor_positions(self.sim, moved_pos, radius=1):
                 if other_eid == moved_eid:
                     continue
                 if other_pos.z != moved_pos.z:
@@ -1340,7 +1413,14 @@ def _wildlife_damage_reaction_intent(sim, eid, source_eid, *, damage, damage_kin
         reason = "pressing"
         score = min(98.0, max(58.0, press_drive))
     else:
-        escape_target = _pick_wildlife_escape_target(sim, pos, (source_pos.x, source_pos.y, source_pos.z), routine, behavior)
+        escape_target = _pick_wildlife_escape_target(
+            sim,
+            pos,
+            (source_pos.x, source_pos.y, source_pos.z),
+            routine,
+            behavior,
+            actor_eid=eid,
+        )
         intent = "seeking_safety"
         target = escape_target or _wildlife_home_position(pos, routine) or (int(pos.x), int(pos.y), int(pos.z))
         target_eid = None
@@ -1383,7 +1463,6 @@ def _wildlife_can_observe(sim, observer_pos, target_pos, *, radius):
 
 
 def _wildlife_group_alarm_target(sim, eid, pos, identity, ecology, behavior):
-    positions = sim.ecs.get(Position)
     ais = sim.ecs.get(AI)
     identities = sim.ecs.get(CreatureIdentity)
     ecologies = sim.ecs.get(EcologyProfile)
@@ -1392,7 +1471,7 @@ def _wildlife_group_alarm_target(sim, eid, pos, identity, ecology, behavior):
     best = None
     best_dist = None
 
-    for other_eid, other_pos in positions.items():
+    for other_eid, other_pos in _nearby_actor_positions(sim, pos, radius=radius):
         if other_eid == eid or int(other_pos.z) != int(pos.z):
             continue
         if _grid_distance(pos.x, pos.y, other_pos.x, other_pos.y) > radius:
@@ -1418,7 +1497,7 @@ def _wildlife_group_alarm_target(sim, eid, pos, identity, ecology, behavior):
     return best
 
 
-def _wildlife_best_scavenge_target(sim, pos, ecology, context):
+def _wildlife_best_scavenge_target(sim, eid, pos, ecology, context):
     if pos is None or ecology is None:
         return None
     hunger = float(getattr(context, "hunger", 50.0) or 50.0)
@@ -1429,6 +1508,23 @@ def _wildlife_best_scavenge_target(sim, pos, ecology, context):
     best = None
     best_score = float("-inf")
     for ground in sim.ground_items_in_radius(pos.x, pos.y, pos.z, r=radius):
+        try:
+            target_x = int(ground.get("x", pos.x))
+            target_y = int(ground.get("y", pos.y))
+            target_z = int(ground.get("z", pos.z))
+        except (TypeError, ValueError):
+            continue
+        if target_z != int(pos.z):
+            continue
+        target_prop = _property_covering(sim, target_x, target_y, target_z)
+        current_habitat = _wildlife_habitat_property(sim, pos.x, pos.y, pos.z)
+        current_habitat_id = str((current_habitat or {}).get("id", "") or "").strip() if isinstance(current_habitat, dict) else ""
+        target_prop_id = str((target_prop or {}).get("id", "") or "").strip() if isinstance(target_prop, dict) else ""
+        if target_prop_id and target_prop_id != current_habitat_id:
+            continue
+        traversable, _reason = _systems._is_traversable_for(sim, eid, target_x, target_y, target_z)
+        if not traversable:
+            continue
         item_def = ITEM_CATALOG.get(str(ground.get("item_id", "")).strip())
         tags = {
             str(tag).strip().lower()
@@ -1440,13 +1536,13 @@ def _wildlife_best_scavenge_target(sim, pos, ecology, context):
         food_bonus = 16.0 if "food" in tags else (9.0 if "drink" in tags else 0.0)
         if food_bonus <= 0.0:
             continue
-        dist = _grid_distance(pos.x, pos.y, int(ground.get("x", pos.x)), int(ground.get("y", pos.y)))
+        dist = _grid_distance(pos.x, pos.y, target_x, target_y)
         score = (float(getattr(ecology, "scavenger_score", 0.0) or 0.0) * 0.72) + (hunger * 0.34) + food_bonus - (dist * 6.0)
         if score > best_score:
             best_score = score
             best = {
                 "score": score,
-                "target": (int(ground.get("x", pos.x)), int(ground.get("y", pos.y)), int(ground.get("z", pos.z))),
+                "target": (target_x, target_y, target_z),
                 "ground_item_id": str(ground.get("ground_item_id", "")).strip() or None,
             }
     return best
@@ -1542,14 +1638,13 @@ def _wildlife_chase_drive(sim, self_eid, other_eid, *, self_identity, self_physi
 
 
 def _wildlife_guardian_bonus(sim, eid, pos, identity, ecology, behavior):
-    positions = sim.ecs.get(Position)
     identities = sim.ecs.get(CreatureIdentity)
     physical_profiles = sim.ecs.get(AnimalPhysicalProfile)
     radius = max(2, int(getattr(behavior, "flock_radius", 3)))
     species = _species_key(identity, ecology)
     bonus = 0.0
 
-    for other_eid, other_pos in positions.items():
+    for other_eid, other_pos in _nearby_actor_positions(sim, pos, radius=radius):
         if other_eid == eid or int(other_pos.z) != int(pos.z):
             continue
         if _grid_distance(pos.x, pos.y, other_pos.x, other_pos.y) > radius:
@@ -1568,13 +1663,12 @@ def _wildlife_guardian_bonus(sim, eid, pos, identity, ecology, behavior):
 
 
 def _wildlife_pack_support(sim, eid, pos, identity, ecology, behavior):
-    positions = sim.ecs.get(Position)
     identities = sim.ecs.get(CreatureIdentity)
     radius = max(2, int(getattr(behavior, "flock_radius", 3)))
     species = _species_key(identity, ecology)
     count = 0
 
-    for other_eid, other_pos in positions.items():
+    for other_eid, other_pos in _nearby_actor_positions(sim, pos, radius=radius):
         if other_eid == eid or int(other_pos.z) != int(pos.z):
             continue
         if _grid_distance(pos.x, pos.y, other_pos.x, other_pos.y) > radius:
@@ -1764,11 +1858,11 @@ def _wildlife_social_intent(sim, eid, pos, identity, ecology, needs):
     if float(needs.safety) < 42.0:
         return None
 
-    positions = sim.ecs.get(Position)
     context = _animal_behavior_context_for_actor(sim, eid)
     best = None
+    observe_radius = max(4, int(max(2.0, float(getattr(social_profile, "companionship_drive", 0.0) or 0.0) / 14.0)) + 2)
 
-    for other_eid, other_pos in positions.items():
+    for other_eid, other_pos in _nearby_actor_positions(sim, pos, radius=observe_radius):
         scored = _wildlife_social_target_score(
             sim,
             eid,
@@ -1822,11 +1916,10 @@ def _wildlife_ecology_intent(sim, eid, pos, routine, behavior, identity, needs):
 
     context = _animal_behavior_context_for_actor(sim, eid)
     observe_radius = max(4, int(getattr(behavior, "flee_radius", 5)) + 2, int(getattr(behavior, "home_radius", 4)) + 1)
-    positions = sim.ecs.get(Position)
     best_threat = None
     best_chase = None
 
-    for other_eid, other_pos in positions.items():
+    for other_eid, other_pos in _nearby_actor_positions(sim, pos, radius=observe_radius):
         if other_eid == eid or int(other_pos.z) != int(pos.z):
             continue
         if local_interactions_suspended_for_actor(sim, other_eid):
@@ -1871,7 +1964,7 @@ def _wildlife_ecology_intent(sim, eid, pos, routine, behavior, identity, needs):
                 **chase,
             }
 
-    scavenge = _wildlife_best_scavenge_target(sim, pos, ecology, context)
+    scavenge = _wildlife_best_scavenge_target(sim, eid, pos, ecology, context)
     group_alarm = _wildlife_group_alarm_target(sim, eid, pos, identity, ecology, behavior)
     defensive_attack = _wildlife_defensive_human_attack_intent(
         sim,
@@ -1915,6 +2008,7 @@ def _wildlife_ecology_intent(sim, eid, pos, routine, behavior, identity, needs):
             best_threat["pos"],
             routine,
             behavior,
+            actor_eid=eid,
         )
         return {
             "intent": "seeking_safety",
@@ -2032,7 +2126,6 @@ def _wildlife_is_active(behavior, hour):
 def _wildlife_flock_anchor(sim, eid, pos, identity, behavior):
     if not pos or not identity or not getattr(behavior, "flocking", False):
         return None
-    positions = sim.ecs.get(Position)
     ais = sim.ecs.get(AI)
     identities = sim.ecs.get(CreatureIdentity)
     flock_radius = max(1, int(getattr(behavior, "flock_radius", 3)))
@@ -2041,7 +2134,7 @@ def _wildlife_flock_anchor(sim, eid, pos, identity, behavior):
         return None
 
     samples = []
-    for other_eid, other_pos in positions.items():
+    for other_eid, other_pos in _nearby_actor_positions(sim, pos, radius=flock_radius):
         if other_eid == eid or int(other_pos.z) != int(pos.z):
             continue
         if _manhattan(pos.x, pos.y, other_pos.x, other_pos.y) > flock_radius:
@@ -2105,7 +2198,58 @@ def _pick_wildlife_patrol_target(sim, eid, pos, routine, behavior, identity):
     return best_tile or home
 
 
-def _pick_wildlife_escape_target(sim, pos, threat, routine, behavior):
+def _wildlife_reachable_escape_tiles(sim, eid, pos, *, radius):
+    if pos is None:
+        return []
+    origin = (int(pos.x), int(pos.y), int(pos.z))
+    radius = max(1, int(radius))
+    habitat = _wildlife_habitat_property(sim, *origin)
+    habitat_id = str((habitat or {}).get("id", "") or "").strip() if isinstance(habitat, dict) else ""
+    reached = {origin}
+    queue = [origin]
+    index = 0
+    while index < len(queue):
+        from_x, from_y, z = queue[index]
+        index += 1
+        for dx, dy in (
+            (0, -1),
+            (1, 0),
+            (0, 1),
+            (-1, 0),
+            (-1, -1),
+            (1, -1),
+            (-1, 1),
+            (1, 1),
+        ):
+            to_x = int(from_x + dx)
+            to_y = int(from_y + dy)
+            tile = (to_x, to_y, z)
+            if tile in reached or max(abs(to_x - origin[0]), abs(to_y - origin[1])) > radius:
+                continue
+            covered = _property_covering(sim, to_x, to_y, z)
+            covered_id = str((covered or {}).get("id", "") or "").strip() if isinstance(covered, dict) else ""
+            if habitat_id:
+                if covered_id != habitat_id:
+                    continue
+            elif covered_id:
+                continue
+            step_ok, _reason = _can_step_transition_for(
+                sim,
+                moving_eid=eid,
+                from_x=from_x,
+                from_y=from_y,
+                to_x=to_x,
+                to_y=to_y,
+                z=z,
+            )
+            if not step_ok:
+                continue
+            reached.add(tile)
+            queue.append(tile)
+    return queue
+
+
+def _pick_wildlife_escape_target(sim, pos, threat, routine, behavior, *, actor_eid=None):
     if pos is None or not isinstance(threat, (list, tuple)) or len(threat) < 3:
         return None
     home = _wildlife_home_position(pos, routine)
@@ -2116,20 +2260,27 @@ def _pick_wildlife_escape_target(sim, pos, threat, routine, behavior):
         int(getattr(behavior, "home_radius", 4)) + 2,
         int(getattr(behavior, "flee_radius", 5)) + 2,
     )
-    candidate_map = {}
-    for tile in _wildlife_walkable_tiles(sim, home, radius=search_radius, outside_only=True, include_origin=True):
-        candidate_map[tile] = tile
-    for tile in _wildlife_walkable_tiles(
-        sim,
-        (int(pos.x), int(pos.y), int(pos.z)),
-        radius=max(2, int(getattr(behavior, "flee_radius", 5)) + 1),
-        outside_only=True,
-        include_origin=True,
-    ):
-        candidate_map[tile] = tile
+    candidate_map = {
+        tile: tile
+        for tile in _wildlife_reachable_escape_tiles(
+            sim,
+            actor_eid,
+            pos,
+            radius=search_radius,
+        )
+    } if actor_eid is not None else {
+        tile: tile
+        for tile in _wildlife_walkable_tiles(
+            sim,
+            (int(pos.x), int(pos.y), int(pos.z)),
+            radius=search_radius,
+            outside_only=True,
+            include_origin=True,
+        )
+    }
 
     if not candidate_map:
-        return home
+        return (int(pos.x), int(pos.y), int(pos.z))
 
     tx, ty, tz = int(threat[0]), int(threat[1]), int(threat[2])
     current_threat_dist = _manhattan(pos.x, pos.y, tx, ty)
@@ -2156,7 +2307,7 @@ def _pick_wildlife_escape_target(sim, pos, threat, routine, behavior):
             best_score = score
             best_tile = tile
 
-    return best_tile or home
+    return best_tile or (int(pos.x), int(pos.y), int(pos.z))
 
 
 def _relocate_indoor_wildlife_outdoors(sim, eid, pos, routine):

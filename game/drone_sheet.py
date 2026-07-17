@@ -28,6 +28,7 @@ from game.drone_workshop import (
     move_workshop_part_to_inventory,
 )
 from game.items import item_display_name, item_inventory_slot_cost
+from game.technical_research import drone_module_profile_with_research
 
 
 DRONE_SHEET_TABS = ("status", "cargo", "battery", "parts", "modules", "procedures", "schematic")
@@ -113,7 +114,7 @@ def _module_visible_overlays(state, *, item_catalog=None):
     for module in tuple(getattr(state, "modules", ()) or ()):
         if not isinstance(module, dict):
             continue
-        profile = drone_profile_for_item(module.get("item_id"), item_catalog=item_catalog)
+        profile = drone_module_profile_with_research(module, item_catalog=item_catalog)
         overlay = profile.get("visible_overlay") if isinstance(profile, dict) else None
         if not isinstance(overlay, dict) or not overlay:
             continue
@@ -415,7 +416,7 @@ def drone_sheet_record(sim, controller_eid, drone_eid, *, item_catalog=None):
 def _module_profile(module, item_catalog=None):
     if not isinstance(module, dict):
         return {}
-    return drone_profile_for_item(module.get("item_id"), item_catalog=item_catalog)
+    return drone_module_profile_with_research(module, item_catalog=item_catalog)
 
 
 def cargo_module_count(state, *, item_catalog=None):
@@ -461,7 +462,7 @@ def drone_sheet_status_lines(record, *, item_catalog=None):
             f"Workbench: {record.get('label', 'workshop chassis')} | source {record.get('workshop_chassis_instance_id', '-')}",
             f"Core: {_item_name(getattr(state, 'power_center_item_id', None), item_catalog=item_catalog)} | Battery: choose from Battery tab to pack",
             f"Hull: {getattr(state, 'hull_hp', 0)}/{getattr(state, 'hull_hp_max', 0)} | Modules installed: {len(modules)}",
-            f"Slots: {summary.get('slot_used', 0)}/{summary.get('slot_limit', 0)} | Weight: {summary.get('weight_used', 0)}/{summary.get('weight_limit', 0)} | Power: idle {summary.get('standby_draw', 0)}/{summary.get('power_output', 0)} active {summary.get('active_draw', 0)}/{summary.get('power_output', 0)}",
+            f"Hardware: {summary.get('slot_used', 0)}/{summary.get('slot_limit', 0)} | Procedures: {summary.get('procedure_slot_used', 0)}/{summary.get('procedure_slot_limit', 0)} | Weight: {summary.get('weight_used', 0)}/{summary.get('weight_limit', 0)} | Power: idle {summary.get('standby_draw', 0)}/{summary.get('power_output', 0)} active {summary.get('active_draw', 0)}/{summary.get('power_output', 0)}",
             f"Capabilities: {capabilities}",
             "Install modules from the workshop side; install a power core from Schematic; pack with a backpack battery.",
         ]
@@ -476,7 +477,7 @@ def drone_sheet_status_lines(record, *, item_catalog=None):
         f"{drone_sheet_label(state)} #{record.get('eid')} | dist {record.get('distance', 0)} | {'adjacent' if record.get('accessible') else 'remote view'}",
         f"Position: ({getattr(pos, 'x', '?')},{getattr(pos, 'y', '?')},{getattr(pos, 'z', '?')}) | range {getattr(state, 'range_limit', 0)}",
         f"Hull: {getattr(state, 'hull_hp', 0)}/{getattr(state, 'hull_hp_max', 0)} | Battery: {getattr(state, 'battery_charge', 0)}/{getattr(state, 'battery_charge_max', 0)}",
-        f"Slots: {summary.get('slot_used', 0)}/{summary.get('slot_limit', 0)} | Weight: {summary.get('weight_used', 0)}/{summary.get('weight_limit', 0)} | Power: idle {summary.get('standby_draw', 0)}/{summary.get('power_output', 0)} active {summary.get('active_draw', 0)}/{summary.get('power_output', 0)}",
+        f"Hardware: {summary.get('slot_used', 0)}/{summary.get('slot_limit', 0)} | Procedures: {summary.get('procedure_slot_used', 0)}/{summary.get('procedure_slot_limit', 0)} | Weight: {summary.get('weight_used', 0)}/{summary.get('weight_limit', 0)} | Power: idle {summary.get('standby_draw', 0)}/{summary.get('power_output', 0)} active {summary.get('active_draw', 0)}/{summary.get('power_output', 0)}",
         f"Cargo: {cargo_used}/{cargo_cap} slots | Capabilities: {capabilities}",
         f"Intent: {getattr(state, 'procedure_key', None) or 'none'} | Last: {getattr(state, 'last_command', None) or 'none'}",
     ]
@@ -638,7 +639,7 @@ def unpack_packed_drone_to_workshop(sim, player_eid, packed_instance_id, *, item
         if not isinstance(module, dict):
             continue
         module_item_id = str(module.get("item_id", "") or module.get("module_item_id", "") or "").strip().lower()
-        module_profile = drone_profile_for_item(module_item_id, item_catalog=item_catalog)
+        module_profile = drone_module_profile_with_research(module, item_catalog=item_catalog)
         if module_profile.get("kind") != "module":
             return {"ok": False, "reason": "invalid_loadout", "errors": (f"{module_item_id} is not a drone module",), "summary": summary}
         module_entry = _module_to_inventory_entry(
@@ -780,7 +781,8 @@ def drone_sheet_module_rows(sim, player_eid, record, *, side="drone", item_catal
     is_workbench = bool(record.get("workshop_chassis")) if isinstance(record, dict) else False
     rows = []
     budget = (
-        f"Budget: slots {summary.get('slot_used', 0)}/{summary.get('slot_limit', 0)} | "
+        f"Budget: hardware {summary.get('slot_used', 0)}/{summary.get('slot_limit', 0)} | "
+        f"procedures {summary.get('procedure_slot_used', 0)}/{summary.get('procedure_slot_limit', 0)} | "
         f"weight {summary.get('weight_used', 0)}/{summary.get('weight_limit', 0)} | "
         f"power idle {summary.get('standby_draw', 0)}/{summary.get('power_output', 0)} "
         f"active {summary.get('active_draw', 0)}/{summary.get('power_output', 0)}"
@@ -793,16 +795,17 @@ def drone_sheet_module_rows(sim, player_eid, record, *, side="drone", item_catal
             if not isinstance(entry, dict):
                 continue
             item_id = str(entry.get("item_id", "") or "").strip().lower()
-            profile = drone_profile_for_item(item_id, item_catalog=item_catalog)
+            profile = drone_module_profile_with_research(entry, item_catalog=item_catalog)
             if profile.get("kind") != "module":
                 continue
             candidate_modules = list(getattr(state, "modules", ()) or ()) + [_entry_to_module(entry)]
             errors, _summary = _loadout_errors_for_candidate(state, item_catalog=item_catalog, modules=candidate_modules)
             display_errors = _workbench_blocking_errors(errors) if is_workbench else errors
             capabilities = ",".join(profile.get("capabilities", ()) or ()) or "none"
+            slot_kind = "procedure slots" if "procedure" in set(profile.get("capabilities", ()) or ()) else "hardware slots"
             label = (
                 f"Install {_item_name(item_id, item_catalog=item_catalog)} | kind {profile.get('module_kind', '?')} | "
-                f"slots {profile.get('slot_cost', 0)} weight {profile.get('weight', 0)} | caps {capabilities}"
+                f"{slot_kind} {profile.get('slot_cost', 0)} weight {profile.get('weight', 0)} | caps {capabilities}"
                 f"{_candidate_error_suffix(display_errors)}"
             )
             rows.append({
@@ -821,11 +824,12 @@ def drone_sheet_module_rows(sim, player_eid, record, *, side="drone", item_catal
         if not isinstance(module, dict):
             continue
         item_id = str(module.get("item_id", "") or "").strip().lower()
-        profile = drone_profile_for_item(item_id, item_catalog=item_catalog)
+        profile = drone_module_profile_with_research(module, item_catalog=item_catalog)
         capabilities = ",".join(profile.get("capabilities", ()) or ()) or "none"
+        slot_kind = "procedure slots" if "procedure" in set(profile.get("capabilities", ()) or ()) else "hardware slots"
         label = (
             f"Remove {_item_name(item_id, item_catalog=item_catalog)} | kind {profile.get('module_kind', '?')} | "
-            f"slots {profile.get('slot_cost', 0)} weight {profile.get('weight', 0)} | "
+            f"{slot_kind} {profile.get('slot_cost', 0)} weight {profile.get('weight', 0)} | "
             f"draw {profile.get('standby_draw', 0)}/{profile.get('active_draw', 0)} | caps {capabilities}"
         )
         rows.append({

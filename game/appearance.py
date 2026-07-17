@@ -790,6 +790,7 @@ def _actor_outfit_color_overlays(render_colors):
         ("inner", "ui_actor_outfit_inner"),
         ("secondary", "ui_actor_outfit_secondary"),
         ("footwear", "ui_actor_outfit_footwear"),
+        ("primary", "ui_actor_outfit_primary"),
         ("headwear", "ui_actor_outfit_headwear"),
         ("accessory", "ui_actor_outfit_accessory"),
     )
@@ -797,13 +798,33 @@ def _actor_outfit_color_overlays(render_colors):
         color = str(render_colors.get(role) or "").strip()
         if not color:
             continue
-        if role == "inner" and color == str(render_colors.get("primary") or "").strip():
-            continue
+        part = render_colors.get("parts", {}).get(role, {}) if isinstance(render_colors.get("parts"), Mapping) else {}
+        if role == "inner":
+            primary_part = render_colors.get("parts", {}).get("primary", {}) if isinstance(render_colors.get("parts"), Mapping) else {}
+            if part and primary_part and part.get("slot") == primary_part.get("slot") and part.get("type") == primary_part.get("type"):
+                continue
+        effects = []
+        for prefix, value in (
+            ("outfit_type_", part.get("type")),
+            ("outfit_material_", part.get("material")),
+            ("outfit_style_", part.get("style")),
+            ("outfit_slot_", part.get("slot")),
+        ):
+            clean_value = str(value or "").strip().lower().replace(" ", "_")
+            if clean_value:
+                effects.append(f"{prefix}{clean_value}")
         overlays.append({
             "glyph": " ",
             "color": color,
             "color_word": str(render_colors.get(f"{role}_word") or "").strip().lower() or None,
             "semantic_id": semantic_id,
+            "effects": tuple(effects),
+        })
+    if overlays:
+        overlays.append({
+            "glyph": " ",
+            "color": "actor_highlight",
+            "semantic_id": "ui_actor_identity_rune",
         })
     return tuple(overlays)
 
@@ -838,7 +859,7 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
     taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower() or "other"
     glyph = str(identity.taxonomy_glyph(fallback="O"))[:1] or "O"
     color = creature_color_key(identity, role=role)
-    color_word = None
+    color_word = str(getattr(identity, "phenotype_color_word", "") or "").strip().lower() or None
     semantic_id = None
 
     if taxonomy == "hominid":

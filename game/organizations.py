@@ -1317,6 +1317,8 @@ def _normalize_membership_row(row, organization_eid=None):
 def _ensure_profile_state(profile):
     if profile is None:
         return None
+    if bool(getattr(profile, "_organization_profile_state_normalized", False)):
+        return profile
     profile.name = _text(getattr(profile, "name", "")) or "Organization"
     profile.kind = _normalize_org_kind(getattr(profile, "kind", ""), default="other")
     profile.key = _text(getattr(profile, "key", ""))
@@ -1340,6 +1342,12 @@ def _ensure_profile_state(profile):
         raw_relations = []
     profile.relations = [_normalize_relation_row(row) for row in raw_relations if isinstance(row, dict)]
     _refresh_profile_site_caches(profile)
+    # Profiles enter through this normalizer after creation/load. Runtime
+    # mutation helpers below already write normalized rows and maintain the
+    # derived member/site sets, so rebuilding every set and row on each read is
+    # pure repeated work. This marker also makes legacy saves pay that repair
+    # cost once, on first access, rather than inside every downstream query.
+    profile._organization_profile_state_normalized = True
     return profile
 
 
@@ -5198,9 +5206,12 @@ def _organization_runtime_cache_state(sim):
         traits["organization_runtime_cache"] = state
     sim_tick = _safe_int(getattr(sim, "tick", 0), default=0)
     if _safe_int(state.get("sim_tick"), default=-1) != sim_tick:
+        revision = _safe_int(state.get("revision"), default=0)
         state.clear()
         state["sim_tick"] = sim_tick
-    for key in ("workplace_posture", "protective_pressure", "property_links", "access_posture"):
+        state["revision"] = revision
+    state.setdefault("revision", 0)
+    for key in ("workplace_posture", "protective_pressure", "property_links", "access_posture", "property_members"):
         cache = state.get(key)
         if not isinstance(cache, dict):
             cache = {}
@@ -5222,7 +5233,8 @@ def _organization_runtime_property_cache_key(prop, *, actor_eid=None, current_ti
 
 def _invalidate_organization_runtime_caches(sim):
     state = _organization_runtime_cache_state(sim)
-    for key in ("workplace_posture", "protective_pressure", "property_links", "access_posture"):
+    state["revision"] = _safe_int(state.get("revision"), default=0) + 1
+    for key in ("workplace_posture", "protective_pressure", "property_links", "access_posture", "property_members"):
         cache = state.get(key)
         if isinstance(cache, dict):
             cache.clear()
@@ -6085,8 +6097,9 @@ def _local_workplace_org_posture_base(sim, prop, *, current_tick=None):
     except Exception:
         organization_instability_profile = None
     try:
-        from game.player_businesses import player_business_status_snapshot
+        from game.player_businesses import _property_owned_by_actor, player_business_status_snapshot
     except Exception:
+        _property_owned_by_actor = None
         player_business_status_snapshot = None
 
     instability = (
@@ -6094,9 +6107,15 @@ def _local_workplace_org_posture_base(sim, prop, *, current_tick=None):
         if callable(organization_instability_profile)
         else {}
     ) or {}
+    player_eid = getattr(sim, "player_eid", None)
+    player_owned_business = bool(
+        player_eid is not None
+        and callable(_property_owned_by_actor)
+        and _property_owned_by_actor(sim, player_eid, prop)
+    )
     business_snapshot = (
         player_business_status_snapshot(sim, prop)
-        if callable(player_business_status_snapshot)
+        if player_owned_business and callable(player_business_status_snapshot)
         else None
     )
     business_snapshot = business_snapshot if isinstance(business_snapshot, dict) else {}
@@ -8520,11 +8539,27 @@ def _property_org_members_impl(sim, prop):
 
 
 def property_org_members(sim, prop):
+    cache_state = _organization_runtime_cache_state(sim)
+    cache = cache_state.get("property_members", {})
+    cache_key = _organization_runtime_property_cache_key(
+        prop,
+        current_tick=getattr(sim, "tick", 0),
+    )
+    cached = cache.get(cache_key) if cache_key is not None else None
+    if isinstance(cached, tuple):
+        return cached
+
     state = _organization_actor_briefing_state(sim)
     depth = max(0, _safe_int(state.get("member_read_depth"), default=0))
     state["member_read_depth"] = depth + 1
     try:
-        return _property_org_members_impl(sim, prop)
+        result = _property_org_members_impl(sim, prop)
+        # The implementation may synchronize a missing affiliation and clear
+        # runtime caches. Reacquire the live bucket before publishing the
+        # completed, post-synchronization result.
+        if cache_key is not None:
+            _organization_runtime_cache_state(sim).setdefault("property_members", {})[cache_key] = result
+        return result
     finally:
         current = max(0, _safe_int(state.get("member_read_depth"), default=1) - 1)
         if current > 0:

@@ -67,6 +67,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "active_ejections",
     "property_order",
     "next_property_order",
+    "_properties_in_radius_cache",
     "ground_item_index",
     "ground_item_order",
     "next_ground_item_order",
@@ -761,18 +762,34 @@ def restore_simulation(snapshot):
         raise ValueError("save snapshot missing simulation state")
 
     tilemap = state.get("tilemap")
+    resolution_version = int(state.get("simulation_resolution_version", 1) or 1)
+    active_chunk_radius = int(state.get("active_chunk_radius", 1))
+    loaded_chunk_radius = int(state.get("loaded_chunk_radius", 2))
+    if resolution_version < 2 and active_chunk_radius == 1 and loaded_chunk_radius == 2:
+        # Version-one saves used the old ordinary 3x3-active / 5x5-loaded
+        # policy.  Preserve explicit compact or custom radii, but let ordinary
+        # worlds spend the new runtime headroom on a larger living area.
+        active_chunk_radius = 2
+        loaded_chunk_radius = 3
+
     sim = Simulation(
         seed=state.get("seed", 1234),
         map_width=int(getattr(tilemap, "width", 64) or 64),
         map_height=int(getattr(tilemap, "height", 32) or 32),
         max_floors=int(getattr(tilemap, "max_floors", 1) or 1),
         chunk_size=int(state.get("chunk_size", 16) or 16),
-        active_chunk_radius=int(state.get("active_chunk_radius", 1) or 1),
-        loaded_chunk_radius=int(state.get("loaded_chunk_radius", 2) or 2),
+        active_chunk_radius=active_chunk_radius,
+        loaded_chunk_radius=loaded_chunk_radius,
     )
 
     for key, value in state.items():
         sim.__dict__[key] = value
+
+    # Apply the resolved policy after restoring raw state so legacy radius
+    # fields cannot overwrite the migration performed above.
+    sim.active_chunk_radius = active_chunk_radius
+    sim.loaded_chunk_radius = loaded_chunk_radius
+    sim.simulation_resolution_version = 2
 
     sim.events = EventBus()
     sim.systems = []

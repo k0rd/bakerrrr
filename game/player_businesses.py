@@ -383,6 +383,9 @@ def _touch_player_business_runtime(prop, *, sim=None):
         return False
     state["_cache_revision"] = max(0, _int_or(state.get("_cache_revision"), default=0)) + 1
     _invalidate_player_business_runtime_cache(sim, prop)
+    reputation_stats = getattr(sim, "business_reputation_stats", None) if sim is not None else None
+    if isinstance(reputation_stats, dict):
+        reputation_stats["_revision"] = _int_or(reputation_stats.get("_revision"), default=0) + 1
     return True
 
 
@@ -3839,6 +3842,7 @@ class PlayerBusinessSystem(System):
         }
         last_summary.update(_player_business_owner_signal(last_summary))
         state["last_summary"] = last_summary
+        _touch_player_business_runtime(prop, sim=self.sim)
         self._queue_owner_warning(prop, state, dict(state.get("last_summary", {})), previous_summary=previous_summary)
 
     def update(self):

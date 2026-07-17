@@ -64,6 +64,7 @@ from game.components import (
     WeaponUseProfile,
 )
 from game.bones import maybe_seed_bones_for_chunk, prime_bones_runtime
+from game.ecology_registry import prime_ecology_registry
 from game.economy import (
     LocalTradePressureSystem,
     chunk_economy_profile,
@@ -165,7 +166,9 @@ from game.objective_progress import ObjectiveProgressSystem
 from game.criminal_justice_system import CriminalJusticeSystem
 from game.trade_system import TradeSystem
 from game.cultivation_runtime import CultivationSystem
+from game.fauna_breeding import FaunaBreedingSystem
 from game.combat_systems import NPCItemUseSystem, NPCWeaponSystem, StatusEffectSystem, WeaponSystem
+from game.npc_emergency_runtime import NPCEmergencyActionSystem
 from game.environment_hazard_system import EnvironmentalHazardSystem
 from game.fire_system import FireSystem
 from game.aerosol_trap_runtime import AerosolTrapSystem
@@ -660,6 +663,7 @@ def _register_runtime_systems(sim, view, player):
     herbal_decay_system = HerbalMixtureDecaySystem(sim)
     hunting_carcass_system = HuntingCarcassSystem(sim)
     cultivation_system = CultivationSystem(sim)
+    fauna_breeding_system = FaunaBreedingSystem(sim)
 
     property_system = PropertySystem(sim, player)
     player_business_system = PlayerBusinessSystem(sim, player)
@@ -685,6 +689,7 @@ def _register_runtime_systems(sim, view, player):
     justice_vehicle_misuse_system = JusticeVehicleMisuseSystem(sim)
     social_knowledge_influence_system = SocialKnowledgeInfluenceSystem(sim)
     npc_will_system = NPCWillSystem(sim)
+    npc_emergency_system = NPCEmergencyActionSystem(sim)
     business_pulse_aftermath_system = BusinessPulseAftermathSystem(sim)
     business_pulse_scene_system = BusinessPulseSceneSystem(sim, player)
     npc_weapon_system = NPCWeaponSystem(sim, player)
@@ -750,9 +755,11 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(npc_needs_system, 10)
     _live_timeskip_stride(npc_settlement_system, 600)
     _live_timeskip_stride(status_effect_system, 5)
+    _live_timeskip_stride(npc_emergency_system, 1)
     _live_timeskip_stride(altered_state_system, 0)
     _live_timeskip_stride(hunting_carcass_system, 0)
     _live_timeskip_stride(cultivation_system, 120)
+    _live_timeskip_stride(fauna_breeding_system, 120)
     _live_timeskip_stride(npc_item_use_system, 5)
     _live_timeskip_stride(npc_social_system, 10)
     _live_timeskip_stride(npc_relationship_system, 0)
@@ -818,6 +825,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(aerosol_trap_system)
     sim.register_system(hunting_carcass_system)
     sim.register_system(cultivation_system)
+    sim.register_system(fauna_breeding_system)
 
     sim.register_system(property_system)
     sim.register_system(player_business_system)
@@ -847,6 +855,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(justice_vehicle_misuse_system)
     sim.register_system(social_knowledge_influence_system)
     sim.register_system(npc_will_system)
+    sim.register_system(npc_emergency_system)
     sim.register_system(business_pulse_scene_system)
     sim.register_system(npc_weapon_system)
     sim.register_system(suppression_system)
@@ -1775,6 +1784,7 @@ def _run_new_game_legacy(view, character_name):
     }
     prime_bones_runtime(sim)
     prime_run_echoes_runtime(sim)
+    prime_ecology_registry(sim)
     run_nonce = _resolve_run_nonce()
     run_rng = random.Random(run_nonce)
     start_chunk_cx, start_chunk_cy = _pick_playtest_start_chunk(sim, run_rng)
@@ -2835,6 +2845,7 @@ def _run_new_game(view, character_name, gender_identity, *, debug_mode=False, cu
     }
     prime_bones_runtime(sim)
     prime_run_echoes_runtime(sim)
+    prime_ecology_registry(sim)
     run_nonce = _resolve_run_nonce()
     run_rng = random.Random(run_nonce)
     sim.world_traits["playtest_start"] = {"nonce": run_nonce}
@@ -3000,6 +3011,7 @@ def _run_loaded_game(view, character_name, *, debug_mode=False):
     sim.character_name = normalize_character_name(character_name) or getattr(sim, "character_name", None)
     prime_bones_runtime(sim)
     prime_run_echoes_runtime(sim)
+    prime_ecology_registry(sim)
     if not isinstance(getattr(sim, "world_traits", None), dict):
         sim.world_traits = {}
     if sim.character_name:

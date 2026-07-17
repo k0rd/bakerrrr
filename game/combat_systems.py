@@ -7,6 +7,7 @@ from engine.systems import System
 from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.components import (
     AI,
+    AnimalGenome,
     AnimalPhysicalProfile,
     ArmorLoadout,
     Collider,
@@ -32,6 +33,7 @@ from game.components import (
     WeaponUseProfile,
 )
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
+from game.fauna_genetics import animal_genome_payload
 from game.appearance_loadout import appearance_metadata_as_loose_item
 from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.checks import (
@@ -41,6 +43,7 @@ from game.checks import (
 from game.dialogue_runtime import active_contractor_record
 from game.drone_runtime import drone_hull_damage_absorb
 from game.drone_system import destroy_deployed_drone
+from game.npc_emergency_runtime import npc_emergency_active
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import (
     _apply_downed_actor_state,
@@ -1192,6 +1195,7 @@ class WeaponSystem(System):
             identity = self.sim.ecs.get(CreatureIdentity).get(eid)
             physical = self.sim.ecs.get(AnimalPhysicalProfile).get(eid)
             ecology = self.sim.ecs.get(EcologyProfile).get(eid)
+            genome = self.sim.ecs.get(AnimalGenome).get(eid)
             if identity and str(getattr(identity, "creature_type", "") or "").strip().lower() == "animal":
                 animal_payload = {
                     "creature_type": str(getattr(identity, "creature_type", "") or "").strip().lower(),
@@ -1205,6 +1209,10 @@ class WeaponSystem(System):
                     animal_payload["juvenile"] = bool(getattr(physical, "juvenile", False))
                 if ecology:
                     animal_payload["ecology_species"] = str(getattr(ecology, "species", "") or "").strip().lower()
+                if genome:
+                    animal_payload["fauna_genetics"] = animal_genome_payload(genome)
+                    animal_payload["root_animal_id"] = str(getattr(genome, "root_animal_id", "") or "").strip().lower()
+                    animal_payload["fauna_lineage_id"] = str(getattr(genome, "lineage_id", "") or "").strip().lower()
             npc_credits = 0
             if inv:
                 for entry in list(inv.items):
@@ -1779,7 +1787,8 @@ class NPCWeaponSystem(System):
             if ai.target_eid is None:
                 continue
             forced_attack = _forced_attack_active(ai, self.sim.tick)
-            if not forced_attack and not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
+            emergency_active = npc_emergency_active(self.sim, eid)
+            if not forced_attack and not emergency_active and not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
                 continue
 
             target_eid = ai.target_eid

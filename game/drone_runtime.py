@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from game.color_words import normalize_color_word, render_key_for_color_word
+from game.technical_research import drone_module_profile_with_research
 
 
 DRONE_SCHEMA_VERSION = 1
@@ -151,6 +152,7 @@ def normalize_drone_profile(profile=None, *, item_id=None):
         normalized.update({
             "chassis_class": chassis_class,
             "slot_limit": _safe_int(profile.get("slot_limit"), 1, minimum=1),
+            "procedure_slot_limit": _safe_int(profile.get("procedure_slot_limit"), 1, minimum=1),
             "weight_limit": _safe_int(profile.get("weight_limit"), 1, minimum=1),
             "base_hp": _safe_int(profile.get("base_hp"), 1, minimum=1),
             "base_range": _safe_int(profile.get("base_range"), 1, minimum=1),
@@ -416,6 +418,7 @@ def drone_loadout_summary(metadata=None, *, item_catalog=None):
 
     chassis_class = _clean_text(chassis.get("chassis_class") or normalized.get("chassis_class")).upper()
     slot_limit = _safe_int(chassis.get("slot_limit"), 0, minimum=0)
+    procedure_slot_limit = _safe_int(chassis.get("procedure_slot_limit"), 0, minimum=0)
     weight_limit = _safe_int(chassis.get("weight_limit"), 0, minimum=0)
 
     power = drone_profile_for_item(power_center_item_id, item_catalog=catalog)
@@ -437,6 +440,7 @@ def drone_loadout_summary(metadata=None, *, item_catalog=None):
     power_output = _safe_int(power.get("power_output"), 0, minimum=0)
     idle_overhead = _safe_int(power.get("idle_overhead"), 0, minimum=0)
     slot_used = 0
+    procedure_slot_used = 0
     weight_used = _safe_int(battery.get("weight"), 0, minimum=0)
     standby_draw = idle_overhead
     active_draw = idle_overhead
@@ -447,7 +451,7 @@ def drone_loadout_summary(metadata=None, *, item_catalog=None):
         if not isinstance(module, dict):
             continue
         module_item_id = _clean_item_id(module.get("item_id"))
-        profile = drone_profile_for_item(module_item_id, item_catalog=catalog)
+        profile = drone_module_profile_with_research(module, item_catalog=catalog)
         module_rows.append({"item_id": module_item_id, "profile": profile})
         if not module_item_id:
             errors.append("module entry is missing item_id")
@@ -457,7 +461,11 @@ def drone_loadout_summary(metadata=None, *, item_catalog=None):
             continue
         if not _compatible(profile, chassis_class):
             errors.append(f"{module_item_id} is incompatible with chassis {chassis_class or '?'}")
-        slot_used += _safe_int(profile.get("slot_cost"), 0, minimum=0)
+        module_slot_cost = _safe_int(profile.get("slot_cost"), 0, minimum=0)
+        if "procedure" in set(profile.get("capabilities", ()) or ()):
+            procedure_slot_used += module_slot_cost
+        else:
+            slot_used += module_slot_cost
         weight_used += _safe_int(profile.get("weight"), 0, minimum=0)
         standby_draw += _safe_int(profile.get("standby_draw"), 0, minimum=0)
         active_draw += _safe_int(profile.get("active_draw"), 0, minimum=0)
@@ -465,6 +473,8 @@ def drone_loadout_summary(metadata=None, *, item_catalog=None):
 
     if slot_limit > 0 and slot_used > slot_limit:
         errors.append(f"module slots {slot_used}/{slot_limit} exceed chassis limit")
+    if procedure_slot_limit > 0 and procedure_slot_used > procedure_slot_limit:
+        errors.append(f"procedure slots {procedure_slot_used}/{procedure_slot_limit} exceed chassis limit")
     if weight_limit > 0 and weight_used > weight_limit:
         errors.append(f"loadout weight {weight_used}/{weight_limit} exceeds chassis limit")
     if power_output > 0 and standby_draw > power_output:
@@ -483,6 +493,8 @@ def drone_loadout_summary(metadata=None, *, item_catalog=None):
         "chassis_class": chassis_class,
         "slot_limit": int(slot_limit),
         "slot_used": int(slot_used),
+        "procedure_slot_limit": int(procedure_slot_limit),
+        "procedure_slot_used": int(procedure_slot_used),
         "weight_limit": int(weight_limit),
         "weight_used": int(weight_used),
         "power_output": int(power_output),
@@ -508,6 +520,74 @@ def drone_state_has_capability(state, capability, *, item_catalog=None):
     if not needle:
         return False
     return needle in set(drone_state_capabilities(state, item_catalog=item_catalog))
+
+
+def drone_sensor_suppression_status(state, *, tick=0):
+    metadata = getattr(state, "source_metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    until_tick = _safe_int(metadata.get("sensor_suppressed_until_tick"), 0, minimum=0)
+    now = _safe_int(tick, 0, minimum=0)
+    active = until_tick > now
+    return {
+        "active": bool(active),
+        "until_tick": int(until_tick),
+        "remaining": max(0, int(until_tick) - int(now)),
+        "source_kind": _clean_text(metadata.get("sensor_suppression_source_kind")).lower(),
+        "source_eid": metadata.get("sensor_suppression_source_eid"),
+    }
+
+
+def set_drone_sensor_suppression(state, *, until_tick, source_kind="", source_eid=None):
+    if state is None:
+        return {"active": False, "until_tick": 0, "remaining": 0, "source_kind": "", "source_eid": None}
+    metadata = getattr(state, "source_metadata", None)
+    if not isinstance(metadata, dict):
+        metadata = {}
+        state.source_metadata = metadata
+    until_tick = _safe_int(until_tick, 0, minimum=0)
+    if until_tick <= 0:
+        metadata.pop("sensor_suppressed_until_tick", None)
+        metadata.pop("sensor_suppression_source_kind", None)
+        metadata.pop("sensor_suppression_source_eid", None)
+    else:
+        metadata["sensor_suppressed_until_tick"] = int(until_tick)
+        metadata["sensor_suppression_source_kind"] = _clean_text(source_kind).lower()
+        metadata["sensor_suppression_source_eid"] = source_eid
+    return drone_sensor_suppression_status(state, tick=0)
+
+
+def drone_link_disruption_status(state, *, tick=0):
+    metadata = getattr(state, "source_metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    until_tick = _safe_int(metadata.get("external_link_disrupted_until_tick"), 0, minimum=0)
+    now = _safe_int(tick, 0, minimum=0)
+    active = until_tick > now
+    return {
+        "active": bool(active),
+        "until_tick": int(until_tick),
+        "remaining": max(0, int(until_tick) - int(now)),
+        "source_kind": _clean_text(metadata.get("external_link_disruption_source_kind")).lower(),
+        "source_eid": metadata.get("external_link_disruption_source_eid"),
+    }
+
+
+def set_drone_link_disruption(state, *, until_tick, source_kind="", source_eid=None):
+    if state is None:
+        return {"active": False, "until_tick": 0, "remaining": 0, "source_kind": "", "source_eid": None}
+    metadata = getattr(state, "source_metadata", None)
+    if not isinstance(metadata, dict):
+        metadata = {}
+        state.source_metadata = metadata
+    until_tick = _safe_int(until_tick, 0, minimum=0)
+    if until_tick <= 0:
+        metadata.pop("external_link_disrupted_until_tick", None)
+        metadata.pop("external_link_disruption_source_kind", None)
+        metadata.pop("external_link_disruption_source_eid", None)
+    else:
+        metadata["external_link_disrupted_until_tick"] = int(until_tick)
+        metadata["external_link_disruption_source_kind"] = _clean_text(source_kind).lower()
+        metadata["external_link_disruption_source_eid"] = source_eid
+    return drone_link_disruption_status(state, tick=0)
 
 
 def drone_hull_damage_absorb(state, *, weapon_id="", damage_kind=""):
