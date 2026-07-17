@@ -21,6 +21,8 @@ from game.fashion_market import (
 from game.human_description import (
     build_human_description_profile,
     human_complexion_render_color_key,
+    human_eye_render_color_key,
+    human_hair_render_color_key,
     human_render_color_key,
     human_self_physical_summary,
 )
@@ -769,6 +771,7 @@ def seed_npc_innate_appearance_from_description(sim, eid, *, seed_token=""):
         "stature_phrase",
         "stature_compact",
         "complexion_phrase",
+        "eye_color",
         "hair_color",
         "hair_texture",
         "hair_length",
@@ -2708,6 +2711,7 @@ def humanoid_render_profile(sim, eid):
             "nonbinary": "mixed",
         }.get(gender_identity, "mixed")
     hair_color = _key(overrides.get("hair_color"))
+    eye_color = _key(overrides.get("eye_color"))
     complexion_phrase = _key(overrides.get("complexion_phrase"))
     return {
         "presentation": presentation,
@@ -2716,7 +2720,9 @@ def humanoid_render_profile(sim, eid):
         "hair_length": _key(overrides.get("hair_length")),
         "hair_style": _key(overrides.get("hair_style") or overrides.get("hair_style_compact")),
         "hair_color": hair_color,
-        "hair_color_key": fallback_render_key_for_color_word(hair_color, default="human_charcoal") if hair_color else "human_charcoal",
+        "hair_color_key": human_hair_render_color_key(hair_color) or "human_hair_charcoal",
+        "eye_color": eye_color,
+        "eye_color_key": human_eye_render_color_key(eye_color) or "",
         "complexion_phrase": complexion_phrase,
         "body_color_key": human_complexion_render_color_key(complexion_phrase) or "human_monochrome",
     }

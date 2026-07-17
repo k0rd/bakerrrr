@@ -36,18 +36,32 @@ _STATURE_ROWS = (
     ("lean and wiry", "lean"),
 )
 
-_HAIR_COLORS = (
-    "black",
-    "dark brown",
-    "chestnut",
-    "warm brown",
-    "ash blond",
-    "honey blond",
-    "platinum blond",
-    "auburn",
-    "copper-red",
-    "silver",
-    "charcoal",
+_HAIR_COLOR_WEIGHTS = (
+    ("black", 10.0),
+    ("blue-black", 4.0),
+    ("espresso", 7.0),
+    ("dark brown", 10.0),
+    ("chestnut", 8.0),
+    ("warm brown", 8.0),
+    ("golden brown", 5.0),
+    ("ash brown", 5.0),
+    ("auburn", 5.0),
+    ("copper-red", 4.0),
+    ("strawberry blond", 3.0),
+    ("ash blond", 4.0),
+    ("honey blond", 5.0),
+    ("platinum blond", 2.0),
+    ("silver", 3.0),
+    ("charcoal", 3.0),
+    ("white", 1.0),
+    ("ink blue", 1.5),
+    ("teal", 1.5),
+    ("forest green", 1.5),
+    ("violet", 1.5),
+    ("plum", 1.5),
+    ("rose pink", 1.5),
+    ("cherry red", 1.5),
+    ("lavender", 1.0),
 )
 
 _EYE_COLORS = (
@@ -169,37 +183,51 @@ _HUMAN_RENDER_PALETTE_ROWS = (
 HUMAN_RENDER_COLOR_KEYS = frozenset(row[2] for row in _HUMAN_RENDER_PALETTE_ROWS)
 
 _HAIR_RENDER_COLOR_KEYS = {
-    "black": "human_charcoal",
-    "dark brown": "human_olive",
-    "chestnut": "human_rust",
-    "warm brown": "human_rust",
-    "ash blond": "human_accent",
-    "honey blond": "human_accent",
-    "platinum blond": "human_monochrome",
-    "auburn": "human_wine",
-    "copper-red": "human_rust",
-    "silver": "human_monochrome",
-    "charcoal": "human_charcoal",
+    "black": "human_hair_black",
+    "blue-black": "human_hair_blue_black",
+    "espresso": "human_hair_espresso",
+    "dark brown": "human_hair_dark_brown",
+    "chestnut": "human_hair_chestnut",
+    "warm brown": "human_hair_warm_brown",
+    "golden brown": "human_hair_golden_brown",
+    "ash brown": "human_hair_ash_brown",
+    "ash blond": "human_hair_ash_blond",
+    "honey blond": "human_hair_honey_blond",
+    "platinum blond": "human_hair_platinum_blond",
+    "auburn": "human_hair_auburn",
+    "copper-red": "human_hair_copper_red",
+    "strawberry blond": "human_hair_strawberry_blond",
+    "silver": "human_hair_silver",
+    "charcoal": "human_hair_charcoal",
+    "white": "human_hair_white",
+    "ink blue": "human_hair_ink_blue",
+    "teal": "human_hair_teal",
+    "forest green": "human_hair_forest_green",
+    "violet": "human_hair_violet",
+    "plum": "human_hair_plum",
+    "rose pink": "human_hair_rose_pink",
+    "cherry red": "human_hair_cherry_red",
+    "lavender": "human_hair_lavender",
 }
 
 _EYE_RENDER_COLOR_KEYS = {
-    "dark brown": "human_olive",
-    "brown": "human_rust",
-    "hazel": "human_olive",
-    "gray": "human_monochrome",
-    "green": "human_olive",
-    "blue": "human_slate",
-    "amber": "human_accent",
+    "dark brown": "human_eye_dark_brown",
+    "brown": "human_eye_brown",
+    "hazel": "human_eye_hazel",
+    "gray": "human_eye_gray",
+    "green": "human_eye_green",
+    "blue": "human_eye_blue",
+    "amber": "human_eye_amber",
 }
 
 _COMPLEXION_RENDER_COLOR_KEYS = {
-    "deep brown complexion": "human_rust",
-    "rich brown complexion": "human_rust",
-    "warm brown complexion": "human_rust",
-    "olive complexion": "human_olive",
-    "golden complexion": "human_accent",
-    "freckled fair complexion": "human_monochrome",
-    "pale complexion": "human_monochrome",
+    "deep brown complexion": "human_skin_deep_brown",
+    "rich brown complexion": "human_skin_rich_brown",
+    "warm brown complexion": "human_skin_warm_brown",
+    "olive complexion": "human_skin_olive",
+    "golden complexion": "human_skin_golden",
+    "freckled fair complexion": "human_skin_freckled_fair",
+    "pale complexion": "human_skin_pale",
 }
 
 _CONDITION_PHRASES = (
@@ -468,7 +496,7 @@ def build_human_description_profile(seed, *, eid=None, identity=None, personal_n
     style_axis = _weighted_choice(rng, _STYLE_WEIGHTS[gender_identity])
     stature_phrase, stature_compact = _pick_row(rng, _STATURE_ROWS)
     hair_length = _pick_row(rng, _HAIR_LENGTHS_BY_STYLE[style_axis])
-    hair_color = _pick_row(rng, _HAIR_COLORS)
+    hair_color = _weighted_choice(rng, _HAIR_COLOR_WEIGHTS)
     hair_texture = _pick_row(rng, _HAIR_TEXTURES)
     eye_color = _pick_row(rng, _EYE_COLORS)
     complexion_phrase = _pick_row(rng, _COMPLEXION_ROWS)
@@ -615,13 +643,33 @@ def _conversation_text(segments):
 
 
 def _hair_descriptor_color_key(profile):
-    return _HAIR_RENDER_COLOR_KEYS.get(str(profile.get("hair_color", "")).strip().lower()) or str(
+    return human_hair_render_color_key(profile) or str(
         profile.get("render_color_key", "") or ""
     ).strip() or None
 
 
+def human_hair_render_color_key(profile_or_phrase):
+    """Return the dedicated palette key for a visible hair color."""
+
+    if isinstance(profile_or_phrase, dict):
+        phrase = profile_or_phrase.get("hair_color", "")
+    else:
+        phrase = profile_or_phrase
+    return _HAIR_RENDER_COLOR_KEYS.get(str(phrase or "").strip().lower()) or None
+
+
 def _eye_descriptor_color_key(profile):
-    return _EYE_RENDER_COLOR_KEYS.get(str(profile.get("eye_color", "")).strip().lower()) or None
+    return human_eye_render_color_key(profile)
+
+
+def human_eye_render_color_key(profile_or_phrase):
+    """Return the small-feature palette key for a visible eye color."""
+
+    if isinstance(profile_or_phrase, dict):
+        phrase = profile_or_phrase.get("eye_color", "")
+    else:
+        phrase = profile_or_phrase
+    return _EYE_RENDER_COLOR_KEYS.get(str(phrase or "").strip().lower()) or None
 
 
 def _complexion_descriptor_color_key(profile):

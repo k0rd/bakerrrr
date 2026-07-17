@@ -887,6 +887,9 @@ def _actor_presentation_effects(profile):
     hair_style = token(profile.get("hair_style"))
     if hair_style:
         effects.append(f"actor_hair_style_{hair_style}")
+    eye_color = token(profile.get("eye_color"))
+    if eye_color:
+        effects.append(f"actor_eye_{eye_color}")
     return tuple(effects)
 
 
