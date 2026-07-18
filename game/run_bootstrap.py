@@ -49,7 +49,7 @@ from game.organizations import (
     seed_chunk_organizations,
     seed_property_organization_defaults,
 )
-from game.population import seed_chunk_items, spawn_chunk_npcs
+from game.population import seed_chunk_items, spawn_chunk_npcs, spawn_chunk_special_population
 from game.property_access import COMMON_AREA_ROOM_KINDS, default_site_services_for_archetype
 from game.property_keys import ensure_actor_has_property_key, ensure_property_lock
 from game.quick_travel_ramps import generate_quick_travel_ramp_records
@@ -826,6 +826,29 @@ def _register_chunk_properties(sim, chunk):
     return records
 
 
+def _register_streamed_chunk_properties(sim, chunk):
+    """Use the canonical streaming path for the initial chunk too."""
+
+    from game.world_progression_systems import WorldStreamingSystem
+
+    chunk_key = (int(chunk.get("cx", 0)), int(chunk.get("cy", 0)))
+    streamer = WorldStreamingSystem(sim, focus_eid=0)
+    streamer._ensure_chunk_properties(chunk_key[0], chunk_key[1])
+    records = sim.chunk_property_records.setdefault(chunk_key, [])
+    chunk_size = int(max(8, sim.chunk_size))
+    origin_x = chunk_key[0] * chunk_size
+    origin_y = chunk_key[1] * chunk_size
+    _register_justice_station_vehicles(
+        sim,
+        chunk,
+        records,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        chunk_size=chunk_size,
+    )
+    return list(records)
+
+
 def _seed_world_items(sim, property_records):
     chunk = getattr(sim, "active_chunk", None)
     if not isinstance(chunk, dict):
@@ -1268,7 +1291,7 @@ def bootstrap_normal_run(
 
     sim.stream_world(start_focus_x, start_focus_y)
     sim.ensure_loaded_chunk_terrain()
-    property_records = _register_chunk_properties(sim, sim.active_chunk)
+    property_records = _register_streamed_chunk_properties(sim, sim.active_chunk)
     sim.chunk_property_records[(sim.active_chunk["cx"], sim.active_chunk["cy"])] = list(property_records)
     world_item_count = _seed_world_items(sim, property_records)
     maybe_seed_bones_for_chunk(sim, sim.active_chunk)
@@ -1398,6 +1421,7 @@ def bootstrap_normal_run(
         vehicle = _ensure_starter_vehicle(sim, player, player_pos, run_rng)
 
     ambient_npc_count = len(spawn_chunk_npcs(sim, sim.active_chunk, property_records, reserved_property_ids=set()))
+    ambient_npc_count += len(spawn_chunk_special_population(sim, sim.active_chunk, property_records))
     ensure_chunk_flora(sim, sim.active_chunk, property_records=property_records)
 
     sim.stream_world(player_pos[0], player_pos[1])

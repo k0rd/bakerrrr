@@ -3,7 +3,7 @@ import random
 from .buildings import layout_chunk_building, world_building_id
 from .ecs import ECS
 from .events import Event, EventBus
-from .underground import chunk_underground_site_plans
+from .underground import chunk_underground_network_plan, chunk_underground_site_plans
 from .sites import layout_chunk_site, site_entry_front_cell, site_layout_reserved_footprints
 from .world import World, normalize_building_levels
 from .eventlog import EventLog
@@ -177,6 +177,8 @@ class Simulation:
             self.entity_identity_records = {}
         if not isinstance(getattr(self, "_properties_in_radius_cache", None), dict):
             self._properties_in_radius_cache = {}
+        if not isinstance(getattr(self, "_underground_plan_cache", None), dict):
+            self._underground_plan_cache = {}
         if not isinstance(getattr(self, "flora_patches", None), dict):
             self.flora_patches = {}
         if not isinstance(getattr(self, "chunk_flora_records", None), dict):
@@ -1024,6 +1026,38 @@ class Simulation:
 
     def chunk_origin(self, cx, cy):
         return (cx * self.chunk_size, cy * self.chunk_size)
+
+    def underground_plans_for_chunk(self, chunk, *, origin_x, origin_y, chunk_size):
+        """Return one cached canonical site/network plan pair per streamed chunk."""
+
+        if not isinstance(chunk, dict):
+            return (), None
+        key = (
+            int(chunk.get("cx", 0)),
+            int(chunk.get("cy", 0)),
+            int(chunk_size),
+            int(self.seed),
+        )
+        cached = self._underground_plan_cache.get(key)
+        if isinstance(cached, tuple) and len(cached) == 2:
+            return cached
+        site_plans = chunk_underground_site_plans(
+            chunk,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+        )
+        network_plan = chunk_underground_network_plan(
+            chunk,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+            site_plans=site_plans,
+            world_seed=self.seed,
+        )
+        cached = (tuple(site_plans), network_plan)
+        self._underground_plan_cache[key] = cached
+        return cached
 
     def _coord_key(self, x, y, z=0):
         try:
@@ -1940,6 +1974,85 @@ class Simulation:
                 if aperture and str(aperture.get("kind", "door") or "door").strip().lower() in {"door", "side_door", "service_door", "employee_door"}:
                     self.apply_door_state(x, y, z)
 
+    def _stamp_underground_network(self, plan, *, origin_x, origin_y, chunk_size):
+        """Carve shared tunnel terrain without claiming connected site interiors."""
+
+        if not isinstance(plan, dict):
+            return 0
+        try:
+            z = int(plan.get("z", -1))
+        except (TypeError, ValueError):
+            return 0
+        floor_cells = set()
+        for cell in tuple(plan.get("floor_cells", ()) or ()):
+            try:
+                if isinstance(cell, dict):
+                    floor_cells.add((int(cell.get("x")), int(cell.get("y"))))
+                elif isinstance(cell, (list, tuple)) and len(cell) >= 2:
+                    floor_cells.add((int(cell[0]), int(cell[1])))
+            except (TypeError, ValueError):
+                continue
+        if not floor_cells:
+            return 0
+
+        left = int(origin_x)
+        right = left + int(chunk_size) - 1
+        top = int(origin_y)
+        bottom = top + int(chunk_size) - 1
+        wall_cells = set()
+        for x, y in floor_cells:
+            for neighbor in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                nx, ny = neighbor
+                if left <= nx <= right and top <= ny <= bottom and neighbor not in floor_cells:
+                    wall_cells.add(neighbor)
+
+        for x, y in sorted(wall_cells):
+            if (int(x), int(y), int(z)) in self.structure_cells:
+                continue
+            tile = self.tilemap.tile_at(x, y, z)
+            if tile is not None and bool(tile.walkable):
+                continue
+            self.tilemap.set_tile(
+                x,
+                y,
+                Tile(
+                    walkable=False,
+                    transparent=False,
+                    glyph="#",
+                    color="building_edge",
+                    semantic_id="wall_underground_tunnel",
+                ),
+                z=z,
+            )
+
+        glyph = str(plan.get("floor_glyph", ".") or ".")[:1] or "."
+        structure_info = {
+            "building_id": str(plan.get("building_id", "underground_network") or "underground_network"),
+            "name": str(plan.get("name", "Underground Network") or "Underground Network"),
+            "archetype": str(plan.get("kind", "access_tunnel_network") or "access_tunnel_network"),
+            "floor": int(z),
+            "room_kind": "access_tunnel",
+            "common_area_kind": "access_tunnel",
+            "common_area_room_kinds": ("access_tunnel",),
+        }
+        for x, y in sorted(floor_cells):
+            self.tilemap.set_tile(
+                x,
+                y,
+                Tile(
+                    walkable=True,
+                    transparent=True,
+                    glyph=glyph,
+                    color="building_fill",
+                    semantic_id="floor_underground_tunnel",
+                ),
+                z=z,
+            )
+            key = (int(x), int(y), int(z))
+            if key not in self.structure_cells:
+                self.structure_cells[key] = dict(structure_info)
+        return len(floor_cells)
+
     def _mark_structure_area(self, left, right, top, bottom, z, info, room_plan=None, excluded=None):
         excluded = excluded or frozenset()
         stamped = dict(info or {})
@@ -2616,12 +2729,17 @@ class Simulation:
                         basement_depth = max(basement_depth, int(normalized_basements))
                     except (TypeError, ValueError, AttributeError):
                         continue
-            underground_plans = chunk_underground_site_plans(
+            underground_plans, underground_network = self.underground_plans_for_chunk(
                 chunk,
                 origin_x=ox,
                 origin_y=oy,
                 chunk_size=size,
             )
+            if isinstance(underground_network, dict):
+                basement_depth = max(
+                    basement_depth,
+                    abs(int(underground_network.get("z", -1) or -1)),
+                )
             for plan in underground_plans:
                 try:
                     basement_depth = max(basement_depth, abs(int(plan.get("z", 0) or 0)))
@@ -2629,6 +2747,7 @@ class Simulation:
                     continue
         else:
             underground_plans = ()
+            underground_network = None
 
         for z in range(-int(basement_depth), 0):
             for y in range(oy, oy + size):
@@ -2878,6 +2997,14 @@ class Simulation:
                     info=structure_info,
                     room_plan=room_plan,
                     excluded=frozenset(excluded),
+                )
+
+            if isinstance(underground_network, dict):
+                self._stamp_underground_network(
+                    underground_network,
+                    origin_x=ox,
+                    origin_y=oy,
+                    chunk_size=size,
                 )
 
         else:

@@ -60,6 +60,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "property_order",
     "next_property_order",
     "_properties_in_radius_cache",
+    "_underground_plan_cache",
     "ground_item_index",
     "ground_item_order",
     "next_ground_item_order",

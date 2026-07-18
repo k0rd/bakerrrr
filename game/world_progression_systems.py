@@ -5,7 +5,12 @@ import re
 from engine.buildings import building_exterior_profile, layout_chunk_building, world_building_id
 from engine.events import Event
 from engine.fixtures import generate_chunk_fixture_records
-from engine.underground import UNDERGROUND_ACCESS_SERVICE, chunk_underground_site_plans
+from engine.underground import (
+    ACCESS_TUNNEL_NETWORK_KIND,
+    UNDERGROUND_ACCESS_SERVICE,
+    chunk_underground_network_plan,
+    chunk_underground_site_plans,
+)
 from engine.persistence import restore_chunk_state
 from engine.sites import layout_chunk_site, site_gameplay_profile
 from engine.systems import System
@@ -107,6 +112,7 @@ from game.opportunities import (
 )
 from game.organizations import (
     ensure_property_organization,
+    link_property_organization,
     occupation_targets_property,
     organization_name,
     property_org_members,
@@ -503,12 +509,15 @@ class WorldStreamingSystem(System):
         fixture_type="service_terminal",
         glyph="i",
         lead_mode=None,
+        display_description=None,
+        route_destinations=(),
     ):
         self._ensure_property_anchor(x, y, z)
+        normalized_fixture_type = str(fixture_type).strip().lower() or "service_terminal"
         metadata = {
-            "archetype": str(fixture_type).strip().lower() or "service_terminal",
-            "fixture_type": str(fixture_type).strip().lower() or "service_terminal",
-            "interaction_role": "service_terminal",
+            "archetype": normalized_fixture_type,
+            "fixture_type": normalized_fixture_type,
+            "interaction_role": "route_marker" if normalized_fixture_type == "underground_route_marker" else "service_terminal",
             "site_services": [
                 str(service).strip().lower()
                 for service in tuple(site_services or ())
@@ -521,6 +530,16 @@ class WorldStreamingSystem(System):
             "public": True,
             "chunk": key,
         }
+        display_description = str(display_description or "").strip()
+        if display_description:
+            metadata["display_description"] = display_description
+        route_destinations = tuple(
+            str(value or "").strip()
+            for value in tuple(route_destinations or ())
+            if str(value or "").strip()
+        )
+        if route_destinations:
+            metadata["route_destinations"] = list(route_destinations)
         if linked_property_id:
             metadata["linked_property_id"] = str(linked_property_id)
         lead_mode = str(lead_mode or "").strip().lower()
@@ -604,12 +623,28 @@ class WorldStreamingSystem(System):
         origin_x = key[0] * chunk_size
         origin_y = key[1] * chunk_size
         area_type = str(chunk.get("district", {}).get("area_type", "city")).strip().lower() or "city"
-        underground_plans = chunk_underground_site_plans(
-            chunk,
-            origin_x=origin_x,
-            origin_y=origin_y,
-            chunk_size=chunk_size,
-        )
+        if hasattr(self.sim, "underground_plans_for_chunk"):
+            underground_plans, underground_network = self.sim.underground_plans_for_chunk(
+                chunk,
+                origin_x=origin_x,
+                origin_y=origin_y,
+                chunk_size=chunk_size,
+            )
+        else:
+            underground_plans = chunk_underground_site_plans(
+                chunk,
+                origin_x=origin_x,
+                origin_y=origin_y,
+                chunk_size=chunk_size,
+            )
+            underground_network = chunk_underground_network_plan(
+                chunk,
+                origin_x=origin_x,
+                origin_y=origin_y,
+                chunk_size=chunk_size,
+                site_plans=underground_plans,
+                world_seed=self.sim.seed,
+            )
         underground_by_source = {
             str(plan.get("source_building_id", "")).strip(): plan
             for plan in underground_plans
@@ -1016,6 +1051,222 @@ class WorldStreamingSystem(System):
                     key=key,
                     spec=hazard_spec,
                     linked_property_id=property_id,
+                )
+
+        if isinstance(underground_network, dict):
+            anchor = underground_network.get("anchor", {}) if isinstance(underground_network.get("anchor"), dict) else {}
+            footprint = underground_network.get("footprint", {}) if isinstance(underground_network.get("footprint"), dict) else {}
+            network_x = int(anchor.get("x", origin_x))
+            network_y = int(anchor.get("y", origin_y))
+            network_z = int(anchor.get("z", underground_network.get("z", -1)))
+            self._ensure_property_anchor(network_x, network_y, network_z)
+
+            source_props = {}
+            site_props = {}
+            for record in tuple(records):
+                prop = self.sim.properties.get(record.get("id")) if isinstance(record, dict) else None
+                if not isinstance(prop, dict):
+                    continue
+                metadata = prop.get("metadata", {}) if isinstance(prop.get("metadata"), dict) else {}
+                building_id = str(metadata.get("building_id", "") or "").strip()
+                if building_id:
+                    source_props.setdefault(building_id, prop)
+                    site_props.setdefault(building_id, prop)
+            connection_rows = tuple(
+                row
+                for row in tuple(underground_network.get("site_connections", ()) or ())
+                if isinstance(row, dict)
+            )
+            interested_property_ids = []
+            for connection in connection_rows:
+                source_prop = source_props.get(str(connection.get("source_building_id", "") or "").strip())
+                if isinstance(source_prop, dict):
+                    source_property_id = str(source_prop.get("id", "") or "").strip()
+                    if source_property_id and source_property_id not in interested_property_ids:
+                        interested_property_ids.append(source_property_id)
+
+            rooms = tuple(underground_network.get("rooms", ("access_tunnel",)) or ("access_tunnel",))
+            route_destinations = tuple(underground_network.get("route_destinations", ()) or ())
+            network_metadata = {
+                "archetype": ACCESS_TUNNEL_NETWORK_KIND,
+                "site_kind": ACCESS_TUNNEL_NETWORK_KIND,
+                "building_id": str(underground_network.get("building_id", "") or "").strip() or None,
+                "site_id": str(underground_network.get("site_id", "") or "").strip() or None,
+                "floors": 1,
+                "rooms": list(rooms),
+                "common_area_kind": "access_tunnel",
+                "common_area_room_kinds": list(dict.fromkeys(("access_tunnel",) + rooms)),
+                "common_area_kinds": list(dict.fromkeys(("access_tunnel",) + rooms)),
+                "room_access_overrides": {
+                    str(room).strip().lower(): "public"
+                    for room in rooms
+                    if str(room).strip()
+                },
+                "footprint": dict(footprint),
+                "footprint_cells": [
+                    dict(cell)
+                    for cell in tuple(underground_network.get("property_cells", ()) or ())
+                    if isinstance(cell, dict)
+                ],
+                "skip_ambient_population": True,
+                "ambient_encounter_profile": str(underground_network.get("ambient_encounter_profile", "") or "").strip().lower() or None,
+                "ambient_encounter_spawns": [
+                    dict(spec)
+                    for spec in tuple(underground_network.get("ambient_encounter_spawns", ()) or ())
+                    if isinstance(spec, dict)
+                ],
+                "allow_wildlife_habitation": bool(underground_network.get("ambient_wildlife_profile")),
+                "ambient_wildlife_profile": str(underground_network.get("ambient_wildlife_profile", "") or "").strip().lower() or None,
+                "ambient_wildlife_spawns": [
+                    dict(spec)
+                    for spec in tuple(underground_network.get("ambient_wildlife_spawns", ()) or ())
+                    if isinstance(spec, dict)
+                ],
+                "ambient_hazard_profile": str(underground_network.get("ambient_hazard_profile", "") or "").strip().lower() or None,
+                "ambient_hazard_spawns": [
+                    dict(spec)
+                    for spec in tuple(underground_network.get("ambient_hazard_spawns", ()) or ())
+                    if isinstance(spec, dict)
+                ],
+                "route_code": str(underground_network.get("route_code", "") or "").strip() or None,
+                "route_destinations": list(route_destinations),
+                "layout_variant": str(underground_network.get("layout_variant", "") or "").strip() or None,
+                "control_mode": "shared_infrastructure",
+                "display_description": "Connected routes: " + "; ".join(str(value) for value in route_destinations),
+                "shared_area_interests": ([{
+                    "property_ids": list(interested_property_ids),
+                    "common_area_kind": "access_tunnel",
+                    "interest_kind": "shared_infrastructure",
+                    "authority_reason": "connected_service_spur",
+                    "protects": True,
+                    "warns": True,
+                }] if interested_property_ids else []),
+                "purchase_cost": 0,
+                "finance_services": [],
+                "site_services": [],
+                "public": True,
+                "chunk": key,
+            }
+            network_property_id = self.sim.register_property(
+                name=str(underground_network.get("name", "Access Tunnel Network") or "Access Tunnel Network"),
+                kind="building",
+                x=network_x,
+                y=network_y,
+                z=network_z,
+                owner_eid=None,
+                owner_tag="public",
+                metadata=network_metadata,
+            )
+            network_prop = self.sim.properties.get(network_property_id)
+            seed_property_organization_defaults(network_prop, district=chunk.get("district"))
+            ensure_property_organization(self.sim, network_prop)
+            for connection in connection_rows:
+                source_prop = source_props.get(str(connection.get("source_building_id", "") or "").strip())
+                if not isinstance(source_prop, dict):
+                    continue
+                source_org_eid = ensure_property_organization(self.sim, source_prop)
+                if source_org_eid is not None:
+                    link_property_organization(
+                        self.sim,
+                        network_prop,
+                        organization_eid=source_org_eid,
+                        link_kind="service_host",
+                        active=True,
+                    )
+            records.append({
+                "id": network_property_id,
+                "kind": "building",
+                "x": network_x,
+                "y": network_y,
+                "z": network_z,
+                "archetype": ACCESS_TUNNEL_NETWORK_KIND,
+                "building_id": network_metadata.get("building_id"),
+            })
+
+            for cache_index, cache_spec in enumerate(tuple(underground_network.get("cache_sites", ()) or ())):
+                if not isinstance(cache_spec, dict):
+                    continue
+                self._register_underground_cache_asset(
+                    records,
+                    key=key,
+                    name=str(cache_spec.get("name", "Tunnel Cache") or "Tunnel Cache"),
+                    x=int(cache_spec.get("x", network_x)),
+                    y=int(cache_spec.get("y", network_y)),
+                    z=int(cache_spec.get("z", network_z)),
+                    linked_property_id=network_property_id,
+                    seed_token=f"{network_metadata.get('site_id')}:network:{cache_index}",
+                    cache_profile=str(cache_spec.get("cache_profile", "maintenance") or "maintenance"),
+                )
+            for service_spec in tuple(underground_network.get("service_sites", ()) or ()):
+                if not isinstance(service_spec, dict):
+                    continue
+                self._register_underground_service_asset(
+                    records,
+                    key=key,
+                    name=str(service_spec.get("name", "Junction Marker") or "Junction Marker"),
+                    x=int(service_spec.get("x", network_x)),
+                    y=int(service_spec.get("y", network_y)),
+                    z=int(service_spec.get("z", network_z)),
+                    site_services=tuple(service_spec.get("site_services", ()) or ()),
+                    linked_property_id=network_property_id,
+                    fixture_type=str(service_spec.get("fixture_type", "underground_route_marker") or "underground_route_marker"),
+                    glyph=str(service_spec.get("glyph", "j") or "j")[:1],
+                    display_description=str(service_spec.get("display_description", "") or ""),
+                    route_destinations=route_destinations,
+                )
+            for hazard_spec in tuple(underground_network.get("ambient_hazard_spawns", ()) or ()):
+                if isinstance(hazard_spec, dict):
+                    self._register_environmental_hazard_asset(
+                        records,
+                        key=key,
+                        spec=hazard_spec,
+                        linked_property_id=network_property_id,
+                    )
+
+            for connection in connection_rows:
+                if bool(connection.get("direct")):
+                    continue
+                site_prop = site_props.get(str(connection.get("building_id", "") or "").strip())
+                lower_linked_id = site_prop.get("id") if isinstance(site_prop, dict) else network_property_id
+                lower_destination = {
+                    "x": int(connection.get("network_x", connection.get("x", network_x))),
+                    "y": int(connection.get("network_y", connection.get("y", network_y))),
+                    "z": int(connection.get("network_z", network_z)),
+                    "destination_name": str(underground_network.get("name", "access tunnels") or "access tunnels"),
+                    "travel_ticks": 1,
+                }
+                upper_destination = {
+                    "x": int(connection.get("x", network_x)),
+                    "y": int(connection.get("y", network_y)),
+                    "z": int(connection.get("z", network_z)),
+                    "destination_name": str(connection.get("source_building_name", "lower passage") or "lower passage"),
+                    "travel_ticks": 1,
+                }
+                self._register_underground_access_asset(
+                    records,
+                    key=key,
+                    name="Stairs to Access Tunnels",
+                    x=int(connection.get("x", network_x)),
+                    y=int(connection.get("y", network_y)),
+                    z=int(connection.get("z", network_z)),
+                    destination=lower_destination,
+                    linked_property_id=lower_linked_id,
+                    fixture_type="tunnel_stairs",
+                    glyph="s",
+                    public=True,
+                )
+                self._register_underground_access_asset(
+                    records,
+                    key=key,
+                    name=f"Stairs to {str(connection.get('source_building_name', 'Lower Passage') or 'Lower Passage')}",
+                    x=int(connection.get("network_x", connection.get("x", network_x))),
+                    y=int(connection.get("network_y", connection.get("y", network_y))),
+                    z=int(connection.get("network_z", network_z)),
+                    destination=upper_destination,
+                    linked_property_id=network_property_id,
+                    fixture_type="tunnel_stairs",
+                    glyph="s",
+                    public=True,
                 )
 
         fixture_count = max(1, chunk_size // 8) if area_type != "city" else max(4, chunk_size // 4)

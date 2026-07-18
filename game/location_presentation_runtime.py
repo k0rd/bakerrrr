@@ -863,6 +863,10 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
     if services:
         bits.append("services:" + ",".join(services))
 
+    display_description = str(metadata.get("display_description", "") or "").strip()
+    if kind == "asset" and display_description:
+        bits.append(display_description)
+
     if access.standing_reason and access.standing_reason not in {"none", "open_business", "public_space"}:
         bits.append(f"standing:{access.standing_reason}")
 

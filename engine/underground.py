@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import heapq
 import random
 
 from engine.buildings import layout_chunk_building, world_building_id
 from engine.sites import site_entry_front_cell
+from engine.world import normalize_building_levels
 
 
 UNDERGROUND_ACCESS_SERVICE = "underground_access"
@@ -13,6 +15,8 @@ METRO_UNDERPASS_KIND = "metro_underpass"
 UTILITY_CORRIDOR_KIND = "utility_corridor"
 STORM_DRAIN_KIND = "storm_drain"
 SERVICE_BASEMENT_KIND = "service_basement"
+ACCESS_TUNNEL_NETWORK_KIND = "access_tunnel_network"
+UNDERGROUND_NETWORK_Z = -1
 CANONICAL_UNDERGROUND_KINDS = (
     METRO_UNDERPASS_KIND,
     UTILITY_CORRIDOR_KIND,
@@ -161,6 +165,200 @@ def _shape_excluded_cells(cells):
                 continue
             excluded.append({"x": int(cell_x), "y": int(cell_y)})
     return tuple(excluded)
+
+
+def _plan_shape_cells(plan):
+    """Return the realized horizontal cells for a shaped underground plan."""
+
+    if not isinstance(plan, dict) or not isinstance(plan.get("footprint"), dict):
+        return frozenset()
+    footprint = plan["footprint"]
+    try:
+        left = int(footprint.get("left"))
+        right = int(footprint.get("right"))
+        top = int(footprint.get("top"))
+        bottom = int(footprint.get("bottom"))
+    except (TypeError, ValueError):
+        return frozenset()
+    excluded = set()
+    for cell in tuple(plan.get("footprint_excluded_cells", ()) or ()):
+        try:
+            if isinstance(cell, dict):
+                excluded.add((int(cell.get("x")), int(cell.get("y"))))
+            elif isinstance(cell, (list, tuple)) and len(cell) >= 2:
+                excluded.add((int(cell[0]), int(cell[1])))
+        except (TypeError, ValueError):
+            continue
+    return frozenset(
+        (x, y)
+        for y in range(top, bottom + 1)
+        for x in range(left, right + 1)
+        if (x, y) not in excluded
+    )
+
+
+def _network_path(start, goals, *, bounds, blocked=(), preferred_axis=None):
+    """Find a short deterministic tunnel path while favoring an existing lane."""
+
+    start = (int(start[0]), int(start[1]))
+    goals = {(int(cell[0]), int(cell[1])) for cell in tuple(goals or ())}
+    if not goals:
+        return ()
+    left, right, top, bottom = (int(value) for value in bounds)
+    blocked = {(int(cell[0]), int(cell[1])) for cell in tuple(blocked or ())}
+    blocked.discard(start)
+    blocked.difference_update(goals)
+    if start in goals:
+        return (start,)
+
+    frontier = [(0.0, 0, start[1], start[0], start)]
+    costs = {start: 0.0}
+    previous = {}
+    preferred_kind = ""
+    preferred_value = 0
+    if isinstance(preferred_axis, (list, tuple)) and len(preferred_axis) >= 2:
+        preferred_kind = str(preferred_axis[0] or "").strip().lower()
+        try:
+            preferred_value = int(preferred_axis[1])
+        except (TypeError, ValueError):
+            preferred_kind = ""
+
+    while frontier:
+        cost, steps, _sort_y, _sort_x, current = heapq.heappop(frontier)
+        if cost > costs.get(current, float("inf")) + 0.0001:
+            continue
+        if current in goals:
+            path = [current]
+            while current in previous:
+                current = previous[current]
+                path.append(current)
+            path.reverse()
+            return tuple(path)
+
+        x, y = current
+        for nx, ny in ((x + 1, y), (x, y + 1), (x - 1, y), (x, y - 1)):
+            neighbor = (int(nx), int(ny))
+            if nx < left or nx > right or ny < top or ny > bottom or neighbor in blocked:
+                continue
+            deviation = 0
+            if preferred_kind == "x":
+                deviation = abs(int(nx) - preferred_value)
+            elif preferred_kind == "y":
+                deviation = abs(int(ny) - preferred_value)
+            next_cost = float(cost) + 1.0 + (0.035 * float(deviation))
+            if next_cost + 0.0001 >= costs.get(neighbor, float("inf")):
+                continue
+            costs[neighbor] = next_cost
+            previous[neighbor] = current
+            heapq.heappush(frontier, (next_cost, int(steps) + 1, int(ny), int(nx), neighbor))
+    return ()
+
+
+def _nearest_open_network_cell(cells, point, *, blocked=()):
+    blocked = set(blocked or ())
+    candidates = [cell for cell in tuple(cells or ()) if cell not in blocked]
+    if not candidates:
+        return None
+    px, py = int(point[0]), int(point[1])
+    return min(
+        candidates,
+        key=lambda cell: (
+            abs(int(cell[0]) - px) + abs(int(cell[1]) - py),
+            int(cell[1]),
+            int(cell[0]),
+        ),
+    )
+
+
+def _network_site_portal(plan):
+    """Pick a clear site cell for a network connection without occupying content."""
+
+    cells = set(_plan_shape_cells(plan))
+    if not cells:
+        return None
+    reserved = set()
+    for key in (
+        "cache_sites",
+        "service_sites",
+        "ambient_encounter_spawns",
+        "ambient_wildlife_spawns",
+        "ambient_hazard_spawns",
+        "underground_returns",
+    ):
+        for spec in tuple(plan.get(key, ()) or ()):
+            if not isinstance(spec, dict):
+                continue
+            try:
+                reserved.add((int(spec.get("x")), int(spec.get("y"))))
+            except (TypeError, ValueError):
+                continue
+    anchor = plan.get("anchor", {}) if isinstance(plan.get("anchor"), dict) else {}
+    try:
+        anchor_point = (int(anchor.get("x")), int(anchor.get("y")))
+    except (TypeError, ValueError):
+        anchor_point = next(iter(cells))
+    candidates = []
+    for cell in cells:
+        if cell in reserved:
+            continue
+        neighbor_count = sum(
+            (cell[0] + dx, cell[1] + dy) in cells
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+        )
+        candidates.append((
+            -int(neighbor_count),
+            abs(cell[0] - anchor_point[0]) + abs(cell[1] - anchor_point[1]),
+            cell[1],
+            cell[0],
+            cell,
+        ))
+    if not candidates:
+        candidates = [(0, 0, cell[1], cell[0], cell) for cell in cells if cell not in reserved]
+    return min(candidates)[-1] if candidates else None
+
+
+def _underground_network_profile(district):
+    district = district if isinstance(district, dict) else {}
+    district_type = _text(district.get("district_type")).lower() or "city"
+    if district_type in {"industrial", "military", "corporate"}:
+        return {
+            "variant": "service_grid",
+            "label": "Service Grid",
+            "rooms": ("access_tunnel", "utility_spine", "conduit_junction", "service_alcove"),
+            "encounter": "underground_maintenance",
+            "wildlife": "basement_pests",
+            "cache": "maintenance",
+            "floor_glyph": "=",
+        }
+    if district_type in {"slums", "entertainment"}:
+        return {
+            "variant": "understreet_sprawl",
+            "label": "Understreet Sprawl",
+            "rooms": ("access_tunnel", "old_service_way", "handoff_nook", "shelter_alcove"),
+            "encounter": "underground_shady",
+            "wildlife": "drain_wildlife",
+            "cache": "contraband_light",
+            "floor_glyph": ",",
+        }
+    if district_type in {"downtown", "transport"}:
+        return {
+            "variant": "old_transit_cut",
+            "label": "Old Transit Cut",
+            "rooms": ("access_tunnel", "abandoned_platform", "service_junction", "waiting_nook"),
+            "encounter": "underground_transient",
+            "wildlife": "underground_pests",
+            "cache": "survival",
+            "floor_glyph": ".",
+        }
+    return {
+        "variant": "shelter_ways",
+        "label": "Shelter Ways",
+        "rooms": ("access_tunnel", "service_passage", "shelter_alcove", "drain_crossing"),
+        "encounter": "underground_shelter",
+        "wildlife": "basement_pests",
+        "cache": "survival",
+        "floor_glyph": ".",
+    }
 
 
 def _footprints_overlap(left, right, top, bottom, other, *, buffer=0):
@@ -313,6 +511,52 @@ def _building_footprints(chunk, *, origin_x, origin_y, chunk_size):
             if isinstance(layout, dict) and isinstance(layout.get("footprint"), dict):
                 footprints.append(dict(layout["footprint"]))
     return tuple(footprints)
+
+
+def _building_basement_cells(chunk, *, origin_x, origin_y, chunk_size):
+    cells = set()
+    for block in chunk.get("blocks", ()):
+        bx = int(block.get("grid_x", 0))
+        by = int(block.get("grid_y", 0))
+        buildings = tuple(block.get("buildings", ()) or ())
+        for building_index, building in enumerate(buildings):
+            if not isinstance(building, dict):
+                continue
+            _floors, basement_levels = normalize_building_levels(
+                building.get("archetype"),
+                building.get("floors", 1),
+                building.get("basement_levels", 0),
+            )
+            if int(basement_levels) <= 0:
+                continue
+            layout = layout_chunk_building(
+                origin_x=origin_x,
+                origin_y=origin_y,
+                chunk_size=chunk_size,
+                block_grid_x=bx,
+                block_grid_y=by,
+                building_index=building_index,
+                building=building,
+                building_count=len(buildings),
+            )
+            footprint = layout.get("footprint") if isinstance(layout, dict) else None
+            if not isinstance(footprint, dict):
+                continue
+            try:
+                left = int(footprint.get("left"))
+                right = int(footprint.get("right"))
+                top = int(footprint.get("top"))
+                bottom = int(footprint.get("bottom"))
+            except (TypeError, ValueError):
+                continue
+            excluded = set(layout.get("excluded", ()) or ())
+            cells.update(
+                (x, y)
+                for y in range(top, bottom + 1)
+                for x in range(left, right + 1)
+                if (x, y) not in excluded
+            )
+    return frozenset(cells)
 
 
 def _preferred_vertical_edges(origin_y, chunk_size, surface_y):
@@ -1550,3 +1794,329 @@ def chunk_underground_site_plans(chunk, *, origin_x, origin_y, chunk_size):
         _text(row.get("site_id")),
     ))
     return tuple(accepted[:MAX_UNDERGROUND_PLANS_PER_CHUNK])
+
+
+def chunk_underground_network_plan(
+    chunk,
+    *,
+    origin_x,
+    origin_y,
+    chunk_size,
+    site_plans=(),
+    world_seed=0,
+):
+    """Plan the shared z=-1 underworld carried continuously between city chunks."""
+
+    if not isinstance(chunk, dict):
+        return None
+    district = chunk.get("district", {}) if isinstance(chunk.get("district"), dict) else {}
+    if (_text(district.get("area_type") or "city").lower() or "city") != "city":
+        return None
+
+    size = int(max(8, chunk_size))
+    left = int(origin_x)
+    right = left + size - 1
+    top = int(origin_y)
+    bottom = top + size - 1
+    chunk_x = int(chunk.get("cx", 0))
+    chunk_y = int(chunk.get("cy", 0))
+    margin = max(2, min(4, size // 5))
+    lane_span = max(1, size - (margin * 2))
+    lane_x = left + margin + random.Random(
+        f"{int(world_seed)}:underground_network:column:{chunk_x}"
+    ).randrange(lane_span)
+    lane_y = top + margin + random.Random(
+        f"{int(world_seed)}:underground_network:row:{chunk_y}"
+    ).randrange(lane_span)
+
+    site_plans = tuple(plan for plan in tuple(site_plans or ()) if isinstance(plan, dict))
+    z1_site_cells = set()
+    for plan in site_plans:
+        try:
+            plan_z = int(plan.get("z", 0))
+        except (TypeError, ValueError):
+            continue
+        if plan_z == UNDERGROUND_NETWORK_Z:
+            z1_site_cells.update(_plan_shape_cells(plan))
+
+    basement_cells = set(_building_basement_cells(
+        chunk,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        chunk_size=size,
+    ))
+    basement_cells.difference_update(z1_site_cells)
+
+    edge_points = {
+        (left, lane_y),
+        (right, lane_y),
+        (lane_x, top),
+        (lane_x, bottom),
+    }
+    blocked = (set(z1_site_cells) | basement_cells) - edge_points
+    bounds = (left, right, top, bottom)
+    horizontal = _network_path(
+        (left, lane_y),
+        {(right, lane_y)},
+        bounds=bounds,
+        blocked=blocked,
+        preferred_axis=("y", lane_y),
+    )
+    if not horizontal:
+        horizontal = tuple((x, lane_y) for x in range(left, right + 1))
+    centerline = set(horizontal)
+    centerline.update(_network_path(
+        (lane_x, top),
+        centerline,
+        bounds=bounds,
+        blocked=blocked,
+        preferred_axis=("x", lane_x),
+    ))
+    centerline.update(_network_path(
+        (lane_x, bottom),
+        centerline,
+        bounds=bounds,
+        blocked=blocked,
+        preferred_axis=("x", lane_x),
+    ))
+
+    floor_cells = set(centerline)
+    for x, y in tuple(centerline):
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if left <= nx <= right and top <= ny <= bottom and (nx, ny) not in blocked:
+                floor_cells.add((nx, ny))
+
+    rng = random.Random(f"{int(world_seed)}:{chunk_x}:{chunk_y}:underground_network:sprawl")
+    pocket_centers = []
+    pocket_candidates = [
+        (left + max(2, size // 4), top + max(2, size // 4)),
+        (right - max(2, size // 4), top + max(2, size // 4)),
+        (left + max(2, size // 4), bottom - max(2, size // 4)),
+        (right - max(2, size // 4), bottom - max(2, size // 4)),
+    ]
+    rng.shuffle(pocket_candidates)
+    pocket_target = 1 + int(size >= 24)
+    for center in pocket_candidates:
+        if len(pocket_centers) >= pocket_target:
+            break
+        cx, cy = int(center[0]), int(center[1])
+        chamber = {
+            (x, y)
+            for y in range(cy - 1, cy + 2)
+            for x in range(cx - 1, cx + 2)
+        }
+        if chamber & blocked or chamber & floor_cells:
+            continue
+        destination = _nearest_open_network_cell(floor_cells, center)
+        if destination is None:
+            continue
+        spur = _network_path(center, {destination}, bounds=bounds, blocked=blocked)
+        if not spur:
+            continue
+        floor_cells.update(spur)
+        floor_cells.update(chamber)
+        pocket_centers.append(center)
+
+    site_connections = []
+    direct_portals = set()
+    for plan in site_plans:
+        try:
+            plan_z = int(plan.get("z", 0))
+        except (TypeError, ValueError):
+            continue
+        if plan_z >= 0:
+            continue
+        if plan_z == UNDERGROUND_NETWORK_Z:
+            entry = plan.get("entry", {}) if isinstance(plan.get("entry"), dict) else {}
+            try:
+                portal = (int(entry.get("x")), int(entry.get("y")))
+            except (TypeError, ValueError):
+                portal = _network_site_portal(plan)
+            direct = True
+            site_shape = set(_plan_shape_cells(plan))
+            route_starts = ()
+            if portal is not None:
+                route_starts = tuple(
+                    (int(nx), int(ny))
+                    for nx, ny in (
+                        (portal[0] - 1, portal[1]),
+                        (portal[0] + 1, portal[1]),
+                        (portal[0], portal[1] - 1),
+                        (portal[0], portal[1] + 1),
+                    )
+                    if left <= nx <= right
+                    and top <= ny <= bottom
+                    and (int(nx), int(ny)) not in site_shape
+                )
+            if not route_starts:
+                route_starts = (portal,)
+        else:
+            portal = _network_site_portal(plan)
+            direct = False
+            open_cells = (
+                (x, y)
+                for y in range(top, bottom + 1)
+                for x in range(left, right + 1)
+            )
+            network_landing = _nearest_open_network_cell(open_cells, portal, blocked=blocked) if portal is not None else None
+            route_starts = (network_landing,)
+        if portal is None:
+            continue
+        destinations = set(floor_cells) - set(blocked)
+        if not destinations:
+            continue
+        route_blocked = set(blocked)
+        if direct:
+            route_blocked.difference_update(route_starts)
+        spur_options = tuple(
+            path
+            for path in (
+                _network_path(route_start, destinations, bounds=bounds, blocked=route_blocked)
+                for route_start in route_starts
+                if route_start is not None
+            )
+            if path
+        )
+        spur = min(spur_options, key=lambda path: (len(path), path)) if spur_options else ()
+        if not spur:
+            continue
+        if direct and portal not in spur:
+            spur = (portal,) + tuple(spur)
+        if direct:
+            direct_portals.add(portal)
+            network_landing = portal
+        elif network_landing is None:
+            continue
+        floor_cells.update(spur)
+        site_connections.append({
+            "site_id": _text(plan.get("site_id")) or None,
+            "building_id": _text(plan.get("building_id")) or None,
+            "source_building_id": _text(plan.get("source_building_id")) or None,
+            "source_building_name": _text(plan.get("source_building_name")) or _text(plan.get("name")) or "connected site",
+            "x": int(portal[0]),
+            "y": int(portal[1]),
+            "z": int(plan_z),
+            "network_x": int(network_landing[0]),
+            "network_y": int(network_landing[1]),
+            "network_z": UNDERGROUND_NETWORK_Z,
+            "direct": bool(direct),
+        })
+
+    floor_cells.difference_update(blocked - direct_portals)
+    if not floor_cells:
+        return None
+    profile = _underground_network_profile(district)
+    route_token = random.Random(
+        f"{int(world_seed)}:{chunk_x}:{chunk_y}:underground_network:route"
+    ).randrange(100, 1000)
+    route_code = f"U{abs(chunk_y) % 10}{abs(chunk_x) % 10}-{route_token}"
+    place_name = _text(district.get("settlement_name")) or _text(district.get("region_name")) or "City"
+    site_name = f"{place_name} {profile['label']} {route_code}"
+
+    hub = _nearest_open_network_cell(
+        floor_cells,
+        (lane_x, lane_y),
+        blocked=z1_site_cells,
+    ) or min(floor_cells, key=lambda cell: (cell[1], cell[0]))
+    reserved = {hub, *edge_points, *(tuple(center) for center in pocket_centers)}
+    content_pool = sorted(
+        (
+            cell for cell in floor_cells
+            if cell not in reserved
+            and cell not in z1_site_cells
+            and left < cell[0] < right
+            and top < cell[1] < bottom
+        ),
+        key=lambda cell: (
+            -(abs(cell[0] - hub[0]) + abs(cell[1] - hub[1])),
+            cell[1],
+            cell[0],
+        ),
+    )
+    cache_point = pocket_centers[0] if pocket_centers else (content_pool[0] if content_pool else hub)
+    reserved.add(cache_point)
+    encounter_point = (
+        pocket_centers[-1]
+        if len(pocket_centers) > 1
+        else next((cell for cell in content_pool if cell not in reserved), hub)
+    )
+    reserved.add(encounter_point)
+    wildlife_points = tuple(cell for cell in content_pool if cell not in reserved)[:2]
+    reserved.update(wildlife_points)
+    hazard_point = next((cell for cell in content_pool if cell not in reserved), None)
+    hazard_sites = ()
+    if hazard_point is not None:
+        hazard_row = _weighted_choice(rng, UNDERGROUND_HAZARD_ROWS)
+        if hazard_row:
+            hazard_sites = ({
+                "name": str(hazard_row[1]),
+                "x": int(hazard_point[0]),
+                "y": int(hazard_point[1]),
+                "z": UNDERGROUND_NETWORK_Z,
+                "profile": str(hazard_row[0]),
+            },)
+
+    destination_labels = ["west service way", "east service way", "north access tunnel", "south access tunnel"]
+    destination_labels.extend(
+        str(row.get("source_building_name", "connected site"))
+        for row in site_connections
+        if str(row.get("source_building_name", "")).strip()
+    )
+    property_cells = sorted(set(floor_cells) - z1_site_cells)
+    shape = _shape_bounds(property_cells) or {
+        "left": int(hub[0]), "right": int(hub[0]), "top": int(hub[1]), "bottom": int(hub[1]),
+    }
+    return {
+        "site_id": f"{chunk_x}:{chunk_y}:underground_network",
+        "kind": ACCESS_TUNNEL_NETWORK_KIND,
+        "layout_variant": str(profile["variant"]),
+        "name": site_name,
+        "route_code": route_code,
+        "route_destinations": tuple(dict.fromkeys(destination_labels)),
+        "building_id": f"{chunk_x}:{chunk_y}:underground_network",
+        "anchor": {"x": int(hub[0]), "y": int(hub[1]), "z": UNDERGROUND_NETWORK_Z},
+        "z": UNDERGROUND_NETWORK_Z,
+        "floors": 1,
+        "rooms": tuple(profile["rooms"]),
+        "common_area_kind": "access_tunnel",
+        "control_mode": "shared_infrastructure",
+        "floor_glyph": str(profile["floor_glyph"]),
+        "floor_cells": tuple({"x": int(x), "y": int(y)} for x, y in sorted(floor_cells)),
+        "property_cells": tuple({"x": int(x), "y": int(y)} for x, y in property_cells),
+        "footprint": shape,
+        "site_connections": tuple(site_connections),
+        "ambient_encounter_profile": str(profile["encounter"]),
+        "ambient_encounter_spawns": ({
+            "x": int(encounter_point[0]),
+            "y": int(encounter_point[1]),
+            "z": UNDERGROUND_NETWORK_Z,
+            "profile": str(profile["encounter"]),
+        },),
+        "ambient_wildlife_profile": str(profile["wildlife"]),
+        "ambient_wildlife_spawns": tuple({
+            "x": int(point[0]),
+            "y": int(point[1]),
+            "z": UNDERGROUND_NETWORK_Z,
+            "profile": str(profile["wildlife"]),
+        } for point in wildlife_points),
+        "ambient_hazard_profile": "network_hazards" if hazard_sites else "",
+        "ambient_hazard_spawns": hazard_sites,
+        "cache_sites": ({
+            "name": "Tunnel Cache" if profile["cache"] != "contraband_light" else "Wrapped Handoff Cache",
+            "x": int(cache_point[0]),
+            "y": int(cache_point[1]),
+            "z": UNDERGROUND_NETWORK_Z,
+            "kind": "utility_cache",
+            "cache_profile": str(profile["cache"]),
+        },),
+        "service_sites": ({
+            "name": f"{route_code} Junction Marker",
+            "x": int(hub[0]),
+            "y": int(hub[1]),
+            "z": UNDERGROUND_NETWORK_Z,
+            "site_services": (),
+            "fixture_type": "underground_route_marker",
+            "glyph": "j",
+            "display_description": "Routes: " + "; ".join(destination_labels),
+        },),
+    }
