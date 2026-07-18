@@ -3211,6 +3211,7 @@ class SiteServiceSystem(System):
 
         if (
             service == UNDERGROUND_ACCESS_SERVICE
+            and int(pos.z) >= 0
             and int(dest_z) < 0
             and not self._underground_destination_has_verified_return_path(landing_x, landing_y, dest_z)
         ):

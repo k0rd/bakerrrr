@@ -3133,10 +3133,11 @@ def _run_pygame(tutorial=False, *, debug_mode=False):
             max_length=40,
             title="bakerrrr - character",
             banner="BAKERRRR",
-            subtitle="Street-level run setup",
+            subtitle="A city grows around every run",
             initial_text=default_character_name,
             invalid_message="Please enter a valid character name.",
             normalizer=normalize_character_name,
+            presentation="flora_title",
             status_lines_callback=lambda raw: (
                 [{
                     "text": f"Disposable tutorial will start for {normalize_character_name(raw)}.",

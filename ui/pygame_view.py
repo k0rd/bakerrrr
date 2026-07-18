@@ -498,6 +498,220 @@ class PygameView:
             self._window_icon_path = None
             return False
 
+    def _title_flora_cell_specs(self):
+        """Return a stable little ecology for the run-entry screen edges."""
+        width = max(1, int(self.width_cells))
+        height = max(1, int(self.height_cells))
+        bottom = height - 1
+        flower_colors = (
+            "flora_flower_pink",
+            "flora_flower_violet",
+            "flora_flower_gold",
+            "flora_flower_white",
+            "flora_flower_blue",
+            "flora_flower_coral",
+        )
+        specs = []
+        occupied = set()
+
+        def add(x, y, kind, color):
+            key = (int(x), int(y))
+            if key in occupied or not (0 <= key[0] < width and 0 <= key[1] < height):
+                return
+            occupied.add(key)
+            specs.append((key[0], key[1], str(kind), str(color)))
+
+        # The base is the richest part: grasses and reeds establish the ground,
+        # then isolated flowers provide the color rather than a uniform garland.
+        for x in range(width):
+            seed = (x * 37) + (width * 11)
+            if seed % 11 in {0, 5}:
+                add(x, bottom, "flower", flower_colors[(seed // 7) % len(flower_colors)])
+            elif seed % 7 == 2:
+                add(x, bottom, "reed", "flora_reed")
+            elif seed % 5 in {1, 4}:
+                add(x, bottom, "grass", "flora_grass")
+            else:
+                add(x, bottom, "shrub", "flora_shrub")
+            if bottom > 0 and seed % 4 == 0:
+                upper_kind = "flower_bud" if seed % 8 == 0 else "grass"
+                upper_color = flower_colors[(seed // 5) % len(flower_colors)] if upper_kind == "flower_bud" else "flora_leaf"
+                add(x, bottom - 1, upper_kind, upper_color)
+
+        # Climbing life stays sparse enough that the side margins still breathe.
+        for y in range(1, max(1, bottom - 1)):
+            if y % 2 == 0:
+                add(0, y, "vine", "flora_vine")
+            elif y % 5 == 0:
+                add(0, y, "moss", "flora_moss")
+            if y % 3 == 0:
+                add(width - 1, y, "vine", "flora_leaf")
+            elif y % 7 == 0:
+                add(width - 1, y, "lichen", "flora_moss")
+
+        # A few growths hang from above; leaving the middle open keeps BAKERRRR
+        # visually dominant and avoids the conventional fantasy-wreath look.
+        for x in range(1, max(1, width - 1)):
+            if x % 9 == 2:
+                add(x, 0, "vine", "flora_vine")
+            elif x % 13 == 6:
+                add(x, 0, "flower_bud", flower_colors[x % len(flower_colors)])
+        return tuple(specs)
+
+    def _draw_title_flora_backdrop(self):
+        width_px, height_px = self.surface.get_size()
+        band_h = max(4, self.cell_px // 2)
+        top_rgb = (7, 15, 18)
+        bottom_rgb = (13, 27, 22)
+        for y in range(0, height_px, band_h):
+            ratio = y / max(1, height_px - 1)
+            color = tuple(
+                int(top_rgb[index] + ((bottom_rgb[index] - top_rgb[index]) * ratio))
+                for index in range(3)
+            )
+            self.pygame.draw.rect(self.surface, color, (0, y, width_px, min(band_h, height_px - y)))
+
+        atmosphere = self.pygame.Surface((width_px, height_px), self.pygame.SRCALPHA)
+        spore_colors = (
+            self._alpha_color("flora_flower_gold", 46),
+            self._alpha_color("flora_flower_white", 34),
+            self._alpha_color("flora_flower_blue", 30),
+        )
+        spore_count = max(18, min(72, (width_px * height_px) // max(1, self.cell_px * self.cell_px * 34)))
+        for index in range(spore_count):
+            seed = ((index + 1) * 2654435761 + width_px * 97 + height_px * 53) & 0xFFFFFFFF
+            x = int(seed % max(1, width_px))
+            y = int((seed // 65537) % max(1, height_px - max(1, self.cell_px // 2)))
+            radius = 1 + int((seed // 17) % max(1, min(3, self.cell_px // 10)))
+            self.pygame.draw.circle(atmosphere, spore_colors[index % len(spore_colors)], (x, y), radius)
+
+        edge_vine = self._alpha_color("flora_vine", 104)
+        edge_leaf = self._alpha_color("flora_leaf", 92)
+        edge_step = max(8, self.cell_px // 2)
+        edge_wave = max(2, self.cell_px // 7)
+        left_vine = []
+        right_vine = []
+        for index, y in enumerate(range(0, height_px, edge_step)):
+            offset = edge_wave if index % 2 else 1
+            left_vine.append((offset, y))
+            right_vine.append((width_px - 1 - offset, y))
+            if index % 4 == 1:
+                leaf_w = max(4, self.cell_px // 3)
+                leaf_h = max(3, self.cell_px // 6)
+                self.pygame.draw.ellipse(atmosphere, edge_leaf, (offset, y, leaf_w, leaf_h))
+                self.pygame.draw.ellipse(atmosphere, edge_leaf, (width_px - offset - leaf_w, y, leaf_w, leaf_h))
+        if len(left_vine) > 1:
+            self.pygame.draw.lines(atmosphere, edge_vine, False, left_vine, max(1, self.cell_px // 24))
+            self.pygame.draw.lines(atmosphere, edge_vine, False, right_vine, max(1, self.cell_px // 24))
+
+        top_vine = []
+        top_step = max(12, int(self.cell_px * 0.8))
+        for index, x in enumerate(range(0, width_px, top_step)):
+            top_vine.append((x, 1 + (edge_wave if index % 2 else 0)))
+        if len(top_vine) > 1:
+            self.pygame.draw.lines(atmosphere, edge_vine, False, top_vine, max(1, self.cell_px // 24))
+
+        soil_h = max(3, self.cell_px // 5)
+        self.pygame.draw.rect(atmosphere, (28, 31, 22, 188), (0, height_px - soil_h, width_px, soil_h))
+        root_color = self._alpha_color("flora_moss", 42)
+        root_step = max(self.cell_px * 2, 18)
+        for x in range(0, width_px, root_step):
+            offset = ((x // root_step) % 3) * max(1, self.cell_px // 7)
+            self.pygame.draw.arc(
+                atmosphere,
+                root_color,
+                self.pygame.Rect(x - self.cell_px // 2, height_px - self.cell_px - offset, self.cell_px * 2, self.cell_px),
+                0.15,
+                2.9,
+                max(1, self.cell_px // 24),
+            )
+        self.surface.blit(atmosphere, (0, 0))
+
+        for x, y, kind, color in self._title_flora_cell_specs():
+            self._draw_flora_overlay(x, y, color=color, kind=kind)
+
+    def _draw_title_flora_panel_frame(self, outer_rect):
+        if not isinstance(outer_rect, self.pygame.Rect):
+            return
+        overlay = self.pygame.Surface(self.surface.get_size(), self.pygame.SRCALPHA)
+        vine = self._alpha_color("flora_vine", 196)
+        leaf_colors = (
+            self._alpha_color("flora_leaf", 188),
+            self._alpha_color("flora_shrub", 176),
+            self._alpha_color("flora_grass", 166),
+        )
+        flower_colors = (
+            self._alpha_color("flora_flower_pink", 218),
+            self._alpha_color("flora_flower_violet", 212),
+            self._alpha_color("flora_flower_gold", 220),
+            self._alpha_color("flora_flower_blue", 208),
+            self._alpha_color("flora_flower_coral", 210),
+        )
+        stroke = max(1, self.cell_px // 16)
+        wave = max(2, self.cell_px // 9)
+        step = max(8, self.cell_px // 2)
+
+        top_points = []
+        bottom_points = []
+        for index, x in enumerate(range(outer_rect.left + 3, outer_rect.right - 2, step)):
+            offset = wave if index % 2 else 0
+            top_points.append((x, outer_rect.top + 2 + offset))
+            bottom_points.append((x, outer_rect.bottom - 3 - offset))
+        if len(top_points) > 1:
+            self.pygame.draw.lines(overlay, vine, False, top_points, stroke)
+            self.pygame.draw.lines(overlay, vine, False, bottom_points, stroke)
+
+        side_step = max(10, int(self.cell_px * 0.7))
+        left_points = []
+        right_points = []
+        for index, y in enumerate(range(outer_rect.top + 3, outer_rect.bottom - 2, side_step)):
+            offset = wave if index % 2 else 0
+            left_points.append((outer_rect.left + 2 + offset, y))
+            right_points.append((outer_rect.right - 3 - offset, y))
+        if len(left_points) > 1:
+            self.pygame.draw.lines(overlay, vine, False, left_points, stroke)
+            self.pygame.draw.lines(overlay, vine, False, right_points, stroke)
+
+        leaf_w = max(4, self.cell_px // 3)
+        leaf_h = max(3, self.cell_px // 5)
+        leaf_gap = max(self.cell_px * 2, 24)
+        for index, x in enumerate(range(outer_rect.left + self.cell_px, outer_rect.right - self.cell_px, leaf_gap)):
+            color = leaf_colors[index % len(leaf_colors)]
+            top_y = outer_rect.top - leaf_h // 2 + (wave if index % 2 else 0)
+            bottom_y = outer_rect.bottom - leaf_h // 2 - (wave if index % 2 else 0)
+            self.pygame.draw.ellipse(overlay, color, (x, top_y, leaf_w, leaf_h))
+            self.pygame.draw.ellipse(overlay, color, (x + leaf_w // 2, bottom_y, leaf_w, leaf_h))
+        for index, y in enumerate(range(outer_rect.top + self.cell_px, outer_rect.bottom - self.cell_px, leaf_gap)):
+            color = leaf_colors[(index + 1) % len(leaf_colors)]
+            self.pygame.draw.ellipse(overlay, color, (outer_rect.left - leaf_w // 2, y, leaf_w, leaf_h))
+            self.pygame.draw.ellipse(overlay, color, (outer_rect.right - leaf_w // 2, y + leaf_h, leaf_w, leaf_h))
+
+        petal_offset = max(3, self.cell_px // 6)
+        petal_r = max(2, self.cell_px // 12)
+        flower_centers = (
+            (outer_rect.left + max(5, self.cell_px // 2), outer_rect.top + max(5, self.cell_px // 2)),
+            (outer_rect.right - max(6, self.cell_px // 2), outer_rect.top + max(5, self.cell_px // 2)),
+            (outer_rect.left + max(5, self.cell_px // 2), outer_rect.bottom - max(6, self.cell_px // 2)),
+            (outer_rect.right - max(6, self.cell_px // 2), outer_rect.bottom - max(6, self.cell_px // 2)),
+        )
+        petal_directions = (
+            (0, -petal_offset),
+            (petal_offset, 0),
+            (0, petal_offset),
+            (-petal_offset, 0),
+            (petal_offset - 1, -petal_offset + 1),
+            (petal_offset - 1, petal_offset - 1),
+            (-petal_offset + 1, petal_offset - 1),
+            (-petal_offset + 1, -petal_offset + 1),
+        )
+        for index, (cx, cy) in enumerate(flower_centers):
+            color = flower_colors[index % len(flower_colors)]
+            for dx, dy in petal_directions:
+                self.pygame.draw.circle(overlay, color, (cx + dx, cy + dy), petal_r)
+            self.pygame.draw.circle(overlay, flower_colors[(index + 2) % len(flower_colors)], (cx, cy), max(1, petal_r - 1))
+
+        self.surface.blit(overlay, (0, 0))
+
     def prompt_text_input(
         self,
         prompt,
@@ -511,6 +725,7 @@ class PygameView:
         invalid_message="Please enter a valid value.",
         normalizer=None,
         status_lines_callback=None,
+        presentation="",
     ):
         """Run a simple in-window text prompt and return the normalized result."""
         if title:
@@ -529,7 +744,13 @@ class PygameView:
         invalid_message = str(invalid_message or "Please enter a valid value.")
         normalize = normalizer if callable(normalizer) else (lambda value: str(value or "").strip())
         status_callback = status_lines_callback if callable(status_lines_callback) else None
-        title_font = self.pygame.font.SysFont("DejaVu Sans Mono", max(18, int(self.cell_px * 1.7)), bold=True)
+        presentation = str(presentation or "").strip().lower()
+        flora_title = presentation in {"flora", "flora_title", "living_flora"}
+        title_font = self.pygame.font.SysFont(
+            "DejaVu Sans Mono",
+            max(18, int(self.cell_px * (2.05 if flora_title else 1.7))),
+            bold=True,
+        )
         subtitle_font = self.pygame.font.SysFont("DejaVu Sans Mono", max(12, int(self.cell_px * 0.85)))
 
         def _status_lines(current_text):
@@ -553,10 +774,13 @@ class PygameView:
                 cursor_visible = not cursor_visible
                 blink_deadline = now + 0.5
 
-            self.surface.fill((12, 16, 22))
-            stripe_color = (18, 24, 31)
-            for row in range(0, self.height_cells * self.cell_px, self.cell_px * 2):
-                self.surface.fill(stripe_color, (0, row, self.width_cells * self.cell_px, self.cell_px))
+            if flora_title:
+                self._draw_title_flora_backdrop()
+            else:
+                self.surface.fill((12, 16, 22))
+                stripe_color = (18, 24, 31)
+                for row in range(0, self.height_cells * self.cell_px, self.cell_px * 2):
+                    self.surface.fill(stripe_color, (0, row, self.width_cells * self.cell_px, self.cell_px))
 
             panel_w = min(max(36, self.width_cells - 10), self.width_cells)
             content_pixel_w = max(self.cell_px * 4, (panel_w - 4) * self.cell_px)
@@ -579,23 +803,35 @@ class PygameView:
 
             outer_rect = self.pygame.Rect(panel_px, panel_py, panel_pw, panel_ph)
             inner_rect = self.pygame.Rect(panel_px + self.cell_px, panel_py + self.cell_px, max(0, panel_pw - (self.cell_px * 2)), max(0, panel_ph - (self.cell_px * 2)))
-            self.pygame.draw.rect(self.surface, (28, 36, 46), outer_rect)
-            self.pygame.draw.rect(self.surface, (32, 41, 53), inner_rect)
+            outer_fill = (20, 39, 33) if flora_title else (28, 36, 46)
+            inner_fill = (19, 31, 29) if flora_title else (32, 41, 53)
+            self.pygame.draw.rect(self.surface, outer_fill, outer_rect)
+            self.pygame.draw.rect(self.surface, inner_fill, inner_rect)
             accent_rect = self.pygame.Rect(panel_px, panel_py, max(2, self.cell_px // 3), panel_ph)
-            self.pygame.draw.rect(self.surface, self._color_value("player"), accent_rect)
+            self.pygame.draw.rect(self.surface, self._color_value("flora_flower_pink" if flora_title else "player"), accent_rect)
 
             top = "+" + ("-" * max(0, panel_w - 2)) + "+"
             mid = "|" + (" " * max(0, panel_w - 2)) + "|"
             bot = "+" + ("-" * max(0, panel_w - 2)) + "+"
-            self.draw_text(panel_x, panel_y, top, color="human")
+            border_color = "flora_vine" if flora_title else "human"
+            self.draw_text(panel_x, panel_y, top, color=border_color)
             for row in range(1, max(1, panel_h - 1)):
-                self.draw_text(panel_x, panel_y + row, mid, color="human")
-            self.draw_text(panel_x, panel_y + panel_h - 1, bot, color="human")
+                self.draw_text(panel_x, panel_y + row, mid, color=border_color)
+            self.draw_text(panel_x, panel_y + panel_h - 1, bot, color=border_color)
+            if flora_title:
+                self._draw_title_flora_panel_frame(outer_rect)
 
             text_px = panel_px + (self.cell_px * 2)
             text_py = panel_py + self.cell_px
             if banner:
-                banner_surface = title_font.render(banner, True, self._color_value("objective"))
+                banner_shadow = title_font.render(banner, True, (4, 10, 8))
+                banner_surface = title_font.render(
+                    banner,
+                    True,
+                    self._color_value("flora_flower_white" if flora_title else "objective"),
+                )
+                if flora_title:
+                    self.surface.blit(banner_shadow, (text_px + max(1, self.cell_px // 10), text_py + max(1, self.cell_px // 10)))
                 self.surface.blit(banner_surface, (text_px, text_py))
             if subtitle:
                 subtitle_y = text_py + max(self.cell_px, title_font.get_height())
