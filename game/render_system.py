@@ -2574,7 +2574,10 @@ class RenderSystem(System):
         except Exception:
             appearance = None
         color = getattr(appearance, "color", None) or "human"
+        color_word = getattr(appearance, "color_word", None)
         semantic_id = getattr(appearance, "semantic_id", None) or "npc_civilian"
+        effects = tuple(getattr(appearance, "effects", ()) or ())
+        overlays = tuple(getattr(appearance, "overlays", ()) or ())
         header_text = f" @ {title} "
         return _rich_line(
             (
@@ -2585,6 +2588,9 @@ class RenderSystem(System):
                     attrs=A_BOLD,
                     inline_glyph=True,
                     semantic_id=semantic_id,
+                    color_word=color_word,
+                    effects=effects,
+                    overlays=overlays,
                 ),
                 _segment(f" {title} "),
             ),

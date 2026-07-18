@@ -5784,11 +5784,12 @@ class PygameView:
         if kind == "base_top":
             neckline_y = q(8)
             strap_offset = max(1, shoulder_half - 1)
+            strap_top_y = min(neckline_y, q(6) + 1)
             if garment in {"bra", "bralette", "bandeau"}:
                 self.pygame.draw.line(overlay, fill, (mid_x - shoulder_half, neckline_y), (mid_x + shoulder_half, neckline_y), max(1, q(1)))
                 if garment != "bandeau":
-                    self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, q(6)), (mid_x - strap_offset, neckline_y), 1)
-                    self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, q(6)), (mid_x + strap_offset, neckline_y), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, strap_top_y), (mid_x - strap_offset, neckline_y), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, strap_top_y), (mid_x + strap_offset, neckline_y), 1)
             else:
                 top_half = max(1, shoulder_half - (1 if garment == "camisole" else 0))
                 bodice = [
@@ -5802,8 +5803,8 @@ class PygameView:
                 self.pygame.draw.polygon(overlay, fill, bodice)
                 self.pygame.draw.line(overlay, shade, bodice[0], bodice[1], 1)
                 if garment in {"camisole", "tank_undershirt"}:
-                    self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, q(6)), (mid_x - strap_offset, neckline_y), 1)
-                    self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, q(6)), (mid_x + strap_offset, neckline_y), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, strap_top_y), (mid_x - strap_offset, neckline_y), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, strap_top_y), (mid_x + strap_offset, neckline_y), 1)
             if emblem:
                 self.pygame.draw.circle(overlay, edge, (mid_x + max(1, q(1)), q(8)), 1)
         elif kind == "base_bottom":
@@ -8485,16 +8486,31 @@ class PygameView:
         self.surface.blit(overlay, (cell_x, cell_y))
         return True
 
-    def _draw_inline_glyph_run(self, pixel_x, y, ch, color=None, attrs=0, semantic_id=None):
+    def _draw_inline_glyph_run(
+        self,
+        pixel_x,
+        y,
+        ch,
+        color=None,
+        color_word=None,
+        attrs=0,
+        semantic_id=None,
+        effects=None,
+        overlays=None,
+    ):
         text = str(ch)[:1] or " "
-        if int(pixel_x) % self.cell_px == 0 and self._draw_procedural_shape(
-            int(pixel_x) // self.cell_px,
-            y,
-            text,
-            color=color,
-            attrs=attrs,
-            semantic_id=semantic_id,
-        ):
+        if int(pixel_x) % self.cell_px == 0:
+            self._draw_char(
+                int(pixel_x) // self.cell_px,
+                y,
+                text,
+                color=color,
+                color_word=color_word,
+                attrs=attrs,
+                semantic_id=semantic_id,
+                effects=effects,
+                overlays=overlays,
+            )
             return self.cell_px
 
         fg = self._color_value(color)
@@ -8610,12 +8626,18 @@ class PygameView:
                 seg_attrs = int(segment.get("attrs", 0) or 0)
                 inline_glyph = bool(segment.get("inline_glyph"))
                 semantic_id = segment.get("semantic_id")
+                color_word = segment.get("color_word")
+                effects = segment.get("effects", ())
+                overlays = segment.get("overlays", ())
             else:
                 text = str(segment)
                 color = None
                 seg_attrs = 0
                 inline_glyph = False
                 semantic_id = None
+                color_word = None
+                effects = ()
+                overlays = ()
             if not text:
                 continue
             combined_attrs = int(attrs) | seg_attrs
@@ -8627,8 +8649,11 @@ class PygameView:
                     y,
                     text[0],
                     color=color,
+                    color_word=color_word,
                     attrs=combined_attrs,
                     semantic_id=semantic_id,
+                    effects=effects,
+                    overlays=overlays,
                 )
             elif self._should_use_grid_text(text) and pixel_x % self.cell_px == 0:
                 if remaining_px is not None:

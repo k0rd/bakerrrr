@@ -330,7 +330,17 @@ def _line_with_suffix(line, suffix):
     return _rich_line(appended, text=_line_text(line) + suffix)
 
 
-def _legend_line(text, glyph=None, color=None, prefix="", attrs=0, semantic_id=None):
+def _legend_line(
+    text,
+    glyph=None,
+    color=None,
+    prefix="",
+    attrs=0,
+    semantic_id=None,
+    color_word=None,
+    effects=None,
+    overlays=None,
+):
     segments = []
     plain = ""
     prefix = str(prefix)
@@ -342,6 +352,12 @@ def _legend_line(text, glyph=None, color=None, prefix="", attrs=0, semantic_id=N
         extras = {"inline_glyph": True}
         if semantic_id:
             extras["semantic_id"] = str(semantic_id)
+        if color_word:
+            extras["color_word"] = str(color_word)
+        if effects:
+            extras["effects"] = tuple(effects)
+        if overlays:
+            extras["overlays"] = tuple(overlays)
         segments.append(_segment(glyph_text, color=color, attrs=attrs, **extras))
         plain += glyph_text
         if text:

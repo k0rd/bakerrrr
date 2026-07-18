@@ -2023,6 +2023,9 @@ CASINO_THREE_BONES_EXACT_TOTAL_GROSS_MULTIPLIERS = {
 }
 CASINO_BLOOM_CARD_MAX_GROW_STEPS = 3
 CASINO_BLOOM_CARD_STARTING_HAND_SIZE = 3
+CASINO_BLOOM_CARD_GROWTH_BASE_MULTIPLIERS = (1.00, 1.18, 1.58)
+CASINO_BLOOM_CARD_GROWTH_MAX_MULTIPLIERS = (1.25, 1.55, 2.10)
+CASINO_BLOOM_CARD_COMBO_POINT_VALUE = 0.05
 
 
 def _casino_color_word(value):
@@ -4658,13 +4661,23 @@ def _casino_bloom_cards_score(cards, growth_steps=0):
     growth_steps = max(0, int(growth_steps))
     if growth_steps <= 0:
         multiplier = 1.0
+        growth_base = 1.0
+        growth_cap = 1.0
+        combo_bonus = 0.0
     else:
-        multiplier = max(1.0, min(8.0, round(points + (0.15 * growth_steps), 2)))
+        tier_index = min(growth_steps, CASINO_BLOOM_CARD_MAX_GROW_STEPS) - 1
+        growth_base = float(CASINO_BLOOM_CARD_GROWTH_BASE_MULTIPLIERS[tier_index])
+        growth_cap = float(CASINO_BLOOM_CARD_GROWTH_MAX_MULTIPLIERS[tier_index])
+        combo_bonus = max(0.0, float(points) - 1.0) * CASINO_BLOOM_CARD_COMBO_POINT_VALUE
+        multiplier = round(max(1.0, min(growth_cap, growth_base + combo_bonus)), 2)
     if not reasons:
         reasons.append("ordinary garden")
     return {
         "multiplier": float(multiplier),
         "points": round(float(points), 2),
+        "growth_base_multiplier": float(growth_base),
+        "growth_cap_multiplier": float(growth_cap),
+        "combo_bonus": round(float(combo_bonus), 3),
         "reasons": tuple(reasons[:4]),
         "family_counts": dict(family_counts),
         "hue_counts": dict(hue_counts),

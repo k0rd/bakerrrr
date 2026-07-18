@@ -62,11 +62,17 @@ class EventLog:
             seg_text = str(segment.get("text", ""))
             if not seg_text:
                 continue
-            normalized.append({
+            normalized_segment = {
                 "text": seg_text,
                 "color": segment.get("color"),
                 "attrs": int(segment.get("attrs", 0) or 0),
+            }
+            normalized_segment.update({
+                str(key): value
+                for key, value in segment.items()
+                if key not in {"text", "color", "attrs"}
             })
+            normalized.append(normalized_segment)
             plain.append(seg_text)
 
         if text is None:

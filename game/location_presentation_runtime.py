@@ -580,7 +580,11 @@ def _entity_legend_line(sim, eid, text, player_eid=None):
         text,
         glyph=appearance.glyph,
         color=appearance.color,
+        color_word=appearance.color_word,
         attrs=A_BOLD,
+        semantic_id=appearance.semantic_id,
+        effects=appearance.effects,
+        overlays=appearance.overlays,
     )
 
 
