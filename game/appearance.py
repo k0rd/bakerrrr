@@ -832,35 +832,6 @@ def _actor_outfit_color_overlays(render_colors, humanoid_profile=None):
             "semantic_id": semantic_id,
             "effects": tuple(effects),
         })
-    if overlays:
-        # The console rune is printed on the visible torso layer. Carry that
-        # layer's real color and cut so pygame can choose contrast and scale.
-        rune_role = next(
-            (
-                role
-                for role in ("primary", "inner", "base_top")
-                if str(render_colors.get(role) or "").strip()
-            ),
-            "",
-        )
-        rune_part = (
-            render_colors.get("parts", {}).get(rune_role, {})
-            if rune_role and isinstance(render_colors.get("parts"), Mapping)
-            else {}
-        )
-        rune_type = str(rune_part.get("type") or "").strip().lower().replace(" ", "_")
-        rune_effects = []
-        if rune_type:
-            rune_effects.append(f"actor_rune_underlay_type_{rune_type}")
-        if rune_type in {"bra", "bralette"}:
-            rune_effects.append("actor_rune_scale_compact")
-        overlays.append({
-            "glyph": " ",
-            "color": str(render_colors.get(rune_role) or "actor_highlight").strip() or "actor_highlight",
-            "color_word": str(render_colors.get(f"{rune_role}_word") or "").strip().lower() or None,
-            "semantic_id": "ui_actor_identity_rune",
-            "effects": tuple(rune_effects),
-        })
     return tuple(overlays)
 
 

@@ -4547,17 +4547,6 @@ class PygameView:
         elif kind == "scout":
             hood = [(mid_x, max(1, head_y - head_r - 2)), (mid_x - head_r - 2, head_y + head_r + 1), (mid_x + head_r + 2, head_y + head_r + 1)]
             self.pygame.draw.lines(overlay, role_accent, True, hood, stroke_w)
-        # The old console token survives as a small identifying rune, no longer a mask over the art.
-        text_value = str(glyph or "@")[:1] or "@"
-        body_brightness = (frame[0] * 0.299) + (frame[1] * 0.587) + (frame[2] * 0.114)
-        text_rgb = (20, 24, 28) if body_brightness >= 150 else (246, 248, 246)
-        text_surface = self._token_font.render(text_value, True, text_rgb)
-        text_rect = text_surface.get_rect(center=(mid_x, shoulder_y + max(2, (hip_y - shoulder_y) // 2)))
-        shadow_rgb = (244, 246, 244) if body_brightness >= 150 else (12, 16, 20)
-        shadow_surface = self._token_font.render(text_value, True, shadow_rgb)
-        overlay.blit(shadow_surface, text_rect.move(1, 1))
-        overlay.blit(text_surface, text_rect)
-
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_actor_hair_overlay(self, x, y, color=None, attrs=0, *, effects=()):
@@ -5920,6 +5909,43 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    @staticmethod
+    def _actor_pattern_mark_kind(value):
+        value = str(value or "").strip().lower().replace("_", "-")
+        if "strip" in value:
+            return "stripe"
+        if any(word in value for word in ("star", "aster", "daisy", "flower", "floral", "cross", "check", "plaid")):
+            return "plus"
+        if any(word in value for word in ("diamond", "argyle", "lightning", "thorn", "leaf")):
+            return "x"
+        if any(word in value for word in ("dot", "spot", "polka", "berry", "moon", "seed", "constellation")):
+            return "dot"
+        return ("dot", "plus", "x")[sum(ord(ch) for ch in value) % 3] if value else "dot"
+
+    def _draw_clipped_actor_pattern_mark(self, overlay, center, value, frame, *, radius=1):
+        """Draw a tiny mark only where the current garment overlay is opaque."""
+        radius = max(1, int(radius))
+        mark_kind = self._actor_pattern_mark_kind(value)
+        if mark_kind == "dot":
+            offsets = ((0, 0),)
+        elif mark_kind == "stripe":
+            offsets = tuple((0, step) for step in range(-radius, radius + 1))
+        elif mark_kind == "plus":
+            offsets = tuple({(step, 0) for step in range(-radius, radius + 1)} | {(0, step) for step in range(-radius, radius + 1)})
+        else:
+            offsets = tuple({(step, step) for step in range(-radius, radius + 1)} | {(step, -step) for step in range(-radius, radius + 1)})
+        brightness = (frame[0] * 0.299) + (frame[1] * 0.587) + (frame[2] * 0.114)
+        ink = self._darkened_rgba(frame, 236, amount=0.48) if brightness >= 145 else self._lightened_rgba(frame, 246, amount=0.30)
+        center_x, center_y = int(center[0]), int(center[1])
+        width, height = overlay.get_size()
+        for dx, dy in offsets:
+            mark_x = center_x + dx
+            mark_y = center_y + dy
+            if not (0 <= mark_x < width and 0 <= mark_y < height):
+                continue
+            if overlay.get_at((mark_x, mark_y)).a:
+                overlay.set_at((mark_x, mark_y), ink)
+
     def _draw_basewear_emblem(self, overlay, center, emblem, frame):
         emblem = str(emblem or "").strip().lower().replace("_", " ")
         if not emblem:
@@ -6042,10 +6068,26 @@ class PygameView:
         material = suffix("outfit_material_", "")
         detail = suffix("outfit_detail_", "")
         pattern = suffix("outfit_pattern_", "")
+        flora_motif = suffix("outfit_flora_motif_", "")
+        motif_treatment = suffix("outfit_motif_treatment_", "")
+        motif_shape = suffix("outfit_motif_shape_", "")
         shoulder_half, hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
         mid_x = px // 2
         waist_half = max(1, min(shoulder_half, hip_half) - 1)
         basewear_hip_half = max(1, hip_half - 1)
+
+        def pattern_centers():
+            by_kind = {
+                "base_top": ((mid_x - 1, q(8)), (mid_x + 2, q(9)), (mid_x - 2, q(9))),
+                "base_bottom": ((mid_x, q(10)), (mid_x - 2, q(11)), (mid_x + 2, q(11))),
+                "inner": ((mid_x - 1, q(7)), (mid_x + 2, q(8)), (mid_x - 2, q(9))),
+                "primary": ((mid_x - 1, q(7)), (mid_x + 2, q(9)), (mid_x - 2, q(11))),
+                "secondary": ((mid_x - 2, q(11)), (mid_x + 2, q(12)), (mid_x, q(13))),
+                "footwear": ((q(6), q(15)), (q(10), q(15))),
+                "headwear": ((mid_x - 1, q(2)), (mid_x + 2, q(3))),
+                "accessory": ((q(11), q(7)),),
+            }
+            return by_kind.get(kind, ((mid_x, px // 2),))
 
         if kind == "base_top":
             neckline_y = q(8)
@@ -6071,8 +6113,6 @@ class PygameView:
                 if garment in {"camisole", "tank_undershirt"}:
                     self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, strap_top_y), (mid_x - strap_offset, neckline_y), 1)
                     self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, strap_top_y), (mid_x + strap_offset, neckline_y), 1)
-            if emblem:
-                self.pygame.draw.circle(overlay, edge, (mid_x + max(1, q(1)), q(8)), 1)
         elif kind == "base_bottom":
             if garment in {"boxers", "boyshorts"}:
                 self.pygame.draw.rect(overlay, fill, self.pygame.Rect(mid_x - basewear_hip_half, q(10), max(3, basewear_hip_half * 2 + 1), max(2, q(2))))
@@ -6150,6 +6190,20 @@ class PygameView:
             elif material == "satin":
                 self.pygame.draw.line(overlay, edge, (mid_x - q(1), texture_y), (mid_x + q(1), texture_y), 1)
 
+        # At the default 24px scale, descriptive patterns cannot be literal
+        # pictures. Preserve their visual identity as clipped micro-print:
+        # dots, pluses, and x marks remain legible without changing silhouette.
+        if pattern and not flora_motif:
+            for mark_center in pattern_centers():
+                self._draw_clipped_actor_pattern_mark(overlay, mark_center, pattern, frame)
+        if flora_motif:
+            motif_mark = motif_shape or flora_motif
+            centers = pattern_centers() if motif_treatment == "print" else pattern_centers()[:1]
+            for mark_center in centers:
+                self._draw_clipped_actor_pattern_mark(overlay, mark_center, motif_mark, frame)
+        if emblem:
+            self._draw_clipped_actor_pattern_mark(overlay, pattern_centers()[0], emblem, frame)
+
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_actor_outfit_overlay(self, x, y, color=None, attrs=0, *, kind="secondary", effects=()):
@@ -6203,6 +6257,37 @@ class PygameView:
         actor_shoulder_half, actor_hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
         body_left = mid_x - actor_hip_half
         body_right = mid_x + actor_hip_half
+
+        def detailed_pattern_centers():
+            spread = max(2, px // 10)
+            row = max(3, px // 7)
+            by_kind = {
+                "inner": (
+                    (mid_x - spread, shoulder_y + row),
+                    (mid_x + spread, shoulder_y + row * 2),
+                    (mid_x - spread, shoulder_y + row * 3),
+                ),
+                "secondary": (
+                    (mid_x - spread, hip_y),
+                    (mid_x + spread, hip_y + row),
+                    (mid_x - spread, hip_y + row * 2),
+                ),
+                "footwear": (
+                    (mid_x - max(3, px // 7), foot_y - max(1, px // 18)),
+                    (mid_x + max(3, px // 7), foot_y - max(1, px // 18)),
+                ),
+                "primary": (
+                    (mid_x - spread, shoulder_y + row),
+                    (mid_x + spread, shoulder_y + row * 2),
+                    (mid_x - spread, shoulder_y + row * 3),
+                ),
+                "headwear": (
+                    (mid_x - spread, max(3, px // 5)),
+                    (mid_x + spread, max(4, px // 4)),
+                ),
+                "accessory": ((mid_x + max(2, px // 10), shoulder_y + row),),
+            }
+            return by_kind.get(kind, ((mid_x, px // 2),))
 
         if kind == "base_top":
             top_y = shoulder_y + max(1, px // 22)
@@ -6478,6 +6563,16 @@ class PygameView:
         else:
             self.pygame.draw.circle(overlay, fill, (mid_x, px // 2), max(2, px // 8))
 
+        if pattern and not flora_motif and kind not in {"base_top", "base_bottom"}:
+            for pattern_center in detailed_pattern_centers():
+                self._draw_clipped_actor_pattern_mark(
+                    overlay,
+                    pattern_center,
+                    pattern,
+                    frame,
+                    radius=max(1, px // 36),
+                )
+
         if flora_motif:
             center_by_kind = {
                 "base_top": (mid_x + max(2, px // 10), shoulder_y + max(4, px // 6)),
@@ -6501,51 +6596,21 @@ class PygameView:
             for motif_center in centers:
                 self._draw_basewear_emblem(overlay, motif_center, motif_mark, frame)
 
+        if emblem and kind not in {"base_top", "base_bottom"}:
+            self._draw_clipped_actor_pattern_mark(
+                overlay,
+                detailed_pattern_centers()[0],
+                emblem,
+                frame,
+                radius=max(1, px // 36),
+            )
+
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_actor_identity_rune_overlay(self, x, y, color=None, attrs=0, *, effects=()):
-        # At ordinary play scales an @ cannot remain both recognizable and
-        # subordinate to the person; it rasterizes into an object apparently
-        # hanging in front of the torso. Preserve it only for larger detail
-        # views where it can read as an intentional clothing emblem.
-        if self.cell_px <= 28:
-            return
-        cell_x = int(x) * self.cell_px
-        cell_y = int(y) * self.cell_px
-        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
-        center = (self.cell_px // 2, max(5, int(self.cell_px * 0.55)))
-        underlay = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.0)
-        brightness = (underlay[0] * 0.299) + (underlay[1] * 0.587) + (underlay[2] * 0.114)
-        text_rgb = (20, 24, 28) if brightness >= 150 else (246, 248, 246)
-        shadow_rgb = (244, 246, 244) if brightness >= 150 else (12, 16, 20)
-        compact = "actor_rune_scale_compact" in {
-            str(effect).strip().lower()
-            for effect in (effects or ())
-            if str(effect).strip()
-        }
-        shadow_surface = self._token_font.render("@", True, shadow_rgb)
-        text_surface = self._token_font.render("@", True, text_rgb)
-        native_tile = self.cell_px <= 28
-        if native_tile:
-            target_h = max(3, int(round(self.cell_px * (0.17 if compact else 0.21))))
-            target_w = max(2, min(4, int(round(text_surface.get_width() * target_h / max(1, text_surface.get_height())))))
-            text_surface = self.pygame.transform.scale(text_surface, (target_w, target_h))
-            shadow_surface = self.pygame.transform.scale(shadow_surface, (target_w, target_h))
-        elif compact:
-            def _compact(surface):
-                return self.pygame.transform.scale(
-                    surface,
-                    (max(3, int(round(surface.get_width() * 0.76))), max(4, int(round(surface.get_height() * 0.76)))),
-                )
-
-            shadow_surface = _compact(shadow_surface)
-            text_surface = _compact(text_surface)
-        if not native_tile:
-            shadow_rect = shadow_surface.get_rect(center=(center[0] + 1, center[1] + 1))
-            overlay.blit(shadow_surface, shadow_rect)
-        text_rect = text_surface.get_rect(center=center)
-        overlay.blit(text_surface, text_rect)
-        self.surface.blit(overlay, (cell_x, cell_y))
+        # Compatibility sink for stale snapshots. The source glyph remains @
+        # for terminal renderers; pygame's human semantic draws only a person.
+        return
 
     def _draw_actor_badge_overlay(self, x, y, color=None, attrs=0, *, kind="contact"):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.12)
