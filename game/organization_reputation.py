@@ -4,6 +4,7 @@ from engine.events import Event
 from engine.systems import System
 
 from game.incident_runtime import incident_record
+from game.justice_identity_runtime import event_evidence_resolves_subject
 from game.organizations import organization_policy_snapshot, organization_profile, property_organization_eid
 from game.property_access import property_access_level as _property_access_level
 from game.property_runtime import property_covering as _property_covering
@@ -703,6 +704,8 @@ class OrganizationReputationSystem(System):
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
+            return
         change = self._apply_trespass_reputation(prop, event.data, source_event="property_trespass")
         if change is not None:
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
@@ -715,6 +718,8 @@ class OrganizationReputationSystem(System):
             return
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
+            return
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
             return
         change = self._apply_tamper_reputation(prop, event.data, source_event="property_tamper")
         if change is not None:
@@ -729,6 +734,8 @@ class OrganizationReputationSystem(System):
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
+            return
         change = self._apply_theft_reputation(prop, source_event="item_stolen")
         if change is not None:
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
@@ -737,7 +744,7 @@ class OrganizationReputationSystem(System):
         incident = incident_record(self.sim, event.data.get("incident_id"))
         if not isinstance(incident, dict):
             return
-        if incident.get("primary_actor_eid") != self.player_eid:
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
             return
         if bool(incident.get("organization_reputation_accounted")):
             return

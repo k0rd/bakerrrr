@@ -34,6 +34,7 @@ from game.components import (
     Position,
 )
 from game.incident_runtime import incident_propagation_allowed, incident_record
+from game.identity_evidence import transmitted_subject_account
 from game.justice_force_runtime import classify_lawful_force
 from game.npc_relationships import incident_relationship_override
 from game.organizations import actor_org_memberships
@@ -465,19 +466,28 @@ class ObservedIncidentConsequenceSystem(System):
 
         confidence = _clamp(source_record.get("confidence"), default=0.45) * 0.88
         account = self._rumor_account_for_transfer(from_eid, to_eid, incident_id, source_record, incident, next_depth)
+        subject_account = transmitted_subject_account(
+            source_record.get("subject_account"),
+            channel="social_rumor",
+            source_eid=from_eid,
+            confidence=confidence,
+            propagation_depth=next_depth,
+            corruption_kind=account.get("corruption_kind", ""),
+        )
 
         self.sim.emit(Event(
             "rumor_shared",
             incident_id=incident_id,
             from_eid=from_eid,
             to_eid=to_eid,
-            offender_eid=incident.get("primary_actor_eid"),
+            offender_eid=subject_account.get("suspect_eid"),
             victim_eid=incident.get("victim_eid"),
             strength=round(confidence, 3),
             propagation_depth=next_depth,
             corruption_kind=account.get("corruption_kind", ""),
             rumor_note=account.get("account_note", ""),
             rumor_tags=tuple(account.get("account_tags", ())),
+            subject_account=subject_account,
         ))
 
         # The existing IncidentKnowledgeSystem learns the incident synchronously

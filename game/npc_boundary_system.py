@@ -718,7 +718,10 @@ class NPCBoundaryEnforcementSystem(System):
         prop = self._incident_property(record)
         if not isinstance(prop, dict):
             return
-        target_eid = self._incident_actor_target(record)
+        identification = _text(event.data.get("subject_identification")).lower()
+        if identification not in {"recognized", "verified"}:
+            return
+        target_eid = _safe_int(event.data.get("suspect_eid"), default=0)
         if target_eid <= 0 or target_eid == _safe_int(learner_eid, default=-1):
             return
         if not self._knowledge_can_record_ban(learner_eid, prop):

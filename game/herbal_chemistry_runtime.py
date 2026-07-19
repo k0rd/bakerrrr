@@ -56,12 +56,30 @@ SECONDARY_TRAITS = (
     "diluter",
     "stabilizer",
     "spoiler",
+    "+wake",
+    "-wake",
+    "+nourish",
+    "-nourish",
+    "+hydrate",
+    "-hydrate",
+)
+FALLBACK_SECONDARY_TRAITS = (
+    "potentiator",
+    "diluter",
+    "stabilizer",
+    "spoiler",
 )
 SECONDARY_TRAIT_LABELS = {
     "potentiator": "+effect",
     "diluter": "-effect",
     "stabilizer": "stabilizer",
     "spoiler": "spoiler",
+    "+wake": "wake-restoring",
+    "-wake": "wake-draining",
+    "+nourish": "nourishing",
+    "-nourish": "hunger-draining",
+    "+hydrate": "hydrating",
+    "-hydrate": "dehydrating",
 }
 
 HERBAL_INGREDIENT_ITEM_IDS = {
@@ -136,6 +154,10 @@ HERBAL_DECAY_METADATA_KEYS = {
     "breakdown_tick",
     "herbal_decay",
     "herbal_result_read",
+    "herbal_signed_effect_stacks",
+    "herbal_wakefulness_delta",
+    "herbal_hunger_delta",
+    "herbal_thirst_delta",
 }
 
 _BIAS_TERMS = {
@@ -497,7 +519,7 @@ def _expressed_genetic_chemistry_class(row):
 def _secondary_trait_fallback(seed, plant_id, class_id, row):
     marker = str(row.get("rarity") or row.get("growth_form") or "").strip().lower()
     rng = random.Random(f"{int(seed)}:herbal-secondary:v1:{plant_id}:{class_id}:{marker}")
-    weights = {trait: 1.0 for trait in SECONDARY_TRAITS}
+    weights = {trait: 1.0 for trait in FALLBACK_SECONDARY_TRAITS}
     if class_id in {"mending", "hydrating", "calming", "cleansing", "binding"}:
         weights["stabilizer"] += 0.8
     if class_id in {"catalyst", "energizing", "volatile"}:
@@ -549,6 +571,44 @@ def herbal_secondary_trait_profiles(sim):
         assignments[plant_id] = (_secondary_trait_fallback(seed, plant_id, class_id, row),)
 
     plant_ids = sorted(catalog)
+    # Each new world starts with a very small, honest genetic reservoir for
+    # signed body-effect traits.  They are not recipe-bound: the trait rides
+    # the harvested part, can become recessive through crossbreeding, and can
+    # return through durable native effect channels in later runs.
+    signed_traits = (
+        "+wake",
+        "-wake",
+        "+nourish",
+        "-nourish",
+        "+hydrate",
+        "-hydrate",
+    )
+    for trait in signed_traits:
+        if not plant_ids or any(trait in tuple(values or ()) for values in assignments.values()):
+            continue
+        candidates = [
+            plant_id
+            for plant_id in plant_ids
+            if not _expressed_genetic_secondary_traits(catalog.get(plant_id, {}))
+        ]
+        if not candidates:
+            continue
+        if trait == "+wake":
+            preferred = [plant_id for plant_id in candidates if class_assignments.get(plant_id) in {"energizing", "catalyst"}]
+            candidates = preferred or candidates
+        elif trait == "-wake":
+            preferred = [plant_id for plant_id in candidates if class_assignments.get(plant_id) in {"calming", "numbing", "deliriant"}]
+            candidates = preferred or candidates
+        elif trait in {"+nourish", "-nourish"}:
+            preferred = [plant_id for plant_id in candidates if class_assignments.get(plant_id) in {"mending", "toxic"}]
+            candidates = preferred or candidates
+        elif trait in {"+hydrate", "-hydrate"}:
+            preferred = [plant_id for plant_id in candidates if class_assignments.get(plant_id) in {"hydrating", "cooling", "irritant"}]
+            candidates = preferred or candidates
+        trait_rng = random.Random(f"{seed}:herbal-signed-trait:v1:{trait}")
+        target_id = candidates[trait_rng.randrange(len(candidates))]
+        assignments[target_id] = tuple(dict.fromkeys(tuple(assignments.get(target_id, ())) + (trait,)))
+
     for index, channel in enumerate(native_channels):
         traits = tuple(
             _key(trait)
@@ -764,6 +824,31 @@ def _herbal_trait_effect_metadata(sim, trait_counts, *, experiment_result="", mo
         "stability_score": stability_score,
         "stability_band": band,
     }
+    def _signed_stack(positive, negative):
+        positive_count = min(5, max(0, _safe_int(counts.get(positive), 0)))
+        negative_count = min(5, max(0, _safe_int(counts.get(negative), 0)))
+        return max(-5, min(5, positive_count - negative_count))
+
+    wake_stack = _signed_stack("+wake", "-wake")
+    nourish_stack = _signed_stack("+nourish", "-nourish")
+    hydrate_stack = _signed_stack("+hydrate", "-hydrate")
+    signed_stacks = {
+        key: value
+        for key, value in {
+            "wake": wake_stack,
+            "nourish": nourish_stack,
+            "hydrate": hydrate_stack,
+        }.items()
+        if value
+    }
+    if signed_stacks:
+        metadata["herbal_signed_effect_stacks"] = signed_stacks
+    if wake_stack:
+        metadata["herbal_wakefulness_delta"] = float(wake_stack * 10.0)
+    if nourish_stack:
+        metadata["herbal_hunger_delta"] = float(nourish_stack * 12.0)
+    if hydrate_stack:
+        metadata["herbal_thirst_delta"] = float(hydrate_stack * 12.0)
     result_read = _herbal_trait_result_read(counts, band)
     if result_read:
         metadata["herbal_result_read"] = result_read

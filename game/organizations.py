@@ -55,6 +55,8 @@ CIVIC_DEPARTMENT_BY_ARCHETYPE = {
     "barracks": ("civic_security", "Security Bureau"),
     "checkpoint": ("civic_security", "Security Bureau"),
     "command_center": ("civic_admin", "Operations Office"),
+    "city_hall": ("civic_admin", "Operations Office"),
+    "civic_office": ("civic_admin", "Operations Office"),
     "courthouse": ("civic_justice", "Justice Office"),
     "jail": ("civic_corrections", "Corrections Department"),
     "prison": ("civic_corrections", "Corrections Department"),
@@ -1515,6 +1517,15 @@ def seed_property_organization_defaults(prop, district=None):
     department_key, department_name = department
 
     metadata["organization_key"] = f"{department_key}:{scope_slug}"
+    if archetype in {"city_hall", "civic_office", "courthouse"}:
+        _merge_metadata_tags(
+            metadata,
+            "organization_tags",
+            "public_records",
+            "census",
+            "licensing",
+            "interest:service_access",
+        )
     if not _text(metadata.get("organization_name")):
         metadata["organization_name"] = f"{scope_name} {department_name}".strip()
     if not _text(metadata.get("organization_kind")):

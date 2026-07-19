@@ -5,6 +5,7 @@ from __future__ import annotations
 
 PUBLIC_ITEM_EFFECT_TYPES = (
     "modify_need",
+    "extend_wakefulness",
     "restore_hp",
     "status",
     "credits",

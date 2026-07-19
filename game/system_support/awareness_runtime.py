@@ -1,6 +1,6 @@
 """Shared witness and observer notice helpers."""
 
-from game.components import AI, Position
+from game.components import AI, CreatureIdentity, Position
 
 
 VALID_ACCOUNTABLE_OBSERVATION_CHANNELS = frozenset({
@@ -163,7 +163,10 @@ def _observer_is_accountable(sim, observer_eid, *, offender_eid=None, allow_play
         return False
     if _observer_is_private_bodyguard(sim, observer_eid):
         return False
-    return _observer_role(sim, observer_eid) != "wildlife"
+    if _observer_role(sim, observer_eid) == "wildlife":
+        return False
+    identity = sim.ecs.get(CreatureIdentity).get(observer_eid)
+    return str(getattr(identity, "creature_type", "") or "").strip().lower() != "animal"
 
 
 def _filter_accountable_observers(

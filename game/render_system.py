@@ -62,6 +62,7 @@ from game.components import (
     WeaponLoadout,
     WeaponUseProfile,
 )
+from game.system_support.sleep_pressure_runtime import chemical_wake_reserve_hours, ensure_sleep_needs
 from game.final_operation import (
     active_final_operation_target_property_id,
     ensure_final_operation_unlocked,
@@ -4296,12 +4297,18 @@ class RenderSystem(System):
             f"HP {hp_text}",
         ]
         if player_needs:
+            ensure_sleep_needs(player_needs)
             resource_chunks.extend(_survival_indicator_chunks(player_needs, rich=True))
         pressure = _pressure_snapshot(self.sim)
         pressure_tier = str(pressure.get("tier", "low")).strip().lower()
         pressure_attention = int(pressure.get("attention", 0))
         resource_chunks.append(f"Heat {pressure_tier} {pressure_attention}")
         if player_needs:
+            wake_text = f"Wake {float(getattr(player_needs, 'wakefulness', 100.0)):.0f}"
+            reserve_hours = chemical_wake_reserve_hours(player_needs)
+            if reserve_hours >= 0.05:
+                wake_text += f"+{reserve_hours:.1f}h"
+            resource_chunks.append(wake_text)
             resource_chunks.append(
                 f"Needs E{player_needs.energy:.0f}/S{player_needs.safety:.0f}/So{player_needs.social:.0f}"
             )

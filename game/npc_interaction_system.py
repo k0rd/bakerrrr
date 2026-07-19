@@ -124,6 +124,7 @@ from game.human_identity import (
     pronoun_format_slots,
 )
 from game.human_description import human_render_color_key
+from game.identity_evidence import remember_presented_identity
 from game.appearance_loadout import (
     appearance_color_key,
     human_live_conversation_presentation,
@@ -2163,6 +2164,29 @@ class NPCInteractionSystem(System):
             last_met_tick=last_met_tick,
             identity_snapshot=snapshot,
         )
+        updated_entry = ledger.person_entry(person_eid) or {}
+        updated_benefits = {
+            str(bit or "").strip().lower()
+            for bit in tuple(updated_entry.get("benefits", ()) or ())
+            if str(bit or "").strip()
+        }
+        personal_exchange = bool(
+            updated_entry.get("introduced", False)
+            or updated_entry.get("met_directly", False)
+        )
+        if personal_exchange and "known_name" in updated_benefits:
+            remember_presented_identity(
+                self.sim,
+                person_eid,
+                self.player_eid,
+                source_eid=self.player_eid,
+                relation_kind=relation_kind or "player_contact",
+                standing=max(0.18, float(standing or 0.0)),
+                property_id=property_id,
+                introduced=bool(updated_entry.get("introduced", False)),
+                met_directly=bool(updated_entry.get("met_directly", False)),
+                tick=self.sim.tick,
+            )
         if property_id:
             prop = self.sim.properties.get(str(property_id))
             if isinstance(prop, dict):

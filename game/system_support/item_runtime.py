@@ -12,6 +12,10 @@ from game.components import (
     WeaponLoadout,
 )
 from game.items import SCRATCH_TICKET_ITEM_ID, scratch_ticket_payout_from_metadata
+from game.system_support.sleep_pressure_runtime import (
+    add_chemical_wake_reserve,
+    modify_wakefulness,
+)
 from game.weapons import WEAPON_CATALOG, weapon_by_id
 
 
@@ -220,6 +224,22 @@ def _apply_item_effects_to_entity(sim, eid, item_def, *, item_metadata=None):
             })
             continue
 
+        if effect_type == "extend_wakefulness":
+            if not needs:
+                continue
+            try:
+                hours = float(effect.get("hours", 0.0) or 0.0) * positive_effect_scalar
+            except (TypeError, ValueError):
+                hours = 0.0
+            added_hours = add_chemical_wake_reserve(needs, hours)
+            if added_hours <= 0.0:
+                continue
+            applied.append({
+                "type": "extend_wakefulness",
+                "hours": round(float(added_hours), 3),
+            })
+            continue
+
         if effect_type == "restore_hp":
             try:
                 delta = int(round(float(effect.get("delta", 0) or 0) * positive_effect_scalar))
@@ -374,6 +394,44 @@ def _apply_item_effects_to_entity(sim, eid, item_def, *, item_metadata=None):
                 "need": need,
                 "delta": float(delta),
                 "source": "item_metadata",
+            })
+
+        try:
+            herbal_wake_delta = float(metadata.get("herbal_wakefulness_delta", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            herbal_wake_delta = 0.0
+        if abs(herbal_wake_delta) > 1e-6:
+            scalar = positive_effect_scalar if herbal_wake_delta > 0.0 else negative_effect_scalar
+            applied_delta = modify_wakefulness(needs, herbal_wake_delta * scalar)
+            if abs(applied_delta) > 1e-6:
+                applied.append({
+                    "type": "modify_wakefulness",
+                    "delta": round(float(applied_delta), 3),
+                    "source": "herbal_trait",
+                })
+
+        for need, metadata_key in (
+            ("hunger", "herbal_hunger_delta"),
+            ("thirst", "herbal_thirst_delta"),
+        ):
+            try:
+                herbal_delta = float(metadata.get(metadata_key, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                herbal_delta = 0.0
+            if abs(herbal_delta) <= 1e-6 or not hasattr(needs, need):
+                continue
+            scalar = positive_effect_scalar if herbal_delta > 0.0 else negative_effect_scalar
+            before = float(getattr(needs, need))
+            after = _clamp(before + (herbal_delta * scalar))
+            setattr(needs, need, after)
+            applied_delta = float(after) - before
+            if abs(applied_delta) <= 1e-6:
+                continue
+            applied.append({
+                "type": "modify_need",
+                "need": need,
+                "delta": round(applied_delta, 3),
+                "source": "herbal_trait",
             })
 
     substance_profile = item_def.get("substance_profile", {})

@@ -35,7 +35,7 @@ RENDER_SEMANTICS_PATH = GAME_DIR / "render_semantics.json"
 FLORA_PATH = GAME_DIR / "flora.json"
 HERBAL_RECIPES_PATH = GAME_DIR / "herbal_recipes.json"
 
-ALLOWED_ITEM_EFFECTS = {"modify_need", "restore_hp", "status", "credits", "add_ammo"}
+ALLOWED_ITEM_EFFECTS = {"modify_need", "extend_wakefulness", "restore_hp", "status", "credits", "add_ammo"}
 ALLOWED_ITEM_NEEDS = {"energy", "safety", "social", "hunger", "thirst"}
 ALLOWED_LEGAL_STATUS = {"legal", "restricted", "suspicious", "illegal"}
 ALLOWED_WEAPON_TRAJECTORIES = {"ballistic", "lobbed", "beam"}
@@ -910,6 +910,18 @@ def _validate_items(path, report):
                             report.error(source, effect_path, "modify_need effect requires delta")
                         else:
                             _validate_number(report, source, effect_path + ["delta"], effect["delta"], field_name="delta")
+                    elif effect_type == "extend_wakefulness":
+                        if "hours" not in effect:
+                            report.error(source, effect_path, "extend_wakefulness effect requires hours")
+                        else:
+                            _validate_number(
+                                report,
+                                source,
+                                effect_path + ["hours"],
+                                effect["hours"],
+                                minimum=0.1,
+                                field_name="hours",
+                            )
                     elif effect_type == "restore_hp":
                         if "delta" not in effect:
                             report.error(source, effect_path, "restore_hp effect requires delta")

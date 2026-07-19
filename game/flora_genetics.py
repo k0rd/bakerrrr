@@ -63,7 +63,11 @@ EFFECT_TRAIT_IDS = frozenset(
         "binder",
         "fader",
         "+nourish",
+        "-nourish",
         "+hydrate",
+        "-hydrate",
+        "+wake",
+        "-wake",
         "+mend",
         "+warm",
         "+steady",
@@ -84,7 +88,11 @@ EFFECT_TRAIT_COSTS = {
     "binder": 1,
     "fader": 1,
     "+nourish": 2,
+    "-nourish": 2,
     "+hydrate": 2,
+    "-hydrate": 2,
+    "+wake": 3,
+    "-wake": 3,
     "+mend": 2,
     "+warm": 2,
     "+steady": 2,
@@ -144,6 +152,10 @@ STABILITY_COST_BY_TRAIT = {
     "+antitoxin": 0.18,
     "+coverhop": 0.4,
     "+barkskin": 0.34,
+    "+wake": 0.18,
+    "-wake": 0.24,
+    "-nourish": 0.16,
+    "-hydrate": 0.2,
 }
 CHEMISTRY_BIAS_TERMS = {
     "mending": ("restorative", "soothing", "staunch", "heal", "mending", "clover", "soft"),
@@ -385,14 +397,22 @@ def _ensure_effect_trait_alleles(genetics, traits):
         trait_key = _key(trait)
         if trait_key not in EFFECT_TRAIT_IDS or trait_key in existing:
             continue
+        signed_body_trait = trait_key in {
+            "+wake",
+            "-wake",
+            "+nourish",
+            "-nourish",
+            "+hydrate",
+            "-hydrate",
+        }
         rows.append(_allele(
             trait_key,
             locus="effects.traits",
-            dominance=0.55,
-            inherit_chance=0.75,
-            expression_chance=0.75,
+            dominance=0.34 if signed_body_trait else 0.55,
+            inherit_chance=0.82 if signed_body_trait else 0.75,
+            expression_chance=0.38 if signed_body_trait else 0.75,
             stability_cost=STABILITY_COST_BY_TRAIT.get(trait_key, 0.12 if trait_key.startswith("+") else 0.0),
-            tags=("effect", trait_key),
+            tags=("effect", "recessive" if signed_body_trait else "ordinary", trait_key),
         ))
         existing.add(trait_key)
     effects["traits"] = rows
@@ -487,10 +507,11 @@ def _legacy_genes_for_row(plant_id, row, raw_genetics, seed):
                 _allele(
                     trait,
                     locus="effects.traits",
-                    dominance=0.55,
-                    expression_chance=0.75,
+                    dominance=0.34 if trait in {"+wake", "-wake", "+nourish", "-nourish", "+hydrate", "-hydrate"} else 0.55,
+                    inherit_chance=0.82 if trait in {"+wake", "-wake", "+nourish", "-nourish", "+hydrate", "-hydrate"} else 1.0,
+                    expression_chance=0.38 if trait in {"+wake", "-wake", "+nourish", "-nourish", "+hydrate", "-hydrate"} else 0.75,
                     stability_cost=STABILITY_COST_BY_TRAIT.get(trait, 0.12 if trait.startswith("+") else 0.0),
-                    tags=("effect", trait),
+                    tags=("effect", "recessive" if trait in {"+wake", "-wake", "+nourish", "-nourish", "+hydrate", "-hydrate"} else "ordinary", trait),
                 )
                 for trait in effects
             ],

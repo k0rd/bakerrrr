@@ -572,6 +572,7 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "restricted",
         "effects": [
             {"type": "modify_need", "need": "energy", "delta": 24},
+            {"type": "extend_wakefulness", "hours": 1.5},
             {"type": "status", "status": "wired", "duration": 16, "modifiers": {"energy_tick_delta": 0.1, "safety_tick_delta": -0.12, "move_speed_mult": 0.22, "weapon_cooldown_mult": -0.18, "ranged_accuracy_mult": -0.1, "incoming_damage_mult": 0.05}},
         ],
     },
@@ -650,6 +651,7 @@ DEFAULT_ITEM_CATALOG = {
         "effects": [
             {"type": "modify_need", "need": "energy", "delta": 30},
             {"type": "modify_need", "need": "safety", "delta": -10},
+            {"type": "extend_wakefulness", "hours": 4.5},
             {"type": "status", "status": "agitated", "duration": 20, "modifiers": {"safety_tick_delta": -0.12, "energy_tick_delta": -0.06, "move_speed_mult": 0.16, "weapon_cooldown_mult": -0.28, "melee_damage_mult": 0.22, "ranged_accuracy_mult": -0.16, "incoming_damage_mult": 0.14, "assault_bias_delta": 0.18, "retreat_bias_delta": -0.12}},
         ],
     },
@@ -748,6 +750,7 @@ DEFAULT_ITEM_CATALOG = {
         "effects": [
             {"type": "modify_need", "need": "energy", "delta": 18},
             {"type": "modify_need", "need": "safety", "delta": -18},
+            {"type": "extend_wakefulness", "hours": 3.0},
             {"type": "status", "status": "overamped", "duration": 18, "modifiers": {"move_speed_mult": 0.18, "weapon_cooldown_mult": -0.12, "ranged_accuracy_mult": -0.18, "incoming_damage_mult": 0.18, "assault_bias_delta": 0.16, "retreat_bias_delta": -0.08}},
         ],
     },
@@ -758,6 +761,7 @@ DEFAULT_ITEM_CATALOG = {
         "tags": ["consumable", "discipline", "restricted"],
         "legal_status": "restricted",
         "effects": [
+            {"type": "extend_wakefulness", "hours": 3.5},
             {"type": "status", "status": "steady_hands", "duration": 22, "modifiers": {"energy_tick_delta": 0.05, "move_speed_mult": 0.07, "ranged_accuracy_mult": 0.12, "projectile_spread_mod": -1, "weapon_cooldown_mult": -0.22}},
         ],
     },

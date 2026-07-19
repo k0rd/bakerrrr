@@ -19,6 +19,7 @@ from engine.visibility import observer_can_see_position
 
 from game.components import AI, IncidentKnowledge, Inventory, JusticeProfile, NPCWill, NPCRoutine, Position
 from game.incident_runtime import incident_record
+from game.identity_evidence import transmitted_subject_account
 from game.items import item_display_name
 from game.item_semantics import inventory_has_phone, item_tags
 from game.property_runtime import property_infrastructure_role as _property_infrastructure_role
@@ -552,6 +553,16 @@ class ObservedIncidentResponseSystem(System):
         incident_id = _int(cue.get("incident_id"), -1)
         incident = incident_record(self.sim, incident_id)
         reporter_eid = _int(cue.get("npc_eid"), -1)
+        reporter_knowledge = self.sim.ecs.get(IncidentKnowledge).get(reporter_eid)
+        reporter_record = reporter_knowledge.records.get(incident_id) if reporter_knowledge is not None else None
+        subject_account = transmitted_subject_account(
+            (reporter_record or {}).get("subject_account"),
+            channel="authority_report",
+            source_eid=reporter_eid,
+            confidence=(reporter_record or {}).get("confidence", 0.0),
+            propagation_depth=(reporter_record or {}).get("propagation_depth", 0),
+            preserve_reporter_account=True,
+        )
         if isinstance(incident, dict):
             incident["officially_reported"] = True
             incident["reported_tick"] = int(getattr(self.sim, "tick", 0))
@@ -567,6 +578,7 @@ class ObservedIncidentResponseSystem(System):
             "x": _int(x, 0),
             "y": _int(y, 0),
             "z": _int(z, 0),
+            "subject_account": subject_account,
         }
         self.sim.observed_response_stats["reported"] += 1
         observation = observation_payload_from_observers(
@@ -579,10 +591,12 @@ class ObservedIncidentResponseSystem(System):
             "incident_authority_reported",
             incident_id=incident_id,
             npc_eid=reporter_eid,
+            reporter_eid=reporter_eid,
             method=_text(cue.get("method")),
             x=_int(x, 0),
             y=_int(y, 0),
             z=_int(z, 0),
+            subject_account=subject_account,
             **observation,
         ))
 

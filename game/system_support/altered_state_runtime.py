@@ -4,8 +4,9 @@ import random
 
 from engine.events import Event
 from engine.systems import System
-from game.components import Position, StatusEffects, Vitality
+from game.components import NPCNeeds, Position, StatusEffects, Vitality
 from game.system_support.combat_pacing_runtime import _combat_turn_pacing_active
+from game.system_support.sleep_pressure_runtime import sleep_deprivation_hallucination_intensity
 from game.system_support.status_runtime import _status_modifier_total, _status_multiplier
 
 
@@ -292,7 +293,10 @@ def maybe_start_drug_blackout(sim, eid):
 
 
 def hallucination_intensity(sim, eid):
-    return max(0.0, _status_value(sim, eid, "hallucination_intensity", 0.0))
+    status_intensity = max(0.0, _status_value(sim, eid, "hallucination_intensity", 0.0))
+    needs = sim.ecs.get(NPCNeeds).get(eid)
+    deprivation_intensity = sleep_deprivation_hallucination_intensity(needs)
+    return max(0.0, min(2.0, status_intensity + deprivation_intensity))
 
 
 def hallucination_read_chance(sim, eid):

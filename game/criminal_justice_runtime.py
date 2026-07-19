@@ -12,11 +12,13 @@ from game.justice_runtime import (
     clear_restitution_claims as _clear_justice_restitution_claims,
     custody_release_grace_active as _custody_release_grace_active,
     decay_records as _decay_justice_records,
+    exonerate_provisional_case as _exonerate_provisional_justice_case,
     grant_custody_release_grace as _grant_custody_release_grace,
     held_property_snapshot as _justice_held_property_snapshot,
     justice_snapshot as _justice_snapshot,
     justice_summary_rows as _justice_summary_rows,
     mark_in_custody as _mark_justice_in_custody,
+    provisional_incident_rows as _justice_provisional_incident_rows,
     record_booking_completion as _record_justice_booking_completion,
     record_incident as _record_justice_incident,
     record_questioning_resolution as _record_justice_questioning_resolution,
@@ -24,7 +26,9 @@ from game.justice_runtime import (
     replace_held_property as _replace_justice_held_property,
     release_from_custody as _release_justice_from_custody,
     restitution_snapshot as _justice_restitution_snapshot,
+    set_provisional_active_contribution as _set_provisional_justice_active_contribution,
     store_held_property as _store_justice_held_property,
+    wanted_tier_for as _justice_wanted_tier_for,
 )
 from game.property_access import (
     evaluate_property_access as _evaluate_property_access,
@@ -201,6 +205,7 @@ def noise_merits_attention(sim, observer_eid, source_eid, x, y, z, cause):
 
 _custody_release_grace_active = _custody_release_grace_active
 _decay_justice_records = _decay_justice_records
+_exonerate_provisional_justice_case = _exonerate_provisional_justice_case
 _defender_excuses_window_shot = defender_excuses_window_shot
 _entities_have_family_bond = entities_have_family_bond
 _grant_custody_release_grace = _grant_custody_release_grace
@@ -209,6 +214,7 @@ _justice_held_property_snapshot = _justice_held_property_snapshot
 _justice_snapshot = _justice_snapshot
 _justice_summary_rows = _justice_summary_rows
 _mark_justice_in_custody = _mark_justice_in_custody
+_justice_provisional_incident_rows = _justice_provisional_incident_rows
 _noise_merits_attention = noise_merits_attention
 _observer_is_active_bodyguard = observer_is_active_bodyguard
 _observer_is_active_contractor_ally = observer_is_active_contractor_ally
@@ -217,4 +223,6 @@ _record_justice_booking_completion = _record_justice_booking_completion
 _record_justice_incident = _record_justice_incident
 _release_justice_from_custody = _release_justice_from_custody
 _replace_justice_held_property = _replace_justice_held_property
+_set_provisional_justice_active_contribution = _set_provisional_justice_active_contribution
 _store_justice_held_property = _store_justice_held_property
+_justice_wanted_tier_for = _justice_wanted_tier_for

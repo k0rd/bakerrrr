@@ -1408,6 +1408,39 @@ def _has_protective_duty(ai, *, justice=None, occupation=None):
     return False
 
 
+def _gunfire_wildlife_investigation_context(sim, event, *, authority_review=False):
+    data = getattr(event, "data", {}) or {}
+    cause = str(data.get("cause", "") or "").strip().lower()
+    if cause not in {"fire_weapon", "gunshot", "weapon_fire"}:
+        return None
+    target_eid = data.get("target_eid")
+    if target_eid is None:
+        return None
+    identity = sim.ecs.get(CreatureIdentity).get(target_eid)
+    target_ai = sim.ecs.get(AI).get(target_eid)
+    role = str(getattr(target_ai, "role", "") or "").strip().lower()
+    creature_type = str(getattr(identity, "creature_type", "") or "").strip().lower()
+    if role != "wildlife" and creature_type != "animal":
+        return None
+    return {
+        "kind": "possible_hunting" if authority_review else "wildlife_gunfire",
+        "cause": cause,
+        "target_eid": int(target_eid),
+        "target_taxonomy": str(getattr(identity, "taxonomy_class", "other") or "other").strip().lower() or "other",
+        "target_species": str(getattr(identity, "species", "unknown species") or "unknown species").strip().lower() or "unknown species",
+        "target_name": str(getattr(identity, "common_name", "wildlife") or "wildlife").strip() or "wildlife",
+        "requires_license_review": bool(authority_review),
+        "credential_type": "hunting" if authority_review else None,
+        "credential_review_status": "pending" if authority_review else "not_applicable",
+        "legal_status": "unresolved",
+        "offense_assumed": False,
+        "x": data.get("x"),
+        "y": data.get("y"),
+        "z": data.get("z"),
+        "heard_tick": int(getattr(sim, "tick", 0) or 0),
+    }
+
+
 def _bond_supports_physical_intervention(bond, *, danger):
     if not isinstance(bond, dict) or not bond:
         return False
@@ -5205,6 +5238,27 @@ class NPCInvestigateSystem(System):
             ai.state = "investigating"
             ai.target = (nx, ny, nz)
             ai.target_eid = None
+            authority_review = _has_protective_duty(
+                ai,
+                justice=justices.get(eid),
+                occupation=occupations.get(eid),
+            )
+            investigation_context = _gunfire_wildlife_investigation_context(
+                self.sim,
+                event,
+                authority_review=authority_review,
+            ) or {
+                "kind": "noise",
+                "cause": str(cause or "").strip().lower(),
+                "target_eid": event.data.get("target_eid"),
+                "requires_license_review": False,
+                "offense_assumed": False,
+                "x": nx,
+                "y": ny,
+                "z": nz,
+                "heard_tick": int(getattr(self.sim, "tick", 0) or 0),
+            }
+            ai.investigation_context = investigation_context
             self._urgent_move_eids.add(int(eid))
             _mark_actor_urgent(self.sim, eid, family="move", reason="noise", ttl_ticks=12)
             _mark_actor_urgent(self.sim, eid, family="will", reason="noise", ttl_ticks=12)
@@ -5219,6 +5273,15 @@ class NPCInvestigateSystem(System):
                 z=nz,
                 cause=cause,
                 target_eid=event.data.get("target_eid"),
+                investigation_kind=investigation_context.get("kind"),
+                target_is_wildlife=investigation_context.get("kind") in {"possible_hunting", "wildlife_gunfire"},
+                target_taxonomy=investigation_context.get("target_taxonomy"),
+                target_species=investigation_context.get("target_species"),
+                requires_license_review=bool(investigation_context.get("requires_license_review")),
+                credential_type=investigation_context.get("credential_type"),
+                credential_review_status=investigation_context.get("credential_review_status"),
+                legal_status=investigation_context.get("legal_status"),
+                offense_assumed=False,
             ))
 
     def _move_actor_position_direct(self, eid, pos, target):

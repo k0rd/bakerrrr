@@ -10,7 +10,7 @@ from __future__ import annotations
 from engine.events import Event
 from engine.systems import System
 
-from game.components import AI, IncidentKnowledge, Inventory, JusticeProfile, NPCTraits, Occupation, Position
+from game.components import AI, CreatureIdentity, IncidentKnowledge, Inventory, JusticeProfile, NPCTraits, Occupation, Position
 from game.drone_incident_reporting import drone_incident_report_rows
 from game.incident_runtime import (
     create_or_merge_incident,
@@ -23,6 +23,7 @@ from game.incident_runtime import (
     record_incident_scene_items,
     update_incident_propagation,
 )
+from game.identity_evidence import build_witness_subject_account, transmitted_subject_account
 from game.organizations import property_org_members
 from game.property_runtime import property_covering, property_runtime_container_entries
 from game.system_support.awareness_runtime import event_observation_accountability, observation_payload_for_position
@@ -139,6 +140,15 @@ class IncidentKnowledgeSystem(System):
             actor_eid = int(eid)
         except (TypeError, ValueError):
             return None
+        ai = self.sim.ecs.get(AI).get(actor_eid)
+        identity = self.sim.ecs.get(CreatureIdentity).get(actor_eid)
+        role = str(getattr(ai, "role", "") or "").strip().lower()
+        creature_type = str(getattr(identity, "creature_type", "") or "").strip().lower()
+        if role == "wildlife" or creature_type == "animal":
+            # Animals retain attacker and threat experience through AnimalMemory.
+            # A human social/legal incident ledger would make them rumor carriers
+            # and crime witnesses merely because they have an EID.
+            return None
         knowledge = self.sim.ecs.get(IncidentKnowledge).get(actor_eid)
         if knowledge is None and create:
             self.sim.ecs.add(actor_eid, IncidentKnowledge())
@@ -224,6 +234,7 @@ class IncidentKnowledgeSystem(System):
         confidence=1.0,
         propagation_depth=0,
         queue=True,
+        subject_account=None,
     ):
         incident = incident_record(self.sim, incident_id)
         if not isinstance(incident, dict):
@@ -231,7 +242,30 @@ class IncidentKnowledgeSystem(System):
         if not incident_propagation_allowed(incident, propagation_depth):
             return None
 
+        source_key = str(source_kind or "").strip().lower()
+        if not isinstance(subject_account, dict):
+            subject_account = None
+        if subject_account is None and incident.get("primary_actor_eid") is not None:
+            if source_key in {
+                "self",
+                "witnessed",
+                "camera",
+                "linked_drone_camera",
+                "drone_radio_feed",
+                "private_bodyguard_witness",
+                "victim",
+            }:
+                subject_account = build_witness_subject_account(
+                    self.sim,
+                    eid,
+                    incident.get("primary_actor_eid"),
+                    source_kind=source_key,
+                    confidence=confidence,
+                )
+
         knowledge = self._knowledge_for(eid, create=True)
+        if knowledge is None:
+            return None
         urgency = self._observer_urgency(
             eid,
             incident,
@@ -273,6 +307,7 @@ class IncidentKnowledgeSystem(System):
                 if incident.get("official_reportable")
                 else None
             ),
+            subject_account=subject_account,
         )
         update_incident_propagation(incident, propagation_depth)
 
@@ -316,6 +351,8 @@ class IncidentKnowledgeSystem(System):
             propagation_depth=int(propagation_depth),
             urgency=round(float(urgency), 3),
             social_interest=round(float(social_interest), 3),
+            subject_identification=str((subject_account or {}).get("identification", "unknown") or "unknown"),
+            suspect_eid=(subject_account or {}).get("suspect_eid"),
         ))
         return record
 
@@ -1387,6 +1424,16 @@ class IncidentKnowledgeSystem(System):
             return
 
         confidence = _clamp_unit(float(event.data.get("strength", 0.0) or 0.0) * 0.92, default=0.22)
+        subject_account = event.data.get("subject_account")
+        if not isinstance(subject_account, dict):
+            subject_account = transmitted_subject_account(
+                (source_record or {}).get("subject_account"),
+                channel="social_rumor",
+                source_eid=from_eid,
+                confidence=confidence,
+                propagation_depth=propagation_depth,
+                corruption_kind=event.data.get("corruption_kind", ""),
+            )
         self._learn_incident(
             to_eid,
             int(incident_id),
@@ -1395,6 +1442,7 @@ class IncidentKnowledgeSystem(System):
             firsthand=False,
             confidence=confidence,
             propagation_depth=propagation_depth,
+            subject_account=subject_account,
         )
         target_knowledge = self._knowledge_for(to_eid, create=False)
         if target_knowledge is not None:

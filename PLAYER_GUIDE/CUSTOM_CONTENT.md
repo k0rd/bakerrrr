@@ -129,7 +129,9 @@ Placeable object-profile items must have `stack_max` set to `1`. Owner names, NP
 
 Allowed effect types:
 
-`modify_need`, `restore_hp`, `status`, `credits`, `add_ammo`
+`modify_need`, `extend_wakefulness`, `restore_hp`, `status`, `credits`, `add_ammo`
+
+`extend_wakefulness` accepts numeric `hours`. It adds a bounded chemical wake reserve that postpones future sleep-pressure loss; it does not erase existing sleep debt.
 
 Allowed needs for `modify_need`:
 

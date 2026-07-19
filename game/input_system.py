@@ -5070,10 +5070,14 @@ class InputSystem(System):
             self._help_state()["open"] = True
             return True
 
-        if dialog_kind in {"justice_surrender", "justice_questioning"}:
+        if dialog_kind in {"justice_surrender", "justice_questioning", "justice_identity_check"}:
             if key in (27, ord("q"), ord("Q")):
-                event_type = "justice_questioning_choice" if dialog_kind == "justice_questioning" else "justice_surrender_choice"
-                choice_id = "refuse" if dialog_kind == "justice_questioning" else "resist"
+                if dialog_kind == "justice_identity_check":
+                    event_type = "justice_identity_check_choice"
+                    choice_id = "decline"
+                else:
+                    event_type = "justice_questioning_choice" if dialog_kind == "justice_questioning" else "justice_surrender_choice"
+                    choice_id = "refuse" if dialog_kind == "justice_questioning" else "resist"
                 self.sim.emit(Event(
                     event_type,
                     eid=self.player_eid,
@@ -5185,6 +5189,14 @@ class InputSystem(System):
                 if dialog_kind == "justice_questioning":
                     self.sim.emit(Event(
                         "justice_questioning_choice",
+                        eid=self.player_eid,
+                        npc_eid=state.get("npc_eid"),
+                        choice_id=topic.get("id"),
+                    ))
+                    return True
+                if dialog_kind == "justice_identity_check":
+                    self.sim.emit(Event(
+                        "justice_identity_check_choice",
                         eid=self.player_eid,
                         npc_eid=state.get("npc_eid"),
                         choice_id=topic.get("id"),
@@ -7082,6 +7094,13 @@ class InputSystem(System):
                 need = effect.get("need")
                 delta = effect.get("delta", 0)
                 effect_labels.append(f"{need}:{delta:+}")
+            elif etype == "extend_wakefulness":
+                try:
+                    hours = float(effect.get("hours", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    hours = 0.0
+                if hours > 0.0:
+                    effect_labels.append(f"wake:+{hours:g}h")
             elif etype == "restore_hp":
                 delta = effect.get("delta", 0)
                 effect_labels.append(f"hp:+{delta}")

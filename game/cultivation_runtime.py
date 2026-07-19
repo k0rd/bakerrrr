@@ -42,7 +42,18 @@ PLANTABLE_MATERIAL_ITEM_IDS = {
     "vine_cuttings",
 }
 POLLEN_ITEM_IDS = {"fresh_blossoms"}
-SECONDARY_TRAIT_IDS = {"potentiator", "diluter", "stabilizer", "spoiler"}
+SECONDARY_TRAIT_IDS = {
+    "potentiator",
+    "diluter",
+    "stabilizer",
+    "spoiler",
+    "+wake",
+    "-wake",
+    "+nourish",
+    "-nourish",
+    "+hydrate",
+    "-hydrate",
+}
 RUMOR_NOTABILITY_BANDS = {"suspect", "contraband", "notorious"}
 NON_POT_GROWTH_FORMS = {"vine"}
 FAILED_STAGES = {"withering", "failed"}

@@ -591,6 +591,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("control_lapse_started", self.on_control_lapse_started)
         self.sim.events.subscribe("drug_blackout_started", self.on_drug_blackout_started)
         self.sim.events.subscribe("drug_blackout_resolved", self.on_drug_blackout_resolved)
+        self.sim.events.subscribe("sleep_deprivation_stage_changed", self.on_sleep_deprivation_stage_changed)
+        self.sim.events.subscribe("exhaustion_sleep_started", self.on_exhaustion_sleep_started)
+        self.sim.events.subscribe("exhaustion_sleep_resolved", self.on_exhaustion_sleep_resolved)
         self.sim.events.subscribe("inventory_panel_toggled", self.on_inventory_panel_toggled)
         self.sim.events.subscribe("inventory_inspected", self.on_inventory_inspected)
         self.sim.events.subscribe("trade_panel_toggled", self.on_trade_panel_toggled)
@@ -711,6 +714,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("justice_inventory_inspected", self.on_justice_inventory_inspected)
         self.sim.events.subscribe("justice_questioning_resolved", self.on_justice_questioning_resolved)
         self.sim.events.subscribe("justice_booking_completed", self.on_justice_booking_completed)
+        self.sim.events.subscribe("justice_misidentification_corrected", self.on_justice_misidentification_corrected)
         self.sim.events.subscribe("organization_vigilante_response", self.on_organization_vigilante_response)
         self.sim.events.subscribe("incident_dispatch_started", self.on_incident_dispatch_started)
         self.sim.events.subscribe("organization_heat_tier_changed", self.on_organization_heat_tier_changed)
@@ -1545,7 +1549,10 @@ class EventLogSystem(System):
         role = self._npc_role(npc_eid)
         if self._investigation_combat_noise(npc_eid, event):
             direct_target = self._investigation_bark_is_direct_target(npc_eid, event)
-            if direct_target:
+            possible_hunting = str(event.data.get("investigation_kind", "") or "").strip().lower() == "possible_hunting"
+            if possible_hunting and bool(event.data.get("requires_license_review")):
+                quote = "Hold there. I'm checking that shot."
+            elif direct_target:
                 quote = "Back off!"
             elif role == "guard":
                 quote = "Drop it."
@@ -5300,6 +5307,14 @@ class EventLogSystem(System):
                     sign = "+" if delta > 0 else ""
                     bits.append(f"{label} {sign}{delta}")
                     continue
+                if effect_type == "extend_wakefulness":
+                    try:
+                        hours = float(entry.get("hours", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        hours = 0.0
+                    if hours > 0.0:
+                        bits.append(f"Wake +{hours:g}h")
+                    continue
                 if effect_type == "status":
                     status = _status_effect_label(
                         entry.get("status", "status"),
@@ -5906,6 +5921,39 @@ class EventLogSystem(System):
             self._log(f"You come back after {duration}{suffix}.", channel="status", priority="high")
             return
         self._log(f"You come back after {duration}.", channel="status", priority="high")
+
+    def on_sleep_deprivation_stage_changed(self, event):
+        if event.data.get("eid") != self.player_eid or bool(event.data.get("recovering")):
+            return
+        stage = str(event.data.get("stage", "") or "").strip().lower()
+        messages = {
+            "tired": "You have been awake long enough to feel it. Sleep would help.",
+            "exhausted": "Fatigue settles behind your eyes and drags at every thought.",
+            "hallucinating": "Exhaustion frays the edges of what you see.",
+        }
+        message = messages.get(stage)
+        if message:
+            self._log(message, channel="status", priority="high")
+
+    def on_exhaustion_sleep_started(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._log(
+            "Your body takes the decision away. You collapse into mandatory sleep.",
+            channel="status",
+            priority="high",
+        )
+
+    def on_exhaustion_sleep_resolved(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        ticks = int(event.data.get("time_advanced_ticks", 0) or 0)
+        duration = _tick_duration_label(self.sim, ticks) if ticks > 0 else "a while"
+        self._log(
+            f"You wake after {duration} because your body recovered enough—not because the danger passed.",
+            channel="status",
+            priority="high",
+        )
 
     def on_inventory_panel_toggled(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -8588,6 +8636,52 @@ class EventLogSystem(System):
             priority="high",
             dedupe_window=12,
             dedupe_key=f"justice-booking:{str(event.data.get('property_id', property_name)).strip().lower()}:{after_tier}:{after_score}",
+        )
+
+    def on_justice_misidentification_corrected(self, event):
+        eid = event.data.get("eid")
+        jurisdiction = str(event.data.get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office"
+        refunded = int(event.data.get("fine_refunded", 0) or 0)
+        debt_cancelled = int(event.data.get("debt_cancelled", 0) or 0)
+        released = bool(event.data.get("released", False))
+        hold_ticks = int(event.data.get("hold_ticks_served", 0) or 0)
+        if eid == self.player_eid:
+            text = f"Case correction: {jurisdiction} confirms that you were misidentified and clears the provisional allegation."
+            if released:
+                text += " You are released immediately."
+            if debt_cancelled > 0:
+                text += f" Justice debt cancelled: {debt_cancelled}c."
+            if refunded > 0:
+                destination = str(event.data.get("refund_destination", "") or "").strip().lower()
+                text += f" Fine refunded: {refunded}c" + (f" to your {destination}." if destination else ".")
+            if hold_ticks > 0:
+                text += " Time already served remains part of your history."
+            self._log(
+                text,
+                channel="mission",
+                priority="critical",
+                dedupe_window=20,
+                dedupe_key=f"justice-exoneration:{event.data.get('case_id')}:{eid}",
+            )
+            return
+        if not (
+            self._player_can_perceive_entity(eid)
+            or self._player_is_near_event_position(event, radius=8)
+        ):
+            return
+        name = self._npc_label(eid)
+        text = f"{jurisdiction} clears {name} after confirming a mistaken identification."
+        if released:
+            text += " They are released immediately."
+        if refunded > 0:
+            text += f" {refunded}c is returned."
+        self._log_npc_message(
+            eid,
+            text,
+            channel="mission",
+            priority="high",
+            dedupe_window=16,
+            dedupe_key=f"justice-exoneration:{event.data.get('case_id')}:{eid}",
         )
 
     def on_justice_inventory_inspected(self, event):

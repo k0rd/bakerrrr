@@ -4,6 +4,7 @@ from engine.events import Event
 from engine.systems import System
 
 from game.incident_runtime import incident_record
+from game.justice_identity_runtime import event_evidence_resolves_subject
 from game.organization_reputation import organization_snapshot as _organization_snapshot
 from game.system_support.awareness_runtime import event_observation_accountability
 from game.system_support.intrusion_runtime import (
@@ -519,6 +520,8 @@ class RunPressureSystem(System):
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
+            return
         change = self._apply_action_offense_pressure(event.data, source_event="action_offense")
         if change is not None:
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
@@ -530,6 +533,8 @@ class RunPressureSystem(System):
             return
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
+            return
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
             return
         change = self._apply_trespass_pressure(event.data, source_event="property_trespass")
         if change is not None:
@@ -543,6 +548,8 @@ class RunPressureSystem(System):
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
+            return
         change = self._apply_tamper_pressure(event.data, source_event="property_tamper")
         if change is not None:
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
@@ -555,7 +562,7 @@ class RunPressureSystem(System):
             return
         if event_is_vision_only(incident):
             return
-        if incident.get("primary_actor_eid") != self.player_eid:
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
             return
         if bool(incident.get("run_pressure_accounted")):
             return

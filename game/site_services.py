@@ -213,6 +213,7 @@ def _default_live_timeskip_state():
         "well_rested_granted": False,
         "practice_note": "",
         "source_status": "",
+        "mandatory_rest": False,
         "result_pending": False,
     }
 
@@ -347,6 +348,7 @@ class SiteServiceSystem(System):
             "entity_damaged": 80,
             "justice_surrender": 70,
             "justice_questioning": 70,
+            "justice_identity_check": 65,
             "woken_by_noise": 40,
         }
         return int(priorities.get(reason_key, 10))
@@ -356,6 +358,14 @@ class SiteServiceSystem(System):
         if not bool(state.get("active")) and not bool(state.get("result_pending")):
             return False
         reason_key = str(reason or "").strip().lower() or "interrupted"
+        if bool(state.get("mandatory_rest")) and reason_key in {
+            "entity_damaged",
+            "justice_questioning",
+            "justice_surrender",
+            "justice_identity_check",
+            "woken_by_noise",
+        }:
+            return False
         current_reason = str(state.get("interruption_reason", "") or "").strip().lower()
         if current_reason and self._live_timeskip_priority(current_reason) > self._live_timeskip_priority(reason_key):
             return False
@@ -545,11 +555,13 @@ class SiteServiceSystem(System):
         return state
 
     def _live_timeskip_blocking_dialog_kind(self):
+        if bool(self._live_timeskip_state().get("mandatory_rest")):
+            return ""
         dialog_state = getattr(self.sim, "dialog_ui", None)
         if not isinstance(dialog_state, dict) or not bool(dialog_state.get("open")):
             return ""
         kind = str(dialog_state.get("kind", "") or "").strip().lower()
-        if kind in {"justice_surrender", "justice_questioning"}:
+        if kind in {"justice_surrender", "justice_questioning", "justice_identity_check"}:
             return kind
         return ""
 
@@ -560,6 +572,8 @@ class SiteServiceSystem(System):
     def on_noise(self, event):
         state = self._live_timeskip_state()
         if not bool(state.get("active")):
+            return
+        if bool(state.get("mandatory_rest")):
             return
         cause = str(event.data.get("cause", "") or "").strip().lower()
         if not cause or cause in QUIET_NOISE_CAUSES:
@@ -615,6 +629,8 @@ class SiteServiceSystem(System):
     def on_entity_damaged(self, event):
         if event.data.get("target_eid") != self.player_eid:
             return
+        if bool(self._live_timeskip_state().get("mandatory_rest")):
+            return
         self._mark_live_timeskip_interruption("entity_damaged")
 
     def on_player_killed(self, event):
@@ -664,6 +680,18 @@ class SiteServiceSystem(System):
             return False
         owner = str(state.get("owner", "site_service") or "site_service").strip().lower()
         kind = str(state.get("kind", "") or "").strip().lower()
+        if owner == "sleep_pressure" or kind == "exhaustion_sleep":
+            needs = self.sim.ecs.get(NPCNeeds).get(self.player_eid)
+            self.sim.emit(Event(
+                "exhaustion_sleep_resolved",
+                eid=self.player_eid,
+                duration_ticks=int(state.get("total_ticks", 0) or 0),
+                time_advanced_ticks=int(state.get("elapsed_ticks", 0) or 0),
+                wakefulness=round(float(getattr(needs, "wakefulness", 0.0) or 0.0), 3),
+                completed=bool(state.get("completed")),
+            ))
+            self._reset_live_timeskip_state()
+            return True
         if owner == "altered_state" or kind == "drug_blackout":
             self.sim.emit(Event(
                 "drug_blackout_resolved",

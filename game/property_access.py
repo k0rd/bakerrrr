@@ -430,7 +430,9 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "butcher_shop": ("butcher_prepare", "fauna_registry"),
     "casino": ("slots", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", "casino_holdem", "plinko", "crash", "twenty_one", "three_bones", "bloom_cards"),
     "contractor_office": ("building_repair", "business_remodel", "bodyguard_contract"),
+    "courthouse": ("civic_records",),
     "courier_office": ("courier_jobs",),
+    "civic_office": ("civic_records",),
     "dock_shack": ("shuttle_transit", "ferry_transit"),
     "employment_agency": ("agency_jobs", "business_management"),
     "ferry_post": ("intel", "ferry_transit"),
@@ -454,8 +456,12 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "tide_station": ("intel", "ferry_transit"),
     "truck_stop": ("bus_transit", "shuttle_transit", "coach_transit", "business_management"),
     "trading_post": ("business_management",),
+    "city_hall": ("civic_records", "business_management"),
 }
 DEFAULT_SITE_SERVICE_EXTEND_ARCHETYPES = frozenset({
+    "city_hall",
+    "civic_office",
+    "courthouse",
     "employment_agency",
     "recruitment_office",
     "relay_post",

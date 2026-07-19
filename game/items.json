@@ -54,6 +54,10 @@
         "delta": 24
       },
       {
+        "type": "extend_wakefulness",
+        "hours": 1.5
+      },
+      {
         "type": "status",
         "status": "wired",
         "duration": 16,
@@ -703,6 +707,10 @@
         "delta": -12
       },
       {
+        "type": "extend_wakefulness",
+        "hours": 4.5
+      },
+      {
         "type": "status",
         "status": "spun_up",
         "duration": 22,
@@ -1301,6 +1309,10 @@
     "legal_status": "restricted",
     "effects": [
       {
+        "type": "extend_wakefulness",
+        "hours": 3.5
+      },
+      {
         "type": "status",
         "status": "steady_hands",
         "duration": 22,
@@ -1663,6 +1675,10 @@
         "type": "modify_need",
         "need": "safety",
         "delta": -8
+      },
+      {
+        "type": "extend_wakefulness",
+        "hours": 2.5
       },
       {
         "type": "status",
@@ -2243,6 +2259,10 @@
         "type": "modify_need",
         "need": "social",
         "delta": 4
+      },
+      {
+        "type": "extend_wakefulness",
+        "hours": 0.75
       },
       {
         "type": "status",

@@ -281,6 +281,9 @@ def _offender_record(state, offender_eid, *, create=False):
             "last_questioning_disposition": "",
             "last_questioning_kept_contraband_count": 0,
             "last_questioning_evidence_surcharge": 0,
+            "last_exoneration_tick": -10_000,
+            "last_exoneration_case_id": "",
+            "last_exoneration_score_removed": 0,
             "restitution_entries": [],
         }
         offenders[offender_key] = record
@@ -351,6 +354,9 @@ def _offender_record(state, offender_eid, *, create=False):
     record["last_questioning_disposition"] = _text(record.get("last_questioning_disposition")).lower()
     record["last_questioning_kept_contraband_count"] = max(0, _safe_int(record.get("last_questioning_kept_contraband_count"), default=0))
     record["last_questioning_evidence_surcharge"] = max(0, _safe_int(record.get("last_questioning_evidence_surcharge"), default=0))
+    record["last_exoneration_tick"] = _safe_int(record.get("last_exoneration_tick"), default=-10_000)
+    record["last_exoneration_case_id"] = _text(record.get("last_exoneration_case_id"))
+    record["last_exoneration_score_removed"] = max(0, _safe_int(record.get("last_exoneration_score_removed"), default=0))
     restitution_entries = record.get("restitution_entries")
     if not isinstance(restitution_entries, list):
         restitution_entries = []
@@ -427,6 +433,9 @@ def justice_snapshot(sim, offender_eid):
             "last_questioning_disposition": "",
             "last_questioning_kept_contraband_count": 0,
             "last_questioning_evidence_surcharge": 0,
+            "last_exoneration_tick": -10_000,
+            "last_exoneration_case_id": "",
+            "last_exoneration_score_removed": 0,
             "restitution_due": 0,
             "restitution_property_count": 0,
         }
@@ -435,7 +444,11 @@ def justice_snapshot(sim, offender_eid):
     incident_type_counts = Counter(
         _text(incident.get("type")).lower()
         for incident in incidents
-        if isinstance(incident, dict) and _text(incident.get("type"))
+        if (
+            isinstance(incident, dict)
+            and _text(incident.get("type"))
+            and not bool(incident.get("exonerated", False))
+        )
     )
     tier = wanted_tier_for(record.get("active_score", 0), in_custody=bool(record.get("in_custody", False)))
     return {
@@ -479,6 +492,9 @@ def justice_snapshot(sim, offender_eid):
         "last_questioning_disposition": _text(record.get("last_questioning_disposition")).lower(),
         "last_questioning_kept_contraband_count": max(0, _safe_int(record.get("last_questioning_kept_contraband_count"), default=0)),
         "last_questioning_evidence_surcharge": max(0, _safe_int(record.get("last_questioning_evidence_surcharge"), default=0)),
+        "last_exoneration_tick": int(record.get("last_exoneration_tick", -10_000)),
+        "last_exoneration_case_id": _text(record.get("last_exoneration_case_id")),
+        "last_exoneration_score_removed": max(0, _safe_int(record.get("last_exoneration_score_removed"), default=0)),
         "restitution_due": int(sum(max(0, _safe_int(entry.get("amount"), default=0)) for entry in record.get("restitution_entries", ()) if isinstance(entry, dict))),
         "restitution_property_count": int(sum(1 for entry in record.get("restitution_entries", ()) if isinstance(entry, dict) and max(0, _safe_int(entry.get("amount"), default=0)) > 0)),
     }
@@ -734,6 +750,10 @@ def record_incident(
     y=None,
     witnessed=False,
     note="",
+    provisional=False,
+    source_case_id=None,
+    source_incident_id=None,
+    attribution_basis="",
 ):
     state = _state(sim)
     record = _offender_record(state, offender_eid, create=True)
@@ -751,7 +771,7 @@ def record_incident(
 
     jurisdiction = jurisdiction_for_position(sim, x=x, y=y)
     source_key = _text(source_event).lower() or incident_type
-    repeat_scope = _text(property_id).lower() or jurisdiction["key"]
+    repeat_scope = _text(source_case_id).lower() or _text(property_id).lower() or jurisdiction["key"]
     recent_key = f"{incident_type}:{source_key}:{repeat_scope}"
     cooldown = int(INCIDENT_REPEAT_COOLDOWNS.get(incident_type, 12))
     last_tick = _safe_int(record.get("recent_keys", {}).get(recent_key), default=-10_000)
@@ -784,6 +804,13 @@ def record_incident(
         "settlement_name": _text(jurisdiction.get("settlement_name")),
         "region_name": _text(jurisdiction.get("region_name")),
         "note": _text(note),
+        "provisional": bool(provisional),
+        "wrongful_risk": bool(provisional),
+        "source_case_id": _text(source_case_id),
+        "source_incident_id": _safe_int(source_incident_id, default=0) or None,
+        "attribution_basis": _text(attribution_basis).lower(),
+        "active_contribution": max(0, int(after_score) - int(before_score)),
+        "legal_status": "provisional" if bool(provisional) else "active",
     }
     try:
         incident_x = int(x)
@@ -816,6 +843,110 @@ def record_incident(
         "tier_changed": before_tier != after_tier,
         "incident_count": int(record["incident_count"]),
         "incident": dict(incident),
+    }
+
+
+def provisional_incident_rows(sim, offender_eid, *, source_case_id=None, active_only=True):
+    """Return the offender-ledger rows created by a fallible case attribution."""
+
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=False)
+    if not isinstance(record, dict):
+        return ()
+    case_key = _text(source_case_id)
+    rows = []
+    for incident in tuple(record.get("incidents", ()) or ()):
+        if not isinstance(incident, dict) or not bool(incident.get("provisional", False)):
+            continue
+        if case_key and _text(incident.get("source_case_id")) != case_key:
+            continue
+        if active_only and bool(incident.get("exonerated", False)):
+            continue
+        rows.append(incident)
+    return tuple(rows)
+
+
+def set_provisional_active_contribution(sim, offender_eid, source_case_id, amount):
+    """Rebase a provisional case's remaining share after booking or custody."""
+
+    rows = provisional_incident_rows(
+        sim,
+        offender_eid,
+        source_case_id=source_case_id,
+        active_only=True,
+    )
+    if not rows:
+        return False
+    remaining = max(0, _safe_int(amount, default=0))
+    for row in rows:
+        row["active_contribution"] = 0
+    rows[-1]["active_contribution"] = int(remaining)
+    return True
+
+
+def exonerate_provisional_case(sim, offender_eid, source_case_id):
+    """Remove only the live pressure contributed by one mistaken attribution.
+
+    The incident rows remain in history, explicitly marked as exonerated.  This
+    preserves time served and the institutional mistake without allowing the
+    provisional allegation to keep driving wanted state or homicide penalties.
+    """
+
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=False)
+    if not isinstance(record, dict):
+        return None
+    case_key = _text(source_case_id)
+    if not case_key:
+        return None
+    rows = provisional_incident_rows(
+        sim,
+        offender_eid,
+        source_case_id=case_key,
+        active_only=True,
+    )
+    if not rows:
+        return None
+
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    before_score = int(record.get("active_score", 0) or 0)
+    before_tier = wanted_tier_for(before_score, in_custody=bool(record.get("in_custody", False)))
+    contribution = sum(
+        max(
+            0,
+            _safe_int(
+                row.get("active_contribution"),
+                default=_safe_int(row.get("weight"), default=0),
+            ),
+        )
+        for row in rows
+    )
+    removed = min(before_score, contribution)
+    after_score = max(0, before_score - removed)
+    record["active_score"] = int(after_score)
+    record["last_change_tick"] = tick
+    record["last_exoneration_tick"] = tick
+    record["last_exoneration_case_id"] = case_key
+    record["last_exoneration_score_removed"] = int(removed)
+    for row in rows:
+        row["exonerated"] = True
+        row["exonerated_tick"] = tick
+        row["legal_status"] = "exonerated_misidentification"
+        row["active_contribution"] = 0
+
+    after_tier = wanted_tier_for(after_score, in_custody=bool(record.get("in_custody", False)))
+    return {
+        "eid": int(record["eid"]),
+        "source_case_id": case_key,
+        "before_score": before_score,
+        "after_score": int(after_score),
+        "score_removed": int(removed),
+        "before_tier": before_tier,
+        "after_tier": after_tier,
+        "tier_changed": before_tier != after_tier,
+        "in_custody": bool(record.get("in_custody", False)),
+        "exonerated_incident_count": len(rows),
+        "incidents": tuple(dict(row) for row in rows),
     }
 
 
@@ -1076,8 +1207,19 @@ def justice_summary_rows(sim, offender_eid):
             f"Held in custody by {jurisdiction}.",
             f"Recorded incidents {incident_count}; latest {latest_label}.",
         ])
-    elif score <= 0 and incident_count <= 0:
-        lines.append("Legal clear. No active justice attention.")
+    elif score <= 0:
+        if _text(snapshot.get("last_exoneration_case_id")):
+            lines.extend([
+                "Legal clear after a corrected provisional identification.",
+                f"Recorded history {incident_count}; the mistaken allegation remains documented rather than active.",
+            ])
+        elif incident_count <= 0:
+            lines.append("Legal clear. No active justice attention.")
+        else:
+            lines.extend([
+                "Legal clear. No active justice attention.",
+                f"Recorded history {incident_count}; latest {latest_label}.",
+            ])
     else:
         if status == "clear":
             lead = f"Legal attention is cooling in {jurisdiction}."
@@ -1087,6 +1229,9 @@ def justice_summary_rows(sim, offender_eid):
             lead,
             f"Legal pressure {score} | recorded incidents {incident_count} | latest {latest_label}.",
         ])
+
+    if score > 0 and _text(snapshot.get("last_exoneration_case_id")):
+        lines.append("A separate provisional identification was corrected and no longer contributes to this pressure.")
 
     if restitution_due > 0:
         site_word = "site" if restitution_count == 1 else "sites"

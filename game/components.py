@@ -856,12 +856,25 @@ class MovementThrottle:
 
 
 class NPCNeeds:
-    def __init__(self, energy=85.0, safety=75.0, social=65.0, hunger=86.0, thirst=90.0):
+    def __init__(
+        self,
+        energy=85.0,
+        safety=75.0,
+        social=65.0,
+        hunger=86.0,
+        thirst=90.0,
+        wakefulness=100.0,
+    ):
         self.energy = float(energy)
         self.safety = float(safety)
         self.social = float(social)
         self.hunger = float(hunger)
         self.thirst = float(thirst)
+        self.wakefulness = float(wakefulness)
+        # Stimulants spend this reserve before actual sleep debt.  It is stored
+        # in wakefulness points so it survives saves without depending on a
+        # particular world's clock scale.
+        self.chemical_wake_reserve = 0.0
         self.critical = set()
 
 
@@ -1290,6 +1303,7 @@ class IncidentKnowledge:
         z=None,
         official_item_links=None,
         official_item_link_counts=None,
+        subject_account=None,
     ):
         incident_key = self._incident_key(incident_id)
         if incident_key is None:
@@ -1433,6 +1447,22 @@ class IncidentKnowledge:
         )
 
         record = dict(existing) if isinstance(existing, dict) else {}
+        existing_subject_account = record.get("subject_account") if isinstance(record.get("subject_account"), dict) else {}
+        incoming_subject_account = dict(subject_account) if isinstance(subject_account, dict) else {}
+        if incoming_subject_account:
+            rank = {
+                "unknown": 0,
+                "described": 1,
+                "reported": 2,
+                "recognized": 3,
+                "verified": 4,
+            }
+            old_rank = rank.get(str(existing_subject_account.get("identification", "unknown") or "unknown").strip().lower(), 0)
+            new_rank = rank.get(str(incoming_subject_account.get("identification", "unknown") or "unknown").strip().lower(), 0)
+            old_quality = float((existing_subject_account.get("observation") or {}).get("quality", existing_subject_account.get("identity_confidence", 0.0)) or 0.0)
+            new_quality = float((incoming_subject_account.get("observation") or {}).get("quality", incoming_subject_account.get("identity_confidence", 0.0)) or 0.0)
+            if not existing_subject_account or new_rank > old_rank or (new_rank == old_rank and new_quality > old_quality):
+                record["subject_account"] = incoming_subject_account
         record.update({
             "incident_id": incident_key,
             "learned_tick": int(learned_tick),

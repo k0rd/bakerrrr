@@ -11,6 +11,15 @@ from game.bodyguard_runtime import (
     bodyguard_channel_summary,
 )
 from game.cult_runtime import CULT_SERVICE_IDS, cult_property_association, cult_services_for_property
+from game.civic_records import (
+    CIVIC_RECORDS_SERVICE_ID,
+    civic_census_lines,
+    civic_license_ledger_lines,
+    civic_people_records,
+    civic_person_record_lines,
+    civic_records_authority,
+    remember_civic_record_inspection,
+)
 from game.components import FinancialProfile, Inventory, NPCNeeds, NPCSettlement, NPCRoutine, Occupation, PlayerAssets, Position
 from game.casino_ui_runtime import (
     CASINO_FLOOR_ARCHETYPES,
@@ -4164,6 +4173,157 @@ class ServiceMenuSystem(System):
             "casino_session": None,
         })
 
+    def _open_civic_records(self, prop):
+        state = self._dialog_ui_state()
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        authority = civic_records_authority(self.sim, prop)
+        records = civic_people_records(self.sim, prop)
+        prop_name = str(prop.get("name", prop.get("id", "Records Office"))).strip() or "Records Office"
+        scope = str(authority.get("settlement_name", "") or "local jurisdiction").strip()
+        topics = [
+            {"id": "service_menu:root", "label": "Back"},
+            {"id": "civic_records:census", "label": "Review census summary"},
+            {"id": "civic_records:people", "label": "Browse public people records"},
+            {"id": "civic_records:self", "label": "Review my civic file"},
+            {"id": "civic_records:licenses", "label": "Review licenses and permits"},
+        ]
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": prop.get("id"),
+            "title": f"Civic Records: {prop_name}",
+            "subtitle": f"{authority['authority_name']} | {len(records)} file{'s' if len(records) != 1 else ''}",
+            "transcript": [
+                f"{authority['office_name']} exposes the public registry for {scope}.",
+                "Census, residence, employment, civil status, public affiliations, property interests, permits, and docket amendments are available here.",
+                "Private biology, witness identity, appearance, social history, and covert affiliations remain redacted.",
+            ],
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Choose a public ledger. Restricted records remain a credentials or wire problem.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": "civic_records",
+            "civic_record_rows": [dict(row) for row in records],
+            "casino_session": None,
+        })
+
+    def _open_civic_census(self, prop):
+        state = self._dialog_ui_state()
+        records = civic_people_records(self.sim, prop)
+        authority = civic_records_authority(self.sim, prop)
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "title": f"Census: {authority['authority_name']}",
+            "subtitle": f"{len(records)} registered file{'s' if len(records) != 1 else ''}",
+            "transcript": list(civic_census_lines(self.sim, prop, records=records)),
+            "topics": [{"id": "civic_records:root", "label": "Back to civic records"}],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "This census includes streamed-out residents without realizing their simulation chunks.",
+            "service_menu_mode": "civic_records:census",
+            "civic_record_rows": [dict(row) for row in records],
+        })
+
+    def _open_civic_people_directory(self, prop):
+        state = self._dialog_ui_state()
+        records = civic_people_records(self.sim, prop)
+        authority = civic_records_authority(self.sim, prop)
+        topics = [{"id": "civic_records:root", "label": "Back to civic records"}]
+        for record in records:
+            career = str(record.get("career", "") or "").replace("_", " ").strip()
+            status = str(record.get("status", "registered") or "registered").replace("_", " ").strip()
+            detail = career or status
+            topics.append({
+                "id": f"civic_records:person|{int(record['eid'])}",
+                "label": f"{record['name']} — {detail}",
+            })
+        transcript = [f"Public people index maintained by {authority['authority_name']}."]
+        if not records:
+            transcript.append("No human records are filed in this jurisdiction yet.")
+        else:
+            transcript.append("Select a person to inspect the public portion of their civic file.")
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "title": "Public People Index",
+            "subtitle": f"{len(records)} file{'s' if len(records) != 1 else ''}",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Selecting a file records its public identity in your notebook without telling that person who you are.",
+            "service_menu_mode": "civic_records:people",
+            "civic_record_rows": [dict(row) for row in records],
+        })
+
+    def _open_civic_person_record(self, prop, subject_eid):
+        state = self._dialog_ui_state()
+        records = civic_people_records(self.sim, prop)
+        record = next((row for row in records if int(row.get("eid", -1)) == int(subject_eid)), None)
+        if record is None:
+            self._present_service_result(
+                "Civic Record",
+                ["That public file is no longer available in this jurisdiction."],
+                property_id=prop.get("id"),
+            )
+            return
+        remember_civic_record_inspection(
+            self.sim,
+            self.player_eid,
+            record,
+            property_id=prop.get("id"),
+        )
+        self.sim.emit(Event(
+            "civic_record_inspected",
+            eid=self.player_eid,
+            subject_eid=int(record["eid"]),
+            subject_name=record.get("name"),
+            property_id=prop.get("id"),
+            property_name=prop.get("name", prop.get("id")),
+            record_status=record.get("status"),
+            corrected_case_count=int(record.get("corrected_case_count", 0) or 0),
+            license_count=len(tuple(record.get("licenses", ()) or ())),
+        ))
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "title": f"Civic File: {record['name']}",
+            "subtitle": f"Public record {int(record['eid'])}",
+            "transcript": list(civic_person_record_lines(self.sim, record, viewer_eid=self.player_eid)),
+            "topics": [{"id": "civic_records:people", "label": "Back to people index"}],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "This is the public file. Restricted details are not disclosed here.",
+            "service_menu_mode": "civic_records:person",
+            "civic_record_rows": [dict(row) for row in records],
+        })
+
+    def _open_civic_license_ledger(self, prop):
+        state = self._dialog_ui_state()
+        records = civic_people_records(self.sim, prop)
+        authority = civic_records_authority(self.sim, prop)
+        own_lines = civic_license_ledger_lines(self.sim, prop, subject_eid=self.player_eid, records=records)
+        transcript = list(civic_license_ledger_lines(self.sim, prop, records=records))
+        transcript.append("")
+        transcript.append("Your filed credentials")
+        transcript.extend(own_lines)
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "title": f"Permit Ledger: {authority['authority_name']}",
+            "subtitle": "Hunting, cultivation, and civic credentials",
+            "transcript": transcript,
+            "topics": [{"id": "civic_records:root", "label": "Back to civic records"}],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Future hunting and cultivation desks issue and verify credentials through this ledger.",
+            "service_menu_mode": "civic_records:licenses",
+            "civic_record_rows": [dict(row) for row in records],
+        })
+
     def _open_bodyguard_contract_menu(self, prop):
         state = self._dialog_ui_state()
         self._clear_pending_service_result()
@@ -4621,7 +4781,7 @@ class ServiceMenuSystem(System):
             if interrupted:
                 if interruption_reason == "woken_by_noise" and wake_cause:
                     lines.append(f"Nearby {wake_cause.replace('_', ' ')} wakes you.")
-                elif interruption_reason in {"justice_surrender", "justice_questioning", "actor_detained", "justice_booking_completed"}:
+                elif interruption_reason in {"justice_surrender", "justice_questioning", "justice_identity_check", "actor_detained", "justice_booking_completed"}:
                     lines.append("Justice reaches you before you can finish laying low.")
                 else:
                     lines.append("Danger reaches you before you can finish laying low.")
@@ -4656,7 +4816,7 @@ class ServiceMenuSystem(System):
             if interrupted:
                 if interruption_reason == "woken_by_noise" and wake_cause:
                     lines.append(f"Nearby {wake_cause.replace('_', ' ')} wakes you.")
-                elif interruption_reason in {"justice_surrender", "justice_questioning", "actor_detained", "justice_booking_completed"}:
+                elif interruption_reason in {"justice_surrender", "justice_questioning", "justice_identity_check", "actor_detained", "justice_booking_completed"}:
                     lines.append("Justice reaches you before you can finish the room stay.")
                 else:
                     lines.append("Danger reaches you before the room stay can finish.")
@@ -6080,6 +6240,37 @@ class ServiceMenuSystem(System):
             else:
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)
+            return
+        if option_id in {CIVIC_RECORDS_SERVICE_ID, "civic_records:root"}:
+            if isinstance(prop, dict):
+                self._open_civic_records(prop)
+            else:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+            return
+        if option_id == "civic_records:census":
+            if isinstance(prop, dict):
+                self._open_civic_census(prop)
+            return
+        if option_id == "civic_records:people":
+            if isinstance(prop, dict):
+                self._open_civic_people_directory(prop)
+            return
+        if option_id == "civic_records:self":
+            if isinstance(prop, dict):
+                self._open_civic_person_record(prop, self.player_eid)
+            return
+        if option_id == "civic_records:licenses":
+            if isinstance(prop, dict):
+                self._open_civic_license_ledger(prop)
+            return
+        if option_id.startswith("civic_records:person|"):
+            if isinstance(prop, dict):
+                try:
+                    subject_eid = int(option_id.partition("|")[2])
+                except (TypeError, ValueError):
+                    subject_eid = -1
+                self._open_civic_person_record(prop, subject_eid)
             return
         if option_id in {"fauna_registry", "flora_registry"}:
             if isinstance(prop, dict):

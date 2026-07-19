@@ -305,6 +305,8 @@ def _derived_catalogue_value(item_id: str, item_def: Mapping) -> tuple[float, di
             utility = max(0.0, _number(effect.get("delta"), 0.0)) * 1.05
         elif effect_type == "modify_need":
             utility = max(0.0, _number(effect.get("delta"), 0.0)) * 0.16
+        elif effect_type == "extend_wakefulness":
+            utility = max(0.0, _number(effect.get("hours"), 0.0)) * 4.0
         elif effect_type == "add_ammo":
             utility = max(0.0, _number(effect.get("amount"), 0.0)) * 1.45
         elif effect_type == "credits":

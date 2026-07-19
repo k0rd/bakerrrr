@@ -5,6 +5,7 @@ from engine.systems import System
 
 from game.components import AI, Position
 from game.incident_runtime import incident_record
+from game.justice_identity_runtime import event_evidence_resolves_subject
 from game.organization_reputation import organization_snapshot as _organization_snapshot
 from game.organizations import (
     local_operational_practice_bundle,
@@ -402,6 +403,8 @@ class OrganizationResponseSystem(System):
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
+            return
         prop = self._property_for_data(event.data)
         if not isinstance(prop, dict):
             return
@@ -423,6 +426,8 @@ class OrganizationResponseSystem(System):
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
+            return
         prop = self._property_for_data(event.data)
         if not isinstance(prop, dict):
             return
@@ -443,6 +448,8 @@ class OrganizationResponseSystem(System):
             return
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
+            return
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
             return
         prop = self._property_for_data(event.data)
         if not isinstance(prop, dict):
@@ -468,6 +475,8 @@ class OrganizationResponseSystem(System):
         observation = self._event_accountability(event, offender_eid=self.player_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
+            return
         target_eid = event.data.get("target_eid")
         if target_eid is None or not self._target_is_inhabitant(target_eid):
             return
@@ -492,7 +501,7 @@ class OrganizationResponseSystem(System):
             return
         if event_is_vision_only(incident):
             return
-        if incident.get("primary_actor_eid") != self.player_eid:
+        if not event_evidence_resolves_subject(self.sim, event, self.player_eid):
             return
         if bool(incident.get("organization_response_accounted")):
             return

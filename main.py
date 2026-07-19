@@ -26,6 +26,7 @@ from game.systems_observed_events import ObservedIncidentConsequenceSystem
 from game.systems_observed_response import ObservedIncidentResponseSystem
 from game.systems_observed_dispatch import ObservedIncidentDispatchSystem
 from game.system_support.altered_state_runtime import AlteredStateSystem
+from game.system_support.sleep_pressure_runtime import SleepPressureSystem
 from game.components import (
     AI,
     ArmorLoadout,
@@ -680,6 +681,7 @@ def _register_runtime_systems(sim, view, player):
     npc_needs_system = NPCNeedsSystem(sim)
     npc_settlement_system = NPCSettlementSystem(sim)
     status_effect_system = StatusEffectSystem(sim)
+    sleep_pressure_system = SleepPressureSystem(sim, player)
     altered_state_system = AlteredStateSystem(sim, player)
     npc_item_use_system = NPCItemUseSystem(sim)
     npc_social_system = NPCSocialDynamicsSystem(sim)
@@ -756,6 +758,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(npc_needs_system, 10)
     _live_timeskip_stride(npc_settlement_system, 600)
     _live_timeskip_stride(status_effect_system, 5)
+    _live_timeskip_stride(sleep_pressure_system, 1)
     _live_timeskip_stride(npc_emergency_system, 1)
     _live_timeskip_stride(altered_state_system, 0)
     _live_timeskip_stride(hunting_carcass_system, 0)
@@ -842,6 +845,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(npc_needs_system)
     sim.register_system(npc_settlement_system)
     sim.register_system(status_effect_system)
+    sim.register_system(sleep_pressure_system)
     sim.register_system(altered_state_system)
     sim.register_system(npc_item_use_system)
     sim.register_system(npc_social_system)

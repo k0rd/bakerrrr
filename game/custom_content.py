@@ -305,6 +305,8 @@ def _validate_item_effects(issues, domain, source, item_id, effects, *, root=CUS
             if need not in PUBLIC_ITEM_NEEDS:
                 _issue(issues, "error", domain, source, f"{effect_path}.need", f"need must be one of {sorted(PUBLIC_ITEM_NEEDS)}", root=root)
             _validate_number(issues, domain, source, f"{effect_path}.delta", effect.get("delta"), root=root)
+        elif effect_type == "extend_wakefulness":
+            _validate_number(issues, domain, source, f"{effect_path}.hours", effect.get("hours"), minimum=0.1, root=root)
         elif effect_type == "restore_hp":
             _validate_number(issues, domain, source, f"{effect_path}.delta", effect.get("delta"), minimum=1, root=root)
         elif effect_type == "credits":

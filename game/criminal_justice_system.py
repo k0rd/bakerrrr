@@ -16,6 +16,7 @@ from game.components import (
     EcologyProfile,
     FinancialProfile,
     HumanWildlifePresence,
+    IncidentKnowledge,
     InsightStats,
     Inventory,
     ItemUseProfile,
@@ -51,6 +52,7 @@ from game.components import (
 from collections import Counter, deque
 from engine.events import Event
 from game.items import (
+    CREDSTICK_ITEM_ID,
     ITEM_CATALOG,
     apply_item_durability_loss,
     credstick_total_credits,
@@ -94,9 +96,11 @@ from game.checks import (
 from game.criminal_justice_runtime import (
     _clear_justice_restitution_claims,
     _decay_justice_records,
+    _exonerate_provisional_justice_case,
     _grant_custody_release_grace,
     _justice_booking_anchor_for,
     _justice_held_property_snapshot,
+    _justice_provisional_incident_rows,
     _justice_restitution_snapshot,
     _justice_snapshot,
     _justice_summary_rows,
@@ -109,7 +113,29 @@ from game.criminal_justice_runtime import (
     _release_justice_from_custody,
     _replace_justice_held_property,
     _store_justice_held_property,
+    _set_provisional_justice_active_contribution,
+    _justice_wanted_tier_for,
 )
+from game.justice_identity_runtime import (
+    justice_case_for_incident,
+    justice_case_recently_checked,
+    justice_case_event_payload,
+    provisional_attribution_read,
+    record_justice_case_encounter,
+    record_justice_identity_report,
+    record_provisional_justice_attribution,
+    subject_account_resolves_identity,
+    unresolved_case_matches_for_actor,
+)
+from game.identity_evidence import (
+    actor_identity_snapshot,
+    build_witness_subject_account,
+    description_match_for_actor,
+    preferred_subject_account,
+    remember_presented_identity,
+    subject_description_summary,
+)
+from game.justice_runtime import jurisdiction_for_position
 from game.system_support.entity_naming import _entity_display_name
 from game.system_support.actor_runtime import (
     _apply_downed_actor_state,
@@ -255,6 +281,7 @@ class CriminalJusticeSystem(System):
     SURRENDER_PROMPT_COOLDOWN_TICKS = 180
     SURRENDER_DIALOG_KIND = "justice_surrender"
     QUESTIONING_DIALOG_KIND = "justice_questioning"
+    IDENTITY_CHECK_DIALOG_KIND = "justice_identity_check"
     BOOKING_ARCHETYPES = ("jail", "courthouse")
     JUSTICE_DEBT_KEY = "justice_fines"
     EVIDENCE_SURCHARGE_PER_ITEM = 35
@@ -314,6 +341,7 @@ class CriminalJusticeSystem(System):
         self.sim.events.subscribe("bounty_pickup_dispatch_requested", self.on_bounty_pickup_dispatch_requested)
         self.sim.events.subscribe("justice_surrender_choice", self.on_justice_surrender_choice)
         self.sim.events.subscribe("justice_questioning_choice", self.on_justice_questioning_choice)
+        self.sim.events.subscribe("justice_identity_check_choice", self.on_justice_identity_check_choice)
 
     def _emit_change_events(self, change, *, source_event="", reason=""):
         if not isinstance(change, dict):
@@ -453,6 +481,10 @@ class CriminalJusticeSystem(System):
         y=None,
         witnessed=False,
         note="",
+        provisional=False,
+        source_case_id=None,
+        source_incident_id=None,
+        attribution_basis="",
     ):
         change = _record_justice_incident(
             self.sim,
@@ -465,6 +497,10 @@ class CriminalJusticeSystem(System):
             y=y,
             witnessed=witnessed,
             note=note,
+            provisional=provisional,
+            source_case_id=source_case_id,
+            source_incident_id=source_incident_id,
+            attribution_basis=attribution_basis,
         )
         if change is not None:
             self._emit_change_events(change, source_event=source_event, reason=incident_type)
@@ -590,6 +626,114 @@ class CriminalJusticeSystem(System):
         incident["justice_accounted_tick"] = int(getattr(self.sim, "tick", 0))
         return incident
 
+    def _emit_identity_case_change(self, case, *, changed=False, newly_resolved=False):
+        if newly_resolved and isinstance(case, dict):
+            self._resolve_case_provisional_aftermath(case)
+        payload = justice_case_event_payload(case)
+        if not changed or not payload:
+            return payload
+        self.sim.emit(Event(
+            "justice_identity_case_updated",
+            newly_resolved=bool(newly_resolved),
+            **payload,
+        ))
+        if not payload.get("resolved_subject_eid") and payload.get("subject_identification") != "unknown":
+            self.sim.emit(Event("justice_description_distributed", **payload))
+        return payload
+
+    def _resolve_reportable_event_subject(self, event, offender_eid):
+        """Open/update the event's identity case from actual observer accounts."""
+
+        incident_id = event.data.get("knowledge_incident_id", event.data.get("incident_id"))
+        incident = incident_record(self.sim, incident_id)
+        direct_account = event.data.get("subject_account") if isinstance(event.data.get("subject_account"), dict) else None
+        if not isinstance(incident, dict):
+            if isinstance(direct_account, dict):
+                return subject_account_resolves_identity(direct_account)
+            for raw_observer_eid in tuple(event.data.get("accountable_observer_eids", event.data.get("observer_eids", ())) or ()):
+                try:
+                    observer_eid = int(raw_observer_eid)
+                except (TypeError, ValueError):
+                    continue
+                account = build_witness_subject_account(
+                    self.sim,
+                    observer_eid,
+                    offender_eid,
+                    source_kind="witnessed",
+                    confidence=1.0,
+                )
+                resolved = subject_account_resolves_identity(account)
+                if resolved is not None:
+                    return resolved
+            return None
+        observers = tuple(event.data.get("accountable_observer_eids", event.data.get("observer_eids", ())) or ())
+        best_account = {}
+        last_case = None
+        if isinstance(direct_account, dict):
+            best_account = dict(direct_account)
+            case, changed, newly_resolved = record_justice_identity_report(
+                self.sim,
+                incident,
+                {
+                    "incident_id": incident_id,
+                    "reporter_eid": event.data.get("reporter_eid", event.data.get("npc_eid")),
+                    "method": event.data.get("method", "official_identification"),
+                    "subject_account": direct_account,
+                },
+            )
+            last_case = case
+            self._emit_identity_case_change(case, changed=changed, newly_resolved=newly_resolved)
+        for raw_observer_eid in observers:
+            try:
+                observer_eid = int(raw_observer_eid)
+            except (TypeError, ValueError):
+                continue
+            knowledge = self.sim.ecs.get(IncidentKnowledge).get(observer_eid)
+            record = knowledge.records.get(int(incident_id)) if knowledge is not None else None
+            account = (record or {}).get("subject_account") if isinstance((record or {}).get("subject_account"), dict) else None
+            if not isinstance(account, dict):
+                account = build_witness_subject_account(
+                    self.sim,
+                    observer_eid,
+                    offender_eid,
+                    source_kind="witnessed",
+                    confidence=1.0,
+                )
+            best_account = preferred_subject_account(best_account, account)
+            case, changed, newly_resolved = record_justice_identity_report(
+                self.sim,
+                incident,
+                {
+                    "incident_id": incident_id,
+                    "reporter_eid": observer_eid,
+                    "method": "direct_justice_witness",
+                    "subject_account": account,
+                },
+            )
+            last_case = case
+            self._emit_identity_case_change(case, changed=changed, newly_resolved=newly_resolved)
+        if not observers and isinstance(event.data.get("subject_account"), dict):
+            best_account = dict(event.data.get("subject_account"))
+            case, changed, newly_resolved = record_justice_identity_report(
+                self.sim,
+                incident,
+                {
+                    "incident_id": incident_id,
+                    "reporter_eid": event.data.get("reporter_eid", event.data.get("npc_eid")),
+                    "method": event.data.get("method", "official_report"),
+                    "subject_account": best_account,
+                },
+            )
+            last_case = case
+            self._emit_identity_case_change(case, changed=changed, newly_resolved=newly_resolved)
+        payload = justice_case_event_payload(last_case)
+        incident["officially_reported"] = True
+        incident.setdefault("reported_tick", int(getattr(self.sim, "tick", 0)))
+        incident["justice_identity_case_id"] = payload.get("case_id")
+        resolved_eid = payload.get("resolved_subject_eid")
+        incident["justice_identity_unresolved"] = resolved_eid is None
+        return resolved_eid
+
     def _queue_npc_wanted_detention(self, change, *, reason="justice_record"):
         if not isinstance(change, dict):
             return False
@@ -714,6 +858,650 @@ class CriminalJusticeSystem(System):
             "explosive_discharge": "explosive_discharge",
             "homicide": "homicide",
         }.get(context, context)
+
+    def _provisional_case_crime_profile(self, case, incident):
+        """Return the factual offense profile that a mistaken attribution may use."""
+
+        if not isinstance(case, dict) or not isinstance(incident, dict):
+            return None
+        severity = max(0, int(incident.get("severity", case.get("severity", 0)) or 0))
+        if severity <= 0:
+            return None
+        kind = str(incident.get("kind", case.get("kind", "")) or "").strip().lower()
+        profile = {
+            "incident_type": "",
+            "source_event": kind,
+            "severity": severity,
+            "note": str(incident.get("note", kind) or kind).strip(),
+        }
+        if kind in {"camera_alert", "property_trespass"}:
+            profile.update(incident_type="trespass", source_event="property_trespass")
+        elif kind == "property_tamper":
+            profile.update(incident_type="tamper", source_event="property_tamper")
+        elif kind == "item_stolen":
+            profile.update(incident_type="theft", source_event="item_stolen")
+        elif kind == "homicide":
+            actual_eid = incident.get("primary_actor_eid")
+            if actual_eid is None:
+                return None
+            homicide_data = dict(incident)
+            homicide_data.setdefault("context", "homicide")
+            homicide_data.setdefault("action", "homicide")
+            homicide_data.setdefault("target_eid", incident.get("victim_eid"))
+            force_read = self._homicide_force_read(homicide_data, actual_eid)
+            severity = mitigated_force_severity(max(self.HOMICIDE_SEVERITY_SCORE, severity), force_read)
+            if severity <= 0:
+                return None
+            profile.update(incident_type="homicide", source_event="npc_killed", severity=severity)
+        elif kind == "action_offense":
+            context = str(incident.get("context", case.get("context", "")) or "").strip().lower()
+            if not context:
+                context = str(incident.get("merge_subject", case.get("merge_subject", "")) or "").split(":")[-1].strip().lower()
+            if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
+                return None
+            if context in VIOLENT_OFFENSE_CONTEXTS:
+                actual_eid = incident.get("primary_actor_eid")
+                if actual_eid is None:
+                    return None
+                force_read = classify_lawful_force(self.sim, incident, offender_eid=actual_eid)
+                severity = mitigated_force_severity(severity, force_read)
+                if severity <= 0:
+                    return None
+            profile.update(
+                incident_type=self._incident_type_from_context(context),
+                source_event="action_offense",
+                severity=severity,
+                note=f"{str(incident.get('action', 'action') or 'action').strip().lower()}/{context}",
+            )
+        else:
+            return None
+        if profile.get("incident_type") not in {
+            "trespass", "tamper", "theft", "contraband", "unarmed_assault", "melee_assault",
+            "armed_assault", "explosive_discharge", "homicide",
+        }:
+            return None
+        return profile
+
+    def _record_provisional_attribution_consequence(
+        self,
+        case,
+        actor_eid,
+        *,
+        officer_eid=None,
+        match=None,
+        read=None,
+        disposition="provisional_suspect",
+    ):
+        if not isinstance(case, dict):
+            return None
+        profile = case.get("provisional_crime_profile") if isinstance(case.get("provisional_crime_profile"), dict) else None
+        if not isinstance(profile, dict):
+            return None
+        attribution = record_provisional_justice_attribution(
+            self.sim,
+            case.get("incident_id"),
+            actor_eid=actor_eid,
+            officer_eid=officer_eid,
+            match=match,
+            read=read,
+            disposition=disposition,
+        )
+        if not isinstance(attribution, dict):
+            return None
+        if bool(attribution.get("justice_record_created", False)):
+            return attribution.get("justice_change") if isinstance(attribution.get("justice_change"), dict) else None
+        change = self._record_incident(
+            actor_eid,
+            incident_type=profile.get("incident_type"),
+            severity=int(profile.get("severity", case.get("severity", 0)) or 0),
+            source_event="provisional_identity_attribution",
+            property_id=case.get("property_id"),
+            x=case.get("x"),
+            y=case.get("y"),
+            witnessed=True,
+            note=f"provisional {profile.get('source_event', 'incident')} attribution; factual incident #{case.get('incident_id')}",
+            provisional=True,
+            source_case_id=case.get("case_id"),
+            source_incident_id=case.get("incident_id"),
+            attribution_basis="fresh_scene_description_match",
+        )
+        attribution["justice_record_created"] = change is not None
+        attribution["justice_change"] = dict(change) if isinstance(change, dict) else None
+        attribution["punishment_status"] = "pending" if change is not None else "not_created"
+        self.sim.emit(Event(
+            "justice_provisional_attribution",
+            eid=actor_eid,
+            officer_eid=officer_eid,
+            incident_id=case.get("incident_id"),
+            case_id=case.get("case_id"),
+            disposition=disposition,
+            match_score=float((match or {}).get("score", 0.0) or 0.0),
+            scene_distance=(read or {}).get("scene_distance"),
+            age_ticks=(read or {}).get("age_ticks"),
+            justice_record_created=change is not None,
+            canonical_identity_resolved=False,
+            wrongful_risk=True,
+        ))
+        return change
+
+    def _active_case_attribution_for(self, case, actor_eid):
+        if not isinstance(case, dict):
+            return None
+        for row in reversed(tuple(case.get("provisional_attributions", ()) or ())):
+            if not isinstance(row, dict):
+                continue
+            try:
+                same_actor = int(row.get("actor_eid")) == int(actor_eid)
+            except (TypeError, ValueError):
+                same_actor = False
+            if same_actor and str(row.get("status", "active") or "active").strip().lower() == "active":
+                return row
+        return None
+
+    def _snapshot_without_provisional_attribution(self, snapshot, attribution):
+        adjusted = dict(snapshot or {})
+        change = attribution.get("justice_change") if isinstance((attribution or {}).get("justice_change"), dict) else {}
+        incident = change.get("incident") if isinstance(change.get("incident"), dict) else {}
+        contribution = int(
+            max(
+                0,
+                incident.get("active_contribution", incident.get("weight", 0)) or 0,
+            )
+        )
+        score = max(0, int(adjusted.get("active_score", 0) or 0) - contribution)
+        adjusted["active_score"] = int(score)
+        adjusted["wanted_tier"] = _justice_wanted_tier_for(score)
+        if str(incident.get("type", "") or "").strip().lower() == "homicide":
+            adjusted["homicide_count"] = max(0, int(adjusted.get("homicide_count", 0) or 0) - 1)
+        return adjusted
+
+    def _provisional_player_fine_share(self, snapshot, attribution):
+        snapshot = dict(snapshot or {})
+        adjusted = self._snapshot_without_provisional_attribution(snapshot, attribution or {})
+        current_base = self._player_base_fine_amount(snapshot) if int(snapshot.get("active_score", 0) or 0) >= 6 else 0
+        adjusted_base = self._player_base_fine_amount(adjusted) if int(adjusted.get("active_score", 0) or 0) >= 6 else 0
+        current_homicide = self._player_homicide_surcharge(snapshot)
+        adjusted_homicide = self._player_homicide_surcharge(adjusted)
+        return max(0, int(current_base + current_homicide - adjusted_base - adjusted_homicide))
+
+    def _provisional_npc_fine_share(self, snapshot, attribution):
+        snapshot = dict(snapshot or {})
+        adjusted = self._snapshot_without_provisional_attribution(snapshot, attribution or {})
+        current = dict(snapshot)
+        current["restitution_due"] = 0
+        adjusted["restitution_due"] = 0
+        current_due = self._npc_fine_amount(current) if int(current.get("active_score", 0) or 0) >= 6 else 0
+        adjusted_due = self._npc_fine_amount(adjusted) if int(adjusted.get("active_score", 0) or 0) >= 6 else 0
+        return max(0, int(current_due - adjusted_due))
+
+    def _record_player_provisional_booking_outcome(
+        self,
+        case,
+        attribution,
+        *,
+        snapshot,
+        hold_ticks,
+        fine_due,
+        fine_result,
+        release_change,
+    ):
+        if not isinstance(case, dict) or not isinstance(attribution, dict):
+            return
+        wrongful_due = min(
+            max(0, int(fine_due or 0)),
+            self._provisional_player_fine_share(snapshot, attribution),
+        )
+        fine_result = fine_result if isinstance(fine_result, dict) else {}
+        attribution["financial_outcome"] = {
+            "fine_due": int(max(0, fine_due or 0)),
+            "wrongful_fine_due": int(wrongful_due),
+            "fine_paid": int(max(0, fine_result.get("fine_paid", 0) or 0)),
+            "debt_added": int(max(0, fine_result.get("debt_added", 0) or 0)),
+            "hold_ticks_served": int(max(0, hold_ticks or 0)),
+            "booking_tick": int(getattr(self.sim, "tick", 0) or 0),
+        }
+        adjusted = self._snapshot_without_provisional_attribution(snapshot, attribution)
+        total_release = int((release_change or {}).get("after_score", 0) or 0)
+        unrelated_release = int(self._booking_release_score(adjusted))
+        residual = max(0, total_release - unrelated_release)
+        _set_provisional_justice_active_contribution(
+            self.sim,
+            self.player_eid,
+            case.get("case_id"),
+            residual,
+        )
+        change = attribution.get("justice_change") if isinstance(attribution.get("justice_change"), dict) else {}
+        incident = change.get("incident") if isinstance(change.get("incident"), dict) else None
+        if isinstance(incident, dict):
+            incident["active_contribution"] = int(residual)
+
+    def _refund_player_exoneration(self, attribution):
+        financial = attribution.get("financial_outcome") if isinstance((attribution or {}).get("financial_outcome"), dict) else {}
+        wrongful_due = max(0, int(financial.get("wrongful_fine_due", 0) or 0))
+        direct_paid = max(0, int(financial.get("fine_paid", 0) or 0))
+        debt_assessed = min(wrongful_due, max(0, int(financial.get("debt_added", 0) or 0)))
+        debt_cancelled = 0
+        profile = self._player_finance_profile(create=False)
+        if profile is not None and debt_assessed > 0:
+            pay_debt = getattr(profile, "pay_debt", None)
+            if callable(pay_debt):
+                debt_cancelled = int(pay_debt(self.JUSTICE_DEBT_KEY, debt_assessed) or 0)
+        paid_debt_estimate = max(0, debt_assessed - debt_cancelled)
+        refund = min(
+            max(0, wrongful_due - debt_cancelled),
+            direct_paid + paid_debt_estimate,
+        )
+        destination = ""
+        if refund > 0:
+            if profile is not None:
+                profile.bank_balance = int(max(0, getattr(profile, "bank_balance", 0) or 0)) + int(refund)
+                destination = "bank"
+            else:
+                assets = self._player_assets(create=True)
+                assets.credits = int(max(0, getattr(assets, "credits", 0) or 0)) + int(refund)
+                destination = "wallet"
+        financial["debt_cancelled"] = int(debt_cancelled)
+        financial["fine_refunded"] = int(refund)
+        financial["refund_destination"] = destination
+        attribution["financial_outcome"] = financial
+        return {
+            "fine_refunded": int(refund),
+            "debt_cancelled": int(debt_cancelled),
+            "refund_destination": destination,
+            "hold_ticks_served": int(max(0, financial.get("hold_ticks_served", 0) or 0)),
+        }
+
+    def _npc_exoneration_refund_records(self):
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            self.sim.world_traits = {}
+            traits = self.sim.world_traits
+        records = traits.get("justice_exoneration_refunds")
+        if not isinstance(records, dict):
+            records = {}
+            traits["justice_exoneration_refunds"] = records
+        return records
+
+    def _credit_npc_inventory_refund(self, actor_eid, amount):
+        amount = max(0, int(amount or 0))
+        if amount <= 0:
+            return 0
+        inventory = self.sim.ecs.get(Inventory).get(actor_eid)
+        if inventory is None:
+            return 0
+        for entry in tuple(getattr(inventory, "items", ()) or ()):
+            if not is_credstick_item(entry.get("item_id")):
+                continue
+            metadata = dict(entry.get("metadata") or {})
+            current = credstick_total_credits(
+                quantity=entry.get("quantity", 1),
+                metadata=metadata,
+            )
+            metadata["stored_credits"] = int(current + amount)
+            metadata["source"] = "justice_exoneration_refund"
+            entry["metadata"] = metadata
+            return int(amount)
+        item_def = ITEM_CATALOG.get(CREDSTICK_ITEM_ID, {})
+        added, _instance_id = inventory.add_item(
+            CREDSTICK_ITEM_ID,
+            quantity=1,
+            stack_max=max(1, int(item_def.get("stack_max", 1) or 1)),
+            instance_factory=self.sim.new_item_instance_id,
+            owner_eid=actor_eid,
+            owner_tag="npc",
+            metadata={"stored_credits": int(amount), "source": "justice_exoneration_refund"},
+        )
+        return int(amount) if added else 0
+
+    def _credit_npc_exoneration_refund(self, actor_eid, amount, *, target_wallet=None, case_id=""):
+        amount = max(0, int(amount or 0))
+        target_wallet = max(0, int(target_wallet if target_wallet is not None else amount))
+        if amount <= 0:
+            return {"fine_refunded": 0, "credits_delivered": 0, "refund_pending": False}
+        inventory = self.sim.ecs.get(Inventory).get(actor_eid)
+        current = self._inventory_cash_total_from_entries(getattr(inventory, "items", ())) if inventory is not None else None
+        delivered = 0
+        if current is not None:
+            delivered = self._credit_npc_inventory_refund(actor_eid, min(amount, max(0, target_wallet - current)))
+            current += delivered
+        pending = current is None or current < target_wallet
+        key = str(int(actor_eid))
+        records = self._npc_exoneration_refund_records()
+        if pending:
+            existing = records.get(key) if isinstance(records.get(key), dict) else {}
+            records[key] = {
+                "eid": int(actor_eid),
+                "case_id": str(case_id or existing.get("case_id", "") or "").strip(),
+                "target_wallet_credits": max(target_wallet, int(existing.get("target_wallet_credits", 0) or 0)),
+                "fine_refunded": max(amount, int(existing.get("fine_refunded", 0) or 0)),
+                "created_tick": int(existing.get("created_tick", getattr(self.sim, "tick", 0)) or 0),
+            }
+        else:
+            records.pop(key, None)
+        return {
+            "fine_refunded": int(amount),
+            "credits_delivered": int(delivered),
+            "refund_pending": bool(pending),
+            "target_wallet_credits": int(target_wallet),
+        }
+
+    def _process_pending_npc_exoneration_refunds(self):
+        records = self._npc_exoneration_refund_records()
+        if not records:
+            return 0
+        delivered_count = 0
+        for key, record in list(records.items()):
+            if not isinstance(record, dict):
+                records.pop(key, None)
+                continue
+            actor_eid = int(record.get("eid", key) or 0)
+            inventory = self.sim.ecs.get(Inventory).get(actor_eid)
+            if inventory is None:
+                continue
+            target = max(0, int(record.get("target_wallet_credits", 0) or 0))
+            current = self._inventory_cash_total_from_entries(getattr(inventory, "items", ()))
+            delivered = self._credit_npc_inventory_refund(actor_eid, max(0, target - current))
+            after = self._inventory_cash_total_from_entries(getattr(inventory, "items", ()))
+            if after < target:
+                continue
+            records.pop(key, None)
+            delivered_count += 1
+            self.sim.emit(Event(
+                "justice_exoneration_refund_delivered",
+                eid=actor_eid,
+                case_id=record.get("case_id"),
+                fine_refunded=int(record.get("fine_refunded", 0) or 0),
+                credits_delivered=int(delivered),
+                wallet_credits_after=int(after),
+            ))
+        return delivered_count
+
+    def _npc_exoneration_memory_records(self):
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            self.sim.world_traits = {}
+            traits = self.sim.world_traits
+        records = traits.get("justice_exoneration_memories")
+        if not isinstance(records, dict):
+            records = {}
+            traits["justice_exoneration_memories"] = records
+        return records
+
+    def _apply_wrongful_justice_memory(self, actor_eid, record):
+        memories = self.sim.ecs.get(NPCMemory)
+        memory = memories.get(actor_eid) if memories is not None else None
+        if memory is None:
+            return False
+        memory.remember(
+            tick=int(record.get("tick", getattr(self.sim, "tick", 0)) or 0),
+            kind="wrongful_justice_attribution",
+            strength=0.94,
+            case_id=record.get("case_id"),
+            incident_id=record.get("incident_id"),
+            officer_eid=record.get("officer_eid"),
+            reporter_eids=tuple(record.get("reporter_eids", ()) or ()),
+            actual_offender_eid=record.get("actual_offender_eid"),
+            fine_refunded=int(record.get("fine_refunded", 0) or 0),
+            hold_ticks_served=int(record.get("hold_ticks_served", 0) or 0),
+        )
+        social = self.sim.ecs.get(NPCSocial).get(actor_eid)
+        if social is None:
+            return True
+        officer_eid = record.get("officer_eid")
+        reporter_eids = tuple(record.get("reporter_eids", ()) or ())
+        actual_eid = record.get("actual_offender_eid")
+        penalties = {}
+        if officer_eid not in {None, -1, actor_eid}:
+            penalties[officer_eid] = max(penalties.get(officer_eid, 0.0), 0.22)
+        for reporter_eid in reporter_eids:
+            if reporter_eid != actor_eid:
+                penalties[reporter_eid] = max(penalties.get(reporter_eid, 0.0), 0.18)
+        if actual_eid not in {None, actor_eid}:
+            penalties[actual_eid] = max(penalties.get(actual_eid, 0.0), 0.3)
+        for target_eid, penalty in penalties.items():
+            bond = social.bonds.get(target_eid) if isinstance(getattr(social, "bonds", None), dict) else None
+            if not isinstance(bond, dict):
+                continue
+            bond["trust"] = max(0.0, float(bond.get("trust", 0.0) or 0.0) - float(penalty))
+            bond["closeness"] = max(0.0, float(bond.get("closeness", 0.0) or 0.0) - (float(penalty) * 0.35))
+        return True
+
+    def _remember_wrongful_justice_outcome(self, actor_eid, case, attribution):
+        if actor_eid == self.player_eid:
+            return
+        reporter_eids = []
+        for row in tuple(case.get("reports", ()) or ()):
+            if not isinstance(row, dict):
+                continue
+            try:
+                reporter_eid = int(row.get("reporter_eid"))
+            except (TypeError, ValueError):
+                continue
+            if reporter_eid > 0 and reporter_eid not in reporter_eids:
+                reporter_eids.append(reporter_eid)
+        outcome = attribution.get("correction_outcome") if isinstance(attribution.get("correction_outcome"), dict) else {}
+        record = {
+            "eid": int(actor_eid),
+            "tick": int(getattr(self.sim, "tick", 0) or 0),
+            "case_id": case.get("case_id"),
+            "incident_id": case.get("incident_id"),
+            "officer_eid": attribution.get("officer_eid"),
+            "reporter_eids": tuple(reporter_eids),
+            "actual_offender_eid": case.get("resolved_subject_eid"),
+            "fine_refunded": int(outcome.get("fine_refunded", 0) or 0),
+            "hold_ticks_served": int(outcome.get("hold_ticks_served", 0) or 0),
+        }
+        key = str(int(actor_eid))
+        records = self._npc_exoneration_memory_records()
+        records[key] = record
+        if self._apply_wrongful_justice_memory(actor_eid, record):
+            records.pop(key, None)
+
+    def _process_pending_npc_exoneration_memories(self):
+        records = self._npc_exoneration_memory_records()
+        if not records:
+            return 0
+        applied = 0
+        for key, record in list(records.items()):
+            if not isinstance(record, dict):
+                records.pop(key, None)
+                continue
+            try:
+                actor_eid = int(record.get("eid", key))
+            except (TypeError, ValueError):
+                records.pop(key, None)
+                continue
+            if not self._apply_wrongful_justice_memory(actor_eid, record):
+                continue
+            records.pop(key, None)
+            applied += 1
+        return applied
+
+    def _resolve_case_provisional_aftermath(self, case):
+        if not isinstance(case, dict) or not bool(case.get("misidentification_confirmed", False)):
+            return ()
+        outcomes = []
+        tick = int(getattr(self.sim, "tick", 0) or 0)
+        for attribution in tuple(case.get("provisional_attributions", ()) or ()):
+            if not isinstance(attribution, dict):
+                continue
+            if str(attribution.get("status", "") or "").strip().lower() != "misidentified":
+                continue
+            if bool(attribution.get("correction_applied", False)):
+                continue
+            actor_eid = int(attribution.get("actor_eid", -1) or -1)
+            if actor_eid <= 0:
+                continue
+            legal_change = _exonerate_provisional_justice_case(
+                self.sim,
+                actor_eid,
+                case.get("case_id"),
+            )
+            self.pending_detentions.pop(actor_eid, None)
+            finance = self._refund_player_exoneration(attribution) if actor_eid == self.player_eid else {
+                "fine_refunded": 0,
+                "debt_cancelled": 0,
+                "refund_destination": "",
+                "hold_ticks_served": int(((attribution.get("financial_outcome") or {}).get("hold_ticks_served", 0)) or 0),
+            }
+            released = False
+            if actor_eid == self.player_eid:
+                snapshot = _justice_snapshot(self.sim, actor_eid)
+                if bool(snapshot.get("in_custody", False)) and str(snapshot.get("wanted_tier", "clear") or "clear") not in {"wanted", "arrest_on_sight"}:
+                    pos = self._position_for(actor_eid)
+                    release_change = _release_justice_from_custody(
+                        self.sim,
+                        actor_eid,
+                        new_score=int(snapshot.get("active_score", 0) or 0),
+                        x=getattr(pos, "x", 0),
+                        y=getattr(pos, "y", 0),
+                    )
+                    self._emit_change_events(release_change, source_event="justice_misidentification_corrected", reason="exoneration")
+                    released = True
+            else:
+                custody = self._npc_custody_records().get(str(actor_eid))
+                financial = attribution.get("financial_outcome") if isinstance(attribution.get("financial_outcome"), dict) else {}
+                custody_case = (
+                    (custody.get("provisional_cases") or {}).get(str(case.get("case_id", "") or ""), {})
+                    if isinstance(custody, dict)
+                    else {}
+                )
+                if isinstance(custody, dict) and isinstance(custody_case, dict):
+                    financial["fine_due"] = max(
+                        int(max(0, financial.get("fine_due", 0) or 0)),
+                        int(max(0, custody.get("fine_due", 0) or 0)),
+                    )
+                    financial["wrongful_fine_due"] = max(
+                        int(max(0, financial.get("wrongful_fine_due", 0) or 0)),
+                        int(max(0, custody_case.get("wrongful_fine_due", 0) or 0)),
+                    )
+                    financial["fine_paid"] = max(
+                        int(max(0, financial.get("fine_paid", 0) or 0)),
+                        int(max(0, custody.get("fine_paid", 0) or 0)),
+                    )
+                    financial["debt_added"] = int(max(0, financial.get("debt_added", 0) or 0))
+                    financial["hold_ticks_served"] = max(
+                        int(max(0, financial.get("hold_ticks_served", 0) or 0)),
+                        max(
+                            0,
+                            int(custody.get("released_tick", tick))
+                            - int(custody.get("start_tick", tick)),
+                        ),
+                    )
+                wrongful_due = max(0, int(financial.get("wrongful_fine_due", 0) or 0))
+                paid = min(wrongful_due, max(0, int(financial.get("fine_paid", 0) or 0)))
+                refund_read = self._credit_npc_exoneration_refund(
+                    actor_eid,
+                    paid,
+                    target_wallet=(custody or {}).get("wallet_credits_before", paid) if isinstance(custody, dict) else paid,
+                    case_id=case.get("case_id"),
+                )
+                finance.update({
+                    "fine_refunded": int(refund_read.get("fine_refunded", 0) or 0),
+                    "refund_pending": bool(refund_read.get("refund_pending", False)),
+                    "credits_delivered": int(refund_read.get("credits_delivered", 0) or 0),
+                    "hold_ticks_served": int(max(0, financial.get("hold_ticks_served", 0) or 0)),
+                })
+                financial["fine_refunded"] = int(refund_read.get("fine_refunded", 0) or 0)
+                financial["refund_pending"] = bool(refund_read.get("refund_pending", False))
+                attribution["financial_outcome"] = financial
+                if isinstance(custody, dict) and bool(custody.get("active", False)):
+                    snapshot = _justice_snapshot(self.sim, actor_eid)
+                    tier = _justice_wanted_tier_for(int(snapshot.get("active_score", 0) or 0))
+                    if tier not in {"wanted", "arrest_on_sight"}:
+                        custody["active"] = False
+                        custody["released_tick"] = tick
+                        custody["release_reason"] = "misidentification_exoneration"
+                        custody["fine_due"] = 0
+                        custody["fine_paid"] = 0
+                        finance["hold_ticks_served"] = max(0, tick - int(custody.get("start_tick", tick)))
+                        release_change = _release_justice_from_custody(
+                            self.sim,
+                            actor_eid,
+                            new_score=int(snapshot.get("active_score", 0) or 0),
+                            x=custody.get("booking_x"),
+                            y=custody.get("booking_y"),
+                        )
+                        self._release_npc_from_custody(actor_eid, custody)
+                        self._emit_change_events(release_change, source_event="justice_misidentification_corrected", reason="exoneration")
+                        released = True
+                financial["hold_ticks_served"] = int(max(0, finance.get("hold_ticks_served", 0) or 0))
+                financial["fine_refunded"] = int(finance.get("fine_refunded", 0) or 0)
+                attribution["financial_outcome"] = financial
+            outcome = {
+                "actor_eid": actor_eid,
+                "tick": tick,
+                "score_removed": int((legal_change or {}).get("score_removed", 0) or 0),
+                "after_score": int((legal_change or {}).get("after_score", 0) or 0),
+                "released": bool(released),
+                **finance,
+            }
+            attribution["correction_applied"] = True
+            attribution["correction_tick"] = tick
+            attribution["correction_outcome"] = dict(outcome)
+            attribution["punishment_status"] = "exonerated_after_misidentification"
+            self._remember_wrongful_justice_outcome(actor_eid, case, attribution)
+            self.sim.emit(Event(
+                "justice_misidentification_corrected",
+                eid=actor_eid,
+                actual_offender_eid=case.get("resolved_subject_eid"),
+                case_id=case.get("case_id"),
+                incident_id=case.get("incident_id"),
+                jurisdiction_name=case.get("jurisdiction_name", "Justice Office"),
+                property_id=case.get("property_id"),
+                x=case.get("x"),
+                y=case.get("y"),
+                z=case.get("z"),
+                **outcome,
+            ))
+            outcomes.append(outcome)
+        case["correction_outcomes"] = list(case.get("correction_outcomes", ()) or ()) + outcomes
+        case["correction_status"] = "complete" if outcomes else case.get("correction_status", "pending")
+        if outcomes:
+            case["correction_completed_tick"] = tick
+            case["updated_tick"] = tick
+        return tuple(outcomes)
+
+    def _consider_provisional_npc_attribution(self, case, *, reporter_eid=None):
+        """Choose at most one nearby NPC lead when an immediate report arrives."""
+
+        if not isinstance(case, dict) or not isinstance(case.get("provisional_crime_profile"), dict):
+            return None
+        account = case.get("best_subject_account") if isinstance(case.get("best_subject_account"), dict) else {}
+        description = account.get("description") if isinstance(account.get("description"), dict) else {}
+        if not description:
+            return None
+        candidates = []
+        identities = self.sim.ecs.get(CreatureIdentity)
+        for actor_eid, pos in self.sim.ecs.get(Position).items():
+            if actor_eid == self.player_eid or actor_eid == reporter_eid:
+                continue
+            identity = identities.get(actor_eid)
+            if identity is None or str(getattr(identity, "creature_type", "") or "").strip().lower() != "human":
+                continue
+            match = description_match_for_actor(self.sim, description, actor_eid)
+            read = provisional_attribution_read(self.sim, case, actor_eid, match=match)
+            if not bool(read.get("eligible", False)):
+                continue
+            rank = (
+                -float(match.get("score", 0.0) or 0.0),
+                -float(match.get("evidence_weight", 0.0) or 0.0),
+                int(read.get("scene_distance")) if read.get("scene_distance") is not None else 10_000,
+                int(actor_eid),
+            )
+            candidates.append((rank, actor_eid, match, read))
+        if not candidates:
+            return None
+        _rank, actor_eid, match, read = min(candidates, key=lambda row: row[0])
+        officer_eid = reporter_eid if reporter_eid is not None and self._actor_is_enforcer(reporter_eid)[0] else None
+        return self._record_provisional_attribution_consequence(
+            case,
+            actor_eid,
+            officer_eid=officer_eid,
+            match=match,
+            read=read,
+            disposition="near_scene_npc_match",
+        )
 
     def _same_eid_value(self, left, right):
         if left is None or right is None:
@@ -976,6 +1764,7 @@ class CriminalJusticeSystem(System):
         return bool(state.get("open")) and str(state.get("kind", "")).strip().lower() in {
             self.SURRENDER_DIALOG_KIND,
             self.QUESTIONING_DIALOG_KIND,
+            self.IDENTITY_CHECK_DIALOG_KIND,
         }
 
     def _player_cash_on_hand(self):
@@ -2069,6 +2858,228 @@ class CriminalJusticeSystem(System):
             self._mark_officer_surrender_prompt_opened(npc_eid)
         return True
 
+    def _player_unresolved_identity_match(self):
+        player_pos = self._position_for(self.player_eid)
+        if player_pos is None:
+            return None
+        jurisdiction = jurisdiction_for_position(self.sim, x=player_pos.x, y=player_pos.y)
+        matches = unresolved_case_matches_for_actor(
+            self.sim,
+            self.player_eid,
+            jurisdiction_key=str(jurisdiction.get("key", "") or "").strip().lower(),
+        )
+        tick = int(getattr(self.sim, "tick", 0))
+        for row in matches:
+            case = row.get("case") if isinstance(row.get("case"), dict) else None
+            if case is None:
+                continue
+            if justice_case_recently_checked(case, self.player_eid, current_tick=tick):
+                continue
+            return row
+        return None
+
+    def _open_player_identity_check_prompt(self, npc_eid, match_row):
+        if npc_eid is None or not isinstance(match_row, dict):
+            return False
+        case = match_row.get("case") if isinstance(match_row.get("case"), dict) else {}
+        match = match_row.get("match") if isinstance(match_row.get("match"), dict) else {}
+        account = case.get("best_subject_account") if isinstance(case.get("best_subject_account"), dict) else {}
+        description = account.get("description") if isinstance(account.get("description"), dict) else {}
+        incident_id = case.get("incident_id")
+        if incident_id is None:
+            return False
+        kind = str(case.get("kind", "incident") or "incident").strip().replace("_", " ")
+        summary = subject_description_summary(description)
+        cues = [str(cue).strip() for cue in tuple(match.get("matched_cues", ()) or ()) if str(cue).strip()]
+        cue_line = f"The resemblance is based on {', '.join(cues[:4])}." if cues else "Only a few broad details line up."
+        provisional_read = provisional_attribution_read(self.sim, case, self.player_eid, match=match)
+        provisional_eligible = bool(provisional_read.get("eligible", False))
+        jurisdiction_name = str(case.get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office"
+        if provisional_eligible:
+            distance = int(provisional_read.get("scene_distance", 0) or 0)
+            scene_line = (
+                "You are still at the reported scene."
+                if distance <= 0
+                else "You are only a few steps from the reported scene."
+                if distance <= 2
+                else "You are still close to the reported scene."
+            )
+            boundary_lines = [
+                f"The report is extremely fresh. {scene_line}",
+                "That combination is strong enough for a fallible provisional attribution. The officer may book you even though resemblance is not proof.",
+            ]
+        else:
+            boundary_lines = [
+                "The officer says this is a resemblance check, not an identification or a charge.",
+                "You may answer, explain, or decline. Resemblance alone does not create a justice record.",
+            ]
+        state = self._dialog_ui_state()
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": self.IDENTITY_CHECK_DIALOG_KIND,
+            "npc_eid": npc_eid,
+            "property_id": case.get("property_id") or None,
+            "title": f"Identity Check: {_entity_display_name(self.sim, npc_eid, title_case=True) or 'Officer'}",
+            "subtitle": jurisdiction_name,
+            "transcript": [
+                f"An unresolved {kind} report describes {summary}.",
+                cue_line,
+                *boundary_lines,
+            ],
+            "topics": [
+                {"id": "identify", "label": "Give your presented name"},
+                {"id": "explain", "label": "Explain where you were"},
+                {"id": "decline", "label": "Decline the questions"},
+            ],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "E choose | Esc decline | ? help",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+        })
+        self.player_surrender_prompt = {
+            "kind": self.IDENTITY_CHECK_DIALOG_KIND,
+            "npc_eid": npc_eid,
+            "incident_id": int(incident_id),
+            "case_id": case.get("case_id"),
+            "match": dict(match),
+            "provisional_read": dict(provisional_read),
+            "property_id": case.get("property_id") or None,
+            "opened_tick": int(getattr(self.sim, "tick", 0)),
+            "jurisdiction_key": str(case.get("jurisdiction_key", "") or "").strip().lower(),
+            "jurisdiction_name": jurisdiction_name,
+        }
+        return True
+
+    def _resolve_player_identity_check_choice(self, choice_id, *, prompt):
+        prompt = prompt if isinstance(prompt, dict) else {}
+        choice = str(choice_id or "").strip().lower() or "decline"
+        if choice not in {"identify", "explain", "decline"}:
+            choice = "decline"
+        npc_eid = prompt.get("npc_eid")
+        incident_id = prompt.get("incident_id")
+        match = prompt.get("match") if isinstance(prompt.get("match"), dict) else {}
+        provisional_read = prompt.get("provisional_read") if isinstance(prompt.get("provisional_read"), dict) else {}
+        case = justice_case_for_incident(self.sim, incident_id)
+        identity = actor_identity_snapshot(self.sim, self.player_eid) or {}
+        presented_name = str(identity.get("personal_name", "") or "").strip() if choice == "identify" else ""
+        if choice == "identify" and npc_eid is not None:
+            remember_presented_identity(
+                self.sim,
+                npc_eid,
+                self.player_eid,
+                source_eid=self.player_eid,
+                relation_kind="identity_check",
+                standing=0.0,
+                met_directly=True,
+                benefits=("known_name", "justice_contact"),
+                tick=int(getattr(self.sim, "tick", 0)),
+            )
+        eligible = bool(provisional_read.get("eligible", False)) and isinstance(case, dict)
+        explanation_succeeded = False
+        if eligible and choice == "explain":
+            skill_defense = 0.72 + float(self._questioning_skill_bonus("explain"))
+            scene_distance = provisional_read.get("scene_distance")
+            age_ticks = provisional_read.get("age_ticks")
+            scene_distance = 6.0 if scene_distance is None else float(scene_distance)
+            age_ticks = 24.0 if age_ticks is None else float(age_ticks)
+            proximity = max(0.0, 1.0 - (scene_distance / 6.0))
+            freshness = max(0.0, 1.0 - (age_ticks / 24.0))
+            evidence_pressure = (
+                0.77
+                + max(0.0, float(provisional_read.get("match_score", 0.92) or 0.92) - 0.92) * 0.5
+                + proximity * 0.04
+                + freshness * 0.03
+            )
+            explanation_succeeded = skill_defense >= evidence_pressure
+        provisional_punishment = bool(eligible and not explanation_succeeded)
+        outcome = (
+            "provisionally_attributed_for_booking"
+            if provisional_punishment
+            else {
+                "identify": "identity_volunteered_without_charge",
+                "explain": "explanation_accepted_without_charge" if explanation_succeeded else "explanation_noted_without_charge",
+                "decline": "declined_without_charge",
+            }[choice]
+        )
+        encounter = record_justice_case_encounter(
+            self.sim,
+            incident_id,
+            actor_eid=self.player_eid,
+            officer_eid=npc_eid,
+            choice_id=choice,
+            outcome=outcome,
+            match=match,
+            presented_name=presented_name,
+        )
+        provisional_change = None
+        if provisional_punishment:
+            provisional_change = self._record_provisional_attribution_consequence(
+                case,
+                self.player_eid,
+                officer_eid=npc_eid,
+                match=match,
+                read=provisional_read,
+                disposition=f"player_identity_check_{choice}",
+            )
+        self.sim.emit(Event(
+            "justice_identity_check_resolved",
+            eid=self.player_eid,
+            officer_eid=npc_eid,
+            incident_id=incident_id,
+            case_id=prompt.get("case_id"),
+            choice_id=choice,
+            outcome=outcome,
+            presented_name=presented_name,
+            match_score=float(match.get("score", 0.0) or 0.0),
+            justice_record_created=isinstance(provisional_change, dict),
+            provisional_attribution=provisional_punishment,
+            canonical_identity_resolved=False,
+        ))
+        if provisional_punishment:
+            if isinstance(provisional_change, dict):
+                source_prop = self.sim.properties.get(str(prompt.get("property_id", "") or ""))
+                attribution = self._active_case_attribution_for(case, self.player_eid)
+                booked = self._book_player(
+                    by_eid=npc_eid,
+                    source_prop=source_prop,
+                    provisional_case=case,
+                    provisional_attribution=attribution,
+                )
+                for row in reversed(tuple(case.get("provisional_attributions", ()) or ())):
+                    if isinstance(row, dict) and row.get("actor_eid") == self.player_eid:
+                        row["punishment_status"] = "booked" if booked else "justice_record_active"
+                        break
+                return bool(booked or provisional_change)
+        lines = {
+            "identify": [
+                f"You give the name {presented_name or 'you use'}. The officer records it as a candidate lead.",
+                "A volunteered name and a resemblance are not proof that you committed the reported act.",
+            ],
+            "explain": [
+                "The officer records your explanation with the unresolved case.",
+                (
+                    "Your explanation breaks the otherwise strong provisional inference; no charge is created."
+                    if explanation_succeeded
+                    else "No charge or wanted status is created from the visual resemblance."
+                ),
+            ],
+            "decline": [
+                "You decline the questions. The officer records the encounter and lets the identification remain unresolved.",
+                "Declining this resemblance check does not itself create an offense.",
+            ],
+        }[choice]
+        if not isinstance(encounter, dict):
+            lines.append("The case record could not be updated, but no consequence was assigned.")
+        self._present_justice_result(
+            "Identity Check Complete",
+            lines,
+            subtitle=str(prompt.get("jurisdiction_name", "Justice Office") or "Justice Office"),
+        )
+        return True
+
     def _resolve_player_questioning_choice(self, choice_id, *, by_eid=None, source_prop=None, snapshot=None):
         snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot()
         if snapshot is None:
@@ -2473,7 +3484,11 @@ class CriminalJusticeSystem(System):
 
     def _close_player_surrender_prompt(self):
         state = self._dialog_ui_state()
-        if bool(state.get("open")) and str(state.get("kind", "")).strip().lower() in {self.SURRENDER_DIALOG_KIND, self.QUESTIONING_DIALOG_KIND}:
+        if bool(state.get("open")) and str(state.get("kind", "")).strip().lower() in {
+            self.SURRENDER_DIALOG_KIND,
+            self.QUESTIONING_DIALOG_KIND,
+            self.IDENTITY_CHECK_DIALOG_KIND,
+        }:
             self.sim.set_time_paused(False, reason="dialog")
             self._reset_dialog_ui(state)
         self.player_surrender_prompt = None
@@ -3101,6 +4116,22 @@ class CriminalJusticeSystem(System):
         )
         inventory_items = self._snapshot_inventory_items(offender_eid)
         wallet_before = self._inventory_cash_total_from_entries(inventory_items)
+        provisional_cases = {}
+        for incident in _justice_provisional_incident_rows(self.sim, offender_eid, active_only=True):
+            case_id = str(incident.get("source_case_id", "") or "").strip()
+            incident_id = incident.get("source_incident_id")
+            case = justice_case_for_incident(self.sim, incident_id)
+            attribution = self._active_case_attribution_for(case, offender_eid)
+            if not case_id or not isinstance(attribution, dict):
+                continue
+            adjusted = self._snapshot_without_provisional_attribution(snapshot, attribution)
+            total_release = int(self._booking_release_score(snapshot))
+            unrelated_release = int(self._booking_release_score(adjusted))
+            provisional_cases[case_id] = {
+                "incident_id": incident_id,
+                "wrongful_fine_due": int(self._provisional_npc_fine_share(snapshot, attribution)),
+                "residual_active_contribution": max(0, total_release - unrelated_release),
+            }
         record = {
             "eid": int(offender_eid),
             "active": True,
@@ -3136,6 +4167,7 @@ class CriminalJusticeSystem(System):
             "wallet_credits_before": int(wallet_before),
             "wallet_credits_after": int(wallet_before),
             "inventory_items": inventory_items,
+            "provisional_cases": provisional_cases,
         }
         self._npc_custody_records()[str(int(offender_eid))] = record
         return record
@@ -3753,7 +4785,16 @@ class CriminalJusticeSystem(System):
                 lines.append(f"Return to {booking_name} to reclaim held property.")
         return lines
 
-    def _book_player(self, *, by_eid=None, source_prop=None, inspection=None, questioning_disposition=""):
+    def _book_player(
+        self,
+        *,
+        by_eid=None,
+        source_prop=None,
+        inspection=None,
+        questioning_disposition="",
+        provisional_case=None,
+        provisional_attribution=None,
+    ):
         snapshot = self._player_bookable_snapshot()
         player_pos = self._position_for(self.player_eid)
         if snapshot is None or player_pos is None:
@@ -3878,6 +4919,15 @@ class CriminalJusticeSystem(System):
             debt_added=int(fine_result.get("debt_added", 0) or 0),
             evidence_surcharge=int(evidence_surcharge),
             seized_entries=tuple(confiscation.get("held_entries", ()) or ()) + tuple(confiscation.get("forfeited_entries", ()) or ()),
+        )
+        self._record_player_provisional_booking_outcome(
+            provisional_case,
+            provisional_attribution,
+            snapshot=snapshot,
+            hold_ticks=hold_ticks,
+            fine_due=fine_due,
+            fine_result=fine_result,
+            release_change=release_change,
         )
         self._clear_restitution_claims(self.player_eid)
         self._emit_change_events(release_change, source_event="justice_booking_release", reason="booking_release")
@@ -4013,6 +5063,10 @@ class CriminalJusticeSystem(System):
             return
         if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
             return
+        resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        if resolved_eid is None:
+            return
+        offender_eid = resolved_eid
         change = self._record_incident(
             offender_eid,
             incident_type="trespass",
@@ -4040,6 +5094,10 @@ class CriminalJusticeSystem(System):
             return
         if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
             return
+        resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        if resolved_eid is None:
+            return
+        offender_eid = resolved_eid
         change = self._record_incident(
             offender_eid,
             incident_type="tamper",
@@ -4122,6 +5180,10 @@ class CriminalJusticeSystem(System):
             return
         if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
             return
+        resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        if resolved_eid is None:
+            return
+        offender_eid = resolved_eid
         change = self._record_incident(
             offender_eid,
             incident_type="theft",
@@ -4167,6 +5229,10 @@ class CriminalJusticeSystem(System):
             severity = mitigated_force_severity(severity, force_read)
             if severity <= 0:
                 return
+        resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        if resolved_eid is None:
+            return
+        offender_eid = resolved_eid
         incident_type = self._incident_type_from_context(context)
         change = self._record_incident(
             offender_eid,
@@ -4302,6 +5368,10 @@ class CriminalJusticeSystem(System):
         if severity <= 0:
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"), field="justice_force_reviewed")
             return
+        resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        if resolved_eid is None:
+            return
+        offender_eid = resolved_eid
         change = self._record_incident(
             offender_eid,
             incident_type="homicide",
@@ -4323,18 +5393,52 @@ class CriminalJusticeSystem(System):
             return
         if event_is_vision_only(incident):
             return
+        case, case_changed, newly_resolved = record_justice_identity_report(
+            self.sim,
+            incident,
+            dict(event.data),
+        )
+        case_payload = justice_case_event_payload(case)
+        incident["officially_reported"] = True
+        incident.setdefault("reported_tick", int(getattr(self.sim, "tick", 0)))
+        incident.setdefault("reported_by_eid", event.data.get("reporter_eid", event.data.get("npc_eid")))
+        crime_profile = self._provisional_case_crime_profile(case, incident)
+        if isinstance(case, dict):
+            case["provisional_crime_profile"] = dict(crime_profile) if isinstance(crime_profile, dict) else None
+            case["provisional_crime_actionable"] = isinstance(crime_profile, dict)
+        self._emit_identity_case_change(case, changed=case_changed, newly_resolved=newly_resolved)
         if bool(incident.get("justice_accounted")):
             return
+        offender_eid = case_payload.get("resolved_subject_eid")
+        if offender_eid is None:
+            incident["justice_identity_unresolved"] = True
+            incident["justice_identity_case_id"] = case_payload.get("case_id")
+            if isinstance(crime_profile, dict):
+                self._consider_provisional_npc_attribution(
+                    case,
+                    reporter_eid=event.data.get("reporter_eid", event.data.get("npc_eid")),
+                )
+            return
+        incident["justice_identity_unresolved"] = False
+        incident["justice_identity_case_id"] = case_payload.get("case_id")
+        for attribution in tuple((case or {}).get("provisional_attributions", ()) or ()):
+            if not isinstance(attribution, dict):
+                continue
+            try:
+                same_actor = int(attribution.get("actor_eid")) == int(offender_eid)
+            except (TypeError, ValueError):
+                same_actor = False
+            if same_actor and bool(attribution.get("justice_record_created", False)):
+                self._mark_incident_accounted(incident.get("id"))
+                attribution["punishment_status"] = "confirmed_attribution"
+                return
         report_observation = self._event_accountability(
             event,
-            offender_eid=incident.get("primary_actor_eid"),
+            offender_eid=offender_eid,
         )
         if not bool(report_observation.get("has_accountable_observation")):
             return
         incident_kind = str(incident.get("kind", "") or "").strip().lower()
-        offender_eid = incident.get("primary_actor_eid")
-        if offender_eid is None:
-            return
         severity_score = int(incident.get("severity", 0) or 0)
         if severity_score <= 0:
             return
@@ -4573,8 +5677,7 @@ class CriminalJusticeSystem(System):
             return
         if map_mode_active(self.sim):
             return
-        snapshot = self._player_bookable_snapshot()
-        if snapshot is None or _actor_in_live_combat(self.sim, self.player_eid):
+        if _actor_in_live_combat(self.sim, self.player_eid):
             return
         npc_eid = event.data.get("npc_eid")
         if npc_eid is None:
@@ -4588,7 +5691,12 @@ class CriminalJusticeSystem(System):
             return
         if npc_will is not None and str(npc_will.intent or "").strip().lower() in THREAT_STATES and npc_will.target_eid == self.player_eid:
             return
-        if self._open_player_justice_prompt(npc_eid, snapshot=snapshot, respect_cooldown=False):
+        snapshot = self._player_bookable_snapshot()
+        if snapshot is not None and self._open_player_justice_prompt(npc_eid, snapshot=snapshot, respect_cooldown=False):
+            event.data["handled"] = True
+            return
+        identity_match = self._player_unresolved_identity_match()
+        if identity_match is not None and self._open_player_identity_check_prompt(npc_eid, identity_match):
             event.data["handled"] = True
 
     def on_justice_surrender_choice(self, event):
@@ -4621,6 +5729,18 @@ class CriminalJusticeSystem(System):
         choice_id = str(event.data.get("choice_id", "") or "").strip().lower() or "refuse"
         self._close_player_surrender_prompt()
         self._resolve_player_questioning_choice(choice_id, by_eid=by_eid, source_prop=source_prop, snapshot=snapshot)
+
+    def on_justice_identity_check_choice(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if not self._player_surrender_prompt_open():
+            return
+        prompt = self.player_surrender_prompt if isinstance(self.player_surrender_prompt, dict) else {}
+        if str(prompt.get("kind", "")).strip().lower() != self.IDENTITY_CHECK_DIALOG_KIND:
+            return
+        choice_id = str(event.data.get("choice_id", "") or "").strip().lower() or "decline"
+        self._close_player_surrender_prompt()
+        self._resolve_player_identity_check_choice(choice_id, prompt=prompt)
 
     def on_npc_surrendered(self, event):
         offender_eid = event.data.get("eid")
@@ -4736,6 +5856,39 @@ class CriminalJusticeSystem(System):
             record["wallet_credits_after"] = int(wallet_after)
             record["released_tick"] = int(tick)
             record["active"] = False
+            remaining_paid = int(max(0, fine_paid))
+            for case_id, case_read in dict(record.get("provisional_cases", {}) or {}).items():
+                case_read = case_read if isinstance(case_read, dict) else {}
+                case = justice_case_for_incident(self.sim, case_read.get("incident_id"))
+                attribution = self._active_case_attribution_for(case, record.get("eid"))
+                if not isinstance(attribution, dict):
+                    continue
+                wrongful_due = min(
+                    int(max(0, record.get("fine_due", 0) or 0)),
+                    int(max(0, case_read.get("wrongful_fine_due", 0) or 0)),
+                )
+                wrongful_paid = min(wrongful_due, remaining_paid)
+                remaining_paid = max(0, remaining_paid - wrongful_paid)
+                attribution["financial_outcome"] = {
+                    "fine_due": int(max(0, record.get("fine_due", 0) or 0)),
+                    "wrongful_fine_due": int(wrongful_due),
+                    "fine_paid": int(wrongful_paid),
+                    "debt_added": 0,
+                    "hold_ticks_served": int(max(0, tick - int(record.get("start_tick", tick)))),
+                    "booking_tick": int(record.get("start_tick", tick)),
+                    "released_tick": int(tick),
+                }
+                residual = int(max(0, case_read.get("residual_active_contribution", 0) or 0))
+                _set_provisional_justice_active_contribution(
+                    self.sim,
+                    record.get("eid"),
+                    case_id,
+                    residual,
+                )
+                change = attribution.get("justice_change") if isinstance(attribution.get("justice_change"), dict) else {}
+                incident = change.get("incident") if isinstance(change.get("incident"), dict) else None
+                if isinstance(incident, dict):
+                    incident["active_contribution"] = residual
             self._clear_restitution_claims(int(record.get("eid", 0) or 0))
 
             release_change = _release_justice_from_custody(
@@ -4777,3 +5930,5 @@ class CriminalJusticeSystem(System):
         self._process_guard_initiated_player_arrest()
         self._process_pending_detentions()
         self._process_resolved_npc_custody()
+        self._process_pending_npc_exoneration_refunds()
+        self._process_pending_npc_exoneration_memories()
