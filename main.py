@@ -135,6 +135,7 @@ from game.opportunities import evaluate_opportunity_board, seed_run_opportunitie
 from game.organization_reputation import OrganizationReputationSystem
 from game.organization_response import OrganizationResponseSystem
 from game.organization_practice_evolution import OrganizationPracticeEvolutionSystem
+from game.organization_supply import OrganizationSupplySystem
 from game.corporate_expansion_runtime import CorporateExpansionSystem
 from game.gang_enterprise_runtime import GangEnterpriseSystem
 from game.civic_trade_posse_runtime import CivicTradePosseSystem
@@ -536,6 +537,7 @@ def _prompt_player_gender_identity_view(
             banner="BAKERRRR",
             subtitle=subtitle,
             initial_index=_player_identity_default_index(initial_value),
+            presentation="flora_title",
         )
     return _prompt_player_gender_identity_text(
         initial_value=initial_value,
@@ -710,6 +712,7 @@ def _register_runtime_systems(sim, view, player):
     corporate_expansion_system = CorporateExpansionSystem(sim)
     gang_enterprise_system = GangEnterpriseSystem(sim)
     civic_trade_posse_system = CivicTradePosseSystem(sim)
+    organization_supply_system = OrganizationSupplySystem(sim)
     organization_reputation_system = OrganizationReputationSystem(sim, player)
     organization_response_system = OrganizationResponseSystem(sim, player)
     final_operation_system = FinalOperationSystem(sim, player)
@@ -786,6 +789,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(corporate_expansion_system, 600)
     _live_timeskip_stride(gang_enterprise_system, 600)
     _live_timeskip_stride(civic_trade_posse_system, 600)
+    _live_timeskip_stride(organization_supply_system, 600)
     _live_timeskip_stride(organization_reputation_system, 60)
     _live_timeskip_stride(organization_response_system, 60)
     _live_timeskip_stride(final_operation_system, 60)
@@ -875,6 +879,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(corporate_expansion_system)
     sim.register_system(gang_enterprise_system)
     sim.register_system(civic_trade_posse_system)
+    sim.register_system(organization_supply_system)
     sim.register_system(organization_reputation_system)
     sim.register_system(organization_response_system)
     sim.register_system(final_operation_system)

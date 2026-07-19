@@ -893,6 +893,9 @@ class NPCMemorySystem(System):
             "threat": 0.001,
             "ally_threatened": 0.001,
             "conflict_side": 0.0012,
+            # A social read of conspicuous sneaking should last long enough to
+            # color the encounter, but not become a permanent obsession.
+            "suspicious_behavior": 0.012,
             # Consequence memory should linger.
             "offense": 0.0001,
             "property_threat": 0.0002,

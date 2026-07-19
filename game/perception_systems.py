@@ -15,13 +15,17 @@ from game.components import (
     NPCMemory,
     NPCNeeds,
     NPCTraits,
+    NPCWill,
     NoiseProfile,
     PlayerModeState,
     Position,
     SuppressionState,
     Vitality,
 )
-from game.property_access import evaluate_property_access as _evaluate_property_access
+from game.property_access import (
+    evaluate_property_access as _evaluate_property_access,
+    property_claim_reason as _property_claim_reason,
+)
 from game.property_runtime import (
     property_cover_intended as _property_cover_intended,
     property_covering as _property_covering,
@@ -553,12 +557,15 @@ class StealthSystem(System):
     CAMERA_ALERT_WINDOW = 18
     PROPERTY_SNEAK_COOLDOWN = 18
     PERSONAL_SNEAK_COOLDOWN = 12
+    PUBLIC_SNEAK_COOLDOWN = 18
+    REACTION_MEMORY_WINDOW = 90
 
     def __init__(self, sim, player_eid):
         super().__init__(sim)
         self.player_eid = player_eid
         self._recent_camera_alerts = {}
         self._reaction_cooldowns = {}
+        self._reaction_counts = {}
         self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
 
     def on_camera_alerted(self, event):
@@ -689,14 +696,130 @@ class StealthSystem(System):
             + (_crime_sensitivity(justice, default=0.5) * 0.35)
         )
 
-    def _reaction_ready(self, observer_eid, context, subject, cooldown):
+    def _next_reaction_count(self, observer_eid, context, subject, cooldown):
         tick = int(getattr(self.sim, "tick", 0))
         key = (int(observer_eid), str(context or ""), str(subject or ""))
         last_tick = int(self._reaction_cooldowns.get(key, -10_000))
         if tick - last_tick < int(cooldown):
-            return False
+            return 0
+        previous = self._reaction_counts.get(key, {})
+        previous_tick = int(previous.get("tick", -10_000)) if isinstance(previous, dict) else -10_000
+        previous_count = int(previous.get("count", 0)) if isinstance(previous, dict) else 0
+        count = previous_count + 1 if tick - previous_tick <= int(self.REACTION_MEMORY_WINDOW) else 1
         self._reaction_cooldowns[key] = tick
+        self._reaction_counts[key] = {"count": count, "tick": tick}
+        return count
+
+    def _remember_visible_sneak(self, observer_eid, pos, *, reaction, strength, context, property_id=None, repeat_count=1):
+        memory = self.sim.ecs.get(NPCMemory).get(observer_eid)
+        if memory is None:
+            return
+        memory.remember(
+            tick=int(getattr(self.sim, "tick", 0)),
+            kind="suspicious_behavior",
+            strength=max(0.08, min(1.0, float(strength))),
+            source_eid=self.player_eid,
+            action="visible_sneak",
+            reaction=str(reaction or "watching").strip().lower() or "watching",
+            context=str(context or "visible_sneak").strip().lower() or "visible_sneak",
+            property_id=str(property_id or "").strip() or None,
+            repeat_count=max(1, int(repeat_count or 1)),
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        )
+
+    def _sneak_tail_target(self, observer_eid, player_pos):
+        observer_pos = self.sim.ecs.get(Position).get(observer_eid)
+        if observer_pos is None or int(observer_pos.z) != int(player_pos.z):
+            return (int(player_pos.x), int(player_pos.y), int(player_pos.z))
+        current = (int(observer_pos.x), int(observer_pos.y), int(observer_pos.z))
+        current_dist = _manhattan(observer_pos.x, observer_pos.y, player_pos.x, player_pos.y)
+        if 3 <= current_dist <= 5:
+            return current
+
+        ais = self.sim.ecs.get(AI)
+        candidates = []
+        for dx in range(-5, 6):
+            for dy in range(-5, 6):
+                stand_off = abs(dx) + abs(dy)
+                if stand_off < 3 or stand_off > 5:
+                    continue
+                tx = int(player_pos.x) + dx
+                ty = int(player_pos.y) + dy
+                tz = int(player_pos.z)
+                if not self.sim.tilemap.in_bounds(tx, ty) or not self.sim.tilemap.is_walkable(tx, ty, tz):
+                    continue
+                if any(
+                    other_eid != observer_eid and ais.get(other_eid) is not None
+                    for other_eid in self.sim.tilemap.entities_at(tx, ty, tz)
+                ):
+                    continue
+                travel = _manhattan(observer_pos.x, observer_pos.y, tx, ty)
+                candidates.append((travel + (abs(stand_off - 4) * 2), travel, tx, ty, tz))
+        if not candidates:
+            return current
+        _, _, tx, ty, tz = min(candidates)
+        return (tx, ty, tz)
+
+    def _set_sneak_investigation(self, observer_eid, pos, *, score, announce=True):
+        ai = self.sim.ecs.get(AI).get(observer_eid)
+        if ai is None or str(getattr(ai, "state", "") or "").strip().lower() in {
+            "protecting",
+            "chasing",
+            "seeking_safety",
+            "reporting_incident",
+            "helping_victim",
+            "ejecting_target",
+            "downed",
+        }:
+            return False
+        target = self._sneak_tail_target(observer_eid, pos)
+        ai.state = "investigating"
+        ai.target = target
+        ai.target_eid = None
+        ai.investigation_context = {
+            "kind": "visible_sneak",
+            "posture": "tailing",
+            "source_eid": self.player_eid,
+            "offense_assumed": False,
+            "x": target[0],
+            "y": target[1],
+            "z": target[2],
+            "seen_tick": int(getattr(self.sim, "tick", 0)),
+        }
+        ai.visible_sneak_handled_tick = int(getattr(self.sim, "tick", 0))
+        will = self.sim.ecs.get(NPCWill).get(observer_eid)
+        if will is not None:
+            will.intent = "investigating"
+            will.score = max(float(getattr(will, "score", 0.0) or 0.0), float(score))
+            will.target = target
+            will.target_eid = None
+            will.last_tick = int(getattr(self.sim, "tick", 0))
+        if announce:
+            self.sim.emit(Event(
+                "npc_intent_changed",
+                npc_eid=observer_eid,
+                intent="investigating",
+                reason="visible_sneak_tail",
+                target=target,
+            ))
         return True
+
+    def _emit_sneak_reaction(self, observer_eid, pos, *, reaction, context, repeat_count, property_id=None, authority_reason=None):
+        self.sim.emit(Event(
+            "npc_sneak_reaction",
+            npc_eid=observer_eid,
+            source_eid=self.player_eid,
+            reaction=str(reaction or "watching").strip().lower() or "watching",
+            context=str(context or "visible_sneak").strip().lower() or "visible_sneak",
+            repeat_count=max(1, int(repeat_count or 1)),
+            property_id=str(property_id or "").strip() or None,
+            authority_reason=str(authority_reason or "").strip().lower() or None,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        ))
 
     def _emit_close_sneak_threat(self, observer_eid, pos, *, threat_strength, safety_hit, context):
         memory = self.sim.ecs.get(NPCMemory).get(observer_eid)
@@ -722,8 +845,6 @@ class StealthSystem(System):
         if not modes or not bool(getattr(modes, "sneak", False)):
             return
         if not watchers:
-            return
-        if bool(getattr(modes, "hidden", False)):
             return
 
         ais = self.sim.ecs.get(AI)
@@ -755,14 +876,31 @@ class StealthSystem(System):
             law_drive = self._observer_law_drive(observer_eid)
 
             if dist <= 1:
-                if not self._reaction_ready(
+                repeat_count = self._next_reaction_count(
                     observer_eid,
                     "personal_space",
                     observer_eid,
                     self.PERSONAL_SNEAK_COOLDOWN,
-                ):
+                )
+                if repeat_count <= 0:
                     continue
                 fearful = law_drive < 0.55 and bravery < 0.28
+                reaction = "wary" if fearful else "personal_space"
+                self._remember_visible_sneak(
+                    observer_eid,
+                    pos,
+                    reaction=reaction,
+                    strength=0.52 if fearful else 0.58,
+                    context="personal_space",
+                    repeat_count=repeat_count,
+                )
+                self._emit_sneak_reaction(
+                    observer_eid,
+                    pos,
+                    reaction=reaction,
+                    context="personal_space",
+                    repeat_count=repeat_count,
+                )
                 if not fearful:
                     offense_score = min(
                         48,
@@ -777,6 +915,7 @@ class StealthSystem(System):
                         context="personal_space",
                         offense_score=offense_score,
                         perceived=round(perceived, 3),
+                        suppress_bark=True,
                     ))
                 self._emit_close_sneak_threat(
                     observer_eid,
@@ -787,30 +926,128 @@ class StealthSystem(System):
                 )
                 continue
 
-            if not bool(intrusion_state.get("active")) or severity_base <= 0 or not property_id:
-                continue
-            if not self._reaction_ready(
-                observer_eid,
-                "property_sneak",
-                property_id,
-                self.PROPERTY_SNEAK_COOLDOWN,
-            ):
-                continue
+            if bool(intrusion_state.get("active")) and severity_base > 0 and property_id:
+                prop = self.sim.properties.get(property_id)
+                _, authority_reason = _property_claim_reason(
+                    self.sim,
+                    observer_eid,
+                    prop,
+                    x=observer_pos.x,
+                    y=observer_pos.y,
+                    z=observer_pos.z,
+                    min_standing=0.58,
+                ) if isinstance(prop, dict) else (None, "")
+                role = str(getattr(observer_ai, "role", "") or "").strip().lower()
+                property_authority = bool(authority_reason) or role == "guard"
+                if property_authority:
+                    repeat_count = self._next_reaction_count(
+                        observer_eid,
+                        "property_sneak",
+                        property_id,
+                        self.PROPERTY_SNEAK_COOLDOWN,
+                    )
+                    if repeat_count <= 0:
+                        continue
+                    self._remember_visible_sneak(
+                        observer_eid,
+                        pos,
+                        reaction="property_challenge",
+                        strength=min(0.88, 0.5 + (severity_base / 100.0) + (min(3, repeat_count - 1) * 0.08)),
+                        context="property_sneak",
+                        property_id=property_id,
+                        repeat_count=repeat_count,
+                    )
+                    self._emit_sneak_reaction(
+                        observer_eid,
+                        pos,
+                        reaction="property_challenge",
+                        context="property_sneak",
+                        repeat_count=repeat_count,
+                        property_id=property_id,
+                        authority_reason=authority_reason or role,
+                    )
+                    offense_score = min(
+                        48,
+                        severity_base
+                        + int(round((law_drive * 8.0) + (discipline * 4.0)))
+                        + min(8, max(0, repeat_count - 1) * 4),
+                    )
+                    perceived = max(0.45, min(0.96, 0.5 + (law_drive * 0.18) + (discipline * 0.1) + (max(0, repeat_count - 1) * 0.04)))
+                    self.sim.emit(Event(
+                        "npc_offended",
+                        npc_eid=observer_eid,
+                        offender_eid=self.player_eid,
+                        action="sneak",
+                        context="property_sneak",
+                        offense_score=offense_score,
+                        perceived=round(perceived, 3),
+                        suppress_bark=True,
+                    ))
+                    continue
 
-            offense_score = min(
-                44,
-                severity_base + int(round((law_drive * 8.0) + (discipline * 4.0))),
+            investigation_context = getattr(observer_ai, "investigation_context", None)
+            if (
+                isinstance(investigation_context, dict)
+                and str(investigation_context.get("kind", "") or "").strip().lower() == "visible_sneak"
+                and str(investigation_context.get("posture", "") or "").strip().lower() == "tailing"
+            ):
+                # Keep a live tail at observation distance while the player is
+                # still visibly sneaking. This refresh is silent; barks and
+                # memory additions retain their separate cooldown.
+                self._set_sneak_investigation(
+                    observer_eid,
+                    pos,
+                    score=38.0 + (discipline * 12.0) + (law_drive * 8.0),
+                    announce=False,
+                )
+
+            repeat_count = self._next_reaction_count(
+                observer_eid,
+                "public_sneak",
+                "public",
+                self.PUBLIC_SNEAK_COOLDOWN,
             )
-            perceived = max(0.45, min(0.92, 0.5 + (law_drive * 0.18) + (discipline * 0.1)))
-            self.sim.emit(Event(
-                "npc_offended",
-                npc_eid=observer_eid,
-                offender_eid=self.player_eid,
-                action="sneak",
-                context="property_sneak",
-                offense_score=offense_score,
-                perceived=round(perceived, 3),
-            ))
+            if repeat_count <= 0:
+                continue
+            role = str(getattr(observer_ai, "role", "") or "").strip().lower()
+            fearful = law_drive < 0.55 and bravery < 0.28
+            assertive = role in {"guard", "manager"} or law_drive >= 0.72 or discipline >= 0.76
+            if fearful:
+                reaction = "wary"
+                strength = 0.36 + min(0.18, max(0, repeat_count - 1) * 0.06)
+                self._emit_close_sneak_threat(
+                    observer_eid,
+                    pos,
+                    threat_strength=strength,
+                    safety_hit=6.0 + min(8.0, max(0, repeat_count - 1) * 2.0),
+                    context="visible_sneak",
+                )
+            elif assertive or repeat_count >= 2:
+                reaction = "tailing"
+                strength = 0.46 + min(0.22, max(0, repeat_count - 1) * 0.07)
+                self._set_sneak_investigation(
+                    observer_eid,
+                    pos,
+                    score=32.0 + (discipline * 14.0) + (law_drive * 10.0) + min(12.0, max(0, repeat_count - 1) * 4.0),
+                )
+            else:
+                reaction = "watching"
+                strength = 0.24
+            self._remember_visible_sneak(
+                observer_eid,
+                pos,
+                reaction=reaction,
+                strength=strength,
+                context="visible_sneak",
+                repeat_count=repeat_count,
+            )
+            self._emit_sneak_reaction(
+                observer_eid,
+                pos,
+                reaction=reaction,
+                context="visible_sneak",
+                repeat_count=repeat_count,
+            )
 
     def update(self):
         modes = self.sim.ecs.get(PlayerModeState).get(self.player_eid)

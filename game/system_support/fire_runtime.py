@@ -380,6 +380,30 @@ def fire_state(sim):
         normalized_cells[key] = cell
     state["cells"] = normalized_cells
 
+    # These sets are the cheap property-level working truth used by the fire
+    # system between real cell-advance waves.  Rebuild them once when loading
+    # old state instead of rediscovering them from every property index on
+    # every simulation tick.
+    derived_active_properties = {
+        _text(cell.get("property_id"))
+        for cell in normalized_cells.values()
+        if _text(cell.get("property_id")) and _safe_int(cell.get("fire_intensity"), 0) > 0
+    }
+    derived_smoke_properties = {
+        _text(cell.get("property_id"))
+        for cell in normalized_cells.values()
+        if _text(cell.get("property_id")) and _safe_int(cell.get("smoke_intensity"), 0) > 0
+    }
+    saved_active_properties = set(state.get("last_active_properties", ()) or ())
+    saved_smoke_properties = set(state.get("last_smoke_properties", ()) or ())
+    state["last_active_properties"] = saved_active_properties | derived_active_properties
+    state["last_smoke_properties"] = saved_smoke_properties | derived_smoke_properties
+    if (
+        saved_active_properties - derived_active_properties
+        or saved_smoke_properties - derived_smoke_properties
+    ):
+        state["fire_property_transition_dirty"] = True
+
     if not any(state.get(name) for name in ("chunk_index", "property_index", "building_index")) and normalized_cells:
         state["chunk_index"] = {}
         state["property_index"] = {}
@@ -395,6 +419,8 @@ def fire_state(sim):
             if building_id:
                 _set_bucket(state["building_index"], building_id).add(coord)
     _sync_protected_chunks(sim, state=state)
+    state.setdefault("fire_response_dirty", bool(normalized_cells))
+    state.setdefault("fire_response_next_tick", 0)
     state["_runtime_normalized"] = True
     return state
 
@@ -479,16 +505,10 @@ def schedule_fire_cell_advance(sim, coord, *, due_tick=None, advance_interval=5)
             state.setdefault("advance_due", {}).pop(int(old_tick), None)
     _int_bucket(state.setdefault("advance_due", {}), due_tick).add(key)
     state.setdefault("advance_tick_by_coord", {})[key] = due_tick
-    active_count = sum(
-        1
-        for cell in tuple(state.get("cells", {}).values())
-        if isinstance(cell, dict)
-        and (
-            _safe_int(cell.get("fire_intensity"), 0) > 0
-            or _safe_int(cell.get("smoke_intensity"), 0) > 0
-        )
-    )
-    state["advance_due_signature"] = (active_count, interval)
+    # The due indexes are already maintained incrementally.  Recounting every
+    # active fire cell here made a due wave quadratic because every advanced
+    # cell schedules itself again.
+    state["advance_due_signature"] = (len(state["advance_tick_by_coord"]), interval)
     return due_tick
 
 
@@ -504,7 +524,9 @@ def unschedule_fire_cell_advance(sim, coord):
     bucket.discard(key)
     if not bucket:
         state.setdefault("advance_due", {}).pop(int(old_tick), None)
-    state["advance_due_dirty"] = True
+    signature = state.get("advance_due_signature")
+    interval = signature[1] if isinstance(signature, (tuple, list)) and len(signature) >= 2 else 5
+    state["advance_due_signature"] = (len(state.get("advance_tick_by_coord", {})), interval)
     return True
 
 
@@ -554,10 +576,36 @@ def _index_fire_cell(sim, coord, cell):
     building_id = _text(cell.get("building_id"))
     if building_id:
         _set_bucket(state["building_index"], building_id).add(coord)
-    _sync_protected_chunks(sim, state=state)
+    if chunk is not None and _safe_int(cell.get("fire_intensity"), 0) > 0:
+        state.setdefault("protected_chunks", set()).add(chunk)
 
 
-def _unindex_fire_cell(sim, coord, cell):
+def _refresh_protected_chunk(sim, chunk, *, state=None):
+    if not isinstance(state, dict):
+        state = fire_state(sim)
+    chunk = _normalize_chunk_key(chunk)
+    if chunk is None:
+        return False
+    cells = state.get("cells", {})
+    active = any(
+        _safe_int((cells.get(coord) or {}).get("fire_intensity"), 0) > 0
+        for coord in tuple(state.get("chunk_index", {}).get(chunk, ()) or ())
+    )
+    protected = state.setdefault("protected_chunks", set())
+    if active:
+        protected.add(chunk)
+    else:
+        protected.discard(chunk)
+    return active
+
+
+def refresh_fire_protected_chunk(sim, chunk):
+    """Refresh one changed chunk without rescanning the whole fire world."""
+
+    return _refresh_protected_chunk(sim, chunk, state=fire_state(sim))
+
+
+def _unindex_fire_cell(sim, coord, cell, *, sync_protected=True):
     state = fire_state(sim)
     chunk = _normalize_chunk_key(sim.chunk_coords(coord[0], coord[1]))
     if chunk is not None:
@@ -577,7 +625,8 @@ def _unindex_fire_cell(sim, coord, cell):
         bucket.discard(coord)
         if not bucket:
             state["building_index"].pop(building_id, None)
-    _sync_protected_chunks(sim, state=state)
+    if chunk is not None and bool(sync_protected):
+        _refresh_protected_chunk(sim, chunk, state=state)
 
 
 def _sync_protected_chunks(sim, *, state=None):
@@ -604,7 +653,7 @@ def _sync_protected_chunks(sim, *, state=None):
 
 
 def fire_protected_chunks(sim):
-    return set(_sync_protected_chunks(sim, state=fire_state(sim)))
+    return set(fire_state(sim).get("protected_chunks", set()) or ())
 
 
 def fire_cell_state(sim, x, y, z=0):
@@ -615,7 +664,7 @@ def fire_cell_state(sim, x, y, z=0):
     return cell if isinstance(cell, dict) else None
 
 
-def remove_fire_cell(sim, x, y, z=0):
+def remove_fire_cell(sim, x, y, z=0, *, sync_protected=True):
     key = _coord_key(x, y, z)
     if key is None:
         return False
@@ -624,8 +673,10 @@ def remove_fire_cell(sim, x, y, z=0):
     if not isinstance(cell, dict):
         return False
     unschedule_fire_cell_advance(sim, key)
-    _unindex_fire_cell(sim, key, cell)
+    _unindex_fire_cell(sim, key, cell, sync_protected=sync_protected)
     state.get("frozen_boundaries", {}).pop(key, None)
+    state["fire_response_dirty"] = True
+    state["fire_property_transition_dirty"] = True
     return True
 
 
@@ -1011,8 +1062,10 @@ def upsert_fire_cell(
                 state.get("last_active_properties", set()).add(tracked_property_id)
             if _safe_int(cell.get("smoke_intensity"), 0) > 0:
                 state.get("last_smoke_properties", set()).add(tracked_property_id)
+        state["fire_response_dirty"] = True
         return cell
 
+    previous_fire_intensity = _safe_int(existing.get("fire_intensity"), 0)
     existing["fire_intensity"] = max(_safe_int(existing.get("fire_intensity"), 0), _safe_int(fire_intensity, 0))
     existing["smoke_intensity"] = max(_safe_int(existing.get("smoke_intensity"), 0), _safe_int(smoke_intensity, 0))
     existing["source_kind"] = _text(source_kind).lower() or _text(existing.get("source_kind")).lower()
@@ -1048,8 +1101,11 @@ def upsert_fire_cell(
             state.get("last_active_properties", set()).add(tracked_property_id)
         if _safe_int(existing.get("smoke_intensity"), 0) > 0:
             state.get("last_smoke_properties", set()).add(tracked_property_id)
-    if bool(sync_protected):
-        _sync_protected_chunks(sim, state=state)
+    if previous_fire_intensity <= 0 < _safe_int(existing.get("fire_intensity"), 0):
+        chunk = _normalize_chunk_key(sim.chunk_coords(key[0], key[1]))
+        if chunk is not None:
+            state.setdefault("protected_chunks", set()).add(chunk)
+    state["fire_response_dirty"] = True
     return existing
 
 

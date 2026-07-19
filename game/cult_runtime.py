@@ -12,6 +12,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from engine.visibility import has_line_of_sight
+from game.appearance_palette import fallback_render_key_for_color_word
 from game.appearance_loadout import (
     APPEARANCE_METADATA_KEY,
     APPEARANCE_SLOT_METADATA_KEY,
@@ -1060,6 +1061,17 @@ def _create_cult(sim, *, leader_eid, officials=(), members=(), cult_id=None):
     }
     _state(sim)["cults"][cult_id] = cult
     if isinstance(meeting_prop, dict):
+        # The meeting remains owned/operated by its ordinary host, but is a
+        # durable cult site too.  That gives diplomacy and supply a real anchor
+        # without stealing the property's primary organization identity.
+        link_property_organization(
+            sim,
+            meeting_prop,
+            organization_eid=org_eid,
+            link_kind="meeting_place",
+            primary=False,
+            active=True,
+        )
         _state(sim)["property_index"].setdefault(_clean_text(meeting_prop.get("id")), [])
         if cult_id not in _state(sim)["property_index"][_clean_text(meeting_prop.get("id"))]:
             _state(sim)["property_index"][_clean_text(meeting_prop.get("id"))].append(cult_id)
@@ -1239,17 +1251,22 @@ def _metadata_for_uniform_piece(sim, eid, cult, item_id, slot, *, seed_token="")
     uniform = dict(cult.get("uniform", {}) or {})
     primary = _clean_text(uniform.get("primary_color")) or "purple"
     accent = _clean_text(uniform.get("accent_color")) or "white"
+    render_color = fallback_render_key_for_color_word(primary, default="human_monochrome")
     metadata = cosmetic_variant_metadata(item_id, seed_token=seed_token, item_catalog=ITEM_CATALOG, sim=sim)
     nested = dict(metadata.get(APPEARANCE_METADATA_KEY) or {})
     nested["color"] = primary
-    nested["accent_color"] = accent
+    nested["color_word"] = primary
+    nested["accent_color"] = render_color
+    nested["uniform_accent_color_word"] = accent
     nested["cult_id"] = cult.get("cult_id")
     nested["cult_name"] = cult.get("name")
     nested["cult_uniform"] = True
     nested["worn_slot"] = slot
     metadata[APPEARANCE_METADATA_KEY] = nested
     metadata["color"] = primary
-    metadata["accent_color"] = accent
+    metadata["color_word"] = primary
+    metadata["accent_color"] = render_color
+    metadata["uniform_accent_color_word"] = accent
     metadata["cult_id"] = cult.get("cult_id")
     metadata["cult_name"] = cult.get("name")
     metadata["cult_uniform"] = True

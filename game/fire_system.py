@@ -18,13 +18,11 @@ from game.system_support.fire_runtime import (
     FUEL_FIXTURE_TYPES,
     RISKY_ARCHETYPES,
     RISKY_ROOM_KINDS,
-    active_fire_cells_near,
     chunk_environmental_ignition_day,
     chunk_fire_summary,
     clear_frozen_fire_boundary,
     fire_behavior_for_cell,
     fire_cell_state,
-    fire_protected_chunks,
     fire_runtime_day,
     fire_state,
     ensure_fire_advance_due_index,
@@ -33,6 +31,7 @@ from game.system_support.fire_runtime import (
     note_frozen_fire_boundary,
     pop_due_fire_cells,
     property_fire_summary,
+    refresh_fire_protected_chunk,
     remove_fire_cell,
     schedule_fire_cell_advance,
     upsert_fire_cell,
@@ -49,6 +48,7 @@ SMOKE_DAMAGE_INTERVAL = 6
 ENVIRONMENTAL_REVIEW_INTERVAL = 90
 ENVIRONMENTAL_CHUNK_IGNITION_CHANCE = 0.05
 FIRE_RESPONSE_KEEP_TICKS = 1200
+FIRE_RESPONSE_REFRESH_INTERVAL = 90
 FIRE_AFTERMATH_HOURS = 6.0
 
 
@@ -491,7 +491,13 @@ class FireSystem(System):
         state = fire_state(self.sim)
         cache = state.setdefault("environmental_candidate_cache", {})
         tick = _safe_int(getattr(self.sim, "tick", 0), 0)
-        if cache.get("built_tick") == tick and isinstance(cache.get("by_chunk"), dict):
+        property_count = len(getattr(self.sim, "properties", {}) or {})
+        structure_count = len(getattr(self.sim, "structure_cells", {}) or {})
+        if (
+            isinstance(cache.get("by_chunk"), dict)
+            and _safe_int(cache.get("property_count"), -1) == property_count
+            and _safe_int(cache.get("structure_count"), -1) == structure_count
+        ):
             return cache
         by_chunk = {}
         candidates = []
@@ -549,8 +555,8 @@ class FireSystem(System):
         cache.clear()
         cache.update({
             "built_tick": tick,
-            "property_count": len(getattr(self.sim, "properties", {}) or {}),
-            "structure_count": len(getattr(self.sim, "structure_cells", {}) or {}),
+            "property_count": property_count,
+            "structure_count": structure_count,
             "by_chunk": by_chunk,
         })
         return cache
@@ -719,12 +725,27 @@ class FireSystem(System):
     def _apply_entity_exposure(self):
         state = fire_state(self.sim)
         cooldowns = state.get("contact_cooldowns", {})
-        for coord, cell in self._loaded_cells():
+        cells = state.get("cells", {})
+        occupied = getattr(self.sim.tilemap, "entities", {})
+        if len(occupied) <= len(cells):
+            candidates = (
+                (coord, cells.get(coord), tuple(entity_ids or ()))
+                for coord, entity_ids in tuple(occupied.items())
+                if cells.get(coord) is not None
+                and self._chunk_is_loaded(self.sim.chunk_coords(coord[0], coord[1]))
+            )
+        else:
+            candidates = (
+                (coord, cell, tuple(self.sim.tilemap.entities_at(coord[0], coord[1], coord[2]) or ()))
+                for coord, cell in self._loaded_cells()
+            )
+        for coord, cell, entity_ids in candidates:
+            if not isinstance(cell, dict) or not entity_ids:
+                continue
             fire_intensity = _safe_int(cell.get("fire_intensity"), 0)
             smoke_intensity = _safe_int(cell.get("smoke_intensity"), 0)
             if fire_intensity <= 0 and smoke_intensity <= 0:
                 continue
-            entity_ids = tuple(self.sim.tilemap.entities_at(coord[0], coord[1], coord[2]) or ())
             for eid in entity_ids:
                 if fire_intensity > 0:
                     key = ("open_flame", coord, int(eid))
@@ -1011,10 +1032,12 @@ class FireSystem(System):
         ) is not None
 
     def _advance_boundary_pressure(self):
+        if _safe_int(getattr(self.sim, "tick", 0), 0) % FIRE_SPREAD_INTERVAL != 0:
+            return
         boundaries = dict(fire_state(self.sim).get("frozen_boundaries", {}) or {})
         for target_coord, record in boundaries.items():
             target_chunk = self.sim.chunk_coords(target_coord[0], target_coord[1])
-            if not _chunk_loaded(self.sim, target_chunk):
+            if not self._chunk_is_loaded(target_chunk):
                 continue
             from_coord = record.get("from_coord")
             source_cell = fire_cell_state(self.sim, *(from_coord or (None, None, None))) if isinstance(from_coord, tuple) else None
@@ -1042,20 +1065,34 @@ class FireSystem(System):
 
     def _sync_fire_property_transitions(self, previous_active, previous_smoke):
         state = fire_state(self.sim)
+        candidate_property_ids = (
+            set(previous_active or ())
+            | set(previous_smoke or ())
+            | set(state.get("last_active_properties", ()) or ())
+            | set(state.get("last_smoke_properties", ()) or ())
+        )
+        cells = state.get("cells", {})
+        property_index = state.get("property_index", {})
         current_active = {
             property_id
-            for property_id, coords in tuple(state.get("property_index", {}).items())
-            for coord in tuple(coords or ())
-            if _safe_int((state.get("cells", {}).get(coord) or {}).get("fire_intensity"), 0) > 0
+            for property_id in candidate_property_ids
+            if any(
+                _safe_int((cells.get(coord) or {}).get("fire_intensity"), 0) > 0
+                for coord in tuple(property_index.get(property_id, ()) or ())
+            )
         }
         current_smoke = {
             property_id
-            for property_id, coords in tuple(state.get("property_index", {}).items())
-            for coord in tuple(coords or ())
-            if _safe_int((state.get("cells", {}).get(coord) or {}).get("smoke_intensity"), 0) > 0
+            for property_id in candidate_property_ids
+            if any(
+                _safe_int((cells.get(coord) or {}).get("smoke_intensity"), 0) > 0
+                for coord in tuple(property_index.get(property_id, ()) or ())
+            )
         }
         state["last_active_properties"] = set(current_active)
         state["last_smoke_properties"] = set(current_smoke)
+        state["fire_response_dirty"] = True
+        state["fire_property_transition_dirty"] = False
 
         for property_id in sorted(set(previous_active or ()) - current_active):
             prop = getattr(self.sim, "properties", {}).get(property_id)
@@ -1097,24 +1134,16 @@ class FireSystem(System):
         state = fire_state(self.sim)
         tick = _safe_int(getattr(self.sim, "tick", 0), 0)
         due_coords = pop_due_fire_cells(self.sim, current_tick=tick, advance_interval=FIRE_SPREAD_INTERVAL)
-        derived_previous_active = {
-            property_id
-            for property_id, coords in tuple(state.get("property_index", {}).items())
-            for coord in tuple(coords or ())
-            if _safe_int((state.get("cells", {}).get(coord) or {}).get("fire_intensity"), 0) > 0
-        }
-        derived_previous_smoke = {
-            property_id
-            for property_id, coords in tuple(state.get("property_index", {}).items())
-            for coord in tuple(coords or ())
-            if _safe_int((state.get("cells", {}).get(coord) or {}).get("smoke_intensity"), 0) > 0
-        }
-        previous_active = set(state.get("last_active_properties", ()) or ()) or derived_previous_active
-        previous_smoke = set(state.get("last_smoke_properties", ()) or ()) or derived_previous_smoke
         if not due_coords:
-            if previous_active or previous_smoke:
-                self._sync_fire_property_transitions(previous_active, previous_smoke)
+            if bool(state.get("fire_property_transition_dirty")):
+                self._sync_fire_property_transitions(
+                    set(state.get("last_active_properties", ()) or ()),
+                    set(state.get("last_smoke_properties", ()) or ()),
+                )
             return
+        previous_active = set(state.get("last_active_properties", ()) or ())
+        previous_smoke = set(state.get("last_smoke_properties", ()) or ())
+        changed_chunks = set()
 
         for coord in due_coords:
             cell = state.get("cells", {}).get(coord)
@@ -1132,7 +1161,8 @@ class FireSystem(System):
             fire_intensity = _safe_int(cell.get("fire_intensity"), 0)
             smoke_intensity = _safe_int(cell.get("smoke_intensity"), 0)
             if fire_intensity <= 0 and smoke_intensity <= 0:
-                remove_fire_cell(self.sim, coord[0], coord[1], coord[2])
+                changed_chunks.add(chunk)
+                remove_fire_cell(self.sim, coord[0], coord[1], coord[2], sync_protected=False)
                 continue
             if tick - _safe_int(cell.get("last_advanced_tick"), -10_000) < FIRE_SPREAD_INTERVAL:
                 schedule_fire_cell_advance(
@@ -1143,6 +1173,7 @@ class FireSystem(System):
                 )
                 continue
             cell["last_advanced_tick"] = tick
+            changed_chunks.add(chunk)
             behavior = self._behavior_for_cell(coord[0], coord[1], coord[2])
             if fire_intensity > 0:
                 self._mark_structural_damage(coord, cell, behavior)
@@ -1172,7 +1203,7 @@ class FireSystem(System):
                 cell["smoke_intensity"] = max(0, smoke_intensity - 1)
 
             if _safe_int(cell.get("fire_intensity"), 0) <= 0 and _safe_int(cell.get("smoke_intensity"), 0) <= 0:
-                remove_fire_cell(self.sim, coord[0], coord[1], coord[2])
+                remove_fire_cell(self.sim, coord[0], coord[1], coord[2], sync_protected=False)
             else:
                 schedule_fire_cell_advance(
                     self.sim,
@@ -1181,6 +1212,8 @@ class FireSystem(System):
                     advance_interval=FIRE_SPREAD_INTERVAL,
                 )
 
+        for chunk in changed_chunks:
+            refresh_fire_protected_chunk(self.sim, chunk)
         self._sync_fire_property_transitions(previous_active, previous_smoke)
 
     def _sync_fire_response_seeds(self):
@@ -1189,17 +1222,21 @@ class FireSystem(System):
         response_seed_ids = state.get("response_seed_ids", {})
         ticks_per_hour = _world_ticks_per_hour(self.sim)
 
-        active_properties = {
-            property_id
-            for property_id in tuple(state.get("property_index", {}).keys())
-            if property_fire_summary(self.sim, getattr(self.sim, "properties", {}).get(property_id)).get("active")
-        }
+        summaries = {}
+        for property_id in tuple(state.get("last_active_properties", ()) or ()):
+            prop = getattr(self.sim, "properties", {}).get(property_id)
+            if not isinstance(prop, dict):
+                continue
+            summary = property_fire_summary(self.sim, prop)
+            if summary.get("active"):
+                summaries[property_id] = summary
+        active_properties = set(summaries)
 
         for property_id in tuple(active_properties):
             prop = getattr(self.sim, "properties", {}).get(property_id)
             if not isinstance(prop, dict):
                 continue
-            summary = property_fire_summary(self.sim, prop)
+            summary = summaries[property_id]
             if not summary.get("active") or not summary.get("public_frontage"):
                 continue
             seed_id = _text(response_seed_ids.get(property_id)) or f"fire-response:{property_id}"
@@ -1241,6 +1278,9 @@ class FireSystem(System):
                 continue
             seed_state["active"].pop(_text(seed_id), None)
             response_seed_ids.pop(property_id, None)
+        tick = _safe_int(getattr(self.sim, "tick", 0), 0)
+        state["fire_response_dirty"] = False
+        state["fire_response_next_tick"] = tick + FIRE_RESPONSE_REFRESH_INTERVAL
 
     def update(self):
         ensure_fire_advance_due_index(self.sim, advance_interval=FIRE_SPREAD_INTERVAL)
@@ -1250,8 +1290,10 @@ class FireSystem(System):
             self._advance_boundary_pressure()
             self._advance_cells()
             self._apply_entity_exposure()
-            self._sync_fire_response_seeds()
-            fire_protected_chunks(self.sim)
+            state = fire_state(self.sim)
+            tick = _safe_int(getattr(self.sim, "tick", 0), 0)
+            if bool(state.get("fire_response_dirty")) or tick >= _safe_int(state.get("fire_response_next_tick"), 0):
+                self._sync_fire_response_seeds()
         finally:
             self._end_update_caches()
 

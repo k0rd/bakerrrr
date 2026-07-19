@@ -28,6 +28,8 @@ INCIDENT_REPEAT_COOLDOWNS = {
     "armed_assault": 18,
     "explosive_discharge": 22,
     "homicide": 28,
+    "hunting_violation": 16,
+    "protected_species_violation": 24,
 }
 
 INCIDENT_LABELS = {
@@ -42,6 +44,8 @@ INCIDENT_LABELS = {
     "armed_assault": "armed assault",
     "explosive_discharge": "explosive discharge",
     "homicide": "homicide",
+    "hunting_violation": "hunting violation",
+    "protected_species_violation": "protected-species hunting",
 }
 
 
@@ -721,6 +725,10 @@ def _incident_weight(incident_type, *, severity=0, witnessed=False):
         return min(32, 22 + (severity // 8) + witnessed_bonus)
     if incident_type == "homicide":
         return min(54, 36 + (severity // 5) + witnessed_bonus)
+    if incident_type == "hunting_violation":
+        return min(18, 6 + (severity // 12) + witnessed_bonus)
+    if incident_type == "protected_species_violation":
+        return min(34, 18 + (severity // 6) + witnessed_bonus)
     return min(10, 3 + (severity // 24) + witnessed_bonus)
 
 

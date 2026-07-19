@@ -32,6 +32,11 @@ from game.drone_runtime import (
     first_open_drone_deploy_tile,
 )
 from game.items import ITEM_CATALOG
+from game.organization_production import (
+    organization_manufacturing_identity,
+    organization_manufacturing_modifiers,
+)
+from game.organization_supply import drone_supply_agreement_for_actor
 from game.system_support.combat_targeting_runtime import _entity_is_weapon_targetable
 
 
@@ -369,6 +374,39 @@ def _loadout_for_kind(kind, rng):
         "modules": modules,
         "procedure_key": "hold",
     }
+
+
+def _actor_organization_eid(sim, actor_eid):
+    affiliations = sim.ecs.get(OrganizationAffiliations).get(actor_eid)
+    memberships = getattr(affiliations, "memberships", {}) if affiliations is not None else {}
+    ranked = []
+    if isinstance(memberships, dict):
+        for org_eid, row in memberships.items():
+            if not isinstance(row, dict) or not bool(row.get("active", True)):
+                continue
+            try:
+                org_eid = int(org_eid)
+            except (TypeError, ValueError):
+                continue
+            ranked.append((0 if bool(row.get("primary", False)) else 1, int(row.get("authority_rank", 99) or 99), org_eid))
+    return sorted(ranked)[0][2] if ranked else None
+
+
+def _supplied_loadout_for_doctrine(kind, doctrine, rng, fallback):
+    """Let a supplier's durable doctrine shape, not replace, receiver intent."""
+
+    doctrine = _clean(doctrine).replace("_", " ")
+    if kind not in {"gang", "cult", "bodyguard", "enforcer"}:
+        return fallback
+    if doctrine in {"visible deterrence", "interdiction", "close protection"}:
+        return _armed_loadout("c", armor=doctrine == "close protection")
+    if doctrine == "quiet survey":
+        return _covert_loadout()
+    if doctrine in {"courier", "salvage utility"}:
+        return _utility_cargo_loadout()
+    if doctrine in {"escort", "watchful"}:
+        return _observer_loadout("b", procedure="follow")
+    return fallback
 
 
 def _loadout_module_ids(metadata):
@@ -714,6 +752,30 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
     kind = _owner_kind(sim, owner_eid)
     rng = random.Random(f"{getattr(sim, 'seed', 0)}:drone-faction:{chunk}:{owner_eid}:{kind}:{ordinal}")
     metadata = _loadout_for_kind(kind, rng)
+    operator_org_eid = _actor_organization_eid(sim, owner_eid)
+    supply = drone_supply_agreement_for_actor(sim, owner_eid)
+    manufacturer_org_eid = (
+        int(supply.get("supplier_org_eid"))
+        if isinstance(supply, dict) and supply.get("supplier_org_eid") is not None
+        else operator_org_eid
+    )
+    manufacturing_identity = (
+        organization_manufacturing_identity(sim, manufacturer_org_eid)
+        if manufacturer_org_eid is not None
+        else {}
+    )
+    manufacturing_modifiers = (
+        organization_manufacturing_modifiers(sim, manufacturer_org_eid)
+        if manufacturer_org_eid is not None
+        else {}
+    )
+    if isinstance(supply, dict) and int(supply.get("flow_percent", 0) or 0) >= 40:
+        metadata = _supplied_loadout_for_doctrine(
+            kind,
+            manufacturing_identity.get("drone_doctrine"),
+            rng,
+            metadata,
+        )
     seeded_task = _seeded_task_for_loadout(kind, metadata, rng)
     owner_tag = _owner_tag_for_kind(kind)
     source_instance_id = _source_instance_id(sim, chunk, owner_eid, kind, ordinal)
@@ -732,10 +794,24 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
         "npc_drone_task": seeded_task,
         "npc_drone_base_task": seeded_task,
         "npc_will_driven": True,
+        "operator_organization_eid": operator_org_eid,
+        "manufacturer_organization_eid": manufacturer_org_eid,
+        "manufacturer_organization_key": manufacturing_identity.get("organization_key"),
+        "manufacturer_organization_name": manufacturing_identity.get("organization_name"),
+        "manufacturer": manufacturing_identity.get("manufacturer"),
+        "manufacturing_signature": manufacturing_identity.get("manufacturing_signature"),
+        "product_motif": manufacturing_identity.get("product_motif"),
+        "product_finish": manufacturing_identity.get("product_finish"),
+        "manufacturing_modifiers": manufacturing_modifiers,
+        "supply_agreement_id": (supply or {}).get("agreement_id") if isinstance(supply, dict) else None,
+        "supply_flow_percent": (supply or {}).get("flow_percent") if isinstance(supply, dict) else None,
         "paint": {
-            "primary_color": "black" if kind in {"gang", "cult", "bodyguard", "enforcer"} else "white",
-            "secondary_color": "red" if kind in {"justice", "security"} else "green",
-            "accent_color": "red" if kind in {"justice", "security"} else "green",
+            "primary_color": manufacturing_identity.get("primary_color_word")
+            or ("black" if kind in {"gang", "cult", "bodyguard", "enforcer"} else "white"),
+            "secondary_color": manufacturing_identity.get("secondary_color_word")
+            or ("red" if kind in {"justice", "security"} else "green"),
+            "accent_color": manufacturing_identity.get("accent_color_word")
+            or ("red" if kind in {"justice", "security"} else "green"),
         },
     })
     state = DroneState.from_packed_metadata(
@@ -751,7 +827,8 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
     state.mode = "deployed"
     state.home = (int(pos.x), int(pos.y), int(pos.z))
     chassis_profile = drone_profile_for_item(state.chassis_item_id, item_catalog=ITEM_CATALOG)
-    state.range_limit = int(max(0, _int(chassis_profile.get("base_range"), getattr(state, "range_limit", 0) or 0)))
+    signal_bonus = max(-2, min(2, _int(manufacturing_modifiers.get("signal_integrity"), 0)))
+    state.range_limit = int(max(1, _int(chassis_profile.get("base_range"), getattr(state, "range_limit", 0) or 0) + signal_bonus))
     state.source_metadata["range_limit"] = int(state.range_limit)
     if state.procedure_key == "follow":
         state.target_eid = owner_eid

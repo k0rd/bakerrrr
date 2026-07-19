@@ -448,6 +448,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("property_self_discovered", self.on_property_self_discovered)
         self.sim.events.subscribe("player_mode_toggled", self.on_player_mode_toggled)
         self.sim.events.subscribe("player_hidden_changed", self.on_player_hidden_changed)
+        self.sim.events.subscribe("npc_sneak_reaction", self.on_npc_sneak_reaction)
         self.sim.events.subscribe("interact_empty", self.on_interact_empty)
         self.sim.events.subscribe("property_interact", self.on_property_interact)
         self.sim.events.subscribe("access_panel_used", self.on_access_panel_used)
@@ -477,6 +478,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("cult_devotion_warning", self.on_cult_devotion_warning)
         self.sim.events.subscribe("cult_crisis_started", self.on_cult_crisis_started)
         self.sim.events.subscribe("cult_disbanded", self.on_cult_disbanded)
+        self.sim.events.subscribe("organization_supply_agreement_created", self.on_organization_supply_agreement_created)
+        self.sim.events.subscribe("organization_supply_delivery", self.on_organization_supply_delivery)
+        self.sim.events.subscribe("organization_supply_disrupted", self.on_organization_supply_disrupted)
         self.sim.events.subscribe("hunting_carcass_harvested", self.on_hunting_carcass_harvested)
         self.sim.events.subscribe("hunting_carcass_blocked", self.on_hunting_carcass_blocked)
         self.sim.events.subscribe("flora_harvested", self.on_flora_harvested)
@@ -4382,7 +4386,30 @@ class EventLogSystem(System):
         )
 
     def on_action_offense(self, event):
-        if event.data.get("offender_eid") != self.player_eid:
+        offender_eid = event.data.get("offender_eid")
+        context = str(event.data.get("context", "ordinary") or "ordinary").strip().lower()
+        if offender_eid != self.player_eid:
+            if context not in {"unlicensed_hunting", "unsafe_hunting", "protected_wildlife_hunting"}:
+                return
+            observation = event_observation_accountability(
+                self.sim,
+                event,
+                offender_eid=offender_eid,
+                default_channels=("actor_witness",),
+                use_legacy_witness_fallback=False,
+            )
+            observers = set(observation.get("accountable_observer_eids", ()) or ())
+            if self.player_eid not in observers and not self._player_can_perceive_entity(offender_eid):
+                return
+            actor_name = _entity_display_name(self.sim, offender_eid, title_case=True) or "A hunter"
+            target_name = str(event.data.get("target_name", "wildlife") or "wildlife").strip()
+            if context == "protected_wildlife_hunting":
+                text = f"{actor_name} is seen hunting protected {target_name}; this can bring serious justice pressure."
+            elif context == "unsafe_hunting":
+                text = f"{actor_name} is seen taking an unsafe shot at {target_name}; a hunting license would not cover it here."
+            else:
+                text = f"{actor_name} is seen hunting {target_name} without an active license."
+            self._log(text, channel="alerts", priority="high", dedupe_window=6, dedupe_key=f"npc-hunting-law:{offender_eid}:{context}")
             return
         observation = event_observation_accountability(
             self.sim,
@@ -4429,6 +4456,15 @@ class EventLogSystem(System):
                 "wildlife_hunting",
                 "Warning: harming wildlife is still noticed, but it does not carry the same civic response as attacking a person.",
             )
+        elif context == "unlicensed_hunting":
+            summary = f"Unlicensed hunting witnessed{site_text}: {action_label}{wildlife_text}."
+            self._warn_once("unlicensed_hunting", "Warning: eligible game requires an active hunting license when the hunt is observed.")
+        elif context == "unsafe_hunting":
+            summary = f"Unsafe hunting witnessed{site_text}: {action_label}{wildlife_text}."
+            self._warn_once("unsafe_hunting", "Warning: a hunting license does not cover urban shots or hunting on occupied property.")
+        elif context == "protected_wildlife_hunting":
+            summary = f"Protected wildlife harmed{site_text}: {action_label}{wildlife_text}."
+            self._warn_once("protected_wildlife_hunting", "Warning: endangered and protected lines require an active civic cull declaration as well as a hunting license.")
         elif context == "unarmed_assault":
             summary = f"Violence witnessed{site_text}: {action_label}."
             self._warn_once(
@@ -4465,6 +4501,8 @@ class EventLogSystem(System):
     def on_npc_offended(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
+        if bool(event.data.get("suppress_bark", False)):
+            return
 
         perceived = float(event.data.get("perceived", 0.0))
         if perceived < 0.55:
@@ -4473,6 +4511,35 @@ class EventLogSystem(System):
         npc_eid = event.data.get("npc_eid")
         quote, nearby_audio, other_floor_audio = self._offended_bark(event)
         self._log_npc_bark(npc_eid, quote, nearby_audio, other_floor_audio, channel="alerts", priority="high")
+
+    def on_npc_sneak_reaction(self, event):
+        if event.data.get("source_eid") != self.player_eid:
+            return
+        npc_eid = event.data.get("npc_eid")
+        reaction = str(event.data.get("reaction", "watching") or "watching").strip().lower()
+        context = str(event.data.get("context", "visible_sneak") or "visible_sneak").strip().lower()
+        repeat_count = max(1, int(event.data.get("repeat_count", 1) or 1))
+        if context == "property_sneak":
+            quote = "I can see you. Stop creeping around in here."
+            if repeat_count >= 2:
+                quote = "I warned you. Stand up and get out."
+        elif context == "personal_space":
+            quote = "Stay back." if reaction == "wary" else "Don't creep up on me."
+        elif reaction == "wary":
+            quote = "Keep your distance."
+        elif reaction == "tailing":
+            quote = "I've got my eye on you."
+        else:
+            quote = "I can see you, you know."
+        self._log_npc_bark(
+            npc_eid,
+            quote,
+            "You hear someone react warily nearby.",
+            "You hear someone react warily on another floor.",
+            channel="alerts",
+            priority="high" if reaction in {"tailing", "property_challenge", "personal_space"} else "normal",
+            dedupe_key=f"sneak_reaction:{npc_eid}:{context}:{repeat_count}",
+        )
 
     def on_item_picked_up(self, event):
         eid = event.data.get("eid")
@@ -5654,6 +5721,56 @@ class EventLogSystem(System):
             "Warning: theft is a threatening action and can trigger pursuit, intervention, or violence.",
         )
 
+    def _organization_supply_event_is_near(self, event):
+        for property_id in (
+            event.data.get("property_id"),
+            event.data.get("source_property_id"),
+            event.data.get("destination_property_id"),
+        ):
+            prop = self.sim.properties.get(str(property_id or "").strip())
+            if isinstance(prop, dict) and self._player_is_near_property(prop, radius=12):
+                return True
+        return False
+
+    def on_organization_supply_agreement_created(self, event):
+        if not self._organization_supply_event_is_near(event):
+            return
+        commodity = str(event.data.get("commodity", "goods") or "goods").replace("_", " ")
+        self._log(
+            f"[SUPPLY] {event.data.get('supplier_name', 'A supplier')} -> "
+            f"{event.data.get('receiver_name', 'a receiver')}: {commodity} route established.",
+            channel="mission",
+            priority="normal",
+            dedupe_key=f"supply-created:{event.data.get('agreement_id')}",
+        )
+
+    def on_organization_supply_delivery(self, event):
+        if not self._organization_supply_event_is_near(event):
+            return
+        commodity = str(event.data.get("commodity", "goods") or "goods").replace("_", " ")
+        self._log(
+            f"[SUPPLY] {commodity.title()} handoff: {event.data.get('supplier_name', 'supplier')} -> "
+            f"{event.data.get('receiver_name', 'receiver')} ({int(event.data.get('flow_percent', 0) or 0)}% flow).",
+            channel="mission",
+            priority="normal",
+            dedupe_window=40,
+            dedupe_key=f"supply-delivery:{event.data.get('agreement_id')}",
+        )
+
+    def on_organization_supply_disrupted(self, event):
+        if event.data.get("actor_eid") != self.player_eid and not self._organization_supply_event_is_near(event):
+            return
+        commodity = str(event.data.get("commodity", "goods") or "goods").replace("_", " ")
+        self._log(
+            f"[SUPPLY] {commodity.title()} route disrupted; {event.data.get('supplier_name', 'supplier')} -> "
+            f"{event.data.get('receiver_name', 'receiver')} now reads {event.data.get('status', 'strained')} "
+            f"at {int(event.data.get('flow_percent', 0) or 0)}% flow.",
+            channel="alerts",
+            priority="high",
+            dedupe_window=20,
+            dedupe_key=f"supply-disrupted:{event.data.get('agreement_id')}",
+        )
+
     def on_business_scene_posture_started(self, event):
         property_id = str(event.data.get("property_id", "") or "").strip()
         prop = self.sim.properties.get(property_id) if property_id else None
@@ -6523,11 +6640,20 @@ class EventLogSystem(System):
             if armor_absorb > 0.0:
                 detail.append(f"armor {int(round(armor_absorb * 100.0))}%")
             suffix = f", {' + '.join(detail)}" if detail else ""
-            self._log(
-                f"You take {damage} damage ({hp}/{max_hp} HP{suffix}).",
-                channel="combat",
-                priority="critical",
-            )
+            if source is not None and self._player_can_perceive_entity(source):
+                attacker_name = self._npc_label(source)
+                self._log_npc_message(
+                    source,
+                    f"{attacker_name} hits you for {damage} damage ({hp}/{max_hp} HP{suffix}).",
+                    channel="combat",
+                    priority="critical",
+                )
+            else:
+                self._log(
+                    f"You take {damage} damage ({hp}/{max_hp} HP{suffix}).",
+                    channel="combat",
+                    priority="critical",
+                )
             return
 
         if not self._player_can_perceive_entity(target):
@@ -8369,7 +8495,23 @@ class EventLogSystem(System):
         )
 
     def on_justice_record_changed(self, event):
-        if event.data.get("offender_eid") != self.player_eid:
+        offender_eid = event.data.get("offender_eid")
+        if offender_eid != self.player_eid:
+            incident_type = str(event.data.get("incident_type", "") or "").strip().lower()
+            if incident_type not in {"hunting_violation", "protected_species_violation"}:
+                return
+            if not self._player_can_perceive_entity(offender_eid):
+                return
+            actor_name = _entity_display_name(self.sim, offender_eid, title_case=True) or "The hunter"
+            jurisdiction = str(event.data.get("jurisdiction_name", "Justice Office") or "Justice Office").strip()
+            delta = int(event.data.get("score_delta", 0) or 0)
+            self._log(
+                f"{jurisdiction} records {actor_name}'s hunting violation (+{delta} law pressure).",
+                channel="mission",
+                priority="high",
+                dedupe_window=8,
+                dedupe_key=f"npc-hunting-justice:{offender_eid}:{incident_type}",
+            )
             return
         before_tier = str(event.data.get("before_tier", "clear") or "clear").strip().lower() or "clear"
         after_tier = str(event.data.get("after_tier", "clear") or "clear").strip().lower() or "clear"

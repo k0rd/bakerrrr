@@ -50,6 +50,11 @@ WILDLIFE_OFFENSE_CONTEXTS = frozenset({
     "wildlife_harassment",
     "wildlife_hunting",
 })
+CIVIC_WILDLIFE_OFFENSE_CONTEXTS = frozenset({
+    "unlicensed_hunting",
+    "unsafe_hunting",
+    "protected_wildlife_hunting",
+})
 HOMICIDE_OFFENSE_CONTEXTS = frozenset({"homicide"})
 VIOLENT_OFFENSE_CONTEXTS = ASSAULT_OFFENSE_CONTEXTS | frozenset({"explosive_discharge"}) | HOMICIDE_OFFENSE_CONTEXTS
 CONTRABAND_OFFENSE_CONTEXTS = frozenset({
@@ -60,7 +65,7 @@ OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS = VIOLENT_OFFENSE_CONTEXTS | CONTRABAND_OFF
     "trespass",
     "tamper",
     "item_theft",
-})
+}) | CIVIC_WILDLIFE_OFFENSE_CONTEXTS
 
 DEFAULT_ACTION_OFFENSE_CONTEXT_BONUS = {
     "ordinary": 0,

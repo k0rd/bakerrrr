@@ -2834,7 +2834,7 @@ class SiteServiceSystem(System):
                 "service": service,
                 "reason": str(result.get("reason", "blocked") or "blocked").strip().lower(),
             }
-            for key in ("cost", "credits", "output_item_id", "quantity"):
+            for key in ("cost", "credits", "output_item_id", "quantity", "inspection_grade", "animal_name"):
                 if key in result:
                     payload[key] = result.get(key)
             self.sim.emit(Event("site_service_blocked", **payload))

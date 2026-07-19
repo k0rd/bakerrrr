@@ -2463,6 +2463,8 @@ class TradeSystem(System):
                 distribution_context=archetype,
                 seed_token=seed_token,
                 item_catalog=ITEM_CATALOG,
+                sim=self.sim,
+                source_property=prop,
             )
             bias = item_market_bias(item_id, market_profile)
             pressure_bias = item_trade_pressure_bias(self.sim, prop, item_id)

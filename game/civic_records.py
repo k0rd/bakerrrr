@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from engine.events import Event
 from game.components import (
     ContactLedger,
     CreatureIdentity,
@@ -18,6 +19,7 @@ from game.components import (
     NPCRoutine,
     Occupation,
     OrganizationAffiliations,
+    PlayerAssets,
     Position,
     PropertyPortfolio,
     Vitality,
@@ -39,6 +41,14 @@ PUBLIC_ORGANIZATION_KINDS = {
     "trade_group",
 }
 LICENSE_STATUSES = {"active", "expired", "revoked", "suspended"}
+LICENSE_FEES = {
+    "hunting": 45,
+    "cultivation": 40,
+}
+LICENSE_RESTRICTIONS = {
+    "hunting": ("eligible game only", "declared seasons and culls only for protected lines"),
+    "cultivation": ("registered cultivation and plant commerce",),
+}
 
 
 def _text(value):
@@ -281,6 +291,74 @@ def civic_license_records(sim, subject_eid=None):
         rows.append(row)
     rows.sort(key=lambda row: (_text(row.get("license_kind")), _int(row.get("subject_eid"), 0)))
     return tuple(rows)
+
+
+def civic_license_record(sim, subject_eid, license_kind):
+    wanted = _text(license_kind).lower().replace(" ", "_")
+    for record in civic_license_records(sim, subject_eid):
+        if _text(record.get("license_kind")).lower() == wanted:
+            return dict(record)
+    return None
+
+
+def civic_license_is_active(sim, subject_eid, license_kind):
+    record = civic_license_record(sim, subject_eid, license_kind)
+    return bool(record and _text(record.get("status")).lower() == "active")
+
+
+def purchase_civic_license(sim, subject_eid, license_kind, *, prop=None):
+    """Buy or renew one ordinary civic credential at an issuing office."""
+
+    license_kind = _text(license_kind).lower().replace(" ", "_")
+    if license_kind not in LICENSE_FEES:
+        return {"ok": False, "reason": "unsupported", "license_kind": license_kind}
+    existing = civic_license_record(sim, subject_eid, license_kind)
+    if existing and _text(existing.get("status")).lower() == "active":
+        return {
+            "ok": False,
+            "reason": "already_active",
+            "license_kind": license_kind,
+            "record": existing,
+        }
+    assets = sim.ecs.get(PlayerAssets).get(subject_eid)
+    credits = max(0, _int(getattr(assets, "credits", 0), 0)) if assets is not None else 0
+    fee = int(LICENSE_FEES[license_kind])
+    if assets is None or credits < fee:
+        return {
+            "ok": False,
+            "reason": "no_credits",
+            "license_kind": license_kind,
+            "fee": fee,
+            "credits": credits,
+        }
+    authority = civic_records_authority(sim, prop)
+    assets.credits = credits - fee
+    record = record_civic_license(
+        sim,
+        subject_eid,
+        license_kind,
+        status="active",
+        issuer_organization_key=authority.get("root_organization_key") or authority.get("organization_key"),
+        issuer_name=authority.get("authority_name") or authority.get("office_name"),
+        restrictions=LICENSE_RESTRICTIONS.get(license_kind, ()),
+    )
+    sim.emit(Event(
+        "civic_license_issued",
+        subject_eid=subject_eid,
+        license_kind=license_kind,
+        fee=fee,
+        issuer_name=authority.get("authority_name") or authority.get("office_name"),
+        issuer_organization_key=authority.get("root_organization_key") or authority.get("organization_key"),
+        renewed=existing is not None,
+    ))
+    return {
+        "ok": True,
+        "reason": "issued" if existing is None else "renewed",
+        "license_kind": license_kind,
+        "fee": fee,
+        "credits": int(assets.credits),
+        "record": record,
+    }
 
 
 def _public_affiliations(sim, eid, affiliations):

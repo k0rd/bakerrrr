@@ -393,7 +393,8 @@ def item_value_quote(item_id, metadata=None, *, item_catalog=None) -> dict:
         durability_ratio = max(0.0, min(1.0, _number(condition.get("durability_ratio"), 1.0)))
         condition_mult *= 0.48 + durability_ratio * 0.52
 
-    fair_value = max(1, int(round(max(1.0, base) * condition_mult)))
+    ecology_mult = max(1.0, min(8.0, _number(metadata.get("ecology_value_multiplier"), 1.0)))
+    fair_value = max(1, int(round(max(1.0, base) * condition_mult * ecology_mult)))
     return {
         "item_id": item_id,
         "base_value": max(1, int(round(max(1.0, base)))),
@@ -401,6 +402,7 @@ def item_value_quote(item_id, metadata=None, *, item_catalog=None) -> dict:
         "source": source,
         "quality": quality,
         "condition_multiplier": condition_mult,
+        "ecology_value_multiplier": ecology_mult,
         **details,
     }
 

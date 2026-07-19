@@ -369,6 +369,7 @@ class CursesView:
         banner="",
         subtitle="",
         initial_index=0,
+        presentation="",
     ):
         rows = [
             {

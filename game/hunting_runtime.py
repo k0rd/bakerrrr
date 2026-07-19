@@ -7,7 +7,9 @@ from typing import Iterable
 
 from engine.events import Event
 from engine.systems import System
-from game.components import AnimalGenome, AnimalPhysicalProfile, CreatureIdentity, EcologyProfile, Inventory, PlayerAssets
+from game.components import AnimalGenome, AnimalPhysicalProfile, CreatureIdentity, EcologyProfile, Inventory, PlayerAssets, Position
+from game.civic_records import civic_license_is_active, civic_license_record
+from game.ecology_registry import fauna_cull_active_for_run, fauna_population_snapshot
 from game.fauna_genetics import animal_genome_payload
 from game.items import ITEM_CATALOG, item_display_name
 from game.system_support.awareness_runtime import observation_payload_for_position
@@ -179,6 +181,93 @@ def hunting_yield_profile(sim, animal_eid=None, *, payload=None):
     }
 
 
+def hunting_legality_snapshot(sim, actor_eid, animal_eid=None, *, payload=None, x=None, y=None, z=0):
+    """Resolve contextual hunting permission without creating an offense."""
+
+    profile = hunting_yield_profile(sim, animal_eid=animal_eid, payload=payload)
+    if profile is None:
+        return {
+            "legal": True,
+            "reason": "not_regulated_game",
+            "context": "wildlife_encounter",
+            "offense_score": 0,
+            "permit_verified": False,
+            "license_status": "not_applicable",
+            "inspection_grade": "not_applicable",
+            "population_status": "unmanaged",
+            "population_abundance": 100,
+            "ecology_value_multiplier": 1.0,
+        }
+    license_record = civic_license_record(sim, actor_eid, "hunting") if actor_eid is not None else None
+    license_status = str((license_record or {}).get("status", "unlicensed") or "unlicensed").strip().lower()
+    permit_verified = civic_license_is_active(sim, actor_eid, "hunting") if actor_eid is not None else False
+    native_id = str(profile.get("fauna_lineage_id", "") or "").strip().lower()
+    population = fauna_population_snapshot(sim, native_id)
+    cull_active = bool(native_id and fauna_cull_active_for_run(sim, native_id))
+
+    if x is None or y is None:
+        pos = sim.ecs.get(Position).get(animal_eid) if animal_eid is not None else None
+        if pos is not None:
+            x, y, z = int(pos.x), int(pos.y), int(pos.z)
+    area_type = "unknown"
+    if x is not None and y is not None and getattr(sim, "world", None) is not None:
+        try:
+            cx, cy = sim.chunk_coords(int(x), int(y))
+            area_type = str(sim.world.overworld_descriptor(cx, cy).get("area_type", "unknown") or "unknown").strip().lower()
+        except Exception:
+            area_type = "unknown"
+    property_id = None
+    if x is not None and y is not None and hasattr(sim, "property_covering"):
+        try:
+            property_id = (sim.property_covering(int(x), int(y), int(z)) or {}).get("id")
+        except (TypeError, ValueError):
+            property_id = None
+
+    population_status = str(population.get("status", "unmanaged") or "unmanaged").strip().lower()
+    protected_without_order = population_status in {"endangered", "protected", "extinct"} and not cull_active
+    unsafe_area = bool(property_id) or area_type == "city"
+    if protected_without_order:
+        legal = False
+        reason = "protected_line"
+        context = "protected_wildlife_hunting"
+        score = 64 if population_status in {"protected", "extinct"} else 42
+        inspection_grade = "suspicious"
+    elif unsafe_area:
+        legal = False
+        reason = "unsafe_area"
+        context = "unsafe_hunting"
+        score = 34
+        inspection_grade = "suspicious"
+    elif not permit_verified:
+        legal = False
+        reason = "license_required"
+        context = "unlicensed_hunting"
+        score = 24
+        inspection_grade = "uncertified"
+    else:
+        legal = True
+        reason = "active_cull" if cull_active else "licensed_game"
+        context = "wildlife_hunting"
+        score = 0
+        inspection_grade = "clean"
+    return {
+        "legal": bool(legal),
+        "reason": reason,
+        "context": context,
+        "offense_score": int(score),
+        "permit_verified": bool(permit_verified and legal),
+        "license_status": license_status,
+        "inspection_grade": inspection_grade,
+        "fauna_lineage_id": native_id,
+        "population_status": population_status,
+        "population_abundance": int(population.get("abundance", 100) or 0),
+        "ecology_value_multiplier": float(population.get("value_multiplier", 1.0) or 1.0),
+        "cull_active": cull_active,
+        "area_type": area_type,
+        "property_id": property_id,
+    }
+
+
 def _hunting_state(sim):
     state = getattr(sim, "hunting_carcasses", None)
     if not isinstance(state, dict):
@@ -202,6 +291,15 @@ def create_hunting_carcass(sim, *, animal_eid=None, x=0, y=0, z=0, source_eid=No
     profile = hunting_yield_profile(sim, animal_eid=animal_eid, payload=payload)
     if not profile:
         return None
+    legality = hunting_legality_snapshot(
+        sim,
+        source_eid,
+        animal_eid=animal_eid,
+        payload=payload,
+        x=x,
+        y=y,
+        z=z,
+    )
     state = _hunting_state(sim)
     carcass_id = _new_carcass_id(sim)
     record = {
@@ -222,6 +320,7 @@ def create_hunting_carcass(sim, *, animal_eid=None, x=0, y=0, z=0, source_eid=No
         "z": int(z),
         "source_eid": source_eid,
         "created_tick": _safe_int(getattr(sim, "tick", 0), 0),
+        "hunt_legality": copy.deepcopy(dict(legality)),
         "harvested": False,
     }
     state[carcass_id] = record
@@ -433,6 +532,10 @@ def field_dress_carcass(sim, eid, carcass_id=None):
     if kill_bag and base_units >= 2:
         quantity += 1
     output_item_id = BAGGED_MEAT_ITEM_ID if kill_bag else RAW_MEAT_ITEM_ID
+    hunt_legality = record.get("hunt_legality") if isinstance(record.get("hunt_legality"), dict) else {}
+    inspection_grade = str(hunt_legality.get("inspection_grade", "uncertified") or "uncertified").strip().lower()
+    permit_verified = bool(hunt_legality.get("permit_verified", False))
+    legal_status = "legal" if inspection_grade == "clean" else "illegal" if inspection_grade == "suspicious" else "restricted"
     metadata = {
         "source": "hunting",
         "source_context": "field_dressed",
@@ -442,7 +545,17 @@ def field_dress_carcass(sim, eid, carcass_id=None):
         "field_dressed_tick": _safe_int(getattr(sim, "tick", 0), 0),
         "field_dressing_tool": tool.get("item_id"),
         "kill_bag_used": bool(kill_bag),
-        "legal_status": "legal",
+        "hunter_eid": record.get("source_eid"),
+        "permit_verified": permit_verified,
+        "hunting_license_status": hunt_legality.get("license_status", "unlicensed"),
+        "inspection_grade": inspection_grade,
+        "legal_status": legal_status,
+        "hunting_legality_reason": hunt_legality.get("reason", "unknown"),
+        "hunting_context": hunt_legality.get("context", "unlicensed_hunting"),
+        "source_fauna_population_status": hunt_legality.get("population_status", "unmanaged"),
+        "source_fauna_abundance": int(hunt_legality.get("population_abundance", 100) or 0),
+        "ecology_value_multiplier": float(hunt_legality.get("ecology_value_multiplier", 1.0) or 1.0),
+        "cull_active_at_hunt": bool(hunt_legality.get("cull_active", False)),
         "source_fauna_root_animal_id": record.get("root_animal_id"),
         "source_fauna_lineage_id": record.get("fauna_lineage_id"),
         "source_fauna_genetics": copy.deepcopy(dict(record.get("fauna_genetics") or {})),
@@ -489,6 +602,9 @@ def field_dress_carcass(sim, eid, carcass_id=None):
         quantity=int(quantity),
         tool_item_id=tool.get("item_id"),
         kill_bag_used=bool(kill_bag),
+        permit_verified=permit_verified,
+        inspection_grade=inspection_grade,
+        hunting_legality_reason=hunt_legality.get("reason", "unknown"),
     ))
     return True
 
@@ -503,6 +619,27 @@ def _eligible_meat_entries(inventory, allowed_item_ids: Iterable[str]):
         if item_id in allowed:
             rows.append(entry)
     return rows
+
+
+def _meat_provenance_signature(entry):
+    metadata = entry.get("metadata") if isinstance((entry or {}).get("metadata"), dict) else {}
+    return (
+        bool(metadata.get("permit_verified", False)),
+        str(metadata.get("inspection_grade", "uncertified") or "uncertified").strip().lower(),
+        str(metadata.get("legal_status", "restricted") or "restricted").strip().lower(),
+        _safe_int(metadata.get("hunter_eid"), -1),
+        str(metadata.get("animal_species", "") or "").strip().lower(),
+        str(metadata.get("source_fauna_lineage_id", "") or "").strip().lower(),
+        str(metadata.get("source_fauna_population_status", "unmanaged") or "unmanaged").strip().lower(),
+        _safe_int(metadata.get("source_fauna_abundance"), 100),
+        float(metadata.get("ecology_value_multiplier", 1.0) or 1.0),
+        bool(metadata.get("cull_active_at_hunt", False)),
+    )
+
+
+def _matching_meat_provenance(entries, source_entry):
+    signature = _meat_provenance_signature(source_entry)
+    return [entry for entry in entries if _meat_provenance_signature(entry) == signature]
 
 
 def _remove_meat_quantity(inventory, entries, quantity):
@@ -549,9 +686,10 @@ def convert_meat_stack(sim, eid, mode, *, max_units=None):
     if not inventory:
         return {"ok": False, "reason": "no_inventory"}
     if mode == "campfire_cook":
-        entries = _eligible_meat_entries(inventory, COOKABLE_MEAT_ITEM_IDS)
-        if not entries:
+        available_entries = _eligible_meat_entries(inventory, COOKABLE_MEAT_ITEM_IDS)
+        if not available_entries:
             return {"ok": False, "reason": "no_meat"}
+        entries = _matching_meat_provenance(available_entries, available_entries[0])
         input_units = sum(max(0, int(entry.get("quantity", 1) or 1)) for entry in entries)
         if max_units is not None:
             input_units = min(input_units, max(1, int(max_units)))
@@ -559,9 +697,26 @@ def convert_meat_stack(sim, eid, mode, *, max_units=None):
         output_item_id = COOKED_MEAT_ITEM_ID
         credits_spent = 0
     elif mode == "butcher_prepare":
-        entries = _eligible_meat_entries(inventory, MEAT_INPUT_ITEM_IDS)
-        if not entries:
+        available_entries = _eligible_meat_entries(inventory, MEAT_INPUT_ITEM_IDS)
+        if not available_entries:
             return {"ok": False, "reason": "no_meat"}
+        eligible_entries = []
+        refused = []
+        for entry in available_entries:
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            if not bool(metadata.get("permit_verified")) or str(metadata.get("inspection_grade", "uncertified") or "uncertified").strip().lower() != "clean":
+                refused.append(entry)
+            else:
+                eligible_entries.append(entry)
+        if not eligible_entries:
+            refused_meta = refused[0].get("metadata") if isinstance(refused[0].get("metadata"), dict) else {}
+            return {
+                "ok": False,
+                "reason": "uncertified_meat",
+                "inspection_grade": str(refused_meta.get("inspection_grade", "uncertified") or "uncertified").strip().lower(),
+                "animal_name": refused_meta.get("animal_name") or refused_meta.get("animal_species"),
+            }
+        entries = _matching_meat_provenance(eligible_entries, eligible_entries[0])
         total_units = sum(max(0, int(entry.get("quantity", 1) or 1)) for entry in entries)
         assets = sim.ecs.get(PlayerAssets).get(eid)
         credits = max(0, int(getattr(assets, "credits", 0) if assets else 0))
@@ -579,12 +734,28 @@ def convert_meat_stack(sim, eid, mode, *, max_units=None):
         return {"ok": False, "reason": "unavailable"}
     if input_units <= 0 or output_units <= 0:
         return {"ok": False, "reason": "no_meat"}
+    source_metadata = entries[0].get("metadata") if entries and isinstance(entries[0].get("metadata"), dict) else {}
     metadata = {
         "source": "hunting",
         "source_context": mode,
         "processed_tick": _safe_int(getattr(sim, "tick", 0), 0),
         "input_units": int(input_units),
-        "legal_status": "legal",
+        "legal_status": str(source_metadata.get("legal_status", "restricted") or "restricted").strip().lower(),
+        "permit_verified": bool(source_metadata.get("permit_verified", False)),
+        "inspection_grade": str(source_metadata.get("inspection_grade", "uncertified") or "uncertified").strip().lower(),
+        "hunter_eid": source_metadata.get("hunter_eid"),
+        "hunting_license_status": source_metadata.get("hunting_license_status"),
+        "hunting_legality_reason": source_metadata.get("hunting_legality_reason"),
+        "hunting_context": source_metadata.get("hunting_context"),
+        "animal_name": source_metadata.get("animal_name"),
+        "animal_species": source_metadata.get("animal_species"),
+        "source_fauna_root_animal_id": source_metadata.get("source_fauna_root_animal_id"),
+        "source_fauna_lineage_id": source_metadata.get("source_fauna_lineage_id"),
+        "source_fauna_genetics": copy.deepcopy(dict(source_metadata.get("source_fauna_genetics") or {})),
+        "source_fauna_population_status": source_metadata.get("source_fauna_population_status", "unmanaged"),
+        "source_fauna_abundance": int(source_metadata.get("source_fauna_abundance", 100) or 0),
+        "ecology_value_multiplier": float(source_metadata.get("ecology_value_multiplier", 1.0) or 1.0),
+        "cull_active_at_hunt": bool(source_metadata.get("cull_active_at_hunt", False)),
     }
     owner_eid, owner_tag = _inventory_owner_for(sim, eid)
     clone = _clone_after_removing(inventory, entries, input_units)
@@ -657,6 +828,7 @@ __all__ = [
     "field_dress_carcass",
     "hunting_carcass_look_text",
     "hunting_carcasses_at",
+    "hunting_legality_snapshot",
     "hunting_yield_profile",
     "nearest_hunting_carcass",
 ]

@@ -930,6 +930,7 @@ class PygameView:
         banner="",
         subtitle="",
         initial_index=0,
+        presentation="",
     ):
         if title:
             self.pygame.display.set_caption(str(title))
@@ -948,19 +949,28 @@ class PygameView:
 
         selected = max(0, min(int(initial_index), len(rows) - 1))
         clock = self.pygame.time.Clock()
-        title_font = self.pygame.font.SysFont("DejaVu Sans Mono", max(18, int(self.cell_px * 1.7)), bold=True)
         subtitle_font = self.pygame.font.SysFont("DejaVu Sans Mono", max(12, int(self.cell_px * 0.85)))
 
         prompt = str(prompt or "")
         detail = str(detail or "")
         banner = str(banner or "")
         subtitle = str(subtitle or "")
+        presentation = str(presentation or "").strip().lower()
+        flora_title = presentation in {"flora", "flora_title", "living_flora"}
+        title_font = self.pygame.font.SysFont(
+            "DejaVu Sans Mono",
+            max(18, int(self.cell_px * (2.05 if flora_title else 1.7))),
+            bold=True,
+        )
 
         while True:
-            self.surface.fill((12, 16, 22))
-            stripe_color = (18, 24, 31)
-            for row_y in range(0, self.height_cells * self.cell_px, self.cell_px * 2):
-                self.surface.fill(stripe_color, (0, row_y, self.width_cells * self.cell_px, self.cell_px))
+            if flora_title:
+                self._draw_title_flora_backdrop()
+            else:
+                self.surface.fill((12, 16, 22))
+                stripe_color = (18, 24, 31)
+                for row_y in range(0, self.height_cells * self.cell_px, self.cell_px * 2):
+                    self.surface.fill(stripe_color, (0, row_y, self.width_cells * self.cell_px, self.cell_px))
 
             panel_w = min(max(44, self.width_cells - 10), self.width_cells)
             content_pixel_w = max(self.cell_px * 4, (panel_w - 4) * self.cell_px)
@@ -988,23 +998,42 @@ class PygameView:
                 max(0, panel_pw - (self.cell_px * 2)),
                 max(0, panel_ph - (self.cell_px * 2)),
             )
-            self.pygame.draw.rect(self.surface, (28, 36, 46), outer_rect)
-            self.pygame.draw.rect(self.surface, (32, 41, 53), inner_rect)
+            outer_fill = (20, 39, 33) if flora_title else (28, 36, 46)
+            inner_fill = (19, 31, 29) if flora_title else (32, 41, 53)
+            self.pygame.draw.rect(self.surface, outer_fill, outer_rect)
+            self.pygame.draw.rect(self.surface, inner_fill, inner_rect)
             accent_rect = self.pygame.Rect(panel_px, panel_py, max(2, self.cell_px // 3), panel_ph)
-            self.pygame.draw.rect(self.surface, self._color_value("player"), accent_rect)
+            self.pygame.draw.rect(
+                self.surface,
+                self._color_value("flora_flower_pink" if flora_title else "player"),
+                accent_rect,
+            )
 
             top = "+" + ("-" * max(0, panel_w - 2)) + "+"
             mid = "|" + (" " * max(0, panel_w - 2)) + "|"
             bot = "+" + ("-" * max(0, panel_w - 2)) + "+"
-            self.draw_text(panel_x, panel_y, top, color="human")
+            border_color = "flora_vine" if flora_title else "human"
+            self.draw_text(panel_x, panel_y, top, color=border_color)
             for row in range(1, max(1, panel_h - 1)):
-                self.draw_text(panel_x, panel_y + row, mid, color="human")
-            self.draw_text(panel_x, panel_y + panel_h - 1, bot, color="human")
+                self.draw_text(panel_x, panel_y + row, mid, color=border_color)
+            self.draw_text(panel_x, panel_y + panel_h - 1, bot, color=border_color)
+            if flora_title:
+                self._draw_title_flora_panel_frame(outer_rect)
 
             text_px = panel_px + (self.cell_px * 2)
             text_py = panel_py + self.cell_px
             if banner:
-                banner_surface = title_font.render(banner, True, self._color_value("objective"))
+                banner_shadow = title_font.render(banner, True, (4, 10, 8))
+                banner_surface = title_font.render(
+                    banner,
+                    True,
+                    self._color_value("flora_flower_white" if flora_title else "objective"),
+                )
+                if flora_title:
+                    self.surface.blit(
+                        banner_shadow,
+                        (text_px + max(1, self.cell_px // 10), text_py + max(1, self.cell_px // 10)),
+                    )
                 self.surface.blit(banner_surface, (text_px, text_py))
             if subtitle:
                 subtitle_y = text_py + max(self.cell_px, title_font.get_height())
@@ -6016,6 +6045,7 @@ class PygameView:
         shoulder_half, hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
         mid_x = px // 2
         waist_half = max(1, min(shoulder_half, hip_half) - 1)
+        basewear_hip_half = max(1, hip_half - 1)
 
         if kind == "base_top":
             neckline_y = q(8)
@@ -6045,14 +6075,14 @@ class PygameView:
                 self.pygame.draw.circle(overlay, edge, (mid_x + max(1, q(1)), q(8)), 1)
         elif kind == "base_bottom":
             if garment in {"boxers", "boyshorts"}:
-                self.pygame.draw.rect(overlay, fill, self.pygame.Rect(mid_x - hip_half, q(10), max(3, hip_half * 2 + 1), max(2, q(2))))
+                self.pygame.draw.rect(overlay, fill, self.pygame.Rect(mid_x - basewear_hip_half, q(10), max(3, basewear_hip_half * 2 + 1), max(2, q(2))))
             elif garment == "thong":
-                self.pygame.draw.line(overlay, fill, (mid_x - hip_half, q(10)), (mid_x + hip_half, q(10)), 1)
+                self.pygame.draw.line(overlay, fill, (mid_x - basewear_hip_half, q(10)), (mid_x + basewear_hip_half, q(10)), 1)
                 self.pygame.draw.line(overlay, fill, (mid_x, q(10)), (mid_x, q(11)), 1)
             else:
                 briefs = [
-                    (mid_x - hip_half, q(10)),
-                    (mid_x + hip_half, q(10)),
+                    (mid_x - basewear_hip_half, q(10)),
+                    (mid_x + basewear_hip_half, q(10)),
                     (mid_x + 1, q(12)),
                     (mid_x - 1, q(12)),
                 ]
@@ -6241,7 +6271,8 @@ class PygameView:
             high_waist = garment == "high_waist_panties"
             waist_y = hip_y - max(4 if high_waist else 2, px // (6 if high_waist else 10))
             lower_y = min(foot_y - 2, waist_y + max(4, px // 5))
-            half = max(3, px // 7)
+            fit_inset = max(1, px // 32)
+            half = max(2, min(max(3, px // 7), actor_hip_half - fit_inset))
             base_rect = self.pygame.Rect(mid_x - half, waist_y, half * 2, max(4, lower_y - waist_y))
             if garment in {"boxers", "boxer_briefs", "boyshorts"}:
                 leg_h = max(3, px // (6 if garment == "boxers" else 7))

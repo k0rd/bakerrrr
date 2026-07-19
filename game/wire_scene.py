@@ -82,8 +82,50 @@ def _interface_snapshot(sim, actor_eid, connection, *, item_catalog=None):
         "name": item_display_name(item_id, metadata=metadata, item_catalog=item_catalog) if item_id else "interface",
         "style": _clean_text(metadata.get("style") or profile.get("style"), "plain").lower(),
         "manufacturer": _clean_text(metadata.get("manufacturer") or profile.get("manufacturer"), "unknown"),
+        "theme_profile": dict(metadata.get("organization_theme") or {}) if isinstance(metadata.get("organization_theme"), Mapping) else {},
+        "diagnostic_voice": dict(metadata.get("diagnostic_voice") or {}) if isinstance(metadata.get("diagnostic_voice"), Mapping) else {},
         "metadata": metadata,
     }
+
+
+def _diagnostic_lines(interface, security):
+    voice = dict(interface.get("diagnostic_voice") or {})
+    manufacturer = _clean_text(interface.get("manufacturer"), "unknown maker")
+    style = _clean_text(interface.get("style"), "plain")
+    metadata = dict(interface.get("metadata") or {})
+    motif = _clean_text(metadata.get("product_motif"), "unmarked traces")
+    register = _clean_id(voice.get("register") or "procedural")
+    address = _clean_text(voice.get("address"), "operator")
+    warning_style = _clean_text(voice.get("warning_style"), "state the consequence")
+    openers = {
+        "clipped": f"READ, {address.upper()}:",
+        "neighborly": f"Easy, {address}:",
+        "procedural": f"Protocol for {address}:",
+        "ceremonial": f"Attend, {address}:",
+        "blunt": f"Look, {address}:",
+        "aspirational": f"Advance with us, {address}:",
+        "solicitous": f"For your assurance, {address}:",
+        "wry": f"Funny thing, {address}:",
+        "austere": f"Notice, {address}:",
+        "breathless": f"Good news, {address}:",
+        "measured": f"Current read, {address}:",
+        "proprietary": f"Authorized {manufacturer} read:",
+        "plainspoken": f"Here's the wire, {address}:",
+        "evangelical": f"Receive the signal, {address}:",
+    }
+    opener = openers.get(register, f"Signal for {address}:")
+    first = f"{opener} {manufacturer} resolves {style} through {motif}."
+    warnings = {
+        "state the consequence": f"Tier {security} security will answer a bad handshake.",
+        "offer one clean exit": f"Tier {security} security is awake; a clean exit remains available.",
+        "cite the rule": f"Rule {security}: warning confidence follows the connected interface.",
+        "make the risk personal": f"Tier {security} is measuring your mistakes, {address}.",
+        "bury the threat in courtesy": f"For continued service, kindly respect tier {security} security.",
+        "challenge the listener": f"Tier {security} security invites you to prove the route clean.",
+        "repeat the boundary": f"Tier {security}. The boundary is tier {security}. Read it twice.",
+        "frame compliance as belonging": f"Those who belong here move cleanly under tier {security} security.",
+    }
+    return [first, warnings.get(warning_style, f"Security read: tier {security}.")]
 
 
 def _scene_id(sim, actor_eid, connection, target, interface):
@@ -318,10 +360,7 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
             8,
             mid - 3,
             "diagnostic node",
-            [
-                f"Signal style: {interface['style']} / {interface['manufacturer']}.",
-                f"Security read: tier {security}; warning confidence follows the connected interface.",
-            ],
+            _diagnostic_lines(interface, security),
             glyph="?",
         ),
         _node(
@@ -403,6 +442,8 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
         "interface_name": interface.get("name", "interface"),
         "interface_style": interface.get("style", "plain"),
         "interface_manufacturer": interface.get("manufacturer", "unknown"),
+        "interface_theme_profile": dict(interface.get("theme_profile") or {}),
+        "interface_diagnostic_voice": dict(interface.get("diagnostic_voice") or {}),
         "interface_range": _int((interface.get("metadata") or {}).get("range"), 1),
         "security_tier": int(security),
         "target_archetype": archetype,

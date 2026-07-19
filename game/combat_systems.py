@@ -34,6 +34,7 @@ from game.components import (
 )
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
 from game.fauna_genetics import animal_genome_payload
+from game.hunting_runtime import hunting_legality_snapshot
 from game.appearance_loadout import appearance_metadata_as_loose_item
 from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.checks import (
@@ -184,7 +185,7 @@ class WeaponSystem(System):
             **payload,
         ))
 
-    def _wildlife_offense_profile(self, target_eid, *, action):
+    def _wildlife_offense_profile(self, target_eid, *, action, actor_eid=None):
         if target_eid is None:
             return None
         ai = self.sim.ecs.get(AI).get(target_eid)
@@ -196,11 +197,19 @@ class WeaponSystem(System):
 
         taxonomy = str(getattr(identity, "taxonomy_class", "other") or "other").strip().lower() or "other"
         target_name = _entity_display_name(self.sim, target_eid, title_case=False)
+        legality = hunting_legality_snapshot(self.sim, actor_eid, animal_eid=target_eid)
         return {
-            "context": "wildlife_encounter",
-            "score": 0,
+            "context": str(legality.get("context", "wildlife_encounter") or "wildlife_encounter"),
+            "score": int(legality.get("offense_score", 0) or 0),
             "target_name": target_name,
             "target_taxonomy": taxonomy,
+            "permit_verified": bool(legality.get("permit_verified", False)),
+            "hunting_license_status": legality.get("license_status"),
+            "hunting_legality_reason": legality.get("reason"),
+            "fauna_lineage_id": legality.get("fauna_lineage_id"),
+            "fauna_population_status": legality.get("population_status"),
+            "fauna_population_abundance": legality.get("population_abundance"),
+            "cull_active": bool(legality.get("cull_active", False)),
         }
 
 
@@ -594,7 +603,7 @@ class WeaponSystem(System):
         if target_pos is None:
             self.sim.emit(Event("weapon_fire_blocked", eid=eid, reason="no_target"))
             return True
-        offense_profile = self._wildlife_offense_profile(target_eid, action="melee_attack")
+        offense_profile = self._wildlife_offense_profile(target_eid, action="melee_attack", actor_eid=eid)
         target_name = _entity_display_name(self.sim, target_eid, title_case=False)
 
         hit = self._damage_entity(
@@ -672,6 +681,13 @@ class WeaponSystem(System):
             property_id=(target_prop or {}).get("id"),
             property_name=(target_prop or {}).get("name"),
             target_taxonomy=target_taxonomy,
+            permit_verified=bool((offense_profile or {}).get("permit_verified", False)),
+            hunting_license_status=(offense_profile or {}).get("hunting_license_status"),
+            hunting_legality_reason=(offense_profile or {}).get("hunting_legality_reason"),
+            fauna_lineage_id=(offense_profile or {}).get("fauna_lineage_id"),
+            fauna_population_status=(offense_profile or {}).get("fauna_population_status"),
+            fauna_population_abundance=(offense_profile or {}).get("fauna_population_abundance"),
+            cull_active=bool((offense_profile or {}).get("cull_active", False)),
         )
         return True
 
@@ -1562,7 +1578,7 @@ class WeaponSystem(System):
         score = None
         offense_profile = None
         if int(weapon.get("explosion_radius", 0)) <= 0:
-            offense_profile = self._wildlife_offense_profile(target_eid, action="fire_weapon")
+            offense_profile = self._wildlife_offense_profile(target_eid, action="fire_weapon", actor_eid=eid)
             if isinstance(offense_profile, dict):
                 context = str(offense_profile.get("context", context) or context).strip().lower() or context
                 score = int(offense_profile.get("score", 0) or 0)
@@ -1588,6 +1604,13 @@ class WeaponSystem(System):
             property_id=(target_prop or {}).get("id"),
             property_name=(target_prop or {}).get("name"),
             target_taxonomy=str((offense_profile or {}).get("target_taxonomy", "") or "").strip().lower(),
+            permit_verified=bool((offense_profile or {}).get("permit_verified", False)),
+            hunting_license_status=(offense_profile or {}).get("hunting_license_status"),
+            hunting_legality_reason=(offense_profile or {}).get("hunting_legality_reason"),
+            fauna_lineage_id=(offense_profile or {}).get("fauna_lineage_id"),
+            fauna_population_status=(offense_profile or {}).get("fauna_population_status"),
+            fauna_population_abundance=(offense_profile or {}).get("fauna_population_abundance"),
+            cull_active=bool((offense_profile or {}).get("cull_active", False)),
         )
 
     def on_melee_attack_request(self, event):

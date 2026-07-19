@@ -137,8 +137,15 @@ def _sync_drone_runtime_shape(sim, drone_eid, state, *, item_catalog=None):
     state.chassis_class = str(summary.get("chassis_class") or getattr(state, "chassis_class", "") or "").strip().upper() or None
     chassis_profile = drone_profile_for_item(getattr(state, "chassis_item_id", None), item_catalog=item_catalog)
     if chassis_profile.get("kind") == "chassis":
-        state.range_limit = int(max(0, _int(chassis_profile.get("base_range"), getattr(state, "range_limit", 0))))
+        source_metadata = getattr(state, "source_metadata", None)
+        source_metadata = source_metadata if isinstance(source_metadata, dict) else {}
+        manufacturing_modifiers = source_metadata.get("manufacturing_modifiers") if isinstance(source_metadata.get("manufacturing_modifiers"), dict) else {}
+        signal_integrity = max(-2, min(2, _int(manufacturing_modifiers.get("signal_integrity"), 0)))
+        state.range_limit = int(max(1, _int(chassis_profile.get("base_range"), getattr(state, "range_limit", 0)) + signal_integrity))
         base_hp = int(max(1, _int(chassis_profile.get("base_hp"), getattr(state, "hull_hp_max", 1))))
+        durability = max(-2, min(2, _int(manufacturing_modifiers.get("durability"), 0)))
+        if durability:
+            base_hp = max(1, int(round(base_hp * (1.0 + 0.08 * durability))))
         state.hull_hp_max = base_hp
         state.hull_hp = int(max(0, min(base_hp, _int(getattr(state, "hull_hp", base_hp), base_hp))))
     vitality = sim.ecs.get(Vitality).get(drone_eid)
@@ -481,6 +488,16 @@ def drone_sheet_status_lines(record, *, item_catalog=None):
         f"Cargo: {cargo_used}/{cargo_cap} slots | Capabilities: {capabilities}",
         f"Intent: {getattr(state, 'procedure_key', None) or 'none'} | Last: {getattr(state, 'last_command', None) or 'none'}",
     ]
+    source_metadata = getattr(state, "source_metadata", None)
+    source_metadata = source_metadata if isinstance(source_metadata, dict) else {}
+    manufacturer = str(source_metadata.get("manufacturer", "") or "").strip()
+    if manufacturer:
+        motif = str(source_metadata.get("product_motif", "") or "").strip()
+        finish = str(source_metadata.get("product_finish", "") or "").strip()
+        design = ", ".join(value for value in (finish, motif) if value) or "unmarked line"
+        supply = str(source_metadata.get("supply_agreement_id", "") or "").strip()
+        supply_suffix = f" | supply mark {supply}" if supply else ""
+        lines.append(f"Maker: {manufacturer} | {design}{supply_suffix}")
     if errors:
         lines.append(f"Loadout errors: {errors}")
     return lines
@@ -1372,6 +1389,12 @@ def swap_drone_battery(sim, player_eid, drone_eid, battery_instance_id, *, item_
         _append_exact_inventory_entry(inventory, old_entry)
 
     charge_max = _int(profile.get("charge_max"), 0)
+    source_metadata = getattr(state, "source_metadata", None)
+    source_metadata = source_metadata if isinstance(source_metadata, dict) else {}
+    manufacturing_modifiers = source_metadata.get("manufacturing_modifiers") if isinstance(source_metadata.get("manufacturing_modifiers"), dict) else {}
+    power_efficiency = max(-2, min(2, _int(manufacturing_modifiers.get("power_efficiency"), 0)))
+    if charge_max > 0 and power_efficiency:
+        charge_max = max(1, int(round(charge_max * (1.0 + 0.08 * power_efficiency))))
     replacement_metadata = dict(removed.get("metadata") or {})
     charge = _int(replacement_metadata.get("battery_charge"), charge_max)
     charge = max(0, min(charge, charge_max)) if charge_max > 0 else max(0, charge)

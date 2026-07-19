@@ -18,7 +18,9 @@ from game.incident_runtime import incident_knowledge_label, incident_record
 from game.lighting import lighting_state, update_lighting_state
 from game.opportunities import evaluate_opportunity_facts
 from game.organization_presence import format_property_org_presence
+from game.organization_production import organization_production_profile
 from game.organization_reputation import organization_snapshot, top_organization_snapshots
+from game.organization_supply import organization_supply_rows, organization_supply_summary
 from game.property_access import property_access_controller, property_access_level, property_status_text
 from game.property_runtime import (
     controller_credential_short_label,
@@ -181,9 +183,39 @@ def organization_summary_rows(sim, *, current_prop=None):
     current_snapshot = organization_snapshot(sim, prop=current_prop, ensure=True) if current_prop else None
     if current_snapshot is not None:
         rows.append(f"Current: {organization_snapshot_line(current_snapshot)}")
+        production = organization_production_profile(
+            sim,
+            current_snapshot.get("organization_eid"),
+            include_hidden=False,
+        )
+        visual = dict(production.get("visual") or {})
+        culture = dict(production.get("culture") or {})
+        manufacturing = dict(production.get("manufacturing") or {})
+        if production:
+            rows.append(
+                "Culture: "
+                f"{culture.get('register', 'plainspoken')} register | "
+                f"{visual.get('finish', 'plain')} {visual.get('motif', 'unmarked line')} | "
+                f"product line {manufacturing.get('brand', current_snapshot.get('name', 'organization'))}"
+            )
     current_presence = format_property_org_presence(sim, current_prop, include_primary=True) if current_prop else ""
     if current_presence:
         rows.append(f"Presence: {current_presence}")
+    current_property_id = str((current_prop or {}).get("id", "") or "").strip()
+    current_supply = organization_supply_rows(
+        sim,
+        property_id=current_property_id,
+        visible_only=True,
+    ) if current_property_id else ()
+    for supply_row in current_supply[:2]:
+        rows.append(f"Supply here: {organization_supply_summary(supply_row)}")
+    visible_supply = organization_supply_rows(sim, visible_only=True)
+    if visible_supply:
+        strained = sum(1 for row in visible_supply if row.get("status") in {"strained", "suspended"})
+        rows.append(
+            f"Public supply: {len(visible_supply)} directional route{'s' if len(visible_supply) != 1 else ''}"
+            + (f" | {strained} disrupted" if strained else "")
+        )
 
     hot_rows = [
         row for row in top_organization_snapshots(sim, limit=3, sort_by="heat")

@@ -355,6 +355,10 @@ def normalize_packed_drone_metadata(metadata=None, *, item_catalog=None):
     }
 
     charge_max = _battery_charge_max(battery_item_id, item_catalog=item_catalog)
+    manufacturing_modifiers = source.get("manufacturing_modifiers") if isinstance(source.get("manufacturing_modifiers"), dict) else {}
+    power_efficiency = max(-2, min(2, _safe_int(manufacturing_modifiers.get("power_efficiency"), 0)))
+    if charge_max > 0 and power_efficiency:
+        charge_max = max(1, int(round(charge_max * (1.0 + 0.08 * power_efficiency))))
     if "battery_charge" in source:
         charge = _safe_int(source.get("battery_charge"), charge_max, minimum=0)
         if charge_max > 0:
@@ -365,10 +369,12 @@ def normalize_packed_drone_metadata(metadata=None, *, item_catalog=None):
     normalized["battery_charge_max"] = int(charge_max)
 
     base_hp = _chassis_base_hp(chassis_item_id, item_catalog=item_catalog)
-    hull_max_default = base_hp if base_hp > 0 else _safe_int(source.get("hull_hp_max"), 1, minimum=1)
+    durability = max(-2, min(2, _safe_int(manufacturing_modifiers.get("durability"), 0)))
+    effective_base_hp = max(1, int(round(base_hp * (1.0 + 0.08 * durability)))) if base_hp > 0 else base_hp
+    hull_max_default = effective_base_hp if effective_base_hp > 0 else _safe_int(source.get("hull_hp_max"), 1, minimum=1)
     hull_max = _safe_int(source.get("hull_hp_max"), hull_max_default, minimum=1)
-    if base_hp > 0:
-        hull_max = min(hull_max, base_hp)
+    if effective_base_hp > 0:
+        hull_max = min(hull_max, effective_base_hp)
     hull_hp = _safe_int(source.get("hull_hp"), hull_max, minimum=0)
     hull_hp = min(hull_hp, hull_max)
     normalized["hull_hp"] = int(hull_hp)
@@ -482,7 +488,7 @@ def drone_loadout_summary(metadata=None, *, item_catalog=None):
     if power_output > 0 and active_draw > power_output:
         errors.append(f"active draw {active_draw}/{power_output} exceeds power output")
 
-    charge_max = _safe_int(battery.get("charge_max"), normalized.get("battery_charge_max", 0), minimum=0)
+    charge_max = _safe_int(normalized.get("battery_charge_max"), battery.get("charge_max", 0), minimum=0)
     charge = _safe_int(normalized.get("battery_charge"), charge_max, minimum=0)
     if charge_max > 0:
         charge = min(charge, charge_max)

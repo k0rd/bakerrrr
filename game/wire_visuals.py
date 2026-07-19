@@ -326,7 +326,15 @@ def wire_visual_kind_for_node_kind(node_kind):
     return WIRE_NODE_VISUAL_KIND_BY_NODE_KIND.get(_clean_key(node_kind), "controller")
 
 
-def wire_interface_theme(style=None, manufacturer=None):
+def wire_interface_theme(style=None, manufacturer=None, theme_profile=None):
+    if isinstance(theme_profile, Mapping) and isinstance(theme_profile.get("tokens"), Mapping):
+        return {
+            "id": _clean_key(theme_profile.get("id"), "organization"),
+            "label": str(theme_profile.get("label") or manufacturer or "organization line").strip(),
+            "biome_style": _clean_key(theme_profile.get("biome_style"), "quiet_signal"),
+            "motif": str(theme_profile.get("motif") or "").strip(),
+            "tokens": dict(theme_profile.get("tokens") or {}),
+        }
     style_key = _clean_key(style, "")
     manufacturer_key = _clean_key(manufacturer, "")
     candidates = []
@@ -348,8 +356,8 @@ def wire_interface_theme(style=None, manufacturer=None):
     return dict(WIRE_INTERFACE_THEME_BY_KEY["unknown"])
 
 
-def wire_visual_metadata(scene_id, target_class, interface_style, manufacturer, *, security=1):
-    theme = wire_interface_theme(interface_style, manufacturer)
+def wire_visual_metadata(scene_id, target_class, interface_style, manufacturer, *, security=1, theme_profile=None):
+    theme = wire_interface_theme(interface_style, manufacturer, theme_profile=theme_profile)
     seed = _hash_int(scene_id, target_class, theme["id"], int(security or 0))
     return {
         "visual_schema_version": WIRE_VISUAL_SCHEMA_VERSION,
@@ -368,6 +376,7 @@ def apply_wire_scene_visuals(scene, *, security=1):
         scene.get("interface_style", ""),
         scene.get("interface_manufacturer", ""),
         security=security,
+        theme_profile=scene.get("interface_theme_profile"),
     )
     scene.update(metadata)
     for node in scene.get("nodes", ()) or ():

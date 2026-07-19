@@ -17,10 +17,12 @@ from game.components import (
     WeaponLoadout,
     WeaponUseProfile,
 )
+from game.civic_records import civic_license_is_active, record_civic_license
 from game.hunting_runtime import (
     FIELD_KNIFE_ITEM_ID,
     KILL_BAG_ITEM_ID,
     field_dress_carcass,
+    hunting_legality_snapshot,
     hunting_yield_profile,
 )
 from game.items import ITEM_CATALOG
@@ -463,6 +465,9 @@ class WorldEventsSystem(System):
             if vitality is not None and bool(getattr(vitality, "downed", False)):
                 continue
             if hunting_yield_profile(self.sim, animal_eid=target_eid) is None:
+                continue
+            legality = hunting_legality_snapshot(self.sim, hunter_eid, animal_eid=target_eid)
+            if civic_license_is_active(self.sim, hunter_eid, "hunting") and str(legality.get("reason", "")).strip().lower() == "protected_line":
                 continue
             anchor_dist = _manhattan(anchor_x, anchor_y, int(target_pos.x), int(target_pos.y))
             hunter_dist = _manhattan(int(hunter_pos.x), int(hunter_pos.y), int(target_pos.x), int(target_pos.y))
@@ -926,6 +931,17 @@ class WorldEventsSystem(System):
             self._set_event_actor_intent(eid, "holding", hold_spot, score=34.0)
             if event_key == "hunter_party" and str(career or "").strip().lower() in {"hunter", "trapper"}:
                 self._equip_event_hunter(eid, actor_rng, career=career)
+                licensed = not bool(event.get("hunter_actor_ids"))
+                if licensed:
+                    record_civic_license(
+                        self.sim,
+                        eid,
+                        "hunting",
+                        issuer_organization_key="civic_wildlife:field",
+                        issuer_name="Regional Wildlife Office",
+                        restrictions=("eligible game only", "field areas only"),
+                    )
+                event.setdefault("hunter_credential_status", {})[str(eid)] = "licensed" if licensed else "unlicensed"
                 event.setdefault("hunter_actor_ids", []).append(eid)
             event["spawned_entity_ids"].append(eid)
 
@@ -1060,10 +1076,16 @@ class WorldEventsSystem(System):
     def _begin_hunter_task(self, event):
         if int(event.get("hunter_kills", 0) or 0) >= int(event.get("hunter_kill_cap", HUNTER_PARTY_MAX_KILLS) or HUNTER_PARTY_MAX_KILLS):
             return None
-        for hunter_eid in self._hunter_actor_ids(event):
+        hunter_ids = self._hunter_actor_ids(event)
+        if not hunter_ids:
+            return None
+        start_index = int(event.get("hunter_turn_index", 0) or 0) % len(hunter_ids)
+        ordered_hunters = hunter_ids[start_index:] + hunter_ids[:start_index]
+        for offset, hunter_eid in enumerate(ordered_hunters):
             rows = self._eligible_hunter_target_rows(event, hunter_eid)
             if not rows:
                 continue
+            event["hunter_turn_index"] = (start_index + offset + 1) % len(hunter_ids)
             _hunter_dist, _anchor_dist, target_eid, target_pos = rows[0]
             task = {
                 "status": "hunting",

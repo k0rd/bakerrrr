@@ -77,6 +77,7 @@ from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
     ACTION_OFFENSE_CONTEXT_BONUS,
     ASSAULT_OFFENSE_CONTEXTS,
+    CIVIC_WILDLIFE_OFFENSE_CONTEXTS,
     OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS,
     VIOLENT_OFFENSE_CONTEXTS,
     _emit_action_offense_event,
@@ -857,6 +858,9 @@ class CriminalJusticeSystem(System):
             "armed_assault": "armed_assault",
             "explosive_discharge": "explosive_discharge",
             "homicide": "homicide",
+            "unlicensed_hunting": "hunting_violation",
+            "unsafe_hunting": "hunting_violation",
+            "protected_wildlife_hunting": "protected_species_violation",
         }.get(context, context)
 
     def _provisional_case_crime_profile(self, case, incident):
@@ -897,7 +901,7 @@ class CriminalJusticeSystem(System):
             context = str(incident.get("context", case.get("context", "")) or "").strip().lower()
             if not context:
                 context = str(incident.get("merge_subject", case.get("merge_subject", "")) or "").split(":")[-1].strip().lower()
-            if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
+            if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS, *CIVIC_WILDLIFE_OFFENSE_CONTEXTS}:
                 return None
             if context in VIOLENT_OFFENSE_CONTEXTS:
                 actual_eid = incident.get("primary_actor_eid")
@@ -917,7 +921,7 @@ class CriminalJusticeSystem(System):
             return None
         if profile.get("incident_type") not in {
             "trespass", "tamper", "theft", "contraband", "unarmed_assault", "melee_assault",
-            "armed_assault", "explosive_discharge", "homicide",
+            "armed_assault", "explosive_discharge", "homicide", "hunting_violation", "protected_species_violation",
         }:
             return None
         return profile
@@ -4492,6 +4496,7 @@ class CriminalJusticeSystem(System):
             "label": "jumpsuit",
             "slots": [self.JUSTICE_RELEASE_JUMPSUIT_SLOT],
             "color": "safety_orange",
+            "color_word": "safety_orange",
             "material": "cotton",
             "style": "issued",
             "accent_color": accent,
@@ -4502,6 +4507,7 @@ class CriminalJusticeSystem(System):
             "appearance_label": "jumpsuit",
             "appearance_slots": [self.JUSTICE_RELEASE_JUMPSUIT_SLOT],
             "color": "safety_orange",
+            "color_word": "safety_orange",
             "material": "cotton",
             "style": "issued",
             "accent_color": accent,
@@ -5205,7 +5211,7 @@ class CriminalJusticeSystem(System):
         if offender_eid is None:
             return
         context = str(event.data.get("context", "ordinary") or "").strip().lower() or "ordinary"
-        if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
+        if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS, *CIVIC_WILDLIFE_OFFENSE_CONTEXTS}:
             return
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
@@ -5533,7 +5539,7 @@ class CriminalJusticeSystem(System):
             )
         elif incident_kind == "action_offense":
             context = str(incident.get("context", "") or "").strip().lower() or str(incident.get("merge_subject", "") or "").split(":")[-1].strip().lower()
-            if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
+            if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS, *CIVIC_WILDLIFE_OFFENSE_CONTEXTS}:
                 return
             force_read = None
             effective_severity = severity_score

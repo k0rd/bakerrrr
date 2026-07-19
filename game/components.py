@@ -2306,6 +2306,11 @@ class OrganizationProfile:
         self.member_eids = set()
         self.site_links = []
         self.relations = []
+        # Durable authored/generated culture shared by every product this
+        # organization puts into the world.  Hidden manufacturing tendencies
+        # live inside this profile too, but are not an in-fiction fact known to
+        # the organization unless another system explicitly discovers them.
+        self.production_profile = {}
 
 
 class OrganizationAffiliations:

@@ -13,11 +13,14 @@ from game.bodyguard_runtime import (
 from game.cult_runtime import CULT_SERVICE_IDS, cult_property_association, cult_services_for_property
 from game.civic_records import (
     CIVIC_RECORDS_SERVICE_ID,
+    LICENSE_FEES,
     civic_census_lines,
+    civic_license_is_active,
     civic_license_ledger_lines,
     civic_people_records,
     civic_person_record_lines,
     civic_records_authority,
+    purchase_civic_license,
     remember_civic_record_inspection,
 )
 from game.components import FinancialProfile, Inventory, NPCNeeds, NPCSettlement, NPCRoutine, Occupation, PlayerAssets, Position
@@ -30,7 +33,11 @@ from game.casino_ui_runtime import (
     ensure_casino_ui_state,
 )
 from game.finance_services import _nearest_property_with_finance_service
-from game.ecology_registry import ecology_species_registry_rows
+from game.ecology_registry import (
+    FAUNA_CULL_FEE,
+    ecology_species_registry_rows,
+    initiate_fauna_cull,
+)
 from game.herbal_chemistry_runtime import secondary_trait_labels
 from game.justice_runtime import held_property_snapshot as _justice_held_property_snapshot
 from game.opportunities import SERVICE_JOB_BOARD_SERVICES, service_job_board_offers
@@ -4149,7 +4156,13 @@ class ServiceMenuSystem(System):
         domain_title = "Flora" if domain == "flora" else "Fauna"
         transcript = [f"Installation-native {domain} recorded at {prop_name}."]
         if rows:
-            transcript.extend(f"{row['name']} -> {row['appearance']}" for row in rows)
+            if domain == "fauna":
+                transcript.extend(
+                    f"{row['name']} -> {row['appearance']} | population {row.get('abundance', 100)}% ({str(row.get('population_status', 'common')).replace('_', ' ')}) | value x{float(row.get('value_multiplier', 1.0) or 1.0):g}"
+                    for row in rows
+                )
+            else:
+                transcript.extend(f"{row['name']} -> {row['appearance']}" for row in rows)
         else:
             transcript.append(f"No installation-native {domain} lines have been discovered yet.")
         self.sim.set_time_paused(True, reason="dialog")
@@ -4187,6 +4200,7 @@ class ServiceMenuSystem(System):
             {"id": "civic_records:people", "label": "Browse public people records"},
             {"id": "civic_records:self", "label": "Review my civic file"},
             {"id": "civic_records:licenses", "label": "Review licenses and permits"},
+            {"id": "civic_records:culls", "label": "Declare a fauna cull"},
         ]
         self.sim.set_time_paused(True, reason="dialog")
         state.update({
@@ -4312,16 +4326,161 @@ class ServiceMenuSystem(System):
         transcript.append("Your filed credentials")
         transcript.extend(own_lines)
         self.sim.set_time_paused(True, reason="dialog")
+        topics = [{"id": "civic_records:root", "label": "Back to civic records"}]
+        for license_kind in ("hunting", "cultivation"):
+            active = civic_license_is_active(self.sim, self.player_eid, license_kind)
+            fee = int(LICENSE_FEES[license_kind])
+            label = f"{license_kind.title()} license — active" if active else f"Buy {license_kind} license — {fee}c"
+            topics.append({"id": f"civic_records:license_buy|{license_kind}", "label": label})
         state.update({
             "title": f"Permit Ledger: {authority['authority_name']}",
             "subtitle": "Hunting, cultivation, and civic credentials",
             "transcript": transcript,
-            "topics": [{"id": "civic_records:root", "label": "Back to civic records"}],
+            "topics": topics,
             "selected_index": 0,
             "scroll": 0,
-            "hint": "Future hunting and cultivation desks issue and verify credentials through this ledger.",
+            "hint": "Licenses are identity-bound civic records, not lootable inventory cards.",
             "service_menu_mode": "civic_records:licenses",
             "civic_record_rows": [dict(row) for row in records],
+        })
+
+    def _open_civic_license_action(self, prop, license_kind):
+        state = self._dialog_ui_state()
+        result = purchase_civic_license(self.sim, self.player_eid, license_kind, prop=prop)
+        kind_label = str(license_kind or "license").replace("_", " ").title()
+        if result.get("ok"):
+            lines = [
+                f"{kind_label} issued for {int(result.get('fee', 0))}c.",
+                f"The credential is now active in your civic file. Credits remaining {int(result.get('credits', 0))}c.",
+                "The permission is tied to your identity and cannot be transferred by dropping or looting an item.",
+            ]
+        elif result.get("reason") == "already_active":
+            lines = [f"Your {kind_label.lower()} is already active."]
+        elif result.get("reason") == "no_credits":
+            lines = [
+                f"The {kind_label.lower()} costs {int(result.get('fee', 0))}c.",
+                f"You currently have {int(result.get('credits', 0))}c.",
+            ]
+        else:
+            lines = ["That license cannot be issued at this counter."]
+        state.update({
+            "title": f"{kind_label} Counter",
+            "subtitle": "Civic credential action",
+            "transcript": lines,
+            "topics": [{"id": "civic_records:licenses", "label": "Back to licenses and permits"}],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "The public permit ledger updates immediately after issuance.",
+            "service_menu_mode": "civic_records:license_action",
+        })
+
+    def _open_civic_culls(self, prop):
+        state = self._dialog_ui_state()
+        rows = ecology_species_registry_rows(self.sim, "fauna")
+        authority = civic_records_authority(self.sim, prop)
+        topics = [{"id": "civic_records:root", "label": "Back to civic records"}]
+        for row in rows:
+            abundance = int(row.get("abundance", 100) or 0)
+            status = str(row.get("population_status", "common") or "common").replace("_", " ")
+            suffix = "declared this run" if row.get("cull_active_this_run") else f"{abundance}% {status}"
+            topics.append({
+                "id": f"civic_records:cull_review|{row['native_id']}",
+                "label": f"{row['name']} — {suffix}",
+            })
+        transcript = [
+            f"{authority['authority_name']} accepts one cull declaration per fauna line per run.",
+            "A declaration lowers installation abundance by one 20-point tier and opens that line to licensed hunting for this run.",
+            "Five deliberate declarations across five distinct runs can end in extinction; the registry never treats repeated clicks as population history.",
+        ]
+        if not rows:
+            transcript.append("No installation-native fauna lines are registered for population policy yet.")
+        state.update({
+            "title": "Fauna Cull Declarations",
+            "subtitle": f"{len(rows)} registered line{'s' if len(rows) != 1 else ''}",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": f"An active hunting license and {FAUNA_CULL_FEE}c filing fee are required.",
+            "service_menu_mode": "civic_records:culls",
+            "ecology_registry_rows": [dict(row) for row in rows],
+        })
+
+    def _open_civic_cull_review(self, prop, native_id):
+        state = self._dialog_ui_state()
+        row = next((row for row in ecology_species_registry_rows(self.sim, "fauna") if str(row.get("native_id")) == str(native_id)), None)
+        if row is None:
+            self._open_civic_culls(prop)
+            return
+        before = int(row.get("abundance", 100) or 0)
+        after = max(0, before - 20)
+        already = bool(row.get("cull_active_this_run"))
+        transcript = [
+            f"Line: {row['name']} — {row['appearance']}.",
+            f"Current population: {before}% ({str(row.get('population_status', 'common')).replace('_', ' ')}).",
+        ]
+        if before <= 0:
+            transcript.append("This line is extinct. Its historical record remains, but no further cull can be declared.")
+        elif already:
+            transcript.append("A cull has already been declared for this line during this run.")
+        else:
+            transcript.extend([
+                f"Declaration effect: {before}% -> {after}% installation abundance.",
+                f"Filing fee: {FAUNA_CULL_FEE}c. This cannot be reversed inside the current run.",
+                "The declaration authorizes licensed hunting of this line for the current run; it does not excuse unsafe urban shots or unrelated offenses.",
+            ])
+        topics = [{"id": "civic_records:culls", "label": "Back to fauna culls"}]
+        if before > 0 and not already:
+            topics.append({"id": f"civic_records:cull_confirm|{row['native_id']}", "label": f"Confirm cull of {row['name']}"})
+        state.update({
+            "title": f"Cull Review: {row['name']}",
+            "subtitle": "Durable installation policy",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Confirm only if you intend to alter this installation's future ecology.",
+            "service_menu_mode": "civic_records:cull_review",
+        })
+
+    def _confirm_civic_cull(self, prop, native_id):
+        state = self._dialog_ui_state()
+        authority = civic_records_authority(self.sim, prop)
+        result = initiate_fauna_cull(
+            self.sim,
+            native_id,
+            actor_eid=self.player_eid,
+            authority_name=authority.get("authority_name") or authority.get("office_name"),
+            authority_key=authority.get("root_organization_key") or authority.get("organization_key"),
+        )
+        if result.get("ok"):
+            lines = [
+                f"Cull declared for {result.get('lineage_name', 'the selected fauna line')}.",
+                f"Installation abundance moved {int(result.get('before_abundance', 0))}% -> {int(result.get('after_abundance', 0))}% ({str(result.get('status', '')).replace('_', ' ')}).",
+                f"Scarcity value is now x{float(result.get('value_multiplier', 1.0) or 1.0):g}; {int(result.get('fee', 0))}c filing fee paid.",
+                "Licensed hunters may act under this declaration during the current run. The next population step requires a later run and a new declaration.",
+            ]
+        else:
+            reason = str(result.get("reason", "unavailable") or "unavailable")
+            if reason == "license_required":
+                lines = ["An active hunting license is required before you can sponsor a cull declaration."]
+            elif reason == "no_credits":
+                lines = [f"The cull filing costs {int(result.get('fee', FAUNA_CULL_FEE))}c; you have {int(result.get('credits', 0))}c."]
+            elif reason == "already_declared":
+                lines = ["This fauna line has already moved one population tier during the current run."]
+            elif reason == "extinct":
+                lines = ["That fauna line is already extinct; only its historical registry remains."]
+            else:
+                lines = ["That cull declaration could not be filed."]
+        state.update({
+            "title": "Cull Declaration Result",
+            "subtitle": authority.get("authority_name") or "Civic Authority",
+            "transcript": lines,
+            "topics": [{"id": "civic_records:culls", "label": "Back to fauna culls"}],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Population, protection, hunting legality, and provenance now read from the same durable line record.",
+            "service_menu_mode": "civic_records:cull_result",
         })
 
     def _open_bodyguard_contract_menu(self, prop):
@@ -5154,6 +5313,13 @@ class ServiceMenuSystem(System):
             return f"Campfire Cooking: {prop_name}", ["You need raw or bagged game meat to cook here."]
         if reason == "no_meat" and service == "butcher_prepare":
             return f"Butcher Prep: {prop_name}", ["Bring raw or bagged game meat for the butcher to prepare."]
+        if reason == "uncertified_meat" and service == "butcher_prepare":
+            animal_name = str(event.data.get("animal_name", "game") or "game").strip()
+            grade = str(event.data.get("inspection_grade", "uncertified") or "uncertified").replace("_", " ").strip()
+            return f"Butcher Prep: {prop_name}", [
+                f"The counter refuses the {animal_name}: its harvest record reads {grade}.",
+                "Clean butchers require a verified hunting permit and lawful hunt provenance; off-book buyers may still take the risk.",
+            ]
         if reason == "no_leads" and service == "intel":
             return f"Intel: {prop_name}", [f"{prop_name} has no fresh routes or leads right now."]
         if reason == "no_bottle" and service == "fuel_fill_bottle":
@@ -6263,6 +6429,22 @@ class ServiceMenuSystem(System):
         if option_id == "civic_records:licenses":
             if isinstance(prop, dict):
                 self._open_civic_license_ledger(prop)
+            return
+        if option_id.startswith("civic_records:license_buy|"):
+            if isinstance(prop, dict):
+                self._open_civic_license_action(prop, option_id.partition("|")[2])
+            return
+        if option_id == "civic_records:culls":
+            if isinstance(prop, dict):
+                self._open_civic_culls(prop)
+            return
+        if option_id.startswith("civic_records:cull_review|"):
+            if isinstance(prop, dict):
+                self._open_civic_cull_review(prop, option_id.partition("|")[2])
+            return
+        if option_id.startswith("civic_records:cull_confirm|"):
+            if isinstance(prop, dict):
+                self._confirm_civic_cull(prop, option_id.partition("|")[2])
             return
         if option_id.startswith("civic_records:person|"):
             if isinstance(prop, dict):

@@ -568,12 +568,20 @@ def fire_drone_weapon(
     state.target = (int(tx), int(ty), int(tz))
     _sync_modules_metadata(state)
 
+    manufacturing_modifiers = (
+        state.source_metadata.get("manufacturing_modifiers")
+        if isinstance(getattr(state, "source_metadata", None), dict)
+        and isinstance(state.source_metadata.get("manufacturing_modifiers"), dict)
+        else {}
+    )
+    effectiveness = max(-2, min(2, _int(manufacturing_modifiers.get("quality_bias"), 0)))
+    delivered_damage = max(1, int(spec["damage"]) + effectiveness)
     hit = _damage_entity_from_drone(
         sim,
         target_eid,
         drone_eid,
         spec["weapon_id"],
-        int(spec["damage"]),
+        delivered_damage,
         tx,
         ty,
         tz,
@@ -605,7 +613,7 @@ def fire_drone_weapon(
         target_x=tx,
         target_y=ty,
         target_z=tz,
-        damage=int(spec["damage"]),
+        damage=int(delivered_damage),
         hit=bool(hit),
         battery_charge=int(getattr(state, "battery_charge", 0) or 0),
         resource_key=spec["resource_key"],

@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import random
 
+from game.organization_production import (
+    organization_manufacturing_identity,
+    organization_manufacturing_modifiers,
+)
+from game.organization_supply import manufacturing_organization_for_property
+
 from game.wire_runtime import (
     is_wire_interface_item,
     is_wire_item,
@@ -309,6 +315,9 @@ def wire_distribution_metadata(
     distribution_context="",
     seed_token="",
     item_catalog=None,
+    sim=None,
+    source_property=None,
+    source_organization_eid=None,
 ):
     item_key = str(item_id or "").strip().lower()
     metadata = dict(base_metadata or {})
@@ -319,13 +328,83 @@ def wire_distribution_metadata(
     metadata.setdefault("quality", _quality_for_context(distribution_context, seed_token=seed_token))
 
     if is_wire_interface_item(item_key, item_catalog=item_catalog):
-        metadata.setdefault("manufacturer", wire_interface_profile_for_item(item_key, item_catalog=item_catalog).get("manufacturer", "unknown"))
+        interface_profile = wire_interface_profile_for_item(item_key, item_catalog=item_catalog)
+        manufacturer_org_eid = source_organization_eid
+        if manufacturer_org_eid is None and sim is not None and isinstance(source_property, dict):
+            manufacturer_org_eid = manufacturing_organization_for_property(sim, source_property, commodity="wire")
+        identity = (
+            organization_manufacturing_identity(sim, manufacturer_org_eid)
+            if sim is not None and manufacturer_org_eid is not None
+            else {}
+        )
+        modifiers = (
+            organization_manufacturing_modifiers(sim, manufacturer_org_eid)
+            if sim is not None and manufacturer_org_eid is not None
+            else {}
+        )
+        if identity:
+            base_quality_rank = {"poor": -1, "standard": 0, "good": 1, "excellent": 2}.get(str(metadata.get("quality", "standard")).lower(), 0)
+            quality_rank = max(-1, min(2, base_quality_rank + int(modifiers.get("quality_bias", 0))))
+            metadata["quality"] = {-1: "poor", 0: "standard", 1: "good", 2: "excellent"}[quality_rank]
+            metadata["manufacturer"] = identity.get("manufacturer") or identity.get("organization_name") or "unknown"
+            metadata["manufacturer_organization_eid"] = int(manufacturer_org_eid)
+            metadata["manufacturer_organization_key"] = identity.get("organization_key")
+            metadata["manufacturer_organization_name"] = identity.get("organization_name")
+            metadata["manufacturing_signature"] = identity.get("manufacturing_signature")
+            metadata["product_motif"] = identity.get("product_motif")
+            metadata["product_finish"] = identity.get("product_finish")
+            metadata["style"] = identity.get("interface_style") or interface_profile.get("style", "plain")
+            metadata["diagnostic_voice"] = dict(identity.get("diagnostic_voice") or {})
+            metadata["organization_theme"] = {
+                "id": f"organization:{identity.get('organization_key') or manufacturer_org_eid}",
+                "label": identity.get("manufacturer") or identity.get("organization_name") or "organization line",
+                "biome_style": identity.get("wire_biome_style") or "quiet_machine",
+                "motif": identity.get("product_motif"),
+                "tokens": {
+                    "surface": "building_fill_dark",
+                    "surface_alt": identity.get("secondary_render_key") or "building_fill",
+                    "border": identity.get("primary_render_key") or "human_slate",
+                    "accent": identity.get("accent_render_key") or "property_service",
+                    "title": identity.get("primary_render_key") or "property_service",
+                    "body": "default",
+                    "muted": identity.get("secondary_render_key") or "human_slate",
+                    "divider": identity.get("accent_render_key") or "property_service",
+                    "selection": identity.get("accent_render_key") or "property_service",
+                    "warning": "survival_meter_low",
+                    "footer": identity.get("secondary_render_key") or "human_slate",
+                },
+            }
+            metadata["warning_rating"] = max(0, min(5, int(interface_profile.get("warning_rating", 1)) + int(modifiers.get("signal_integrity", 0))))
+            metadata["trace_resistance"] = max(0, min(5, int(interface_profile.get("trace_resistance", 0)) + int(modifiers.get("concealment", 0))))
+            leakage_delta = int(round((int(modifiers.get("signal_integrity", 0)) + int(modifiers.get("consistency", 0))) / 2.0))
+            metadata["signature_leakage"] = max(0, min(5, int(interface_profile.get("signature_leakage", 1)) - leakage_delta))
+            metadata["range"] = max(0, int(interface_profile.get("range", 1)) + int(modifiers.get("signal_integrity", 0)))
+            metadata["noise_floor"] = max(0, min(5, int(interface_profile.get("noise_floor", 0)) - int(modifiers.get("consistency", 0))))
+            metadata["memory_speed"] = max(1, int(interface_profile.get("memory_speed", 1)) + int(modifiers.get("quality_bias", 0)) + int(modifiers.get("power_efficiency", 0)))
+        else:
+            metadata.setdefault("manufacturer", interface_profile.get("manufacturer", "unknown"))
         return normalize_wire_interface_metadata(
             metadata,
             item_id=item_key,
-            profile=wire_interface_profile_for_item(item_key, item_catalog=item_catalog),
+            profile=interface_profile,
         )
     if is_wire_item(item_key, item_catalog=item_catalog):
+        manufacturer_org_eid = source_organization_eid
+        if manufacturer_org_eid is None and sim is not None and isinstance(source_property, dict):
+            manufacturer_org_eid = manufacturing_organization_for_property(sim, source_property, commodity="wire")
+        identity = (
+            organization_manufacturing_identity(sim, manufacturer_org_eid)
+            if sim is not None and manufacturer_org_eid is not None
+            else {}
+        )
+        if identity:
+            metadata.setdefault("manufacturer", identity.get("manufacturer") or identity.get("organization_name"))
+            metadata.setdefault("manufacturer_organization_eid", int(manufacturer_org_eid))
+            metadata.setdefault("manufacturer_organization_key", identity.get("organization_key"))
+            metadata.setdefault("manufacturer_organization_name", identity.get("organization_name"))
+            metadata.setdefault("manufacturing_signature", identity.get("manufacturing_signature"))
+            metadata.setdefault("product_motif", identity.get("product_motif"))
+            metadata.setdefault("product_finish", identity.get("product_finish"))
         if item_key == "wire_corrupted_file":
             metadata.setdefault("corruption_tags", ("unstable", "market_burn"))
         if item_key == "wire_license_key" and str(distribution_context or "").strip().lower() in {"pawn_shop", "junk_market", "backroom_market"}:

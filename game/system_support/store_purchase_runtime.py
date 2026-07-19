@@ -445,11 +445,23 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
     restricted = "restricted" in tags
     experimental = "experimental" in tags
     homemade_aerosol_trap = "aerosol_trap" in tags and "homemade" in tags
+    metadata = entry.get("metadata") if isinstance((entry or {}).get("metadata"), Mapping) else {}
+    game_meat = item_id in {"raw_game_meat", "bagged_game_meat", "cooked_game_meat", "packaged_game_meat"}
+    inspection_grade = str(metadata.get("inspection_grade", "uncertified") or "uncertified").strip().lower()
+    uncertified_game_meat = bool(game_meat and (inspection_grade != "clean" or not bool(metadata.get("permit_verified"))))
 
     if _player_owns_store(sim, actor_eid, prop):
         actual = INTEREST_WANTED
         price_mult = 1.0
         reason = "owner shelf transfer"
+    elif uncertified_game_meat and archetype in SHADY_BUYER_ARCHETYPES:
+        actual = INTEREST_WANTED
+        price_mult = 0.38
+        reason = "off-book buyer accepts uncertified game"
+    elif uncertified_game_meat:
+        actual = INTEREST_REFUSED
+        price_mult = 0.0
+        reason = "game products need clean permit and inspection provenance"
     elif homemade_aerosol_trap:
         if _homemade_trap_sale_allowed(sim, actor_eid, prop, entry, archetype=archetype, service_eid=service_eid):
             actual = INTEREST_UNUSUAL
@@ -516,6 +528,8 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
     risk_label = ""
     if "stolen" in tags:
         risk_label = "stolen risk"
+    elif uncertified_game_meat:
+        risk_label = "uncertified game"
     elif "illegal" in tags:
         risk_label = "contraband"
     elif homemade_aerosol_trap:

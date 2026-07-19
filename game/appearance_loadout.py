@@ -881,8 +881,18 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
     if not slots and profile:
         slots = tuple(profile.get("slots", ()))
     appearance_type = _key(metadata.get("appearance_type") or nested_data.get("type")) or item_id
-    color = _key(metadata.get("color") or nested_data.get("color"))
-    color_word = _key(color or metadata.get("color_word") or nested_data.get("color_word"))
+    outer_color = _key(metadata.get("color"))
+    nested_color = _key(nested_data.get("color"))
+    explicit_color_word = _key(metadata.get("color_word") or nested_data.get("color_word"))
+    # The nested appearance record is the canonical garment description. The
+    # outer ``color`` field predates exact color words and can still contain a
+    # neutral render fallback on older or externally-authored items.
+    legacy_color = nested_color or outer_color
+    color_word = explicit_color_word or legacy_color
+    # ``color`` predates the shared exact color-word channel and some saved or
+    # externally-authored items still carry a neutral render fallback there.
+    # When both exist, the precise word is the appearance truth.
+    color = color_word or legacy_color
     material = _key(metadata.get("material") or nested_data.get("material"))
     style = _key(metadata.get("style") or nested_data.get("style"))
     accent = _key(metadata.get("accent_color") or nested_data.get("accent_color"))
@@ -903,8 +913,27 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
         material = _text((profile.get("materials") or ("cotton",))[0]).lower()
     if not style:
         style = _text((profile.get("styles") or ("plain",))[0]).lower()
-    if not accent:
-        accent = fallback_render_key_for_color_word(color_word, default="human_monochrome")
+    derived_accent = fallback_render_key_for_color_word(color_word, default="") if color_word else ""
+    stale_neutral_accent = accent in {"clothing_gray", "human_gray", "human_monochrome", "default"}
+    precise_non_neutral_fallback = derived_accent and derived_accent not in {
+        "clothing_gray",
+        "human_gray",
+        "human_monochrome",
+        "default",
+    }
+    if (
+        derived_accent
+        and explicit_color_word
+        and legacy_color
+        and explicit_color_word != legacy_color
+    ) or (stale_neutral_accent and precise_non_neutral_fallback):
+        # ``accent_color`` is the limited-palette rendering fallback for worn
+        # clothing, not a second decorative color. Replace a genuinely stale
+        # neutral value, while retaining compatible legacy keys such as
+        # ``human_wine`` that still represent the same stated color.
+        accent = derived_accent
+    elif not accent:
+        accent = derived_accent or "human_monochrome"
     if not slots:
         return {}
     return {
