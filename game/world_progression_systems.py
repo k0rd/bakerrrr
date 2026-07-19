@@ -104,6 +104,7 @@ from game.opportunities import (
     opportunity_distance_text,
     opportunity_known_count,
     opportunity_source_label,
+    record_opportunity_kill,
     refresh_due_dynamic_opportunities,
     reveal_opportunity_to_observer,
     resolve_external_opportunity,
@@ -1462,6 +1463,7 @@ class OpportunitySystem(System):
         self.sim.events.subscribe("insurance_policy_purchased", self.on_insurance_policy_purchased)
         self.sim.events.subscribe("stakeout_intel_gained", self.on_stakeout_intel_gained)
         self.sim.events.subscribe("overworld_discovery_found", self.on_overworld_discovery_found)
+        self.sim.events.subscribe("npc_killed", self.on_npc_killed)
 
     def _ensure_seeded(self):
         return seed_run_opportunities(self.sim, player_eid=self.player_eid, rng=self.seed_rng)
@@ -1884,6 +1886,13 @@ class OpportunitySystem(System):
         if kind == "landmark":
             self._remember_opportunity_chunk_activity(chunk, "intel")
 
+    def on_npc_killed(self, event):
+        record_opportunity_kill(
+            self.sim,
+            event.data.get("target_eid"),
+            event.data.get("source_eid"),
+        )
+
     def _emit_provided_item_log(self, item_notice):
         if not isinstance(item_notice, dict):
             return
@@ -1956,6 +1965,9 @@ class OpportunitySystem(System):
                 playstyles=tuple(entry.get("playstyles", ())),
                 reward=reward,
                 reward_text=format_reward_text(reward),
+                reward_recipient_eid=entry.get("reward_recipient_eid"),
+                reward_recipient_name=str(entry.get("reward_recipient_name", "") or "").strip(),
+                reward_attribution=str(entry.get("reward_attribution", "") or "").strip().lower(),
                 completion_reason=str(entry.get("completion_reason", "")).strip(),
                 active_remaining=active_count,
             ))

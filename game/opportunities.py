@@ -11,6 +11,7 @@ from game.components import (
     AI,
     ContactLedger,
     CreatureIdentity,
+    DroneState,
     FinancialProfile,
     Inventory,
     JusticeProfile,
@@ -1739,6 +1740,19 @@ def _player_metrics(sim, player_eid):
         int(e) for e in (killed_raw if isinstance(killed_raw, (list, tuple, set)) else ())
         if e is not None
     )
+    killed_sources = {}
+    raw_sources = traits.get("killed_npc_sources", {})
+    if isinstance(raw_sources, dict):
+        for raw_target_eid, raw_record in raw_sources.items():
+            target_eid = _safe_int(
+                raw_record.get("target_eid") if isinstance(raw_record, dict) else raw_target_eid,
+                default=0,
+            )
+            if target_eid <= 0:
+                continue
+            raw_source_eid = raw_record.get("source_eid") if isinstance(raw_record, dict) else raw_record
+            source_eid = _safe_int(raw_source_eid, default=0)
+            killed_sources[target_eid] = source_eid if source_eid > 0 else None
     recent_property_ids, recent_building_ids = _recent_site_interactions(sim)
     recent_handoff_property_ids, recent_handoff_building_ids = _recent_handoff_site_interactions(sim)
     recent_required_item_transfers = _recent_required_item_transfers(sim)
@@ -1769,10 +1783,58 @@ def _player_metrics(sim, player_eid):
         "inventory": inventory,
         "inventory_counts": _inventory_counts(inventory),
         "killed_npc_eids": killed_eids,
+        "killed_npc_sources": killed_sources,
         "justice_snapshot": justice_snapshot if isinstance(justice_snapshot, dict) else {},
         "held_property": held_property if isinstance(held_property, dict) else {},
         "booking_seizure": booking_seizure if isinstance(booking_seizure, dict) else {},
     }
+
+
+def record_opportunity_kill(sim, target_eid, source_eid=None):
+    """Retain factual kill attribution for contract settlement.
+
+    ``killed_npc_eids`` predates attributed contracts and remains the durable
+    death set used by other opportunity failure rules.  The companion mapping
+    deliberately records an unknown source as well: a witnessed death with no
+    responsible actor must not later be mistaken for a player kill by the
+    legacy fallback.
+    """
+    if sim is None:
+        return None
+    target_eid = _safe_int(target_eid, default=0)
+    if target_eid <= 0:
+        return None
+    source_eid = _safe_int(source_eid, default=0)
+
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        sim.world_traits = {}
+        traits = sim.world_traits
+
+    killed = traits.get("killed_npc_eids")
+    if not isinstance(killed, list):
+        killed = list(killed) if isinstance(killed, (tuple, set)) else []
+        traits["killed_npc_eids"] = killed
+    if target_eid not in killed:
+        killed.append(target_eid)
+
+    sources = traits.get("killed_npc_sources")
+    if not isinstance(sources, dict):
+        sources = {}
+        traits["killed_npc_sources"] = sources
+    key = str(target_eid)
+    previous = sources.get(key)
+    previous_source = _safe_int(previous.get("source_eid"), default=0) if isinstance(previous, dict) else 0
+    # Do not let a later, less informative duplicate event erase attribution.
+    if previous_source > 0 and source_eid <= 0:
+        return previous
+    record = {
+        "target_eid": target_eid,
+        "source_eid": source_eid if source_eid > 0 else None,
+        "tick": int(getattr(sim, "tick", 0) or 0),
+    }
+    sources[key] = record
+    return record
 
 
 def _opportunity_tagged_item_quantity(inventory, opportunity_id, item_id):
@@ -6590,6 +6652,7 @@ def refresh_due_dynamic_opportunities(sim, player_eid, rng=None, *, reason="peri
 
 def _completion_detail(sim, opportunity, metrics):
     requirements = _opportunity_requirements(opportunity)
+    kind = str((opportunity or {}).get("kind", "") or "").strip().lower()
     bounty_target_eid = _safe_int(requirements.get("bounty_target_eid"), default=0)
     if bounty_target_eid > 0:
         if not bool(requirements.get("player_accepted")):
@@ -6598,6 +6661,17 @@ def _completion_detail(sim, opportunity, metrics):
             target_name = str(requirements.get("bounty_target_name", "target")).strip() or "target"
             return True, f"{target_name} restrained for pickup", None
         return False, "", None
+
+    # A hit follows its person, not the chunk where the lead first placed
+    # them.  The old generic visit gate made a valid kill fail silently after
+    # a mobile target wandered away from that seeded location.
+    kill_target_eid = _safe_int(requirements.get("kill_target_eid"), default=0)
+    if kind == "contract_kill" and kill_target_eid > 0:
+        killed_eids = metrics.get("killed_npc_eids", frozenset())
+        if kill_target_eid not in killed_eids:
+            return False, "", None
+        target_name = str(requirements.get("kill_target_name", "target")).strip() or "target"
+        return True, f"{target_name} neutralized", None
 
     visit_chunk = _chunk_tuple(requirements.get("visit_chunk"))
     current_chunk = _chunk_tuple(metrics.get("current_chunk"))
@@ -7363,6 +7437,170 @@ def _apply_reward(sim, player_eid, reward, *, opportunity=None):
     return applied
 
 
+def _contract_kill_reward_actor(sim, opportunity, metrics, player_eid):
+    requirements = _opportunity_requirements(opportunity)
+    target_eid = _safe_int(requirements.get("kill_target_eid"), default=0)
+    sources = metrics.get("killed_npc_sources", {}) if isinstance(metrics, dict) else {}
+    attribution = "factual"
+    if isinstance(sources, dict) and target_eid in sources:
+        actor_eid = _safe_int(sources.get(target_eid), default=0)
+    elif bool(requirements.get("player_accepted")):
+        # Saves made before attributed deaths retain their historical player
+        # completion instead of turning an already-finished hit into a dud.
+        actor_eid = _safe_int(player_eid, default=0)
+        attribution = "legacy_player_fallback"
+    else:
+        return None, "unattributed"
+
+    if actor_eid <= 0 or actor_eid == target_eid:
+        return None, "unattributed"
+
+    drone = sim.ecs.get(DroneState).get(actor_eid) if sim is not None else None
+    if drone is not None:
+        responsible_eid = _safe_int(getattr(drone, "controller_eid", None), default=0)
+        if responsible_eid <= 0:
+            responsible_eid = _safe_int(getattr(drone, "owner_eid", None), default=0)
+        if responsible_eid > 0:
+            actor_eid = responsible_eid
+
+    if actor_eid == _safe_int(player_eid, default=0):
+        return actor_eid, attribution
+
+    identity = sim.ecs.get(CreatureIdentity).get(actor_eid) if sim is not None else None
+    if identity is not None:
+        taxonomy = str(getattr(identity, "taxonomy_class", "hominid") or "hominid").strip().lower()
+        if taxonomy != "hominid":
+            return None, "ineligible_nonhuman"
+    elif sim is None or sim.ecs.get(AI).get(actor_eid) is None:
+        return None, "unavailable_actor"
+    return actor_eid, attribution
+
+
+def _contract_reward_actor_name(sim, actor_eid, player_eid):
+    if actor_eid is None:
+        return ""
+    if _safe_int(actor_eid, default=0) == _safe_int(player_eid, default=-1):
+        return "you"
+    identity = sim.ecs.get(CreatureIdentity).get(actor_eid) if sim is not None else None
+    if identity is not None:
+        label = str(identity.display_name() or "").replace("_", " ").strip()
+        if label:
+            return label.title()
+    ai = sim.ecs.get(AI).get(actor_eid) if sim is not None else None
+    label = str(getattr(ai, "role", "") or "").replace("_", " ").strip()
+    return label.title() if label else "someone"
+
+
+def _deposit_npc_contract_credits(sim, actor_eid, credits):
+    credits = max(0, _safe_int(credits, default=0))
+    if sim is None or actor_eid is None or credits <= 0:
+        return ""
+    inventory = sim.ecs.get(Inventory).get(actor_eid)
+    if inventory is None:
+        inventory = Inventory(capacity=4)
+        sim.ecs.add(actor_eid, inventory)
+    added, _instance_id = inventory.add_item(
+        item_id="credstick_chip",
+        quantity=1,
+        stack_max=_item_stack_max("credstick_chip"),
+        instance_factory=getattr(sim, "new_item_instance_id", None),
+        owner_eid=actor_eid,
+        owner_tag="contract_reward",
+        metadata={"stored_credits": credits, "acquisition": "contract_reward"},
+    )
+    if added:
+        return "credstick"
+
+    finance = sim.ecs.get(FinancialProfile).get(actor_eid)
+    if finance is None:
+        finance = FinancialProfile(bank_balance=0)
+        sim.ecs.add(actor_eid, finance)
+    finance.bank_balance = max(0, _safe_int(getattr(finance, "bank_balance", 0), default=0)) + credits
+    return "bank"
+
+
+def _apply_npc_contract_reward(sim, actor_eid, reward, *, opportunity=None):
+    reward = dict(reward or {})
+    applied = {
+        "credits": 0,
+        "intel": 0,
+        "standing": 0,
+        "energy": 0,
+        "safety": 0,
+        "social": 0,
+    }
+
+    credits = max(0, _safe_int(reward.get("credits"), default=0))
+    delivery = _deposit_npc_contract_credits(sim, actor_eid, credits)
+    if delivery:
+        applied["credits"] = credits
+        applied["credit_delivery"] = delivery
+
+    needs = sim.ecs.get(NPCNeeds).get(actor_eid) if sim is not None else None
+    for key in ("energy", "safety", "social"):
+        gain = max(0, _safe_int(reward.get(key), default=0))
+        if gain <= 0 or needs is None:
+            continue
+        before = _clamp(getattr(needs, key, 0.0))
+        after = _clamp(before + gain)
+        setattr(needs, key, after)
+        applied[key] = max(0, int(round(after - before)))
+
+    raw_items = reward.get("items", ())
+    if isinstance(raw_items, dict):
+        raw_items = [raw_items]
+    granted = []
+    inventory = sim.ecs.get(Inventory).get(actor_eid) if sim is not None else None
+    if isinstance(raw_items, (list, tuple)):
+        for spec in raw_items:
+            if not isinstance(spec, dict):
+                continue
+            item_id = str(spec.get("item_id", "") or "").strip().lower()
+            quantity = max(1, _safe_int(spec.get("quantity"), default=1))
+            if not item_id or item_id not in ITEM_CATALOG:
+                continue
+            if is_credstick_item(item_id):
+                cash_value = credstick_total_credits(
+                    quantity=quantity,
+                    metadata={"stored_credits": max(0, _safe_int(spec.get("stored_credits"), default=0))}
+                    if "stored_credits" in spec
+                    else None,
+                )
+                if _deposit_npc_contract_credits(sim, actor_eid, cash_value):
+                    applied["credits"] = int(applied.get("credits", 0)) + int(cash_value)
+                    granted.append({
+                        "item_id": item_id,
+                        "quantity": quantity,
+                        "item_label": _item_label(item_id),
+                        "credits_gained": int(cash_value),
+                    })
+                continue
+            if inventory is None:
+                inventory = Inventory(capacity=4)
+                sim.ecs.add(actor_eid, inventory)
+            added, _instance_id = inventory.add_item(
+                item_id=item_id,
+                quantity=quantity,
+                stack_max=_item_stack_max(item_id),
+                instance_factory=getattr(sim, "new_item_instance_id", None),
+                owner_eid=actor_eid,
+                owner_tag="contract_reward",
+                metadata={
+                    "acquisition": "contract_reward",
+                    "opportunity_kind": str((opportunity or {}).get("kind", "") or "").strip().lower(),
+                },
+            )
+            if added:
+                granted.append({
+                    "item_id": item_id,
+                    "quantity": quantity,
+                    "item_label": _item_label(item_id),
+                })
+    if granted:
+        applied["items"] = granted
+    return applied
+
+
 def format_reward_text(reward):
     reward = reward or {}
     bits = []
@@ -7735,9 +7973,40 @@ def advance_opportunity_lifecycle(sim, player_eid):
             continue
 
         reward = dict(entry.get("reward", {}))
-        applied = _apply_reward(sim, player_eid, reward, opportunity=entry)
+        kind = str(entry.get("kind", "") or "").strip().lower()
+        reward_actor_eid = player_eid
+        reward_attribution = "player_completion"
+        if kind == "contract_kill":
+            reward_actor_eid, reward_attribution = _contract_kill_reward_actor(
+                sim,
+                entry,
+                metrics,
+                player_eid,
+            )
+        if reward_actor_eid is None:
+            applied = {}
+        elif _safe_int(reward_actor_eid, default=0) == _safe_int(player_eid, default=-1):
+            applied = _apply_reward(sim, player_eid, reward, opportunity=entry)
+        else:
+            applied = _apply_npc_contract_reward(
+                sim,
+                reward_actor_eid,
+                reward,
+                opportunity=entry,
+            )
         completion_reason = str(reason_text).strip() or "requirements met"
         extra = {}
+        if kind == "contract_kill":
+            reward_actor_name = _contract_reward_actor_name(sim, reward_actor_eid, player_eid)
+            extra.update({
+                "completed_by_eid": reward_actor_eid,
+                "completed_by_name": reward_actor_name,
+                "reward_recipient_eid": reward_actor_eid,
+                "reward_recipient_name": reward_actor_name,
+                "reward_attribution": reward_attribution,
+            })
+            if reward_actor_name and _safe_int(reward_actor_eid, default=0) != _safe_int(player_eid, default=-1):
+                completion_reason = f"{completion_reason} by {reward_actor_name}"
         if consumed:
             extra["consumed_item"] = consumed
             completion_reason = f"{completion_reason}, delivered {consumed['item_label']}"

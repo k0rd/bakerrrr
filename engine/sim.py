@@ -820,6 +820,7 @@ class Simulation:
             attention_state = actor_attention_state(self)
             social_warmth_protected = set(attention_state.get("social_warmth_protected_chunks", set()) or ())
             area_warmth_protected = set(attention_state.get("area_warmth_protected_chunks", set()) or ())
+            opportunity_protected = set(attention_state.get("opportunity_protected_chunks", set()) or ())
             if warmth_protected:
                 unloaded = []
                 detail_changed = list(report.get("detail_changed", ()) or ())
@@ -848,6 +849,7 @@ class Simulation:
             report["warmth_protected"] = tuple(sorted(warmth_protected))
             report["social_warmth_protected"] = tuple(sorted(social_warmth_protected))
             report["area_warmth_protected"] = tuple(sorted(area_warmth_protected))
+            report["opportunity_protected"] = tuple(sorted(opportunity_protected))
             report["emergency_protected"] = tuple(sorted(emergency_protected))
             report["loaded_count"] = len(self.world.loaded_chunks)
             report["active_count"] = sum(1 for data in self.world.loaded_chunks.values() if data.get("detail") == "active")

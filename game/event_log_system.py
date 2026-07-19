@@ -100,6 +100,7 @@ from game.opportunities import (
     opportunity_distance_text,
     opportunity_known_count,
     opportunity_source_label,
+    record_opportunity_kill,
     refresh_dynamic_opportunities,
     reveal_opportunity_to_observer,
     resolve_external_opportunity,
@@ -6867,20 +6868,9 @@ class EventLogSystem(System):
         reason = str(event.data.get("reason", "dead")).strip().replace("_", " ")
         target_name = event.data.get("target_name") or self._npc_label(target)
 
-        # Track for contract-kill opportunity completion.
-        if target is not None:
-            try:
-                eid_int = int(target)
-                traits = getattr(self.sim, "world_traits", None)
-                if isinstance(traits, dict):
-                    killed_list = traits.get("killed_npc_eids")
-                    if not isinstance(killed_list, list):
-                        killed_list = []
-                        traits["killed_npc_eids"] = killed_list
-                    if eid_int not in killed_list:
-                        killed_list.append(eid_int)
-            except (TypeError, ValueError):
-                pass
+        # Keep completion facts independent of whether the dedicated
+        # opportunity system is present in a reduced/test runtime.
+        record_opportunity_kill(self.sim, target, source)
 
         if source == self.player_eid:
             self._log_npc_message(
@@ -7995,6 +7985,8 @@ class EventLogSystem(System):
         summary = str(event.data.get("summary", "")).strip()
         chunk = event.data.get("chunk", (0, 0))
         reward_text = str(event.data.get("reward_text", "")).strip()
+        reward_recipient_eid = event.data.get("reward_recipient_eid")
+        reward_recipient_name = str(event.data.get("reward_recipient_name", "") or "").strip()
         source = str(event.data.get("source", "unknown")).strip()
         completion_reason = str(event.data.get("completion_reason", "")).strip()
         active_remaining = int(event.data.get("active_remaining", 0))
@@ -8024,7 +8016,15 @@ class EventLogSystem(System):
         source_text = opportunity_source_label(source, short=False)
         details = [f"Source {source_text}"]
         if reward_text:
-            details.append(f"Reward {reward_text}")
+            try:
+                paid_to_player = int(reward_recipient_eid) == int(self.player_eid)
+            except (TypeError, ValueError):
+                paid_to_player = reward_recipient_eid in {None, self.player_eid}
+            if paid_to_player:
+                details.append(f"Reward {reward_text}")
+            else:
+                recipient = reward_recipient_name or "the completer"
+                details.append(f"Paid {recipient} {reward_text}")
         details.append(self._opportunity_remaining_text(active_remaining))
         details.append("Press O for report")
         self.sim.log.add("  " + " | ".join(details) + ".")

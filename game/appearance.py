@@ -232,15 +232,37 @@ _BUILDING_MATERIAL_WEIGHTS_BY_CLASS: Mapping[str, Tuple[Tuple[str, int], ...]] =
 }
 
 PROPERTY_FIXTURE_SEMANTICS = {
+    "streetlamp": "infra_lamp",
+    "trail_lamp": "infra_lamp",
+    "utility_pole": "infra_pole",
+    "relay_pole": "infra_pole",
+    "hydrant": "infra_hydrant",
     "bench": "prop_cover_bench",
     "bus_stop": "prop_cover_shelter",
+    "mailbox": "infra_mailbox",
     "junction_box": "prop_cover_junction",
     "planter_box": "prop_cover_planter",
     "drift_fence": "prop_cover_fence",
     "transformer": "prop_cover_transformer",
+    "wall_camera": "infra_camera",
+    "atm_kiosk": "infra_atm",
+    "banking_kiosk": "infra_atm",
+    "claim_terminal": "infra_claim_terminal",
+    "vending_machine": "service_fixture_vending",
+    "security_booth": "service_fixture_security_booth",
+    "alarm_panel": "infra_alarm_panel",
+    "alarm": "infra_alarm_panel",
+    "charging_pillar": "service_fixture_charging",
+    "service_terminal": "service_fixture_terminal",
+    "access_panel": "infra_access_panel",
     "field_cache_box": "prop_cover_cache",
+    "maintenance_cache_box": "prop_cover_cache",
     "water_tank": "prop_cover_tank",
     "campfire_ring": "prop_campfire_ring",
+    "way_marker": "infra_way_marker",
+    "underground_route_marker": "infra_way_marker",
+    "storm_siren": "infra_siren",
+    "solar_rig": "infra_solar",
     "notice_board": "prop_notice_board",
     "news_rack": "prop_notice_board",
     "meeting_board": "prop_notice_board",
@@ -1228,7 +1250,16 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None, sim=N
                 effects=effects,
                 overlays=overlays,
             )
-        semantic_id = PROPERTY_FIXTURE_SEMANTICS.get(property_fixture_type(prop))
+        fixture_type = property_fixture_type(prop)
+        semantic_id = PROPERTY_FIXTURE_SEMANTICS.get(fixture_type)
+        if fixture_type in {"street_stairwell", "underpass_stairs", "underpass_stairwell"}:
+            access_name = str(prop.get("name", "") or "").strip().lower()
+            if "hatch" in access_name or "grate" in access_name:
+                semantic_id = "infra_ground_hatch"
+            elif "ladder" in access_name:
+                semantic_id = "infra_ladder"
+            else:
+                semantic_id = "infra_stairs"
     if property_is_public(prop) and glyph.isalpha():
         glyph = glyph.lower()
 

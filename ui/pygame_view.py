@@ -3832,7 +3832,27 @@ class PygameView:
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_infrastructure_overlay(self, x, y, color=None, attrs=0, *, kind="lamp"):
-        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.06)
+        fixture_color = {
+            "lamp": "fixture_lamp",
+            "pole": "fixture_pole",
+            "hydrant": "fixture_hydrant",
+            "stop": "fixture_transit",
+            "utility_a": "fixture_utility",
+            "utility_b": "fixture_utility",
+            "atm": "fixture_atm",
+            "claim_terminal": "fixture_claim",
+            "access_panel": "fixture_access",
+            "ground_hatch": "fixture_hatch",
+            "stairs": "fixture_stairs",
+            "ladder": "fixture_stairs",
+            "mailbox": "fixture_mailbox",
+            "camera": "fixture_camera",
+            "alarm_panel": "fixture_alarm",
+            "way_marker": "fixture_way_marker",
+            "siren": "fixture_alarm",
+            "solar": "fixture_solar",
+        }.get(str(kind or "").strip().lower(), color)
+        frame = self._styled_overlay_color(fixture_color, attrs=attrs, bold_scale=1.06)
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
         overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
@@ -4046,6 +4066,98 @@ class PygameView:
                 (check_right, check_y - max(2, self.cell_px // 8)),
                 max(1, stroke_w),
             )
+        elif kind == "ground_hatch":
+            rim = self.pygame.Rect(
+                max(1, self.cell_px // 10),
+                mid_y - max(2, self.cell_px // 7),
+                max(8, self.cell_px - max(2, self.cell_px // 5)),
+                max(6, self.cell_px // 3),
+            )
+            lid = rim.inflate(-max(2, self.cell_px // 7), -max(2, self.cell_px // 9))
+            self.pygame.draw.rect(overlay, shadow, rim.move(0, max(1, stroke_w)), border_radius=max(1, self.cell_px // 12))
+            self.pygame.draw.rect(overlay, fill, rim, border_radius=max(1, self.cell_px // 12))
+            self.pygame.draw.rect(overlay, stroke, rim, stroke_w, border_radius=max(1, self.cell_px // 12))
+            self.pygame.draw.rect(overlay, shadow, lid, max(1, stroke_w), border_radius=max(1, self.cell_px // 18))
+            hinge_y = lid.top + max(1, stroke_w)
+            for hinge_x in (lid.left + max(1, self.cell_px // 10), lid.right - max(1, self.cell_px // 10)):
+                self.pygame.draw.circle(overlay, stroke, (hinge_x, hinge_y), max(1, self.cell_px // 24))
+            handle_w = max(4, self.cell_px // 4)
+            handle_y = lid.centery + max(1, self.cell_px // 16)
+            handle_color = self._alpha_color("vehicle_light", 190)
+            self.pygame.draw.line(overlay, handle_color, (mid_x - handle_w // 2, handle_y), (mid_x + handle_w // 2, handle_y), max(1, stroke_w))
+        elif kind == "stairs":
+            step_color = self._alpha_color("fixture_stairs", 188)
+            for idx in range(4):
+                y_pos = self.cell_px - max(3, self.cell_px // 8) - idx * max(2, self.cell_px // 7)
+                half_w = max(2, self.cell_px // 3 - idx * max(1, self.cell_px // 18))
+                self.pygame.draw.line(overlay, shadow, (mid_x - half_w, y_pos + 1), (mid_x + half_w, y_pos + 1), max(1, stroke_w + 1))
+                self.pygame.draw.line(overlay, step_color, (mid_x - half_w, y_pos), (mid_x + half_w, y_pos), stroke_w)
+            self.pygame.draw.line(overlay, stroke, (mid_x - max(3, self.cell_px // 3), self.cell_px - max(2, self.cell_px // 9)), (mid_x - max(2, self.cell_px // 6), max(2, self.cell_px // 6)), stroke_w)
+            self.pygame.draw.line(overlay, stroke, (mid_x + max(3, self.cell_px // 3), self.cell_px - max(2, self.cell_px // 9)), (mid_x + max(2, self.cell_px // 6), max(2, self.cell_px // 6)), stroke_w)
+        elif kind == "ladder":
+            rail_left = mid_x - max(2, self.cell_px // 6)
+            rail_right = mid_x + max(2, self.cell_px // 6)
+            top_y = max(2, self.cell_px // 8)
+            bottom_y = self.cell_px - max(2, self.cell_px // 8)
+            self.pygame.draw.line(overlay, stroke, (rail_left, top_y), (rail_left, bottom_y), max(1, stroke_w + 1))
+            self.pygame.draw.line(overlay, stroke, (rail_right, top_y), (rail_right, bottom_y), max(1, stroke_w + 1))
+            for rung_y in range(top_y + max(2, self.cell_px // 7), bottom_y, max(3, self.cell_px // 5)):
+                self.pygame.draw.line(overlay, accent, (rail_left, rung_y), (rail_right, rung_y), stroke_w)
+        elif kind == "mailbox":
+            post_y = mid_y + max(1, self.cell_px // 8)
+            self.pygame.draw.line(overlay, shadow, (mid_x, post_y), (mid_x, self.cell_px - max(2, self.cell_px // 9)), max(1, stroke_w + 1))
+            box = self.pygame.Rect(max(2, self.cell_px // 7), max(2, self.cell_px // 5), max(8, self.cell_px - max(4, self.cell_px // 3)), max(6, self.cell_px // 3))
+            self.pygame.draw.rect(overlay, fill, box, border_radius=max(2, self.cell_px // 7))
+            self.pygame.draw.rect(overlay, stroke, box, stroke_w, border_radius=max(2, self.cell_px // 7))
+            self.pygame.draw.line(overlay, shadow, (box.left + max(2, self.cell_px // 6), box.centery), (box.right - max(2, self.cell_px // 8), box.centery), stroke_w)
+            flag_x = box.right - max(2, self.cell_px // 7)
+            self.pygame.draw.line(overlay, self._alpha_color("fixture_alarm", 190), (flag_x, box.top), (flag_x, box.top - max(3, self.cell_px // 5)), stroke_w)
+            self.pygame.draw.line(overlay, self._alpha_color("fixture_alarm", 190), (flag_x, box.top - max(3, self.cell_px // 5)), (flag_x + max(3, self.cell_px // 6), box.top - max(3, self.cell_px // 5)), stroke_w)
+        elif kind == "camera":
+            bracket = (max(2, self.cell_px // 6), mid_y + max(1, self.cell_px // 8))
+            body = self.pygame.Rect(max(3, self.cell_px // 4), max(2, self.cell_px // 4), max(7, self.cell_px // 2), max(5, self.cell_px // 4))
+            self.pygame.draw.line(overlay, shadow, bracket, (body.left + max(1, self.cell_px // 12), body.bottom), max(1, stroke_w + 1))
+            self.pygame.draw.rect(overlay, fill, body, border_radius=max(2, self.cell_px // 8))
+            self.pygame.draw.rect(overlay, stroke, body, stroke_w, border_radius=max(2, self.cell_px // 8))
+            lens = (body.right - max(2, self.cell_px // 8), body.centery)
+            self.pygame.draw.circle(overlay, self._alpha_color("vehicle_glass", 220), lens, max(2, self.cell_px // 10))
+            self.pygame.draw.circle(overlay, shadow, lens, max(2, self.cell_px // 10), max(1, stroke_w))
+        elif kind == "alarm_panel":
+            panel = self.pygame.Rect(max(3, self.cell_px // 4), max(2, self.cell_px // 6), max(7, self.cell_px // 2), max(9, self.cell_px - max(4, self.cell_px // 3)))
+            self.pygame.draw.rect(overlay, fill, panel, border_radius=max(2, self.cell_px // 10))
+            self.pygame.draw.rect(overlay, stroke, panel, stroke_w, border_radius=max(2, self.cell_px // 10))
+            self.pygame.draw.circle(overlay, self._alpha_color("vehicle_tail_light", 230), (panel.centerx, panel.top + max(3, self.cell_px // 5)), max(2, self.cell_px // 9))
+            for line_y in (panel.centery + max(1, self.cell_px // 12), panel.bottom - max(3, self.cell_px // 6)):
+                self.pygame.draw.line(overlay, shadow, (panel.left + max(2, self.cell_px // 7), line_y), (panel.right - max(2, self.cell_px // 7), line_y), stroke_w)
+        elif kind == "way_marker":
+            top_y = max(2, self.cell_px // 7)
+            bottom_y = self.cell_px - max(2, self.cell_px // 8)
+            self.pygame.draw.line(overlay, stroke, (mid_x, top_y), (mid_x, bottom_y), max(1, stroke_w + 1))
+            board_h = max(3, self.cell_px // 7)
+            left_board = [(mid_x, top_y), (max(1, self.cell_px // 10), top_y), (max(3, self.cell_px // 5), top_y + board_h // 2), (max(1, self.cell_px // 10), top_y + board_h), (mid_x, top_y + board_h)]
+            right_y = top_y + max(4, self.cell_px // 4)
+            right_board = [(mid_x, right_y), (self.cell_px - max(1, self.cell_px // 10), right_y), (self.cell_px - max(3, self.cell_px // 5), right_y + board_h // 2), (self.cell_px - max(1, self.cell_px // 10), right_y + board_h), (mid_x, right_y + board_h)]
+            self.pygame.draw.polygon(overlay, fill, left_board)
+            self.pygame.draw.polygon(overlay, fill, right_board)
+            self.pygame.draw.lines(overlay, stroke, True, left_board, stroke_w)
+            self.pygame.draw.lines(overlay, stroke, True, right_board, stroke_w)
+        elif kind == "siren":
+            mast_top = max(2, self.cell_px // 4)
+            mast_bottom = self.cell_px - max(2, self.cell_px // 8)
+            self.pygame.draw.line(overlay, stroke, (mid_x, mast_top), (mid_x, mast_bottom), max(1, stroke_w + 1))
+            horn = [(mid_x - max(2, self.cell_px // 10), mast_top + max(1, stroke_w)), (mid_x + max(2, self.cell_px // 10), mast_top + max(1, stroke_w)), (self.cell_px - max(2, self.cell_px // 7), max(2, self.cell_px // 9)), (self.cell_px - max(2, self.cell_px // 7), max(5, self.cell_px // 3))]
+            self.pygame.draw.polygon(overlay, fill, horn)
+            self.pygame.draw.lines(overlay, stroke, True, horn, stroke_w)
+            self.pygame.draw.circle(overlay, self._alpha_color("vehicle_tail_light", 210), (mid_x, mast_top), max(1, self.cell_px // 15))
+        elif kind == "solar":
+            panel = self.pygame.Rect(max(2, self.cell_px // 8), max(2, self.cell_px // 7), max(9, self.cell_px - max(4, self.cell_px // 4)), max(7, self.cell_px // 3))
+            self.pygame.draw.polygon(overlay, fill, [(panel.left + max(2, self.cell_px // 8), panel.top), (panel.right, panel.top), (panel.right - max(2, self.cell_px // 8), panel.bottom), (panel.left, panel.bottom)])
+            self.pygame.draw.polygon(overlay, stroke, [(panel.left + max(2, self.cell_px // 8), panel.top), (panel.right, panel.top), (panel.right - max(2, self.cell_px // 8), panel.bottom), (panel.left, panel.bottom)], stroke_w)
+            for frac in (1, 2):
+                gx = panel.left + (panel.w * frac // 3)
+                self.pygame.draw.line(overlay, self._alpha_color("vehicle_glass", 144), (gx + max(1, self.cell_px // 16), panel.top + 1), (gx - max(1, self.cell_px // 16), panel.bottom - 1), max(1, stroke_w))
+            self.pygame.draw.line(overlay, self._alpha_color("vehicle_glass", 144), (panel.left + 1, panel.centery), (panel.right - 1, panel.centery), max(1, stroke_w))
+            self.pygame.draw.line(overlay, stroke, (mid_x, panel.bottom), (mid_x, self.cell_px - max(2, self.cell_px // 8)), max(1, stroke_w + 1))
         else:
             panel = self.pygame.Rect(
                 max(2, self.cell_px // 4),
@@ -5074,7 +5186,13 @@ class PygameView:
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_service_security_fixture_overlay(self, x, y, color=None, attrs=0, *, kind="terminal"):
-        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.06)
+        fixture_color = {
+            "vending": "fixture_vending",
+            "charging": "fixture_charging",
+            "terminal": "fixture_terminal",
+            "security_booth": "fixture_security",
+        }.get(str(kind or "").strip().lower(), color)
+        frame = self._styled_overlay_color(fixture_color, attrs=attrs, bold_scale=1.06)
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
         overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
@@ -8012,6 +8130,15 @@ class PygameView:
             "infra_atm": "atm",
             "infra_claim_terminal": "claim_terminal",
             "infra_access_panel": "access_panel",
+            "infra_ground_hatch": "ground_hatch",
+            "infra_stairs": "stairs",
+            "infra_ladder": "ladder",
+            "infra_mailbox": "mailbox",
+            "infra_camera": "camera",
+            "infra_alarm_panel": "alarm_panel",
+            "infra_way_marker": "way_marker",
+            "infra_siren": "siren",
+            "infra_solar": "solar",
         }
         infra_kind = infra_kind_map.get(semantic_key)
         if infra_kind:
@@ -8060,25 +8187,31 @@ class PygameView:
         if semantic_key == "entity_state_downed":
             self._draw_entity_state_overlay(x, y, color=color, attrs=attrs, kind="downed")
             return "entity_state_downed"
-        if color_key == "property_service":
+        service_fixture_kind = {
+            "service_fixture_vending": "vending",
+            "service_fixture_charging": "charging",
+            "service_fixture_terminal": "terminal",
+            "service_fixture_security_booth": "security_booth",
+        }.get(semantic_key)
+        if service_fixture_kind is None and color_key == "property_service":
             service_fixture_kind = {
                 "v": "vending",
                 "e": "charging",
                 "i": "terminal",
                 "t": "terminal",
             }.get(glyph)
-            if service_fixture_kind:
-                self._draw_service_security_fixture_overlay(
-                    x,
-                    y,
-                    color=color,
-                    attrs=attrs,
-                    kind=service_fixture_kind,
-                )
-                return f"service_fixture_{service_fixture_kind}"
+        if service_fixture_kind:
+            self._draw_service_security_fixture_overlay(
+                x,
+                y,
+                color=color,
+                attrs=attrs,
+                kind=service_fixture_kind,
+            )
+            return f"service_fixture_{service_fixture_kind}"
         if color_key == "property_asset" and glyph == "q":
             self._draw_service_security_fixture_overlay(x, y, color=color, attrs=attrs, kind="security_booth")
-            return "security_booth"
+            return "service_fixture_security_booth"
         if semantic_key == "prop_campfire_ring":
             self._draw_campfire_ring_overlay(x, y, color=color, attrs=attrs)
             return "campfire_ring"

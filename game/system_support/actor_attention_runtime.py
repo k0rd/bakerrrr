@@ -81,6 +81,9 @@ BUILDING_WARMTH_CHUNK_BUDGET = 3
 AREA_WARMTH_CHUNK_BUDGET = BUILDING_WARMTH_CHUNK_BUDGET
 PLAYER_BUSINESS_WARMTH_SCORE = 2.4
 PLAYER_VEHICLE_WARMTH_SCORE = 2.2
+KNOWN_QUEST_GIVER_WARMTH_SCORE = 2.8
+KNOWN_QUEST_TARGET_WARMTH_SCORE = 2.35
+KNOWN_QUEST_LOCATION_WARMTH_SCORE = 2.25
 SOCIAL_WARMTH_MIN_SCORE = 0.08
 SOCIAL_WARMTH_MAX_SCORE = 3.0
 SOCIAL_WARMTH_SPEND_FRACTION = 0.42
@@ -106,6 +109,7 @@ def _empty_stats():
         "area_warmth_areas": 0,
         "social_warmth_protected_chunks": 0,
         "area_warmth_protected_chunks": 0,
+        "opportunity_protected_chunks": 0,
     }
 
 
@@ -122,8 +126,11 @@ def _new_state():
         "urgent_reasons": {family: {} for family in ATTENTION_FAMILIES},
         "social_warmth": {},
         "area_warmth": {},
+        "known_opportunity_actor_rows": {},
+        "known_opportunity_area_rows": {},
         "social_warmth_protected_chunks": set(),
         "area_warmth_protected_chunks": set(),
+        "opportunity_protected_chunks": set(),
         "social_warmth_last_protected": (),
         "area_warmth_last_protected": (),
         "last_refresh_tick": None,
@@ -149,10 +156,16 @@ def actor_attention_state(sim):
         state["social_warmth"] = {}
     if not isinstance(state.get("area_warmth"), dict):
         state["area_warmth"] = {}
+    if not isinstance(state.get("known_opportunity_actor_rows"), dict):
+        state["known_opportunity_actor_rows"] = {}
+    if not isinstance(state.get("known_opportunity_area_rows"), dict):
+        state["known_opportunity_area_rows"] = {}
     if not isinstance(state.get("social_warmth_protected_chunks"), set):
         state["social_warmth_protected_chunks"] = set(state.get("social_warmth_protected_chunks") or ())
     if not isinstance(state.get("area_warmth_protected_chunks"), set):
         state["area_warmth_protected_chunks"] = set(state.get("area_warmth_protected_chunks") or ())
+    if not isinstance(state.get("opportunity_protected_chunks"), set):
+        state["opportunity_protected_chunks"] = set(state.get("opportunity_protected_chunks") or ())
     state.setdefault("social_warmth_last_protected", ())
     state.setdefault("area_warmth_last_protected", ())
     for family in ATTENTION_FAMILIES:
@@ -607,7 +620,13 @@ def _live_social_warmth_rows(sim, state=None):
         if score < SOCIAL_WARMTH_MIN_SCORE:
             continue
         live.append((eid, pos, score, row))
-    return tuple(live)
+    live_by_eid = {eid: (eid, pos, score, row) for eid, pos, score, row in live}
+    known_actor_rows, _known_area_rows = _known_opportunity_attention_rows(sim)
+    for eid, pos, score, row in known_actor_rows:
+        existing = live_by_eid.get(eid)
+        if existing is None or float(score) > float(existing[2]):
+            live_by_eid[eid] = (eid, pos, score, row)
+    return tuple(live_by_eid[eid] for eid in sorted(live_by_eid))
 
 
 def _live_area_warmth_rows(sim, state=None):
@@ -625,10 +644,23 @@ def _live_area_warmth_rows(sim, state=None):
         if score < SOCIAL_WARMTH_MIN_SCORE:
             continue
         live.append((str(key), chunk, score, row))
-    return tuple(live)
+    live_by_key = {str(key): (str(key), chunk, score, row) for key, chunk, score, row in live}
+    _known_actor_rows, known_area_rows = _known_opportunity_attention_rows(sim)
+    for key, chunk, score, row in known_area_rows:
+        existing = live_by_key.get(str(key))
+        if existing is None or float(score) > float(existing[2]):
+            live_by_key[str(key)] = (str(key), chunk, score, row)
+    return tuple(live_by_key[key] for key in sorted(live_by_key))
 
 
-def _social_warmth_reason_for_actor(state, eid):
+def _social_warmth_reason_for_actor(sim, state, eid):
+    known_rows = state.get("known_opportunity_actor_rows", {})
+    known_row = known_rows.get(eid) if isinstance(known_rows, dict) else None
+    if not isinstance(known_row, dict) and isinstance(known_rows, dict):
+        known_row = known_rows.get(str(eid))
+    if isinstance(known_row, dict):
+        reason = str(known_row.get("reason", "known_opportunity_target") or "known_opportunity_target").strip().lower()
+        return f"social_warmth:{reason}"
     row = _social_warmth_rows(state).get(eid)
     if not isinstance(row, dict):
         row = _social_warmth_rows(state).get(str(eid))
@@ -778,6 +810,141 @@ def _owned_property_warmth_rows(sim):
     return tuple(rows)
 
 
+def _known_opportunity_attention_rows(sim):
+    """Return actor/place anchors for active opportunities known to the player."""
+    player_eid = getattr(sim, "player_eid", None)
+    if player_eid is None:
+        return tuple(), tuple()
+    opportunities = getattr(sim, "world_traits", {}).get("opportunities", {})
+    if not isinstance(opportunities, dict):
+        return tuple(), tuple()
+    intel_by_observer = opportunities.get("intel_by_observer", {})
+    player_intel = intel_by_observer.get(str(player_eid), {}) if isinstance(intel_by_observer, dict) else {}
+    if not isinstance(player_intel, dict):
+        player_intel = {}
+
+    positions = sim.ecs.get(Position)
+    actor_anchors = {}
+    area_anchors = {}
+    for entry in tuple(opportunities.get("active", ()) or ()):
+        if not isinstance(entry, dict):
+            continue
+        opportunity_id = _safe_int(entry.get("id"), 0)
+        intel = player_intel.get(str(opportunity_id)) if opportunity_id > 0 else None
+        awareness = str((intel or {}).get("awareness_state", "") or "").strip().lower() if isinstance(intel, dict) else ""
+        requirements = entry.get("requirements", {}) if isinstance(entry.get("requirements"), dict) else {}
+        known = awareness in {"heard", "confirmed"}
+        known = known or _safe_int(entry.get("first_player_known_tick"), -1) >= 0
+        known = known or bool(requirements.get("player_accepted"))
+        if not known:
+            continue
+        issuer = entry.get("issuer", {}) if isinstance(entry.get("issuer"), dict) else {}
+        giver_eid = _safe_int(requirements.get("giver_npc_eid"), 0)
+        if giver_eid <= 0:
+            giver_eid = _safe_int(issuer.get("npc_eid"), 0)
+        if giver_eid > 0 and giver_eid != _safe_int(player_eid, -1):
+            actor_anchors[giver_eid] = {
+                "score": KNOWN_QUEST_GIVER_WARMTH_SCORE,
+                "reason": "known_quest_giver",
+                "opportunity_id": opportunity_id,
+            }
+
+        target_eids = set()
+        for key in ("kill_target_eid", "bounty_target_eid", "interact_npc_eid", "pickup_interact_npc_eid"):
+            target_eid = _safe_int(requirements.get(key), 0)
+            if (
+                target_eid > 0
+                and target_eid != _safe_int(player_eid, -1)
+                and positions.get(target_eid) is not None
+            ):
+                target_eids.add(target_eid)
+        for target_eid in target_eids:
+            existing = actor_anchors.get(target_eid)
+            if not isinstance(existing, dict) or _safe_float(existing.get("score"), 0.0) < KNOWN_QUEST_TARGET_WARMTH_SCORE:
+                actor_anchors[target_eid] = {
+                    "score": KNOWN_QUEST_TARGET_WARMTH_SCORE,
+                    "reason": "known_opportunity_target",
+                    "opportunity_id": opportunity_id,
+                }
+
+        if target_eids:
+            continue
+        chunk = _normalize_chunk(requirements.get("visit_chunk")) or _normalize_chunk(entry.get("chunk"))
+        if chunk is None:
+            property_id = str(requirements.get("property_id", "") or "").strip()
+            prop = getattr(sim, "properties", {}).get(property_id)
+            chunk = _property_chunk(sim, prop)
+        if chunk is None:
+            continue
+        key = f"known_opportunity:{opportunity_id}"
+        area_anchors[key] = {
+            "chunk": chunk,
+            "score": KNOWN_QUEST_LOCATION_WARMTH_SCORE,
+            "reason": "known_opportunity_location",
+            "opportunity_id": opportunity_id,
+        }
+
+    actor_rows = []
+    now = _safe_int(getattr(sim, "tick", 0), 0)
+    for actor_eid in sorted(actor_anchors):
+        pos = positions.get(actor_eid)
+        if pos is None:
+            continue
+        anchor = actor_anchors[actor_eid]
+        score = _safe_float(anchor.get("score"), 0.0)
+        row = {
+            "actor_eid": actor_eid,
+            "other_eid": _safe_int(player_eid, 0),
+            "score": score,
+            "peak_score": score,
+            "reason": str(anchor.get("reason", "known_opportunity_target")),
+            "reason_score": score,
+            "change_score": 0.0,
+            "bond_strength": 0.0,
+            "last_tick": now,
+            "spend_count": 0,
+            "no_spend": True,
+            "opportunity_ids": (int(anchor.get("opportunity_id", 0)),),
+        }
+        actor_rows.append((actor_eid, pos, score, row))
+
+    area_rows = []
+    for key in sorted(area_anchors):
+        anchor = area_anchors[key]
+        chunk = _normalize_chunk(anchor.get("chunk"))
+        if chunk is None:
+            continue
+        score = _safe_float(anchor.get("score"), 0.0)
+        row = {
+            "chunk": chunk,
+            "score": score,
+            "peak_score": score,
+            "reason": "known_opportunity_location",
+            "reason_score": score,
+            "source_kind": "known_opportunity",
+            "source_id": str(anchor.get("opportunity_id", "")),
+            "last_tick": now,
+            "spend_count": 0,
+            "no_spend": True,
+        }
+        area_rows.append((key, chunk, score, row))
+    return tuple(actor_rows), tuple(area_rows)
+
+
+def _known_opportunity_chunks(sim):
+    actor_rows, area_rows = _known_opportunity_attention_rows(sim)
+    chunks = set()
+    for _eid, pos, _score, _row in actor_rows:
+        chunk = _chunk_for_pos(sim, pos)
+        if chunk is not None:
+            chunks.add(chunk)
+    for _key, chunk, _score, _row in area_rows:
+        chunk = _normalize_chunk(chunk)
+        if chunk is not None:
+            chunks.add(chunk)
+    return set(chunks)
+
+
 def social_warmth_protected_chunks(sim, unload_candidates, *, budget=SOCIAL_WARMTH_CHUNK_BUDGET):
     state = actor_attention_state(sim)
     candidates = {
@@ -801,7 +968,17 @@ def social_warmth_protected_chunks(sim, unload_candidates, *, budget=SOCIAL_WARM
         chunk = _chunk_for_pos(sim, pos)
         if chunk not in candidates:
             continue
-        by_chunk[chunk].append(_warmth_item("actor", eid, chunk, score, row, actor_eid=eid))
+        by_chunk[chunk].append(
+            _warmth_item(
+                "actor",
+                eid,
+                chunk,
+                score,
+                row,
+                actor_eid=eid,
+                no_spend=bool(row.get("no_spend")),
+            )
+        )
 
     selected = _rank_warmth_candidates(by_chunk)[:budget]
     protected = {item["chunk"] for item in selected}
@@ -810,7 +987,8 @@ def social_warmth_protected_chunks(sim, unload_candidates, *, budget=SOCIAL_WARM
     for selected_row in selected:
         last.append(_selected_warmth_last_row(selected_row))
         for item in selected_row["items"]:
-            _spend_social_warmth_row(social_rows, item["key"])
+            if not bool(item.get("no_spend")):
+                _spend_social_warmth_row(social_rows, item["key"])
     state["social_warmth_protected_chunks"] = protected
     state["social_warmth_last_protected"] = tuple(last)
     _prune_social_warmth(sim, state, live_only=True)
@@ -839,7 +1017,9 @@ def area_warmth_protected_chunks(sim, unload_candidates, *, budget=BUILDING_WARM
     for key, chunk, score, row in _live_area_warmth_rows(sim, state):
         if chunk not in candidates:
             continue
-        by_chunk[chunk].append(_warmth_item("area", key, chunk, score, row))
+        by_chunk[chunk].append(
+            _warmth_item("area", key, chunk, score, row, no_spend=bool(row.get("no_spend")))
+        )
     for key, chunk, score, row in _owned_property_warmth_rows(sim):
         if chunk not in candidates:
             continue
@@ -874,9 +1054,18 @@ def warmth_protected_chunks(
         building_budget = budget
     elif area_budget is not None:
         building_budget = area_budget
-    social_protected = social_warmth_protected_chunks(sim, unload_candidates, budget=social_budget)
-    area_protected = area_warmth_protected_chunks(sim, unload_candidates, budget=building_budget)
-    return set(social_protected) | set(area_protected)
+    candidates = {
+        chunk
+        for chunk in (_normalize_chunk(raw) for raw in tuple(unload_candidates or ()))
+        if chunk is not None
+    }
+    opportunity_protected = _known_opportunity_chunks(sim) & candidates
+    remaining = candidates - opportunity_protected
+    social_protected = social_warmth_protected_chunks(sim, remaining, budget=social_budget)
+    area_protected = area_warmth_protected_chunks(sim, remaining, budget=building_budget)
+    state = actor_attention_state(sim)
+    state["opportunity_protected_chunks"] = set(opportunity_protected)
+    return set(opportunity_protected) | set(social_protected) | set(area_protected)
 
 
 def warmth_debug_summary(sim, *, limit=1):
@@ -890,12 +1079,27 @@ def warmth_debug_summary(sim, *, limit=1):
     area_protected = state.get("area_warmth_protected_chunks", set())
     if not isinstance(area_protected, set):
         area_protected = set(area_protected or ())
-    protected = set(social_protected) | set(area_protected)
+    opportunity_protected = state.get("opportunity_protected_chunks", set())
+    if not isinstance(opportunity_protected, set):
+        opportunity_protected = set(opportunity_protected or ())
+    protected = set(social_protected) | set(area_protected) | set(opportunity_protected)
     combined = []
     for eid, pos, score, row in live_actor_rows:
-        combined.append(_warmth_item("actor", eid, _chunk_for_pos(sim, pos), score, row, actor_eid=eid))
+        combined.append(
+            _warmth_item(
+                "actor",
+                eid,
+                _chunk_for_pos(sim, pos),
+                score,
+                row,
+                actor_eid=eid,
+                no_spend=bool(row.get("no_spend")),
+            )
+        )
     for key, chunk, score, row in live_area_rows:
-        combined.append(_warmth_item("area", key, chunk, score, row))
+        combined.append(
+            _warmth_item("area", key, chunk, score, row, no_spend=bool(row.get("no_spend")))
+        )
     for key, chunk, score, row in owned_property_rows:
         combined.append(_warmth_item("area", key, chunk, score, row, no_spend=True))
     owned_business_count = sum(1 for _key, _chunk, _score, row in owned_property_rows if row.get("reason") == "player_business")
@@ -922,6 +1126,7 @@ def warmth_debug_summary(sim, *, limit=1):
         "protected_count": len(protected),
         "social_protected_count": len(social_protected),
         "area_protected_count": len(area_protected),
+        "opportunity_protected_count": len(opportunity_protected),
         "social_budget": SOCIAL_WARMTH_CHUNK_BUDGET,
         "building_budget": BUILDING_WARMTH_CHUNK_BUDGET,
         "top": tuple(top),
@@ -998,6 +1203,26 @@ def _collect_attention_sources(sim, state):
             warm_chunks.add(chunk)
             reason = str(row.get("tracking_reason", "") or "opportunity").strip() or "opportunity"
             _add_chunk_reason(chunk_reasons, chunk, f"opportunity:{reason}")
+
+    known_actor_rows, known_area_rows = _known_opportunity_attention_rows(sim)
+    state["known_opportunity_actor_rows"] = {
+        int(eid): dict(row)
+        for eid, _pos, _score, row in known_actor_rows
+    }
+    state["known_opportunity_area_rows"] = {
+        str(key): dict(row)
+        for key, _chunk, _score, row in known_area_rows
+    }
+    for _eid, pos, _score, row in known_actor_rows:
+        if str(row.get("reason", "") or "").strip().lower() != "known_opportunity_target":
+            continue
+        chunk = _chunk_for_pos(sim, pos)
+        if chunk is not None:
+            warm_chunks.add(chunk)
+            _add_chunk_reason(chunk_reasons, chunk, "known_opportunity_target")
+    for _key, chunk, _score, row in known_area_rows:
+        warm_chunks.add(chunk)
+        _add_chunk_reason(chunk_reasons, chunk, str(row.get("reason", "known_opportunity_location")))
 
     try:
         from game.system_support.fire_runtime import fire_protected_chunks
@@ -1227,7 +1452,7 @@ def attention_scope_for_actor(sim, eid, *, pos=None, ai=None):
     if reasons:
         return {"scope": "full", "reasons": tuple(sorted(set(reasons)))}
 
-    social_warmth_reason = _social_warmth_reason_for_actor(state, eid)
+    social_warmth_reason = _social_warmth_reason_for_actor(sim, state, eid)
     if social_warmth_reason:
         return {"scope": "warm", "reasons": (social_warmth_reason,)}
 
@@ -1322,6 +1547,8 @@ def refresh_actor_attention(sim, *, player_eid=None):
     stats["social_warmth_protected_chunks"] = len(protected if isinstance(protected, set) else set(protected or ()))
     protected = state.get("area_warmth_protected_chunks", set())
     stats["area_warmth_protected_chunks"] = len(protected if isinstance(protected, set) else set(protected or ()))
+    protected = state.get("opportunity_protected_chunks", set())
+    stats["opportunity_protected_chunks"] = len(protected if isinstance(protected, set) else set(protected or ()))
     state["stats"] = stats
     state["last_refresh_tick"] = tick
     return state
