@@ -209,12 +209,6 @@ from game.dialogue_shape import (
     shaped_opening_lines as _shaped_opening_lines,
 )
 from game.dialogue_social_context import dialogue_social_context_read as _dialogue_social_context_read
-from game.tutorial import (
-    current_tutorial_hint as _current_tutorial_hint,
-    is_tutorial_run as _is_tutorial_run,
-    tutorial_guide_line as _tutorial_guide_line,
-    tutorial_state as _tutorial_state,
-)
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
     building_id_from_structure as _building_id_from_structure,
@@ -7706,14 +7700,6 @@ class NPCInteractionSystem(System):
             "dialogue_read_player_ok": bool(social_context.get("read_player_ok")),
             "dialogue_check_in_ok": bool(social_context.get("check_in_ok")),
         })
-        tutorial_read = _tutorial_state(self.sim) if _is_tutorial_run(self.sim) else {}
-        context["tutorial_guide"] = bool(
-            tutorial_read
-            and tutorial_read.get("guide_eid") is not None
-            and tutorial_read.get("guide_eid") == npc_eid
-        )
-        if context["tutorial_guide"]:
-            context["tutorial_hint"] = _current_tutorial_hint(self.sim)
         context["side_job_offer"] = self._side_job_for_npc(npc_eid)
         context["side_job_pending_offer"] = self._pending_side_job_offer(npc_eid)
         context["side_job_decline_cooling"] = self._side_job_decline_active(npc_eid)
@@ -12818,12 +12804,6 @@ class NPCInteractionSystem(System):
                 ),
             })
         rows = self._augment_repeat_dialogue_rows(context, available)
-        if context.get("tutorial_guide") and not any(str(row.get("id", "")).strip().lower() == "tutorial_next" for row in rows):
-            rows.insert(0, {
-                "id": "tutorial_next",
-                "label": "What now?",
-                "player_line": "What should I do next?",
-            })
         return rows
 
     def _prioritize_dialog_topics(self, topics, highlight_topic_ids=()):
@@ -13182,14 +13162,6 @@ class NPCInteractionSystem(System):
     def _resolve_dialog_topic(self, context, topic_id, *, pressure_topic_id=None, pressure_family_id=None):
         topic_id = str(topic_id or "").strip().lower()
         npc_eid = context["npc_eid"]
-        if topic_id == "tutorial_next" and context.get("tutorial_guide"):
-            self._dialogue_mark_topic(
-                npc_eid,
-                topic_id,
-                pressure_topic_id=pressure_topic_id,
-                pressure_family_id=pressure_family_id,
-            )
-            return {"npc_lines": [_tutorial_guide_line(self.sim)]}
         ask_count = self._dialogue_mark_topic(
             npc_eid,
             topic_id,

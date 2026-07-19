@@ -29,14 +29,8 @@ py -m pip install pygame-ce windows-curses
 py main.py --ui pygame
 ```
 
-To try the disposable tutorial first:
-
-```powershell
-py main.py --tutorial --ui pygame
-```
-
-Tutorial runs ask for the ordinary character setup, but they do not write character saves.
-For current playtests, ordinary startup never opens the tutorial automatically; start a regular run and use `?` for the in-game help surface unless you specifically want to test `--tutorial`.
+Press `?` during a run for the exhaustive control and system reference. See
+`PLAYER_GUIDE/` for the spoiler-light external guide.
 
 note: the two venv commands are optional, if you wish to run in a virtual python sandbox. if you are following my lead, 
     you would throw caution to the wind.

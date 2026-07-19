@@ -24,12 +24,6 @@ For current playtests, start with a regular run and use `?` for the in-game help
 python3 main.py --ui pygame
 ```
 
-The disposable tutorial is available only when explicitly requested:
-
-```bash
-python3 main.py --tutorial --ui pygame
-```
-
 ## Files You May See
 
 - `saves/` keeps local saves and the small player config.

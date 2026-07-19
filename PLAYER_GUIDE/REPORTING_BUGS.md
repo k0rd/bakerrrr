@@ -9,7 +9,7 @@ Useful things to include:
 - Your OS.
 - Whether you used a packaged build or source launch.
 - The command you used, if you launched from source.
-- Whether it happened in the tutorial or a normal run.
+- Which screen, panel, or play mode was active.
 - The last visible message or menu you remember.
 - What you expected to happen.
 - What happened instead.

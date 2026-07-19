@@ -12,13 +12,9 @@ For current playtests, start with a regular run:
 python3 main.py --ui pygame
 ```
 
-The disposable tutorial is opt-in while its pacing and wording are being tuned:
-
-```bash
-python3 main.py --tutorial --ui pygame
-```
-
-This opens the pygame frontend and starts a disposable tutorial run. It still asks for your character name and identity, because those are normal game surfaces. When you leave that tutorial, it does not resume or write a character save.
+Press `?` whenever you need the exhaustive in-game reference. The HUD footer
+also changes with the active mode and panel, so it is the quickest contextual
+control reminder.
 
 ## Regular Launch
 
@@ -34,7 +30,7 @@ You can also select pygame through the environment:
 BAKERRRR_UI=pygame python3 main.py
 ```
 
-The default launch uses the curses frontend:
+The default launch uses the pygame frontend:
 
 ```bash
 python3 main.py

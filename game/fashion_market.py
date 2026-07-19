@@ -284,9 +284,6 @@ def flush_fashion_market(sim):
     registry = fashion_market_for_sim(sim)
     if not isinstance(runtime, dict) or registry is None:
         return None
-    rules = getattr(sim, "world_traits", {}).get("rules", {}) if isinstance(getattr(sim, "world_traits", None), dict) else {}
-    if isinstance(rules, dict) and bool(rules.get("tutorial_no_persistence")):
-        return None
     runtime["npc_outfits_since_flush"] = 0
     return save_fashion_market(registry, path=runtime.get("path"))
 
@@ -493,9 +490,6 @@ def record_cosmetic_popularity(sim, item_id, metadata=None, *, source="player", 
     registry = fashion_market_for_sim(sim)
     runtime = getattr(sim, "fashion_market_runtime", None) if sim is not None else None
     if registry is None or not isinstance(runtime, dict) or not is_cosmetic_fashion_item(item_id):
-        return False
-    rules = getattr(sim, "world_traits", {}).get("rules", {}) if isinstance(getattr(sim, "world_traits", None), dict) else {}
-    if isinstance(rules, dict) and bool(rules.get("tutorial_no_persistence")):
         return False
     source = _key(source)
     if source not in {"player", "npc"}:

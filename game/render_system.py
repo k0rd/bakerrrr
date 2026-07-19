@@ -4356,14 +4356,6 @@ class RenderSystem(System):
         final_operation_line = ""
         if final_operation_eval:
             final_operation_line = str(final_operation_eval.get("summary_line", "")).strip()
-        tutorial_hint = ""
-        try:
-            from game.tutorial import current_tutorial_hint as _current_tutorial_hint, is_tutorial_run as _is_tutorial_run
-
-            if _is_tutorial_run(self.sim):
-                tutorial_hint = str(_current_tutorial_hint(self.sim) or "").strip()
-        except Exception:
-            tutorial_hint = ""
         opportunity_rows = evaluate_opportunity_facts(
             self.sim,
             self.player_eid,
@@ -4410,8 +4402,6 @@ class RenderSystem(System):
             quest_lines = _wrap_display_lines(report_hint_line, hud_text_w, max_lines=1)
         else:
             quest_lines = []
-            if tutorial_hint:
-                quest_lines.extend(_wrap_display_lines(tutorial_hint, hud_text_w, max_lines=1))
             if objective_line and len(quest_lines) < 2:
                 quest_lines.extend(_wrap_display_lines(objective_line, hud_text_w, max_lines=1))
             if final_operation_line and len(quest_lines) < 2:
@@ -4480,8 +4470,6 @@ class RenderSystem(System):
             if look_ui.get("active"):
                 rail_run_lines.extend(_wrap_display_lines(report_hint_line, rail_text_w, max_lines=1))
             else:
-                if tutorial_hint:
-                    rail_run_lines.extend(_wrap_display_lines(tutorial_hint, rail_text_w, max_lines=1))
                 if objective_line and len(rail_run_lines) < 3:
                     rail_run_lines.extend(_wrap_display_lines(objective_line, rail_text_w, max_lines=1))
                 if final_operation_line and len(rail_run_lines) < 3:

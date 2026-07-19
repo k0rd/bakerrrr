@@ -518,10 +518,10 @@ def _result_from_row(row: dict[str, Any], *, export_root: Path) -> dict[str, Any
 
 
 def export_success_reward_bundle(sim, player_eid=None, event_data=None, *, export_root: Path | str | None = None) -> dict[str, Any]:
-    """Export one optional reward bundle for a successful non-tutorial run.
+    """Export one optional reward bundle for a successful run.
 
-    The caller is responsible for tutorial gating. This function still refuses
-    non-success outcomes so tests and duplicate conclusion paths stay harmless.
+    This function refuses non-success outcomes so tests and duplicate
+    conclusion paths stay harmless.
     """
 
     event_data = dict(event_data or {})

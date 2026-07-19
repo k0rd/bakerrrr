@@ -21,7 +21,7 @@ PLAYER_GUIDE/examples/custom_content/ui_themes/coastal_glass.json
 
 ## Generated Rewards
 
-Successful non-tutorial runs can write optional generated reward files under:
+Successful runs can write optional generated reward files under:
 
 ```bash
 saves/rewards/

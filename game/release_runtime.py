@@ -161,7 +161,7 @@ def debug_disabled_hint(sim):
 def _compact_run_summary(run_end):
     if not isinstance(run_end, dict):
         return "unavailable"
-    keys = ("outcome", "reason", "objective_title", "tick", "tutorial", "saved")
+    keys = ("outcome", "reason", "objective_title", "tick", "saved")
     parts = []
     for key in keys:
         if key in run_end:
@@ -169,7 +169,7 @@ def _compact_run_summary(run_end):
     return ", ".join(parts) if parts else "unavailable"
 
 
-def write_crash_report(exc, *, argv=None, backend=None, tutorial=None, run_end=None, crash_path=None):
+def write_crash_report(exc, *, argv=None, backend=None, run_end=None, crash_path=None):
     path = Path(crash_path) if crash_path else CRASH_REPORT_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     now = _datetime.datetime.now(_datetime.timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -181,7 +181,6 @@ def write_crash_report(exc, *, argv=None, backend=None, tutorial=None, run_end=N
         f"python: {sys.version.split()[0]}",
         f"argv: {args_text}",
         f"selected_ui: {backend or 'unknown'}",
-        f"tutorial: {tutorial if tutorial is not None else 'unknown'}",
         f"save_dir: {SAVE_DIR}",
         f"last_run_summary: {_compact_run_summary(run_end)}",
         "",
