@@ -58,6 +58,7 @@ TOPIC_ORDER = (
     "service_appearance",
     "service_outfitter",
     "service_drone_parts",
+    "service_records",
     "service_justice",
     "service_vehicle_sales",
     "service_used_cars",
@@ -282,6 +283,7 @@ TOPIC_DEFS = {
             "service_appearance",
             "service_outfitter",
             "service_drone_parts",
+            "service_records",
             "service_justice",
             "service_vehicle_sales",
             "service_used_cars",
@@ -421,6 +423,11 @@ TOPIC_DEFS = {
         "root": False,
         "unlocks": (),
     },
+    "service_records": {
+        "label": "Where can I inspect civic records?",
+        "root": False,
+        "unlocks": (),
+    },
     "service_justice": {
         "label": "Where's the nearest jail or courthouse?",
         "root": False,
@@ -531,6 +538,7 @@ TOPIC_DEFS = {
             "service_appearance",
             "service_outfitter",
             "service_drone_parts",
+            "service_records",
             "service_justice",
             "service_vehicle_sales",
             "service_used_cars",
@@ -1506,6 +1514,12 @@ PLAYER_TOPIC_BANKS = {
         "Who sells drone modules or sensors around here?",
         "Where would I find radios, batteries, or drone stock?",
         "If I need drone parts, who is close?",
+    ),
+    "service_records": (
+        "Where can I inspect civic records?",
+        "Who keeps the public records around here?",
+        "Where would I look up a person or license nearby?",
+        "Is there a public records counter close by?",
     ),
     "service_justice": (
         "Where is the nearest jail or courthouse?",
@@ -5398,6 +5412,8 @@ def topic_label(topic_id, context=None):
         return "Any outfitter nearby?"
     if topic_id == "service_drone_parts":
         return "Any drone parts nearby?"
+    if topic_id == "service_records":
+        return "Where can I inspect civic records?"
     if topic_id == "service_justice":
         return "Where's the nearest jail or courthouse?"
     if topic_id == "service_vehicle_sales":

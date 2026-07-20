@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import copy
 import json
+import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Mapping
 
@@ -30,7 +32,11 @@ from game.flora_genetics import normalize_flora_genetics
 
 
 ECOLOGY_REGISTRY_VERSION = 1
-ECOLOGY_REGISTRY_PATH = SAVE_DIR / "ecology_registry.json"
+ECOLOGY_REGISTRY_JSON_PATH = SAVE_DIR / "ecology_registry.json"
+ECOLOGY_REGISTRY_DB_PATH = SAVE_DIR / "ecology_registry.sqlite3"
+# Public compatibility name: the canonical registry is now SQLite.  The JSON
+# path remains separately named as the one-time migration source.
+ECOLOGY_REGISTRY_PATH = ECOLOGY_REGISTRY_DB_PATH
 FAUNA_CULL_STEP = 20
 FAUNA_CULL_FEE = 25
 FAUNA_VALUE_MULTIPLIERS = {
@@ -92,8 +98,12 @@ def normalize_ecology_registry(payload):
     return rows
 
 
-def load_ecology_registry(path=None):
-    source = Path(path) if path is not None else ECOLOGY_REGISTRY_PATH
+def _is_json_registry_path(path):
+    return Path(path).suffix.lower() == ".json"
+
+
+def _load_json_registry(path):
+    source = Path(path)
     if not source.exists():
         return empty_ecology_registry()
     try:
@@ -102,8 +112,8 @@ def load_ecology_registry(path=None):
         return empty_ecology_registry()
 
 
-def save_ecology_registry(registry, path=None):
-    target = Path(path) if path is not None else ECOLOGY_REGISTRY_PATH
+def _save_json_registry(registry, path):
+    target = Path(path)
     payload = normalize_ecology_registry(registry)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".tmp")
@@ -112,14 +122,171 @@ def save_ecology_registry(registry, path=None):
     return target
 
 
+def _connect_ecology_db(path, *, wal=True):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(target), timeout=5.0)
+    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute(f"PRAGMA journal_mode = {'WAL' if wal else 'DELETE'}")
+    # Lineage birth is an installation-durable event. FULL still keeps these
+    # tiny row transactions sub-millisecond while covering sudden power loss,
+    # not merely process crashes.
+    connection.execute("PRAGMA synchronous = FULL")
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ecology_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ecology_lineages (
+            domain TEXT NOT NULL,
+            native_id TEXT NOT NULL,
+            record_json TEXT NOT NULL,
+            PRIMARY KEY (domain, native_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ecology_eradication_history (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_json TEXT NOT NULL
+        )
+        """
+    )
+    connection.commit()
+    return connection
+
+
+def _record_json(record):
+    return json.dumps(_json_safe(record), separators=(",", ":"), sort_keys=True)
+
+
+def _load_sqlite_registry(path):
+    source = Path(path)
+    if not source.exists():
+        return empty_ecology_registry()
+    try:
+        connection = _connect_ecology_db(source)
+        try:
+            registry = empty_ecology_registry()
+            for domain, native_id, record_json in connection.execute(
+                "SELECT domain, native_id, record_json FROM ecology_lineages"
+            ):
+                if domain not in {"flora", "fauna"}:
+                    continue
+                record = json.loads(record_json)
+                if isinstance(record, Mapping):
+                    registry[domain][str(native_id)] = dict(record)
+            for (record_json,) in connection.execute(
+                "SELECT record_json FROM ecology_eradication_history ORDER BY sequence"
+            ):
+                record = json.loads(record_json)
+                if isinstance(record, Mapping):
+                    registry["eradication_history"].append(dict(record))
+            return normalize_ecology_registry(registry)
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error, json.JSONDecodeError):
+        return empty_ecology_registry()
+
+
+def load_ecology_registry(path=None):
+    source = Path(path) if path is not None else ECOLOGY_REGISTRY_PATH
+    if _is_json_registry_path(source):
+        return _load_json_registry(source)
+    return _load_sqlite_registry(source)
+
+
+def _replace_sqlite_registry(registry, path, *, wal=True):
+    target = Path(path)
+    payload = normalize_ecology_registry(registry)
+    connection = _connect_ecology_db(target, wal=wal)
+    try:
+        with connection:
+            connection.execute("DELETE FROM ecology_lineages")
+            connection.execute("DELETE FROM ecology_eradication_history")
+            lineage_rows = []
+            for domain in ("flora", "fauna"):
+                for native_id, record in payload[domain].items():
+                    lineage_rows.append((domain, str(native_id), _record_json(record)))
+            connection.executemany(
+                "INSERT INTO ecology_lineages (domain, native_id, record_json) VALUES (?, ?, ?)",
+                lineage_rows,
+            )
+            connection.executemany(
+                "INSERT INTO ecology_eradication_history (record_json) VALUES (?)",
+                [(_record_json(record),) for record in payload["eradication_history"]],
+            )
+            connection.execute(
+                "INSERT INTO ecology_meta (key, value) VALUES ('version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(ECOLOGY_REGISTRY_VERSION),),
+            )
+    finally:
+        connection.close()
+    return target
+
+
+def save_ecology_registry(registry, path=None):
+    target = Path(path) if path is not None else ECOLOGY_REGISTRY_PATH
+    if _is_json_registry_path(target):
+        return _save_json_registry(registry, target)
+    return _replace_sqlite_registry(registry, target)
+
+
+def migrate_ecology_registry_json(json_path=None, db_path=None):
+    """Atomically import a legacy JSON registry while retaining its source."""
+
+    source = Path(json_path) if json_path is not None else ECOLOGY_REGISTRY_JSON_PATH
+    target = Path(db_path) if db_path is not None else ECOLOGY_REGISTRY_DB_PATH
+    if target.exists() or not source.exists():
+        return False
+    registry = _load_json_registry(source)
+    temporary = target.with_suffix(target.suffix + ".migrating")
+    temporary.unlink(missing_ok=True)
+    try:
+        _replace_sqlite_registry(registry, temporary, wal=False)
+        verified = _load_sqlite_registry(temporary)
+        for domain in ("flora", "fauna"):
+            if set(verified[domain]) != set(registry[domain]):
+                raise ValueError(f"ecology registry migration lost {domain} lineages")
+        if len(verified["eradication_history"]) != len(registry["eradication_history"]):
+            raise ValueError("ecology registry migration lost eradication history")
+        if verified != registry:
+            raise ValueError("ecology registry migration changed lineage payloads")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary.replace(target)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return True
+
+
 def prime_ecology_registry(sim, *, registry_path=None):
     if sim is None:
         return empty_ecology_registry()
     path = Path(registry_path) if registry_path is not None else ECOLOGY_REGISTRY_PATH
+    migrated = False
+    if not _is_json_registry_path(path) and not path.exists():
+        legacy_path = ECOLOGY_REGISTRY_JSON_PATH if registry_path is None else path.with_suffix(".json")
+        migrated = migrate_ecology_registry_json(legacy_path, path)
+        if not migrated:
+            save_ecology_registry(empty_ecology_registry(), path)
     runtime = {
         "path": str(path),
         "registry": load_ecology_registry(path),
         "primed": True,
+        "backend": "json" if _is_json_registry_path(path) else "sqlite",
+        "migrated_from_json": bool(migrated),
+        "batch_depth": 0,
+        "pending_lineages": set(),
+        "history_dirty": False,
+        "full_sync_pending": False,
     }
     sim.ecology_registry_runtime = runtime
     _prime_native_flora_profiles(sim)
@@ -137,12 +304,104 @@ def ecology_registry_for_sim(sim):
     return registry
 
 
-def _save_runtime_registry(sim):
+def _persist_sqlite_changes(path, registry, lineage_keys, *, history_dirty=False):
+    connection = _connect_ecology_db(path)
+    try:
+        with connection:
+            for domain, native_id in sorted(set(lineage_keys)):
+                if domain not in {"flora", "fauna"}:
+                    continue
+                record = (registry.get(domain) or {}).get(native_id)
+                if isinstance(record, Mapping):
+                    connection.execute(
+                        """
+                        INSERT INTO ecology_lineages (domain, native_id, record_json)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(domain, native_id)
+                        DO UPDATE SET record_json=excluded.record_json
+                        """,
+                        (domain, native_id, _record_json(record)),
+                    )
+                else:
+                    connection.execute(
+                        "DELETE FROM ecology_lineages WHERE domain=? AND native_id=?",
+                        (domain, native_id),
+                    )
+            if history_dirty:
+                connection.execute("DELETE FROM ecology_eradication_history")
+                connection.executemany(
+                    "INSERT INTO ecology_eradication_history (record_json) VALUES (?)",
+                    [(_record_json(record),) for record in registry.get("eradication_history", ())],
+                )
+            connection.execute(
+                "INSERT INTO ecology_meta (key, value) VALUES ('version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(ECOLOGY_REGISTRY_VERSION),),
+            )
+    finally:
+        connection.close()
+    return Path(path)
+
+
+def _flush_runtime_registry(sim):
     runtime = getattr(sim, "ecology_registry_runtime", None) if sim is not None else None
     registry = ecology_registry_for_sim(sim)
     if not isinstance(runtime, dict) or registry is None:
         return None
-    return save_ecology_registry(registry, path=runtime.get("path"))
+    path = Path(runtime.get("path"))
+    pending = set(runtime.get("pending_lineages") or ())
+    history_dirty = bool(runtime.get("history_dirty"))
+    full_sync = bool(runtime.get("full_sync_pending"))
+    if not pending and not history_dirty and not full_sync:
+        return path
+    if str(runtime.get("backend", "")).lower() == "sqlite" and not full_sync:
+        result = _persist_sqlite_changes(path, registry, pending, history_dirty=history_dirty)
+    else:
+        result = save_ecology_registry(registry, path=path)
+    runtime["pending_lineages"] = set()
+    runtime["history_dirty"] = False
+    runtime["full_sync_pending"] = False
+    return result
+
+
+def _save_runtime_registry(sim, *, lineage_keys=(), history_dirty=False, full_sync=False):
+    runtime = getattr(sim, "ecology_registry_runtime", None) if sim is not None else None
+    registry = ecology_registry_for_sim(sim)
+    if not isinstance(runtime, dict) or registry is None:
+        return None
+    pending = runtime.get("pending_lineages")
+    if not isinstance(pending, set):
+        pending = set(pending or ())
+        runtime["pending_lineages"] = pending
+    for domain, native_id in tuple(lineage_keys or ()):
+        domain = _key(domain)
+        native_id = str(native_id or "").strip()
+        if domain in {"flora", "fauna"} and native_id:
+            pending.add((domain, native_id))
+    runtime["history_dirty"] = bool(runtime.get("history_dirty")) or bool(history_dirty)
+    runtime["full_sync_pending"] = bool(runtime.get("full_sync_pending")) or bool(full_sync)
+    if not lineage_keys and not history_dirty:
+        runtime["full_sync_pending"] = True
+    if _safe_int(runtime.get("batch_depth"), 0) > 0:
+        return Path(runtime.get("path"))
+    return _flush_runtime_registry(sim)
+
+
+@contextmanager
+def ecology_registry_write_batch(sim):
+    """Commit all registry mutations in one transaction at pulse end."""
+
+    runtime = getattr(sim, "ecology_registry_runtime", None) if sim is not None else None
+    if not isinstance(runtime, dict) or not bool(runtime.get("primed")):
+        yield
+        return
+    runtime["batch_depth"] = _safe_int(runtime.get("batch_depth"), 0) + 1
+    try:
+        yield
+    finally:
+        runtime["batch_depth"] = max(0, _safe_int(runtime.get("batch_depth"), 1) - 1)
+        if runtime["batch_depth"] == 0:
+            _flush_runtime_registry(sim)
 
 
 def fauna_abundance_status(abundance):
@@ -277,7 +536,11 @@ def initiate_fauna_cull(
             **history_row,
         })
         registry["eradication_history"] = registry["eradication_history"][-128:]
-    _save_runtime_registry(sim)
+    _save_runtime_registry(
+        sim,
+        lineage_keys=(("fauna", native_id),),
+        history_dirty=after <= 0,
+    )
     payload = {
         "ok": True,
         "native_id": native_id,
@@ -386,8 +649,17 @@ def register_native_flora_line(sim, profile, *, source="bred"):
         "times_realized": max(1, _safe_int(existing.get("times_realized"), 0) + 1),
     }
     registry.setdefault("flora", {})[native_id] = record
-    _save_runtime_registry(sim)
-    _prime_native_flora_profiles(sim)
+    _save_runtime_registry(sim, lineage_keys=(("flora", native_id),))
+    # The hybrid is already a complete current-run profile. Mark and register
+    # only this cultivar instead of rebuilding every installation-native flora
+    # genome after each cross (an O(history) multi-second pulse on mature
+    # registries). Future runs still reconstruct detached effects during prime.
+    from game.flora_runtime import register_dynamic_flora_profile
+
+    live_profile = copy.deepcopy(dict(profile))
+    live_profile["native_lineage_id"] = native_id
+    live_profile["dynamic_flora"] = True
+    register_dynamic_flora_profile(sim, live_profile)
     sim.emit(Event(
         "ecology_lineage_native",
         domain="flora",
@@ -558,7 +830,7 @@ def register_native_fauna_line(sim, eid, genome=None, *, source="natural_breedin
     }
     record["genome"]["native_lineage_id"] = native_id
     registry.setdefault("fauna", {})[native_id] = record
-    _save_runtime_registry(sim)
+    _save_runtime_registry(sim, lineage_keys=(("fauna", native_id),))
     sim.emit(Event(
         "ecology_lineage_native",
         domain="fauna",
@@ -713,8 +985,11 @@ def ecology_species_registry_rows(sim, domain):
 
 
 __all__ = [
+    "ECOLOGY_REGISTRY_DB_PATH",
+    "ECOLOGY_REGISTRY_JSON_PATH",
     "ECOLOGY_REGISTRY_PATH",
     "ECOLOGY_REGISTRY_VERSION",
+    "ecology_registry_write_batch",
     "ecology_registry_for_sim",
     "ecology_species_registry_rows",
     "empty_ecology_registry",
@@ -724,6 +999,7 @@ __all__ = [
     "fauna_value_multiplier",
     "initiate_fauna_cull",
     "load_ecology_registry",
+    "migrate_ecology_registry_json",
     "native_fauna_profiles",
     "native_flora_effect_channels",
     "native_flora_profiles",

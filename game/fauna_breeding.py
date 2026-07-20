@@ -33,7 +33,7 @@ from game.components import (
     WildlifeBehavior,
     WildlifeSocialState,
 )
-from game.ecology_registry import register_native_fauna_line
+from game.ecology_registry import ecology_registry_write_batch, register_native_fauna_line
 from game.fauna_genetics import (
     GENERIC_BODY_CHANNELS,
     animal_genome_from_payload,
@@ -465,6 +465,10 @@ class FaunaBreedingSystem(System):
         return matured
 
     def _birth_due_gestations(self):
+        with ecology_registry_write_batch(self.sim):
+            return self._birth_due_gestations_batched()
+
+    def _birth_due_gestations_batched(self):
         births = 0
         for carrier_eid, reproduction in tuple(self.sim.ecs.get(AnimalReproduction).items()):
             gestation = reproduction.gestation if isinstance(reproduction.gestation, dict) else {}

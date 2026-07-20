@@ -45,6 +45,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "npc_social_dynamics_system",
     "social_knowledge_influence_system",
     "run_epilogue_ledger",
+    "ecology_registry_runtime",
     "property_anchor_index",
     "property_cover_index",
     "actor_attention_state",

@@ -28,7 +28,7 @@ from game.flora_runtime import (
     register_flora_patch,
 )
 from game.herbal_chemistry_runtime import plant_chemistry_class, plant_secondary_traits
-from game.ecology_registry import register_native_flora_line
+from game.ecology_registry import ecology_registry_write_batch, register_native_flora_line
 from game.items import ITEM_CATALOG, item_display_name
 from game.property_runtime import property_fixture_type
 
@@ -1359,6 +1359,11 @@ def _loaded_crossbreed_candidates(sim):
 
 
 def natural_crossbreed_loaded_flora(sim):
+    with ecology_registry_write_batch(sim):
+        return _natural_crossbreed_loaded_flora_batched(sim)
+
+
+def _natural_crossbreed_loaded_flora_batched(sim):
     records = ensure_cultivation_state(sim)
     now = _safe_int(getattr(sim, "tick", 0), 0)
     if now <= 0 or now % 600 != 0:

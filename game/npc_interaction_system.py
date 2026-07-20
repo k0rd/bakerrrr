@@ -680,6 +680,7 @@ class NPCInteractionSystem(System):
     SOCIAL_KNOWLEDGE_SHARE_COOLDOWN_TICKS = 180
     OUTFITTER_LOCATOR_ARCHETYPES = ("outfitter", "surplus_store")
     DRONE_PARTS_LOCATOR_ARCHETYPES = ("electronics_shop", "comms_shop", "drone_shop")
+    CIVIC_RECORDS_LOCATOR_ARCHETYPES = ("courthouse", "civic_office", "city_hall")
     JUSTICE_LOCATOR_ARCHETYPES = ("jail", "courthouse", "prison")
     JUSTICE_LOCATOR_ROLE_TOKENS = ("guard", "corrections", "deputy", "bailiff", "sergeant")
     SERVICE_LOCATOR_TOPICS = {
@@ -881,6 +882,15 @@ class NPCInteractionSystem(System):
             "archetypes": DRONE_PARTS_LOCATOR_ARCHETYPES,
             "local_summary": "In this chunk, {names_text} sells drone parts, radios, or electronics.",
             "near_summary": "Nearest drone or electronics counter I know is {distance_phrase} at {names_text}.",
+        },
+        "service_records": {
+            "services": ("civic_records",),
+            "service_label": "civic records office",
+            "offer_label": "public records",
+            "lead_kind": "service_records",
+            "archetypes": CIVIC_RECORDS_LOCATOR_ARCHETYPES,
+            "local_summary": "In this chunk, {names_text} keeps the public civic ledgers.",
+            "near_summary": "Nearest civic records counter I know is {distance_phrase} at {names_text}.",
         },
         "service_justice": {
             "services": (),
