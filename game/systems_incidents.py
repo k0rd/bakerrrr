@@ -778,7 +778,18 @@ class IncidentKnowledgeSystem(System):
     def _learn_drone_incident_reports(self, incident, event):
         if not isinstance(incident, dict):
             return ()
-        report_rows = drone_incident_report_rows(self.sim, incident, event)
+        reported_drone_eids = set()
+        for raw_eid in tuple(incident.get("drone_reporter_eids", ()) or ()):
+            try:
+                reported_drone_eids.add(int(raw_eid))
+            except (TypeError, ValueError):
+                continue
+        report_rows = drone_incident_report_rows(
+            self.sim,
+            incident,
+            event,
+            exclude_drone_eids=reported_drone_eids,
+        )
         if not report_rows:
             return ()
         incident_id = int(incident.get("id", 0) or 0)
@@ -825,6 +836,7 @@ class IncidentKnowledgeSystem(System):
             )
             if learned_record is None:
                 continue
+            reported_drone_eids.add(drone_eid)
             learned.append({
                 "recipient_eid": recipient_eid,
                 "drone_eid": drone_eid,
@@ -843,6 +855,7 @@ class IncidentKnowledgeSystem(System):
                 observed_coord=row.get("observed_coord"),
             ))
         if learned:
+            incident["drone_reporter_eids"] = tuple(sorted(reported_drone_eids))
             incident["observer_eids"] = tuple(sorted(existing_observers))
             incident["accountable_observer_eids"] = tuple(sorted(existing_accountable))
             incident["observation_channels"] = tuple(sorted(channels))

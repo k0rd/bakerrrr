@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from engine.visibility import observer_visible_positions
+from engine.visibility import has_line_of_sight
 
 from game.components import DroneState, Position
 from game.drone_recon import (
@@ -129,7 +129,40 @@ def _recipient_rows(sim, drone_eid, state, *, active_player_link=False, radio_re
     return tuple(recipients)
 
 
-def drone_incident_report_rows(sim, incident, event, *, item_catalog=None):
+def _nearby_candidate_coords(sim, pos, coords):
+    nearby = []
+    for coord in tuple(coords or ()):
+        try:
+            x, y, z = int(coord[0]), int(coord[1]), int(coord[2])
+            px, py, pz = int(pos.x), int(pos.y), int(pos.z)
+        except (AttributeError, IndexError, TypeError, ValueError):
+            continue
+        if z != pz:
+            continue
+        if max(abs(x - px), abs(y - py)) > DRONE_LINKED_CAMERA_RADIUS:
+            continue
+        if not _loaded(sim, x, y, z):
+            continue
+        nearby.append((x, y, z))
+    return tuple(nearby)
+
+
+def _observed_candidate_coord(sim, pos, coords):
+    for coord in tuple(coords or ()):
+        if has_line_of_sight(
+            sim,
+            pos.x,
+            pos.y,
+            pos.z,
+            coord[0],
+            coord[1],
+            coord[2],
+        ):
+            return coord
+    return None
+
+
+def drone_incident_report_rows(sim, incident, event, *, item_catalog=None, exclude_drone_eids=()):
     """Return firsthand operator/org recipient rows for drones that observed an incident.
 
     Camera-only drones do not create incident reports. They may later record or
@@ -141,13 +174,24 @@ def drone_incident_report_rows(sim, incident, event, *, item_catalog=None):
     coords = _candidate_coords(sim, incident, event)
     if not coords:
         return ()
+    excluded = set()
+    for eid in tuple(exclude_drone_eids or ()):
+        try:
+            excluded.add(int(eid))
+        except (TypeError, ValueError):
+            continue
     rows = []
     positions = sim.ecs.get(Position)
-    for drone_eid, state in list(sim.ecs.get(DroneState).items()):
+    for drone_eid, state in sim.ecs.get(DroneState).items():
         if not _deployed(state):
             continue
         pos = positions.get(drone_eid)
         if pos is None or int(getattr(state, "battery_charge", 0) or 0) <= 0:
+            continue
+        if int(drone_eid) in excluded:
+            continue
+        nearby_coords = _nearby_candidate_coords(sim, pos, coords)
+        if not nearby_coords:
             continue
         if drone_link_disruption_status(state, tick=int(getattr(sim, "tick", 0) or 0)).get("active"):
             continue
@@ -161,20 +205,7 @@ def drone_incident_report_rows(sim, incident, event, *, item_catalog=None):
             radio_report = False
         if not active_link and not radio_report:
             continue
-        visible = observer_visible_positions(
-            sim,
-            observer_eid=drone_eid,
-            x=pos.x,
-            y=pos.y,
-            z=pos.z,
-            radius=DRONE_LINKED_CAMERA_RADIUS,
-        )
-        visible = {
-            (int(x), int(y), int(z))
-            for x, y, z in visible
-            if int(z) == int(pos.z) and _loaded(sim, x, y, z)
-        }
-        observed_coord = next((coord for coord in coords if coord in visible), None)
+        observed_coord = _observed_candidate_coord(sim, pos, nearby_coords)
         if observed_coord is None:
             continue
         for recipient in _recipient_rows(
