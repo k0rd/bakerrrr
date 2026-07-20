@@ -7,7 +7,7 @@ import random
 from engine.events import Event
 from engine.visibility import has_line_of_sight
 from game.components import AI, NPCMemory, NPCWill, Occupation, Position
-from game.movement_runtime import _can_step_transition_for, _is_traversable_for
+from game.movement_runtime import _can_step_transition_for, _is_traversable_for, _movement_planning_context
 from game.npc_relationships import record_partner_combat_witnesses, relationship_partner_eid
 from game.property_doors import _operable_door_state_at
 from game.property_runtime import property_covering, property_metadata
@@ -242,6 +242,7 @@ def _reachable_tiles(sim, eid, pos, *, max_steps=4):
         (-1, 1),
         (1, 1),
     )
+    planning_context = _movement_planning_context(sim, eid)
     while frontier:
         cx, cy, steps = frontier.pop(0)
         if int(steps) >= int(max_steps):
@@ -259,6 +260,7 @@ def _reachable_tiles(sim, eid, pos, *, max_steps=4):
                 to_x=nx,
                 to_y=ny,
                 z=z,
+                planning_context=planning_context,
             )
             if not step_ok:
                 continue

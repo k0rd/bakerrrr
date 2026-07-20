@@ -179,6 +179,7 @@ from game.systems import (
     AnimalSocialSystem,
     BusinessPulseAftermathSystem,
     BusinessPulseSceneSystem,
+    BusinessSceneWorkSystem,
     CameraSystem,
     CreatureHazardSystem,
     DoorWaitSystem,
@@ -668,6 +669,7 @@ def _register_runtime_systems(sim, view, player):
     npc_emergency_system = NPCEmergencyActionSystem(sim)
     business_pulse_aftermath_system = BusinessPulseAftermathSystem(sim)
     business_pulse_scene_system = BusinessPulseSceneSystem(sim, player)
+    business_scene_work_system = BusinessSceneWorkSystem(sim)
     npc_weapon_system = NPCWeaponSystem(sim, player)
     npc_system = NPCInvestigateSystem(sim)
 
@@ -747,6 +749,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(criminal_drive_system, 60)
     _live_timeskip_stride(npc_will_system, 12)
     _live_timeskip_stride(business_pulse_scene_system, 0)
+    _live_timeskip_stride(business_scene_work_system, 5)
     _live_timeskip_stride(npc_weapon_system, 1)
     _live_timeskip_stride(criminal_justice_system, 5)
     _live_timeskip_stride(npc_system, 1)
@@ -833,6 +836,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(npc_will_system)
     sim.register_system(npc_emergency_system)
     sim.register_system(business_pulse_scene_system)
+    sim.register_system(business_scene_work_system)
     sim.register_system(npc_weapon_system)
     sim.register_system(suppression_system)
     sim.register_system(criminal_justice_system)

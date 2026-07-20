@@ -2257,6 +2257,7 @@ class AnimalMemory:
 class WildlifeSocialState:
     def __init__(self):
         self.bonds = {}
+        self.last_contact_ticks = {}
 
     def add_bond(self, other_eid, kind="companion", closeness=0.25, trust=0.25, comfort=0.25):
         self.bonds[other_eid] = {
@@ -2281,6 +2282,31 @@ class WildlifeSocialState:
                 best_eid = eid
 
         return best_eid
+
+    def note_contact(self, other_eid, tick):
+        try:
+            other_key = int(other_eid)
+            contact_tick = int(tick)
+        except (TypeError, ValueError):
+            return
+        contacts = getattr(self, "last_contact_ticks", None)
+        if not isinstance(contacts, dict):
+            contacts = {}
+            self.last_contact_ticks = contacts
+        contacts[other_key] = contact_tick
+
+    def last_contact_tick(self, other_eid, default=None):
+        try:
+            other_key = int(other_eid)
+        except (TypeError, ValueError):
+            return default
+        contacts = getattr(self, "last_contact_ticks", None)
+        if not isinstance(contacts, dict) or other_key not in contacts:
+            return default
+        try:
+            return int(contacts[other_key])
+        except (TypeError, ValueError):
+            return default
 
 
 class Occupation:

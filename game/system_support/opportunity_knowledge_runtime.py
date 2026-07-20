@@ -6,7 +6,7 @@ from collections import deque
 
 from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.components import AI, NPCOpportunityKnowledge, Position
-from game.movement_runtime import _can_step_transition_for
+from game.movement_runtime import _can_step_transition_for, _movement_planning_context
 from game.property_runtime import (
     property_covering as _property_covering,
     property_entry_position as _property_entry_position,
@@ -839,7 +839,7 @@ def _reconstruct_path(parents, best):
     return chain
 
 
-def _build_path_nodes(sim, eid, sx, sy, tx, ty, z, *, max_nodes=512):
+def _build_path_nodes(sim, eid, sx, sy, tx, ty, z, *, max_nodes=512, planning_context=None):
     start = (int(sx), int(sy))
     goal = (int(tx), int(ty))
     if start == goal:
@@ -876,6 +876,7 @@ def _build_path_nodes(sim, eid, sx, sy, tx, ty, z, *, max_nodes=512):
                 to_x=nx,
                 to_y=ny,
                 z=z,
+                planning_context=planning_context,
             )
             if not step_ok:
                 continue
@@ -890,7 +891,7 @@ def _build_path_nodes(sim, eid, sx, sy, tx, ty, z, *, max_nodes=512):
     return _reconstruct_path(parents, best)
 
 
-def _greedy_visible_step(sim, eid, sx, sy, tx, ty, z):
+def _greedy_visible_step(sim, eid, sx, sy, tx, ty, z, *, planning_context=None):
     if not _has_line_of_sight(sim, int(sx), int(sy), int(z), int(tx), int(ty), int(z)):
         return None
     candidates = []
@@ -920,6 +921,7 @@ def _greedy_visible_step(sim, eid, sx, sy, tx, ty, z):
             to_x=int(nx),
             to_y=int(ny),
             z=int(z),
+            planning_context=planning_context,
         )
         if step_ok:
             return (int(nx), int(ny))
@@ -957,6 +959,7 @@ def next_active_target_step(sim, actor_eid, state, pos, target, *, max_nodes=512
     if goal is None:
         return None
     current_xy = (_int(pos.x), _int(pos.y))
+    planning_context = _movement_planning_context(sim, actor_eid)
     direct_step = _greedy_visible_step(
         sim,
         actor_eid,
@@ -965,6 +968,7 @@ def next_active_target_step(sim, actor_eid, state, pos, target, *, max_nodes=512
         goal[0],
         goal[1],
         _int(pos.z),
+        planning_context=planning_context,
     )
     if direct_step is not None:
         row["path_nodes"] = None
@@ -992,6 +996,7 @@ def next_active_target_step(sim, actor_eid, state, pos, target, *, max_nodes=512
         goal[1],
         _int(pos.z),
         max_nodes=max_nodes,
+        planning_context=planning_context,
     )
     if not rebuilt or len(rebuilt) < 2:
         row["path_nodes"] = None

@@ -17,7 +17,7 @@ from engine.events import Event
 from engine.systems import System
 
 from game.components import AI, IncidentKnowledge, Inventory, NPCWill, NPCRoutine, Position
-from game.incident_runtime import incident_record
+from game.incident_runtime import incident_record, mark_incident_registry_changed
 from game.property_runtime import property_infrastructure_role as _property_infrastructure_role
 
 
@@ -326,6 +326,7 @@ class ObservedIncidentResponseSystem(System):
             incident["reported_tick"] = int(getattr(self.sim, "tick", 0))
             incident["reported_by_eid"] = _int(cue.get("npc_eid"), -1)
             incident["report_method"] = _text(cue.get("method"))
+            mark_incident_registry_changed(self.sim)
 
         reports = getattr(self.sim, "world_traits", {}).setdefault("observed_authority_reports", {})
         reports[str(incident_id)] = {

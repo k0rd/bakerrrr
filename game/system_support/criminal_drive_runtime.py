@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from engine.derived_facts import cached_derived_fact
 from engine.sites import site_entry_front_cell
 from engine.events import Event
 from game.components import (
@@ -91,7 +92,6 @@ def _criminal_drive_runtime_cache(sim, *, current_tick=None):
             "tick": tick,
             "nearby_buildings": {},
             "property_terms": {},
-            "active_plan_index": None,
         }
         sim.criminal_drive_runtime_cache = state
     return state
@@ -809,7 +809,10 @@ def attempt_criminal_affiliation(sim, actor_eid, *, organization_eid, property_i
 
 
 def active_plan_for_actor(sim, actor_eid, *, current_tick=None):
-    rows = actor_assigned_crime_plans(sim, actor_eid, current_tick=current_tick)
+    actor_eid = _safe_int(actor_eid, default=0)
+    if actor_eid <= 0:
+        return None
+    rows = active_crime_plan_actor_index(sim, current_tick=current_tick).get(actor_eid, ())
     return rows[0] if rows else None
 
 
@@ -839,40 +842,47 @@ def _crime_plan_rows_for_organization(sim, organization_eid, *, profile=None, cu
 def active_crime_plan_actor_index(sim, *, current_tick=None):
     if current_tick is None:
         current_tick = getattr(sim, "tick", 0)
-    cache = _criminal_drive_runtime_cache(sim, current_tick=current_tick)
-    cached = cache.get("active_plan_index")
-    if isinstance(cached, dict):
-        return cached
+    tick = _safe_int(current_tick, default=0)
 
-    index = {}
-    plan_components = sim.ecs.get(OrganizationCrimePlans)
-    for organization_eid in tuple(plan_components.keys()):
-        profile = organization_profile(sim, organization_eid)
-        for row in _crime_plan_rows_for_organization(
-            sim,
-            organization_eid,
-            profile=profile,
-            current_tick=current_tick,
-        ):
-            actor_ids = {
-                _safe_int(row.get("leader_eid"), default=0),
-                *{
-                    _safe_int(actor_eid, default=0)
-                    for actor_eid in tuple(row.get("assigned_member_eids", ()) or ())
-                },
-            } - {0}
-            for actor_id in actor_ids:
-                index.setdefault(int(actor_id), []).append(dict(row))
-    for rows in index.values():
-        rows.sort(
-            key=lambda row: (
-                0 if _text(row.get("stage")).lower() == "executing" else 1,
-                -_safe_int(row.get("last_update_tick"), default=0),
-                _text(row.get("plan_key")),
+    def build_index():
+        index = {}
+        plan_components = sim.ecs.get(OrganizationCrimePlans)
+        for organization_eid in tuple(plan_components.keys()):
+            profile = organization_profile(sim, organization_eid)
+            for row in _crime_plan_rows_for_organization(
+                sim,
+                organization_eid,
+                profile=profile,
+                current_tick=tick,
+            ):
+                actor_ids = {
+                    _safe_int(row.get("leader_eid"), default=0),
+                    *{
+                        _safe_int(actor_eid, default=0)
+                        for actor_eid in tuple(row.get("assigned_member_eids", ()) or ())
+                    },
+                } - {0}
+                for actor_id in actor_ids:
+                    index.setdefault(int(actor_id), []).append(dict(row))
+        for rows in index.values():
+            rows.sort(
+                key=lambda row: (
+                    0 if _text(row.get("stage")).lower() == "executing" else 1,
+                    -_safe_int(row.get("last_update_tick"), default=0),
+                    _text(row.get("plan_key")),
+                )
             )
-        )
-    cache["active_plan_index"] = index
-    return index
+        return index
+
+    return cached_derived_fact(
+        sim,
+        "organization_crime_plans.actor_index",
+        "all",
+        build_index,
+        domains=("organization_crime_plans",),
+        signature=(tick,),
+        max_entries=1,
+    )
 
 
 def find_registered_item_system(sim):

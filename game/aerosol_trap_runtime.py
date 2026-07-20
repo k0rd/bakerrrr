@@ -74,12 +74,21 @@ def armed_aerosol_traps_at(sim, x, y, z):
 
 
 def actor_knows_armed_aerosol_trap_at(sim, eid, x, y, z):
+    return _coord(x, y, z) in actor_known_armed_aerosol_trap_positions(sim, eid)
+
+
+def actor_known_armed_aerosol_trap_positions(sim, eid):
+    """Return the currently armed trap cells this actor remembers.
+
+    Path searches can derive this once and reuse it for every speculative tile;
+    the public point query keeps identical live semantics for one-off movement.
+    """
     if sim is None or eid is None:
-        return False
+        return frozenset()
     memory = sim.ecs.get(NPCMemory).get(eid)
     if memory is None:
-        return False
-    target = _coord(x, y, z)
+        return frozenset()
+    positions = set()
     for entry in tuple(getattr(memory, "entries", ()) or ()):
         if str(entry.get("kind", "") or "").strip().lower() != AEROSOL_TRAP_MEMORY_KIND:
             continue
@@ -90,9 +99,8 @@ def actor_knows_armed_aerosol_trap_at(sim, eid, x, y, z):
         prop = getattr(sim, "properties", {}).get(property_id) if property_id else None
         if not property_is_armed_aerosol_trap(prop):
             continue
-        if _coord(prop.get("x"), prop.get("y"), prop.get("z", 0)) == target:
-            return True
-    return False
+        positions.add(_coord(prop.get("x"), prop.get("y"), prop.get("z", 0)))
+    return frozenset(positions)
 
 
 def _remember_trap_placement(sim, observer_eid, *, trap_property_id, placer_eid, x, y, z, item_id, item_name):

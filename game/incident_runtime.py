@@ -7,6 +7,8 @@ the broader migration from ad-hoc memory entries continues.
 
 from __future__ import annotations
 
+from engine.derived_facts import cached_derived_fact, mark_derived_fact_changed
+
 
 DEFAULT_INCIDENT_MERGE_RULES = {
     "action_offense": {"ticks": 6, "radius": 2},
@@ -373,11 +375,23 @@ def _incident_state(sim):
 
     state["next_id"] = max(1, _int_or_default(state.get("next_id"), 1))
     state["last_pruned_tick"] = _int_or_default(state.get("last_pruned_tick"), -10_000)
+    state["revision"] = max(0, _int_or_default(state.get("revision"), 0))
     return state
 
 
 def incident_registry(sim):
     return _incident_state(sim).get("incidents", {})
+
+
+def incident_registry_revision(sim):
+    return _int_or_default(_incident_state(sim).get("revision"), 0)
+
+
+def mark_incident_registry_changed(sim):
+    state = _incident_state(sim)
+    state["revision"] = _int_or_default(state.get("revision"), 0) + 1
+    mark_derived_fact_changed(sim, "incidents")
+    return state["revision"]
 
 
 def incident_record(sim, incident_id):
@@ -389,11 +403,21 @@ def incident_record(sim, incident_id):
 
 
 def incident_records(sim):
-    incidents = incident_registry(sim)
-    return tuple(
-        incidents[incident_id]
-        for incident_id in sorted(incidents.keys())
-        if isinstance(incidents.get(incident_id), dict)
+    def build():
+        incidents = incident_registry(sim)
+        return tuple(
+            incidents[incident_id]
+            for incident_id in sorted(incidents.keys())
+            if isinstance(incidents.get(incident_id), dict)
+        )
+
+    return cached_derived_fact(
+        sim,
+        "incidents.records",
+        "all",
+        build,
+        domains=("incidents",),
+        max_entries=1,
     )
 
 
@@ -580,6 +604,7 @@ def create_or_merge_incident(
         if note:
             candidate["note"] = note
         candidate["merge_subject"] = merge_subject or _text(candidate.get("merge_subject")).lower()
+        mark_incident_registry_changed(sim)
         return candidate, True
 
     incident_id = max(1, _int_or_default(state.get("next_id"), 1))
@@ -620,6 +645,7 @@ def create_or_merge_incident(
     incidents[incident_id] = record
     recent_ids.append(incident_id)
     state["recent_ids"] = recent_ids[-256:]
+    mark_incident_registry_changed(sim)
     return record, False
 
 
@@ -649,4 +675,6 @@ def prune_incidents(sim, *, tick=None):
         keep_recent.append(int(incident_id))
     state["recent_ids"] = keep_recent[-256:]
     state["last_pruned_tick"] = tick
+    if removed:
+        mark_incident_registry_changed(sim)
     return tuple(sorted(removed))

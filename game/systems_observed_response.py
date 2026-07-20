@@ -18,7 +18,7 @@ from engine.systems import System
 from engine.visibility import observer_can_see_position
 
 from game.components import AI, IncidentKnowledge, Inventory, JusticeProfile, NPCWill, NPCRoutine, Position
-from game.incident_runtime import incident_record
+from game.incident_runtime import incident_record, mark_incident_registry_changed
 from game.identity_evidence import transmitted_subject_account
 from game.items import item_display_name
 from game.item_semantics import inventory_has_phone, item_tags
@@ -574,6 +574,7 @@ class ObservedIncidentResponseSystem(System):
             incident["reported_tick"] = int(getattr(self.sim, "tick", 0))
             incident["reported_by_eid"] = reporter_eid
             incident["report_method"] = _text(cue.get("method"))
+            mark_incident_registry_changed(self.sim)
 
         reports = getattr(self.sim, "world_traits", {}).setdefault("observed_authority_reports", {})
         reports[str(incident_id)] = {

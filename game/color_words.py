@@ -1219,29 +1219,20 @@ def color_words_for_family(
     )
 
 
-def choose_color_word(
-    rng,
-    *,
-    slots=(),
-    include_reserved: bool = False,
-    include_unweighted: bool = False,
-    family: object = "",
-    families=(),
-    family_axis: str = "hue",
-) -> str:
-    slot_tokens = {
-        str(slot or "").strip().lower()
-        for slot in tuple(slots or ())
-        if str(slot or "").strip()
-    }
-    family_values = []
-    if family:
-        family_values.append(family)
-    if isinstance(families, str):
-        family_values.append(families)
-    else:
-        family_values.extend(tuple(families or ()))
-    family_tokens = tuple(token for token in (_normalize_family_token(value) for value in family_values) if token)
+@lru_cache(maxsize=512)
+def _weighted_color_word_table(
+    slot_tokens: tuple[str, ...],
+    include_reserved: bool,
+    include_unweighted: bool,
+    family_tokens: tuple[str, ...],
+    family_axis: str,
+) -> tuple[tuple[tuple[str, int], ...], int]:
+    """Materialize immutable eligibility weights, not a random choice.
+
+    The source palette is catalogue data.  Rebuilding the same several-
+    thousand-row weighted table for every shirt, eye, or paint roll does not
+    add variety; keeping the draw itself live preserves the exact RNG shape.
+    """
     weighted: list[tuple[str, int]] = []
     for row in COLOR_WORD_PALETTE:
         row_weight = int(row.roll_weight)
@@ -1257,9 +1248,42 @@ def choose_color_word(
             weight += sum(max(0, int(bias.get(slot, 0))) for slot in slot_tokens)
         if weight > 0:
             weighted.append((row.word, weight))
+    frozen = tuple(weighted)
+    return frozen, sum(weight for _word, weight in frozen)
+
+
+def choose_color_word(
+    rng,
+    *,
+    slots=(),
+    include_reserved: bool = False,
+    include_unweighted: bool = False,
+    family: object = "",
+    families=(),
+    family_axis: str = "hue",
+) -> str:
+    slot_tokens = tuple(sorted({
+        str(slot or "").strip().lower()
+        for slot in tuple(slots or ())
+        if str(slot or "").strip()
+    }))
+    family_values = []
+    if family:
+        family_values.append(family)
+    if isinstance(families, str):
+        family_values.append(families)
+    else:
+        family_values.extend(tuple(families or ()))
+    family_tokens = tuple(token for token in (_normalize_family_token(value) for value in family_values) if token)
+    weighted, total = _weighted_color_word_table(
+        slot_tokens,
+        bool(include_reserved),
+        bool(include_unweighted),
+        family_tokens,
+        str(family_axis or "hue").strip().lower() or "hue",
+    )
     if not weighted:
         return COLOR_WORD_PALETTE[0].word
-    total = sum(weight for _word, weight in weighted)
     roll = rng.uniform(0, total)
     cursor = 0.0
     for word, weight in weighted:

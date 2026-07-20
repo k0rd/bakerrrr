@@ -61,7 +61,20 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "property_order",
     "next_property_order",
     "_properties_in_radius_cache",
+    "_derived_fact_state",
+    "_organization_runtime_cache",
+    "_property_access_controller_cache",
+    "_player_business_runtime_cache",
+    "_npc_path_step_cache",
+    "_npc_path_search_failures",
+    "_routine_will_signatures",
+    "_hidden_contact_referral_property_cache",
+    "_herbal_decay_next_tick",
     "_underground_plan_cache",
+    "building_regular_chunk_pulse_cache",
+    "criminal_drive_runtime_cache",
+    "npc_behavior_runtime_cache",
+    "npc_behavior_search_cache",
     "ground_item_index",
     "ground_item_order",
     "next_ground_item_order",
@@ -495,21 +508,60 @@ def unload_chunk_state(sim, key, *, rebuild_indexes=True):
 
     sim.chunk_saved_states[key] = snapshot
 
-    for ground_item_id in list(snapshot.get("ground_items", {}).keys()):
-        sim.ground_items.pop(ground_item_id, None)
-    for property_id in list(snapshot.get("stores", {}).keys()):
-        sim.stores.pop(property_id, None)
-    for property_id in list(snapshot.get("properties", {}).keys()):
-        sim.properties.pop(property_id, None)
-    for eid in list(snapshot.get("entities", {}).keys()):
-        sim.remove_entity(int(eid))
+    indexes_updated = _remove_snapshot_live_state(sim, snapshot)
 
     sim.chunk_property_records.pop(key, None)
     sim.chunk_ground_item_records.pop(key, None)
     sim.chunk_population_records.pop(key, None)
-    if rebuild_indexes and hasattr(sim, "rebuild_spatial_indexes"):
+    if rebuild_indexes and not indexes_updated and hasattr(sim, "rebuild_spatial_indexes"):
         sim.rebuild_spatial_indexes()
     return snapshot
+
+
+def _remove_snapshot_live_state(sim, snapshot):
+    """Remove one unloaded chunk while preserving the maintained indexes.
+
+    Chunk streaming used to update the entity index through ``remove_entity``
+    and then rebuild every entity, property, and ground-item index anyway.
+    Unindexing the two record collections at their mutation boundary keeps the
+    result authoritative without turning an unload into a global recount.
+
+    The boolean return lets older or reduced simulation doubles retain the
+    defensive full-rebuild fallback.
+    """
+    can_update_indexes = all(
+        callable(getattr(sim, method_name, None))
+        for method_name in (
+            "_unindex_ground_item_record",
+            "_unindex_property_record",
+            "_invalidate_properties_in_radius_cache",
+            "remove_entity",
+        )
+    )
+
+    property_removed = False
+    for ground_item_id in tuple(snapshot.get("ground_items", {}).keys()):
+        ground = sim.ground_items.pop(ground_item_id, None)
+        if ground is not None and can_update_indexes:
+            sim._unindex_ground_item_record(ground_item_id, ground, drop_order=True)
+    for property_id in tuple(snapshot.get("stores", {}).keys()):
+        sim.stores.pop(property_id, None)
+    for property_id in tuple(snapshot.get("properties", {}).keys()):
+        prop = sim.properties.pop(property_id, None)
+        if prop is None:
+            continue
+        property_removed = True
+        if can_update_indexes:
+            sim._unindex_property_record(property_id, prop)
+            sim.property_order.pop(property_id, None)
+    for eid in tuple(snapshot.get("entities", {}).keys()):
+        sim.remove_entity(int(eid))
+
+    if property_removed:
+        sim.property_registry_dirty = True
+        if can_update_indexes:
+            sim._invalidate_properties_in_radius_cache()
+    return bool(can_update_indexes)
 
 
 def _merge_snapshot_record_rows(existing_rows, incoming_rows):
@@ -556,19 +608,12 @@ def merge_unload_chunk_state(sim, key, *, rebuild_indexes=True):
             snapshot.get(section, ()),
         )
 
-    for ground_item_id in list(snapshot.get("ground_items", {}).keys()):
-        sim.ground_items.pop(ground_item_id, None)
-    for property_id in list(snapshot.get("stores", {}).keys()):
-        sim.stores.pop(property_id, None)
-    for property_id in list(snapshot.get("properties", {}).keys()):
-        sim.properties.pop(property_id, None)
-    for eid in list(snapshot.get("entities", {}).keys()):
-        sim.remove_entity(int(eid))
+    indexes_updated = _remove_snapshot_live_state(sim, snapshot)
 
     sim.chunk_property_records.pop(key, None)
     sim.chunk_ground_item_records.pop(key, None)
     sim.chunk_population_records.pop(key, None)
-    if rebuild_indexes and hasattr(sim, "rebuild_spatial_indexes"):
+    if rebuild_indexes and not indexes_updated and hasattr(sim, "rebuild_spatial_indexes"):
         sim.rebuild_spatial_indexes()
     return snapshot
 

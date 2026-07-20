@@ -61,6 +61,9 @@ class Simulation:
         self.property_order = {}
         self.next_property_order = 0
         self._properties_in_radius_cache = {}
+        self._derived_fact_state = {}
+        self._organization_runtime_cache = {}
+        self._herbal_decay_next_tick = None
         self.door_states = {}
         self.fixture_power_cuts = {}
         self.camera_disabled = {}
@@ -177,6 +180,26 @@ class Simulation:
             self.entity_identity_records = {}
         if not isinstance(getattr(self, "_properties_in_radius_cache", None), dict):
             self._properties_in_radius_cache = {}
+        # Derived query state is never canonical.  Rebinding happens after a
+        # restore as well as construction, so discard any legacy-saved caches.
+        self._derived_fact_state = {}
+        self._organization_runtime_cache = {}
+        self._property_access_controller_cache = {}
+        self._player_business_runtime_cache = {}
+        self._npc_path_step_cache = {}
+        self._npc_path_search_failures = {}
+        self._routine_will_signatures = {}
+        self._hidden_contact_referral_property_cache = None
+        self._herbal_decay_next_tick = None
+        self.building_regular_chunk_pulse_cache = {}
+        self.criminal_drive_runtime_cache = {}
+        self.npc_behavior_runtime_cache = {}
+        self.npc_behavior_search_cache = {}
+        if isinstance(getattr(self, "world_traits", None), dict):
+            self.world_traits.pop("organization_runtime_cache", None)
+            briefing_state = self.world_traits.get("organization_actor_briefings")
+            if isinstance(briefing_state, dict):
+                briefing_state["query_cache"] = {}
         if not isinstance(getattr(self, "_underground_plan_cache", None), dict):
             self._underground_plan_cache = {}
         if not isinstance(getattr(self, "flora_patches", None), dict):
@@ -980,7 +1003,6 @@ class Simulation:
         dropped = []
         deferred = []
         merged_saved = []
-        attempted_unload = False
         self._stream_unload_flush_active = True
         try:
             pending.clear()
@@ -1001,13 +1023,10 @@ class Simulation:
                         merged_saved.append(key)
                     else:
                         snapshot = unload_chunk_state(self, key, rebuild_indexes=False)
-                    attempted_unload = True
                     if snapshot is None:
                         dropped.append(key)
                     else:
                         persisted.append(key)
-            if attempted_unload and hasattr(self, "rebuild_spatial_indexes"):
-                self.rebuild_spatial_indexes()
         finally:
             self._stream_unload_flush_active = False
 

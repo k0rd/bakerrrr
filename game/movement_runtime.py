@@ -1,9 +1,11 @@
 """Shared entity movement and doorway transition helpers."""
 
+from dataclasses import dataclass
+
 from engine.events import Event
 
-from game.aerosol_trap_runtime import actor_knows_armed_aerosol_trap_at
-from game.components import AI, Collider, Position
+from game.aerosol_trap_runtime import actor_known_armed_aerosol_trap_positions, actor_knows_armed_aerosol_trap_at
+from game.components import AI, Collider, CreatureIdentity, Position
 from game.property_access import (
     evaluate_property_access as _evaluate_property_access,
     property_ingress_context as _property_ingress_context,
@@ -19,11 +21,23 @@ from game.property_runtime import (
     property_aperture_at as _property_aperture_at,
     property_covering as _property_covering,
 )
-from game.system_support.fire_runtime import fire_cell_state
+from game.system_support.fire_runtime import fire_cell_state, fire_state
 
 
-def _entity_blocks(sim, moving_eid, x, y, z):
-    colliders = sim.ecs.get(Collider)
+@dataclass(frozen=True, slots=True)
+class MovementPlanningContext:
+    """Actor-static and registry-view facts for one synchronous path search."""
+
+    is_animal_or_wildlife: bool
+    is_nonplayer_ai: bool
+    known_armed_trap_positions: frozenset
+    colliders: object
+    fire_cells: object
+
+
+def _entity_blocks(sim, moving_eid, x, y, z, *, colliders=None):
+    if colliders is None:
+        colliders = sim.ecs.get(Collider)
 
     for other_eid in sim.tilemap.entities_at(x, y, z):
         if other_eid == moving_eid:
@@ -34,6 +48,28 @@ def _entity_blocks(sim, moving_eid, x, y, z):
             return True, other_eid
 
     return False, None
+
+
+def _movement_planning_context(sim, moving_eid):
+    """Hoist actor-static facts out of a single speculative path search."""
+    ai = sim.ecs.get(AI).get(moving_eid) if moving_eid is not None else None
+    identity = sim.ecs.get(CreatureIdentity).get(moving_eid) if moving_eid is not None else None
+    role = str(getattr(ai, "role", "") or "").strip().lower()
+    creature_type = str(getattr(identity, "creature_type", "") or "").strip().lower()
+    is_nonplayer_ai = moving_eid != getattr(sim, "player_eid", None) and ai is not None
+    state = fire_state(sim)
+    cells = state.get("cells", {}) if isinstance(state, dict) else {}
+    return MovementPlanningContext(
+        is_animal_or_wildlife=role == "wildlife" or creature_type == "animal",
+        is_nonplayer_ai=bool(is_nonplayer_ai),
+        known_armed_trap_positions=(
+            actor_known_armed_aerosol_trap_positions(sim, moving_eid)
+            if is_nonplayer_ai
+            else frozenset()
+        ),
+        colliders=sim.ecs.get(Collider),
+        fire_cells=cells if isinstance(cells, dict) else {},
+    )
 
 
 def _auto_open_closed_door_for_move(sim, eid, from_x, from_y, to_x, to_y, z, *, move_reason="move"):
@@ -73,6 +109,7 @@ def _closed_door_move_block_reason(sim, eid, x, y, z):
             to_x=x,
             to_y=y,
             to_z=z,
+            sim=sim,
         )
     if prop:
         access = _evaluate_property_access(
@@ -97,23 +134,38 @@ def _closed_door_move_block_reason(sim, eid, x, y, z):
     return "closed_door"
 
 
-def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z):
+def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z, *, planning_context=None):
     state = _operable_door_state_at(sim, to_x, to_y, z)
     if state is None or bool(state.get("open", False)) or bool(state.get("broken", False)):
         return False
-    if _actor_is_animal_or_wildlife(sim, eid):
+    is_animal = (
+        planning_context.is_animal_or_wildlife
+        if isinstance(planning_context, MovementPlanningContext)
+        else bool(planning_context.get("is_animal_or_wildlife"))
+        if isinstance(planning_context, dict)
+        else _actor_is_animal_or_wildlife(sim, eid)
+    )
+    if is_animal:
         return False
     positions = sim.ecs.get(Position)
     actor_pos = positions.get(eid)
     if actor_pos is None:
         return False
 
-    if eid != getattr(sim, "player_eid", None):
-        ai = sim.ecs.get(AI).get(eid) if eid is not None else None
-        if ai is not None:
-            fire_cell = fire_cell_state(sim, to_x, to_y, z)
-            if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
-                return False
+    if isinstance(planning_context, MovementPlanningContext):
+        is_nonplayer_ai = planning_context.is_nonplayer_ai
+    elif isinstance(planning_context, dict):
+        is_nonplayer_ai = bool(planning_context.get("is_nonplayer_ai"))
+    else:
+        is_nonplayer_ai = eid != getattr(sim, "player_eid", None) and sim.ecs.get(AI).get(eid) is not None
+    if is_nonplayer_ai:
+        fire_cell = (
+            planning_context.fire_cells.get((int(to_x), int(to_y), int(z)))
+            if isinstance(planning_context, MovementPlanningContext)
+            else fire_cell_state(sim, to_x, to_y, z)
+        )
+        if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
+            return False
 
     prop = _door_property_at(sim, to_x, to_y, z, state=state)
     if prop:
@@ -125,6 +177,7 @@ def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z
             to_x=to_x,
             to_y=to_y,
             to_z=z,
+            sim=sim,
         )
         actor_prop = _property_covering(sim, int(actor_pos.x), int(actor_pos.y), int(actor_pos.z))
         actor_inside_same_prop = bool(
@@ -173,8 +226,15 @@ def _movement_allows_auto_open(sim, eid, *, reason="move"):
     return True
 
 
-def _animal_npc_cannot_cross_doorway(sim, moving_eid, from_x, from_y, to_x, to_y, z):
-    if not _actor_is_animal_or_wildlife(sim, moving_eid):
+def _animal_npc_cannot_cross_doorway(sim, moving_eid, from_x, from_y, to_x, to_y, z, *, planning_context=None):
+    is_animal = (
+        planning_context.is_animal_or_wildlife
+        if isinstance(planning_context, MovementPlanningContext)
+        else bool(planning_context.get("is_animal_or_wildlife"))
+        if isinstance(planning_context, dict)
+        else _actor_is_animal_or_wildlife(sim, moving_eid)
+    )
+    if not is_animal:
         return None
 
     origin_prop = _property_covering(sim, from_x, from_y, z)
@@ -194,6 +254,7 @@ def _animal_npc_cannot_cross_doorway(sim, moving_eid, from_x, from_y, to_x, to_y
             to_x=to_x,
             to_y=to_y,
             to_z=z,
+            sim=sim,
         )
         if ingress.entered_bounds and ingress.ingress_kind in {"ordinary_entry", "alternate_aperture"}:
             return "blocked_animal_doorway"
@@ -206,44 +267,79 @@ def _animal_npc_cannot_cross_doorway(sim, moving_eid, from_x, from_y, to_x, to_y
     return None
 
 
-def _is_traversable_for(sim, moving_eid, x, y, z):
+def _is_traversable_for(sim, moving_eid, x, y, z, *, planning_context=None):
     if sim.detail_for_xy(x, y) == "unloaded":
         return False, "out_of_bounds"
     if not sim.tilemap.in_bounds(x, y):
         return False, "out_of_bounds"
     if not sim.tilemap.is_walkable(x, y, z):
         return False, "blocked_tile"
-    if moving_eid != getattr(sim, "player_eid", None):
-        ai = sim.ecs.get(AI).get(moving_eid) if moving_eid is not None else None
-        if ai is not None:
-            fire_cell = fire_cell_state(sim, x, y, z)
-            if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
-                return False, "active_fire"
-            if actor_knows_armed_aerosol_trap_at(sim, moving_eid, x, y, z):
-                return False, "known_trap"
-    blocked, blocker_eid = _entity_blocks(sim, moving_eid, x, y, z)
+    if isinstance(planning_context, MovementPlanningContext):
+        is_nonplayer_ai = planning_context.is_nonplayer_ai
+    elif isinstance(planning_context, dict):
+        is_nonplayer_ai = bool(planning_context.get("is_nonplayer_ai"))
+    else:
+        is_nonplayer_ai = moving_eid != getattr(sim, "player_eid", None) and sim.ecs.get(AI).get(moving_eid) is not None
+    if is_nonplayer_ai:
+        fire_cell = (
+            planning_context.fire_cells.get((int(x), int(y), int(z)))
+            if isinstance(planning_context, MovementPlanningContext)
+            else fire_cell_state(sim, x, y, z)
+        )
+        if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
+            return False, "active_fire"
+        if isinstance(planning_context, MovementPlanningContext):
+            known_trap = (int(x), int(y), int(z)) in planning_context.known_armed_trap_positions
+        elif isinstance(planning_context, dict):
+            known_trap = (int(x), int(y), int(z)) in planning_context.get("known_armed_trap_positions", ())
+        else:
+            known_trap = actor_knows_armed_aerosol_trap_at(sim, moving_eid, x, y, z)
+        if known_trap:
+            return False, "known_trap"
+    colliders = planning_context.colliders if isinstance(planning_context, MovementPlanningContext) else None
+    blocked, blocker_eid = _entity_blocks(sim, moving_eid, x, y, z, colliders=colliders)
     if blocked:
         return False, f"blocked_entity:{blocker_eid}"
     return True, None
 
 
-def _can_step_transition_for(sim, moving_eid, from_x, from_y, to_x, to_y, z):
-    traversable, reason = _is_traversable_for(sim, moving_eid, to_x, to_y, z)
-    if not traversable:
-        if not (
-            str(reason or "").strip().lower() == "blocked_tile"
-            and _closed_door_is_plannable_transition(sim, moving_eid, from_x, from_y, to_x, to_y, z)
-        ):
-            return False, reason
-    animal_transition_reason = _animal_npc_cannot_cross_doorway(
+def _can_step_transition_for(sim, moving_eid, from_x, from_y, to_x, to_y, z, *, planning_context=None):
+    traversable, reason = _is_traversable_for(
         sim,
         moving_eid,
-        from_x,
-        from_y,
         to_x,
         to_y,
         z,
+        planning_context=planning_context,
     )
+    if not traversable:
+        if not (
+            str(reason or "").strip().lower() == "blocked_tile"
+            and _closed_door_is_plannable_transition(
+                sim,
+                moving_eid,
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                z,
+                planning_context=planning_context,
+            )
+        ):
+            return False, reason
+    if isinstance(planning_context, MovementPlanningContext) and not planning_context.is_animal_or_wildlife:
+        animal_transition_reason = None
+    else:
+        animal_transition_reason = _animal_npc_cannot_cross_doorway(
+            sim,
+            moving_eid,
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            z,
+            planning_context=planning_context,
+        )
     if animal_transition_reason:
         return False, animal_transition_reason
     return True, None

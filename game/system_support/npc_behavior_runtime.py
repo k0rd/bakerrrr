@@ -70,6 +70,14 @@ BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME = "commit_opportunistic_crime"
 BEHAVIOR_COMMIT_PLANNED_CRIME = "commit_planned_crime"
 BEHAVIOR_SEEK_CRIMINAL_AFFILIATION = "seek_criminal_affiliation"
 
+# ITEM_CATALOG is installation-static during ordinary play.  NPC shopping and
+# street-drug consideration used to repeatedly normalize the same catalog rows
+# for every actor.  Keep the derived semantics here while leaving live stock,
+# item metadata, needs, and prices uncached.
+_STREET_DRUG_ITEM_IDS_CACHE = None
+_STREET_DRUG_ITEM_IDS_CATALOG_MARKER = None
+_SHOPPING_ITEM_TAG_CACHE = {}
+
 _PUBLIC_GROUND_OWNER_TAGS = {None, "", "public", "unowned", "city"}
 _PUBLIC_PROPERTY_OWNER_TAGS = {"", "public", "unowned", "none", "neutral"}
 _SALVAGE_ARCHETYPES = frozenset({
@@ -643,11 +651,51 @@ def _npc_behavior_search_cache(sim):
         state = {
             "lodging_targets": {},
             "shopping_targets": {},
+            "shopping_consideration_due": {},
         }
         sim.npc_behavior_search_cache = state
     state.setdefault("lodging_targets", {})
     state.setdefault("shopping_targets", {})
+    state.setdefault("shopping_consideration_due", {})
     return state
+
+
+def _shopping_need_is_urgent(needs, vitality):
+    hunger = 100.0 if needs is None else float(getattr(needs, "hunger", 100.0) or 100.0)
+    thirst = 100.0 if needs is None else float(getattr(needs, "thirst", 100.0) or 100.0)
+    if hunger < 30.0 or thirst < 30.0:
+        return True
+    if vitality is None or bool(getattr(vitality, "downed", False)):
+        return False
+    max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1))
+    hp = max(0, int(getattr(vitality, "hp", max_hp) or max_hp))
+    return (1.0 - (float(hp) / float(max_hp))) >= 0.48
+
+
+def _shopping_consideration_due(sim, actor_eid, *, needs=None, vitality=None, active=False):
+    """Bound routine shopping deliberation without hiding urgent demand.
+
+    Store stock, access, prices, and personal taste remain live inputs whenever
+    the actor deliberates.  The cadence models the separate fact that an actor
+    who just decided not to shop does not reconsider every storefront every
+    simulation tick.
+    """
+
+    if bool(active) or _shopping_need_is_urgent(needs, vitality):
+        return True
+    now = int(getattr(sim, "tick", 0) or 0)
+    due_by_actor = _npc_behavior_search_cache(sim).setdefault("shopping_consideration_due", {})
+    try:
+        actor_key = int(actor_eid)
+    except (TypeError, ValueError):
+        return True
+    due_tick = due_by_actor.get(actor_key)
+    if due_tick is not None and now < int(due_tick):
+        return False
+    # Per-actor phase avoids turning one citywide shopping thought into a
+    # periodic frame spike while retaining a short, bounded reconsideration.
+    due_by_actor[actor_key] = now + 10 + (abs(actor_key) % 7)
+    return True
 
 
 def _cached_behavior_property_access(sim, actor_eid, prop, *, x=None, y=None, z=None):
@@ -1339,6 +1387,10 @@ def _behavior_preference(sim, eid, key, default=None):
 
 
 def _street_drug_item_ids():
+    global _STREET_DRUG_ITEM_IDS_CACHE, _STREET_DRUG_ITEM_IDS_CATALOG_MARKER
+    marker = (id(ITEM_CATALOG), len(ITEM_CATALOG))
+    if _STREET_DRUG_ITEM_IDS_CATALOG_MARKER == marker and _STREET_DRUG_ITEM_IDS_CACHE is not None:
+        return _STREET_DRUG_ITEM_IDS_CACHE
     rows = []
     for item_id, item_def in ITEM_CATALOG.items():
         tags = {str(tag).strip().lower() for tag in item_def.get("tags", ()) if str(tag).strip()}
@@ -1351,7 +1403,9 @@ def _street_drug_item_ids():
             continue
         rows.append(str(item_id).strip().lower())
     rows.sort()
-    return tuple(rows)
+    _STREET_DRUG_ITEM_IDS_CACHE = tuple(rows)
+    _STREET_DRUG_ITEM_IDS_CATALOG_MARKER = marker
+    return _STREET_DRUG_ITEM_IDS_CACHE
 
 
 def _desired_street_buy_item_id(sim, actor_eid, *, district_type="", career=""):
@@ -2825,20 +2879,27 @@ def _shopping_actor_role_career(sim, actor_eid):
 
 def _shopping_item_tags(item_id, row=None):
     tags = set(row.get("tags", ())) if isinstance(row, dict) else set()
+    normalized_item_id = str(item_id or "").strip().lower()
+    item_def = ITEM_CATALOG.get(normalized_item_id, {})
+    cached = _SHOPPING_ITEM_TAG_CACHE.get(normalized_item_id)
+    if not isinstance(cached, tuple) or len(cached) != 2 or cached[0] is not item_def:
+        catalog_tags = _item_tags({"item_id": normalized_item_id, "metadata": {}})
+        catalog_tags.update(str(tag).strip().lower() for tag in item_def.get("tags", ()) if str(tag).strip())
+        category = str(item_def.get("category", "") or "").strip().lower()
+        if category:
+            catalog_tags.add(category)
+        family = str(item_def.get("appearance_family", "") or "").strip().lower()
+        if family:
+            catalog_tags.add(family)
+        if item_def.get("weapon_id"):
+            catalog_tags.add("weapon")
+        if isinstance(item_def.get("armor"), dict) and float(item_def["armor"].get("damage_reduction", 0.0) or 0.0) > 0.0:
+            catalog_tags.add("armor")
+        cached = (item_def, frozenset(catalog_tags))
+        _SHOPPING_ITEM_TAG_CACHE[normalized_item_id] = cached
     if not tags:
-        tags.update(_item_tags({"item_id": item_id, "metadata": {}}))
-    item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower(), {})
-    tags.update(str(tag).strip().lower() for tag in item_def.get("tags", ()) if str(tag).strip())
-    category = str(item_def.get("category", "") or "").strip().lower()
-    if category:
-        tags.add(category)
-    family = str(item_def.get("appearance_family", "") or "").strip().lower()
-    if family:
-        tags.add(family)
-    if item_def.get("weapon_id"):
-        tags.add("weapon")
-    if isinstance(item_def.get("armor"), dict) and float(item_def["armor"].get("damage_reduction", 0.0) or 0.0) > 0.0:
-        tags.add("armor")
+        return cached[1]
+    tags.update(cached[1])
     return frozenset(tags)
 
 
@@ -3084,8 +3145,6 @@ def _find_shopping_target(sim, actor_eid, pos, *, radius=None, work_active=False
         for field in ("energy", "safety", "social", "hunger", "thirst")
     ) if needs is not None else ()
     signature = (
-        int(pos.x),
-        int(pos.y),
         int(pos.z),
         int(radius),
         bool(work_active),
@@ -3107,8 +3166,35 @@ def _find_shopping_target(sim, actor_eid, pos, *, radius=None, work_active=False
         and cached.get("signature") == signature
         and now - int(cached.get("tick", now)) <= 4
     ):
-        result = cached.get("result")
-        return dict(result) if isinstance(result, dict) else None
+        origin = cached.get("origin")
+        if isinstance(origin, (tuple, list)) and len(origin) >= 2:
+            try:
+                displacement = abs(int(pos.x) - int(origin[0])) + abs(int(pos.y) - int(origin[1]))
+            except (TypeError, ValueError):
+                displacement = 10**9
+        else:
+            displacement = 10**9
+        # A walking actor should keep pursuing the decision it just made.  A
+        # large relocation is different evidence and deserves a fresh local
+        # search even inside the short cache lifetime.
+        if displacement <= 4:
+            result = cached.get("result")
+            if not isinstance(result, dict):
+                return None
+            result = dict(result)
+            target = result.get("target")
+            if isinstance(target, (tuple, list)) and len(target) >= 2:
+                try:
+                    current_distance = abs(int(pos.x) - int(target[0])) + abs(int(pos.y) - int(target[1]))
+                    previous_distance = int(result.get("distance", current_distance) or current_distance)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    result["distance"] = int(current_distance)
+                    result["score"] = float(result.get("score", 0.0) or 0.0) + (
+                        float(previous_distance - current_distance) * 1.15
+                    )
+            return result
 
     options = trade_system.npc_purchase_options(
         actor_eid,
@@ -3171,6 +3257,7 @@ def _find_shopping_target(sim, actor_eid, pos, *, radius=None, work_active=False
     shopping_cache[int(actor_eid)] = {
         "signature": signature,
         "tick": now,
+        "origin": (int(pos.x), int(pos.y), int(pos.z)),
         "result": dict(best) if isinstance(best, dict) else None,
     }
     return best

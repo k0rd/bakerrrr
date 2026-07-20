@@ -6,6 +6,8 @@ world cell. Properties and chunks only derive summary state from these cells.
 
 from __future__ import annotations
 
+from engine.derived_facts import mark_derived_fact_changed
+from engine.events import Event
 from engine.tilemap import Tile
 
 from game.property_runtime import (
@@ -425,6 +427,10 @@ def fire_state(sim):
     return state
 
 
+def mark_fire_light_changed(sim, *, state=None):
+    return mark_derived_fact_changed(sim, "fire_light")
+
+
 def rebuild_fire_advance_due_index(sim, *, advance_interval=5):
     state = fire_state(sim)
     try:
@@ -660,8 +666,146 @@ def fire_cell_state(sim, x, y, z=0):
     key = _coord_key(x, y, z)
     if key is None:
         return None
-    cell = fire_state(sim).get("cells", {}).get(key)
+    state = getattr(sim, "fire_state", None)
+    cells = state.get("cells") if isinstance(state, dict) and bool(state.get("_runtime_normalized")) else None
+    if not isinstance(cells, dict):
+        cells = fire_state(sim).get("cells", {})
+    cell = cells.get(key)
     return cell if isinstance(cell, dict) else None
+
+
+def property_fire_cells(sim, property_id, *, include_smoke=False):
+    """Return one property's live fire cells from the maintained sparse index."""
+
+    property_id = _text(property_id)
+    if not property_id:
+        return ()
+    state = fire_state(sim)
+    cells = state.get("cells", {})
+    rows = []
+    for coord in tuple(state.get("property_index", {}).get(property_id, ()) or ()):
+        cell = cells.get(coord)
+        if not isinstance(cell, dict):
+            continue
+        fire_intensity = _safe_int(cell.get("fire_intensity"), 0)
+        smoke_intensity = _safe_int(cell.get("smoke_intensity"), 0)
+        if fire_intensity <= 0 and not (bool(include_smoke) and smoke_intensity > 0):
+            continue
+        rows.append(cell)
+    rows.sort(key=lambda cell: (
+        -_safe_int(cell.get("fire_intensity"), 0),
+        -_safe_int(cell.get("smoke_intensity"), 0),
+        _safe_int(cell.get("y"), 0),
+        _safe_int(cell.get("x"), 0),
+        _safe_int(cell.get("z"), 0),
+    ))
+    return tuple(rows)
+
+
+def suppress_fire_cell(
+    sim,
+    x,
+    y,
+    z=0,
+    *,
+    amount=1,
+    smoke_amount=0,
+    source_eid=None,
+    source_kind="response_worker",
+):
+    """Apply bounded external suppression to one canonical fire cell.
+
+    Suppression is deliberately different from burning out: it does not mark
+    fuel as spent or repair damage that the fire already caused.  The ordinary
+    fire due queue continues to own smoke decay and any remaining flame.
+    """
+
+    key = _coord_key(x, y, z)
+    if key is None:
+        return {
+            "ok": False,
+            "reason": "invalid_coord",
+            "fire_reduced": 0,
+            "smoke_reduced": 0,
+        }
+    try:
+        amount = max(0, int(amount))
+    except (TypeError, ValueError):
+        amount = 1
+    try:
+        smoke_amount = max(0, int(smoke_amount))
+    except (TypeError, ValueError):
+        smoke_amount = 0
+    if amount <= 0 and smoke_amount <= 0:
+        return {
+            "ok": False,
+            "reason": "no_suppression",
+            "fire_reduced": 0,
+            "smoke_reduced": 0,
+        }
+
+    state = fire_state(sim)
+    cell = state.get("cells", {}).get(key)
+    if not isinstance(cell, dict):
+        return {
+            "ok": False,
+            "reason": "no_fire_cell",
+            "fire_reduced": 0,
+            "smoke_reduced": 0,
+        }
+
+    previous_fire = _safe_int(cell.get("fire_intensity"), 0)
+    previous_smoke = _safe_int(cell.get("smoke_intensity"), 0)
+    next_fire = max(0, previous_fire - amount)
+    next_smoke = max(0, previous_smoke - smoke_amount)
+    if next_fire == previous_fire and next_smoke == previous_smoke:
+        return {
+            "ok": False,
+            "reason": "nothing_to_suppress",
+            "fire_reduced": 0,
+            "smoke_reduced": 0,
+        }
+
+    tick = _safe_int(getattr(sim, "tick", 0), 0)
+    cell["fire_intensity"] = next_fire
+    cell["smoke_intensity"] = next_smoke
+    cell["burn_budget"] = max(0, _safe_int(cell.get("burn_budget"), 0) - max(0, amount))
+    cell["last_suppressed_tick"] = tick
+    cell["last_suppressed_by_eid"] = source_eid
+    cell["last_suppression_kind"] = _text(source_kind).lower() or "response_worker"
+    cell["suppression_total"] = max(0, _safe_int(cell.get("suppression_total"), 0)) + (
+        previous_fire - next_fire
+    )
+
+    if next_fire != previous_fire:
+        mark_fire_light_changed(sim, state=state)
+    chunk = _normalize_chunk_key(sim.chunk_coords(key[0], key[1]))
+    if next_fire <= 0 and next_smoke <= 0:
+        remove_fire_cell(sim, key[0], key[1], key[2], sync_protected=True)
+    elif chunk is not None:
+        _refresh_protected_chunk(sim, chunk, state=state)
+
+    state["fire_response_dirty"] = True
+    state["fire_property_transition_dirty"] = True
+    result = {
+        "ok": True,
+        "reason": "suppressed",
+        "x": key[0],
+        "y": key[1],
+        "z": key[2],
+        "property_id": _text(cell.get("property_id")),
+        "building_id": _text(cell.get("building_id")),
+        "fire_before": previous_fire,
+        "fire_after": next_fire,
+        "smoke_before": previous_smoke,
+        "smoke_after": next_smoke,
+        "fire_reduced": previous_fire - next_fire,
+        "smoke_reduced": previous_smoke - next_smoke,
+        "source_eid": source_eid,
+        "source_kind": _text(source_kind).lower() or "response_worker",
+    }
+    sim.emit(Event("fire_suppressed", **result))
+    return result
 
 
 def remove_fire_cell(sim, x, y, z=0, *, sync_protected=True):
@@ -672,6 +816,8 @@ def remove_fire_cell(sim, x, y, z=0, *, sync_protected=True):
     cell = state.get("cells", {}).pop(key, None)
     if not isinstance(cell, dict):
         return False
+    if _safe_int(cell.get("fire_intensity"), 0) > 0:
+        mark_fire_light_changed(sim, state=state)
     unschedule_fire_cell_advance(sim, key)
     _unindex_fire_cell(sim, key, cell, sync_protected=sync_protected)
     state.get("frozen_boundaries", {}).pop(key, None)
@@ -1051,6 +1197,8 @@ def upsert_fire_cell(
                 "aerosol_source_item_name": _text(aerosol_source_item_name),
             })
         cells[key] = cell
+        if _safe_int(cell.get("fire_intensity"), 0) > 0:
+            mark_fire_light_changed(sim, state=state)
         _index_fire_cell(sim, key, cell)
         if advance_interval is not None:
             schedule_fire_cell_advance(sim, key, advance_interval=advance_interval)
@@ -1068,6 +1216,8 @@ def upsert_fire_cell(
     previous_fire_intensity = _safe_int(existing.get("fire_intensity"), 0)
     existing["fire_intensity"] = max(_safe_int(existing.get("fire_intensity"), 0), _safe_int(fire_intensity, 0))
     existing["smoke_intensity"] = max(_safe_int(existing.get("smoke_intensity"), 0), _safe_int(smoke_intensity, 0))
+    if _safe_int(existing.get("fire_intensity"), 0) != previous_fire_intensity:
+        mark_fire_light_changed(sim, state=state)
     existing["source_kind"] = _text(source_kind).lower() or _text(existing.get("source_kind")).lower()
     existing["source_eid"] = source_eid if source_eid is not None else existing.get("source_eid")
     existing["source_property_id"] = _text(source_property_id) or existing.get("source_property_id") or behavior.get("property_id")
@@ -1288,15 +1438,18 @@ __all__ = [
     "fire_protected_chunks",
     "fire_runtime_day",
     "fire_state",
+    "mark_fire_light_changed",
     "mark_chunk_environmental_ignition",
     "mark_fire_cell_spent",
     "note_frozen_fire_boundary",
     "pop_due_fire_cells",
     "property_fire_summary",
+    "property_fire_cells",
     "rebuild_fire_advance_due_index",
     "remove_fire_cell",
     "schedule_fire_cell_advance",
     "ensure_fire_advance_due_index",
     "unschedule_fire_cell_advance",
+    "suppress_fire_cell",
     "upsert_fire_cell",
 ]

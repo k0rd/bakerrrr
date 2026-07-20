@@ -9,6 +9,8 @@ import random
 
 from engine.events import Event
 from engine.systems import System
+from engine.visibility import has_line_of_sight
+from game.civic_records import civic_license_is_active
 from game.location_presentation_runtime import _location_building_category
 from game.meaningful_objects_runtime import materialize_place_object_near
 from game.opportunities import tracked_target_scene_rows
@@ -46,6 +48,11 @@ from game.system_support.business_event_state import (
     _business_event_actor_note,
     _business_event_actor_state,
     _business_event_seed_state,
+)
+from game.system_support.fire_runtime import (
+    fire_cell_state,
+    property_fire_cells,
+    suppress_fire_cell,
 )
 from game.quiet_maintenance_runtime import (
     quiet_maintenance_actor_line,
@@ -188,6 +195,9 @@ _BUSINESS_EVENT_AFTERMATH_CLEANUP_HOURS = 48.0
 _BUSINESS_EVENT_AFTERMATH_VIGIL_HOURS = 24.0
 _BUSINESS_EVENT_AFTERMATH_CASUALTY_DURATION_HOURS = 72.0
 _BUSINESS_EVENT_AFTERMATH_HAZARD_DURATION_HOURS = 6.0
+_FIRE_RESPONSE_WORK_INTERVAL = 5
+_FIRE_RESPONSE_WORK_RANGE = 4
+_AFTERMATH_CLEANUP_WORK_INTERVAL = 12
 _BUSINESS_EVENT_AFTERMATH_VIOLENCE_DURATION_HOURS = 60.0
 _BUSINESS_EVENT_SHIFT_PHASES = {
     "staff_handoff",
@@ -2113,7 +2123,8 @@ def _business_event_reactive_property_near(sim, x, y, z, *, radius=12):
     target_chunk = sim.chunk_coords(x, y)
     best = None
     best_score = None
-    for candidate in sim.properties.values():
+    chunk_radius = max(2, int(getattr(sim, "chunk_size", 16) or 16) * 2)
+    for candidate in sim.properties_in_radius(x, y, z, r=chunk_radius):
         if not isinstance(candidate, dict):
             continue
         if str(candidate.get("kind", "") or "").strip().lower() != "building":
@@ -2813,8 +2824,18 @@ def _business_event_aftermath_blueprint(category, *, event_phase=""):
             "fixture_type": "cleanup_cart",
             "fixture_glyph": "c",
             "actor_specs": [
-                {"role": "worker", "career": "cleanup_crew", "linger_ticks": 12},
-                {"role": "worker", "career": second_career, "linger_ticks": 12},
+                {
+                    "role": "worker",
+                    "career": "cleanup_crew",
+                    "linger_ticks": 12,
+                    "work_authority": "site_cleanup",
+                },
+                {
+                    "role": "worker",
+                    "career": second_career,
+                    "linger_ticks": 12,
+                    "work_authority": "site_cleanup",
+                },
             ],
             "keep_hours": 1,
             "release_budget": 0,
@@ -2851,7 +2872,8 @@ def _business_event_neighborhood_target(sim, prop, *, rng=None):
     origin_chunk = sim.chunk_coords(origin_x, origin_y)
     origin_id = str(prop.get("id", "") or "").strip()
     weighted = []
-    for candidate in sim.properties.values():
+    chunk_radius = max(2, int(getattr(sim, "chunk_size", 16) or 16) * 2)
+    for candidate in sim.properties_in_radius(origin_x, origin_y, origin_z, r=chunk_radius):
         if not isinstance(candidate, dict):
             continue
         if str(candidate.get("kind", "") or "").strip().lower() != "building":
@@ -6038,7 +6060,6 @@ class BusinessPulseSceneSystem(System):
             and same_z
             and same_hour
             and recent_enough
-            and bool(active)
             and isinstance(cached_specs, (list, tuple))
         ):
             return list(cached_specs)
@@ -6393,6 +6414,9 @@ class BusinessPulseSceneSystem(System):
             "career": career,
             "site_affiliated": bool(site_affiliated),
             "carried_item_ids": tuple(carried_item_ids),
+            "work_authority": str(actor_spec.get("work_authority", "") or "").strip().lower(),
+            "emergency_authority": bool(actor_spec.get("emergency_authority", False)),
+            "required_work_license": str(actor_spec.get("required_work_license", "") or "").strip().lower(),
         }
         note.update(public_place_mood_fields(scene))
         intel_note = {}
@@ -6825,6 +6849,11 @@ class BusinessPulseSceneSystem(System):
             "drift_preferred": bool(blueprint.get("drift_preferred", False)),
             "keep_hours": max(1, int(blueprint.get("keep_hours", 2) or 2)),
             "pulse_hour": max(0, int((spec.get("pulse") or {}).get("hour", 0) or 0)),
+            "required_work_license": str(
+                blueprint.get("required_work_license", "")
+                or (spec.get("pulse") or {}).get("required_work_license", "")
+                or ""
+            ).strip().lower(),
         }
         scene.update(public_place_mood_fields(spec.get("pulse") or {}))
         rng = random.Random(f"{self.sim.seed}:business-scene:{scene['scene_id']}")
@@ -7541,3 +7570,306 @@ class BusinessPulseSceneSystem(System):
             self._update_scene_actor_routes(scene)
         self._prune_chunk_spillover(active_chunk, tallies=chunk_tallies)
         _prune_business_event_seeds(self.sim, active_scene_ids=active.keys())
+
+
+class BusinessSceneWorkSystem(System):
+    """Let materialized response and cleanup workers change world truth.
+
+    The visible scene owns who is present and where they are assigned.  This
+    system only visits that bounded active-scene set, so emergency work can run
+    during headless time without repeating business candidate discovery.
+    """
+
+    def __init__(self, sim):
+        super().__init__(sim)
+        self.runs_without_turn = True
+
+    def _actor_note(self, eid):
+        state = _business_event_actor_state(self.sim)
+        note = state.get(int(eid), {}) if isinstance(state, dict) else {}
+        return note if isinstance(note, dict) else {}
+
+    def _worker_ids(self, scene, careers):
+        careers = {
+            str(career or "").strip().lower()
+            for career in tuple(careers or ())
+            if str(career or "").strip()
+        }
+        rows = []
+        for raw_eid in tuple((scene or {}).get("spawned_entity_ids", ()) or ()):
+            try:
+                eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            if self.sim.ecs.get(Position).get(eid) is None:
+                continue
+            if careers and str(self._actor_note(eid).get("career", "") or "").strip().lower() not in careers:
+                continue
+            rows.append(eid)
+        return tuple(rows)
+
+    def _actor_can_work(self, eid):
+        if self.sim.ecs.get(Position).get(eid) is None or _entity_is_downed(self.sim, eid):
+            return False
+        ai = self.sim.ecs.get(AI).get(eid)
+        will = self.sim.ecs.get(NPCWill).get(eid)
+        blocked_states = {"investigating", "protecting", "seeking_safety", "surrendered"}
+        if str(getattr(ai, "state", "") or "").strip().lower() in blocked_states:
+            return False
+        if str(getattr(will, "intent", "") or "").strip().lower() in blocked_states:
+            return False
+        return True
+
+    def _actor_work_authorized(self, scene, eid):
+        note = self._actor_note(eid)
+        required = str(
+            note.get("required_work_license", "")
+            or (scene or {}).get("required_work_license", "")
+            or ""
+        ).strip().lower()
+        if not required:
+            note["work_license_status"] = "not_required"
+            return True
+        if bool(note.get("emergency_authority")):
+            note["work_license_status"] = "emergency_authority"
+            return True
+        if civic_license_is_active(self.sim, eid, required):
+            note["work_license_status"] = "active"
+            return True
+        note["work_license_status"] = "missing"
+        blocked_key = f"{int(eid)}:{required}"
+        if str((scene or {}).get("work_license_blocked_key", "") or "") != blocked_key:
+            scene["work_license_blocked_key"] = blocked_key
+            self.sim.emit(Event(
+                "business_scene_work_license_blocked",
+                scene_id=str((scene or {}).get("scene_id", "") or "").strip(),
+                property_id=str((scene or {}).get("property_id", "") or "").strip(),
+                worker_eid=int(eid),
+                required_license_kind=required,
+            ))
+        return False
+
+    def _set_actor_work_target(self, scene, eid, target):
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            return
+        target = (int(target[0]), int(target[1]), int(target[2]))
+        route = (scene or {}).setdefault("actor_routes", {}).get(int(eid))
+        if isinstance(route, dict):
+            current_points = tuple(
+                (int(point[0]), int(point[1]), int(point[2]))
+                for point in tuple(route.get("points", ()) or ())
+                if isinstance(point, (tuple, list)) and len(point) >= 3
+            )
+            if current_points != (target,):
+                route["points"] = [target]
+                route["index"] = 0
+                route["next_switch_tick"] = int(self.sim.tick) + max(4, int(route.get("linger_ticks", 8) or 8))
+                route.pop("yield_point", None)
+        ai = self.sim.ecs.get(AI).get(eid)
+        will = self.sim.ecs.get(NPCWill).get(eid)
+        if ai is not None and (
+            str(getattr(ai, "state", "") or "").strip().lower() != "holding"
+            or tuple(getattr(ai, "target", ()) or ()) != target
+            or getattr(ai, "target_eid", None) is not None
+        ):
+            _sync_ai_intent(ai, will, self.sim.tick, "holding", target=target, target_eid=None)
+
+    def _safe_response_work_tile(self, actor_pos, target):
+        if actor_pos is None or not isinstance(target, (tuple, list)) or len(target) < 3:
+            return None
+        tx, ty, tz = int(target[0]), int(target[1]), int(target[2])
+        current = (int(actor_pos.x), int(actor_pos.y), int(actor_pos.z))
+        current_fire = fire_cell_state(self.sim, *current)
+        if (
+            current[2] == tz
+            and _manhattan(current[0], current[1], tx, ty) <= _FIRE_RESPONSE_WORK_RANGE
+            and int((current_fire or {}).get("fire_intensity", 0) or 0) <= 0
+            and has_line_of_sight(self.sim, current[0], current[1], current[2], tx, ty, tz)
+        ):
+            return current
+
+        candidates = []
+        for radius in range(1, _FIRE_RESPONSE_WORK_RANGE + 1):
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    if abs(dx) + abs(dy) != radius:
+                        continue
+                    x, y = tx + dx, ty + dy
+                    if not self.sim.tilemap.is_walkable(x, y, tz):
+                        continue
+                    fire_here = fire_cell_state(self.sim, x, y, tz)
+                    if int((fire_here or {}).get("fire_intensity", 0) or 0) > 0:
+                        continue
+                    if not has_line_of_sight(self.sim, x, y, tz, tx, ty, tz):
+                        continue
+                    occupied = any(
+                        int(other_eid) != int(getattr(actor_pos, "eid", -1) or -1)
+                        and self.sim.ecs.get(Position).get(other_eid) is not None
+                        for other_eid in tuple(self.sim.tilemap.entities_at(x, y, tz) or ())
+                    )
+                    if occupied and (x, y, tz) != current:
+                        continue
+                    candidates.append((
+                        _manhattan(current[0], current[1], x, y),
+                        int((fire_here or {}).get("smoke_intensity", 0) or 0),
+                        radius,
+                        y,
+                        x,
+                        (x, y, tz),
+                    ))
+            if candidates:
+                break
+        candidates.sort()
+        return candidates[0][-1] if candidates else None
+
+    def _process_fire_response(self, scene):
+        property_id = str((scene or {}).get("property_id", "") or "").strip()
+        if not property_id:
+            return
+        cells = property_fire_cells(self.sim, property_id)
+        if not cells:
+            scene["response_status"] = "contained"
+            return
+        workers = self._worker_ids(scene, ("response_worker",))
+        worker_eid = next((eid for eid in workers if self._actor_can_work(eid)), None)
+        if worker_eid is None or not self._actor_work_authorized(scene, worker_eid):
+            scene["response_status"] = "interrupted" if workers else "uncrewed"
+            return
+        pos = self.sim.ecs.get(Position).get(worker_eid)
+        target_cell = min(
+            cells,
+            key=lambda cell: (
+                _manhattan(int(pos.x), int(pos.y), int(cell.get("x", 0)), int(cell.get("y", 0))),
+                -int(cell.get("fire_intensity", 0) or 0),
+                int(cell.get("y", 0) or 0),
+                int(cell.get("x", 0) or 0),
+            ),
+        )
+        target = (
+            int(target_cell.get("x", 0)),
+            int(target_cell.get("y", 0)),
+            int(target_cell.get("z", 0)),
+        )
+        work_tile = self._safe_response_work_tile(pos, target)
+        if work_tile is None:
+            scene["response_status"] = "no_safe_approach"
+            return
+        self._set_actor_work_target(scene, worker_eid, work_tile)
+        scene["response_target"] = target
+        scene["response_work_tile"] = work_tile
+        if (int(pos.x), int(pos.y), int(pos.z)) != work_tile:
+            scene["response_status"] = "approaching"
+            return
+        if int(self.sim.tick) < int(scene.get("response_next_work_tick", 0) or 0):
+            scene["response_status"] = "suppressing"
+            return
+
+        result = suppress_fire_cell(
+            self.sim,
+            target[0],
+            target[1],
+            target[2],
+            amount=1,
+            source_eid=worker_eid,
+            source_kind="emergency_response",
+        )
+        scene["response_next_work_tick"] = int(self.sim.tick) + _FIRE_RESPONSE_WORK_INTERVAL
+        if not bool(result.get("ok")):
+            scene["response_status"] = str(result.get("reason", "stalled") or "stalled")
+            return
+        scene["response_status"] = "suppressing"
+        scene["response_actions"] = int(scene.get("response_actions", 0) or 0) + 1
+        scene["last_response_result"] = dict(result)
+        note = self._actor_note(worker_eid)
+        note["work_target"] = target
+        note["work_status"] = "suppressing fire"
+
+    def _process_cleanup(self, scene):
+        property_id = str((scene or {}).get("property_id", "") or "").strip()
+        prop = getattr(self.sim, "properties", {}).get(property_id)
+        if not isinstance(prop, dict):
+            return
+        entry = _business_event_aftermath_entry(self.sim, prop)
+        if not isinstance(entry, dict):
+            scene["cleanup_status"] = "complete"
+            return
+        workers = self._worker_ids(scene, ("cleanup_crew", "sanitation_worker", "maintenance_tech"))
+        worker_eid = next((eid for eid in workers if self._actor_can_work(eid)), None)
+        if worker_eid is None or not self._actor_work_authorized(scene, worker_eid):
+            scene["cleanup_status"] = "interrupted" if workers else "uncrewed"
+            return
+        pos = self.sim.ecs.get(Position).get(worker_eid)
+        anchor = (scene or {}).get("anchor")
+        if not isinstance(anchor, (tuple, list)) or len(anchor) < 3:
+            anchor = (int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0)))
+        anchor = (int(anchor[0]), int(anchor[1]), int(anchor[2]))
+        if int(pos.z) != anchor[2] or _manhattan(int(pos.x), int(pos.y), anchor[0], anchor[1]) > 3:
+            self._set_actor_work_target(scene, worker_eid, anchor)
+            scene["cleanup_status"] = "approaching"
+            return
+        if int(self.sim.tick) < int(scene.get("cleanup_next_work_tick", 0) or 0):
+            scene["cleanup_status"] = "working"
+            return
+
+        severity = max(0.0, min(1.0, float(entry.get("severity", 0.4) or 0.4)))
+        required_actions = max(2, int(2.0 + (severity * 3.0) + 0.999))
+        actions = int(entry.get("cleanup_actions", 0) or 0) + 1
+        entry["cleanup_actions"] = actions
+        entry["cleanup_required_actions"] = required_actions
+        entry["cleanup_progress"] = min(1.0, float(actions) / float(required_actions))
+        entry["cleanup_last_tick"] = int(self.sim.tick)
+        entry["cleanup_worker_eid"] = int(worker_eid)
+        entry["cleanup_work_authority"] = str(self._actor_note(worker_eid).get("work_authority", "") or "").strip().lower()
+        scene["cleanup_next_work_tick"] = int(self.sim.tick) + _AFTERMATH_CLEANUP_WORK_INTERVAL
+        scene["cleanup_status"] = "working"
+        scene["cleanup_progress"] = float(entry["cleanup_progress"])
+        note = self._actor_note(worker_eid)
+        note["work_status"] = "clearing the aftermath"
+
+        if actions < required_actions:
+            return
+        maintenance = run_quiet_maintenance(
+            self.sim,
+            prop,
+            source_kind="aftermath_cleanup",
+            preferred_kind="minor_repair",
+            emit_event=True,
+        )
+        if not bool(maintenance.get("ok")):
+            maintenance = run_quiet_maintenance(
+                self.sim,
+                prop,
+                source_kind="aftermath_cleanup",
+                preferred_kind="frontage_reset",
+                emit_event=True,
+            )
+        _business_event_aftermath_state(self.sim).setdefault("properties", {}).pop(property_id, None)
+        scene["cleanup_status"] = "complete"
+        scene["cleanup_completed_tick"] = int(self.sim.tick)
+        scene["cleanup_maintenance_result"] = dict(maintenance or {})
+        note["work_status"] = "cleanup complete"
+        self.sim.emit(Event(
+            "business_aftermath_cleanup_completed",
+            scene_id=str(scene.get("scene_id", "") or "").strip(),
+            property_id=property_id,
+            property_name=str(prop.get("name", property_id) or property_id).strip(),
+            worker_eid=int(worker_eid),
+            cleanup_actions=int(actions),
+            maintenance_kind=str((maintenance or {}).get("maintenance_kind", "") or "").strip().lower(),
+            x=anchor[0],
+            y=anchor[1],
+            z=anchor[2],
+        ))
+
+    def update(self):
+        active = _business_event_scene_state(self.sim).get("active", {})
+        if not isinstance(active, dict):
+            return
+        for scene in tuple(active.values()):
+            if not isinstance(scene, dict):
+                continue
+            event_phase = str(scene.get("event_phase", "") or "").strip().lower()
+            if event_phase == "fire_response":
+                self._process_fire_response(scene)
+            elif event_phase == "cleanup_detail":
+                self._process_cleanup(scene)

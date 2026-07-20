@@ -266,7 +266,7 @@ from game.player_businesses import (
     player_business_role_fit,
     player_business_staffing_targets,
 )
-from game.incident_runtime import incident_record
+from game.incident_runtime import incident_record, mark_incident_registry_changed
 import random
 
 THREAT_STATES = {"protecting", "investigating"}
@@ -629,6 +629,7 @@ class CriminalJusticeSystem(System):
             return None
         incident[str(field or "justice_accounted")] = True
         incident["justice_accounted_tick"] = int(getattr(self.sim, "tick", 0))
+        mark_incident_registry_changed(self.sim)
         return incident
 
     def _emit_identity_case_change(self, case, *, changed=False, newly_resolved=False):
@@ -737,6 +738,7 @@ class CriminalJusticeSystem(System):
         incident["justice_identity_case_id"] = payload.get("case_id")
         resolved_eid = payload.get("resolved_subject_eid")
         incident["justice_identity_unresolved"] = resolved_eid is None
+        mark_incident_registry_changed(self.sim)
         return resolved_eid
 
     def _queue_npc_wanted_detention(self, change, *, reason="justice_record"):
@@ -5412,6 +5414,7 @@ class CriminalJusticeSystem(System):
         incident["officially_reported"] = True
         incident.setdefault("reported_tick", int(getattr(self.sim, "tick", 0)))
         incident.setdefault("reported_by_eid", event.data.get("reporter_eid", event.data.get("npc_eid")))
+        mark_incident_registry_changed(self.sim)
         crime_profile = self._provisional_case_crime_profile(case, incident)
         if isinstance(case, dict):
             case["provisional_crime_profile"] = dict(crime_profile) if isinstance(crime_profile, dict) else None

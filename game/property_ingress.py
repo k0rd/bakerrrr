@@ -383,6 +383,7 @@ class PropertyIngressRuntime:
             to_x=target_x,
             to_y=target_y,
             to_z=target_z,
+            sim=self.sim,
         )
         if ingress.ingress_kind != "ordinary_entry":
             return None
@@ -738,6 +739,7 @@ class PropertyIngressRuntime:
                 to_x=tx,
                 to_y=ty,
                 to_z=tz,
+                sim=self.sim,
             )
             tile = self.sim.tilemap.tile_at(tx, ty, tz)
             aperture = _property_aperture_at(prop, tx, ty, tz)

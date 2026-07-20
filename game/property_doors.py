@@ -152,6 +152,7 @@ def _door_open_attempt(sim, eid, x, y, z, *, allow_override=False):
             to_x=x,
             to_y=y,
             to_z=z,
+            sim=sim,
         )
     if ingress and ingress.from_inside:
         return (_set_door_open_state(sim, x, y, z, True), "opened_inside")

@@ -654,6 +654,15 @@ def _property_business_community_signal(sim, property_id):
     return result
 
 
+def _maximum_business_community_signal_radius(sim):
+    try:
+        chunk_size = int(getattr(sim, "chunk_size", 16) or 16)
+    except (TypeError, ValueError):
+        chunk_size = 16
+    chunk_size = max(12, chunk_size)
+    return max(5, int(round(chunk_size * 1.35)))
+
+
 def _property_business_community_ripple(sim, property_id):
     property_key = _text(property_id)
     base = {
@@ -677,7 +686,14 @@ def _property_business_community_ripple(sim, property_id):
     lift_total = 0.0
     drag_total = 0.0
     contributors = 0
-    for other_id, other_prop in sim.properties.items():
+    nearby_properties = sim.properties_in_radius(
+        int(point[0]),
+        int(point[1]),
+        int(point[2]),
+        r=_maximum_business_community_signal_radius(sim),
+    )
+    for other_prop in nearby_properties:
+        other_id = _text(other_prop.get("id")) if isinstance(other_prop, dict) else ""
         if _text(other_id) == property_key:
             continue
         if not property_supports_business_reputation(other_prop):

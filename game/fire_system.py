@@ -25,6 +25,7 @@ from game.system_support.fire_runtime import (
     fire_cell_state,
     fire_runtime_day,
     fire_state,
+    mark_fire_light_changed,
     ensure_fire_advance_due_index,
     mark_fire_cell_spent,
     mark_chunk_environmental_ignition,
@@ -1144,6 +1145,7 @@ class FireSystem(System):
         previous_active = set(state.get("last_active_properties", ()) or ())
         previous_smoke = set(state.get("last_smoke_properties", ()) or ())
         changed_chunks = set()
+        fire_light_changed = False
 
         for coord in due_coords:
             cell = state.get("cells", {}).get(coord)
@@ -1187,6 +1189,8 @@ class FireSystem(System):
                     cell["fire_intensity"] = max(0, fire_intensity - 1)
                 else:
                     cell["fire_intensity"] = max(fire_intensity, 1)
+                if _safe_int(cell.get("fire_intensity"), 0) != fire_intensity:
+                    fire_light_changed = True
                 if _safe_int(cell.get("fire_intensity"), 0) <= 0:
                     spent_record = mark_fire_cell_spent(
                         self.sim,
@@ -1211,6 +1215,9 @@ class FireSystem(System):
                     due_tick=tick + FIRE_SPREAD_INTERVAL,
                     advance_interval=FIRE_SPREAD_INTERVAL,
                 )
+
+        if fire_light_changed:
+            mark_fire_light_changed(self.sim, state=state)
 
         for chunk in changed_chunks:
             refresh_fire_protected_chunk(self.sim, chunk)
@@ -1259,8 +1266,22 @@ class FireSystem(System):
                     "fixture_type": "fire_response_barrier",
                     "fixture_glyph": "!",
                     "actor_specs": [
-                        {"role": "worker", "career": "response_worker", "linger_ticks": 16, "fixed_position": True},
-                        {"role": "guard", "career": "traffic_guard", "linger_ticks": 16, "fixed_position": True},
+                        {
+                            "role": "worker",
+                            "career": "response_worker",
+                            "linger_ticks": 8,
+                            "fixed_position": False,
+                            "work_authority": "emergency_response",
+                            "emergency_authority": True,
+                        },
+                        {
+                            "role": "guard",
+                            "career": "traffic_guard",
+                            "linger_ticks": 16,
+                            "fixed_position": True,
+                            "work_authority": "emergency_cordon",
+                            "emergency_authority": True,
+                        },
                     ],
                     "keep_hours": 1,
                     "release_budget": 0,

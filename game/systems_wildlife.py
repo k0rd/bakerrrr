@@ -477,6 +477,9 @@ class AnimalSocialSystem(System):
         if left_eid is None or right_eid is None:
             return
         for eid, other_eid in ((left_eid, right_eid), (right_eid, left_eid)):
+            social_state = self.sim.ecs.get(WildlifeSocialState).get(eid)
+            if social_state is not None:
+                social_state.note_contact(other_eid, self.sim.tick)
             memory = self.sim.ecs.get(AnimalMemory).get(eid)
             if memory is None:
                 continue
@@ -1764,6 +1767,19 @@ def _wildlife_social_target_score(sim, self_eid, other_eid, *, pos, other_pos, i
     distance = _grid_distance(pos.x, pos.y, other_pos.x, other_pos.y)
     if distance > observe_radius:
         return None
+
+    # A completed contact satisfies this particular relationship briefly.
+    # Keeping the interval pair-specific prevents adjacent animals from
+    # rebuilding the same bond every tick without suppressing threat/ecology
+    # sensing or contact with a different companion.
+    social_state = _wildlife_social_state_for_actor(sim, self_eid)
+    if social_state is not None:
+        last_contact = social_state.last_contact_tick(other_eid, default=None)
+        if last_contact is not None:
+            sociability = float(getattr(social_profile, "sociability", 0.0) or 0.0)
+            contact_interval = max(8, min(24, int(round(24.0 - (sociability * 0.16)))))
+            if int(getattr(sim, "tick", 0) or 0) - int(last_contact) < contact_interval:
+                return None
 
     other_identity = sim.ecs.get(CreatureIdentity).get(other_eid)
     if other_identity is None:

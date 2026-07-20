@@ -30,6 +30,7 @@ _crime_sensitivity = _systems._crime_sensitivity
 _degrade_player_disguise = _systems._degrade_player_disguise
 _justice_level = _systems._justice_level
 _manhattan = _systems._manhattan
+_noise_attention_context_from_event = _systems._noise_attention_context_from_event
 _noise_merits_attention = _systems._noise_merits_attention
 _npc_conflict_alignment = _systems._npc_conflict_alignment
 _npc_disguise_scrutiny_profile = _systems._npc_disguise_scrutiny_profile
@@ -75,6 +76,7 @@ class NPCMemorySystem(System):
         nz = event.data.get("z")
         radius = event.data.get("radius", 0)
         cause = event.data.get("cause")
+        attention_context = None
 
         positions = self.sim.ecs.get(Position)
         memories = self.sim.ecs.get(NPCMemory)
@@ -90,7 +92,18 @@ class NPCMemorySystem(System):
                 continue
 
             dist = _manhattan(pos.x, pos.y, nx, ny)
-            if not _noise_merits_attention(self.sim, eid, source_eid, nx, ny, nz, cause):
+            if attention_context is None:
+                attention_context = _noise_attention_context_from_event(self.sim, event)
+            if not _noise_merits_attention(
+                self.sim,
+                eid,
+                source_eid,
+                nx,
+                ny,
+                nz,
+                cause,
+                context=attention_context,
+            ):
                 continue
 
             intensity = max(0.1, 1.0 - (dist / float(max(1, radius + 1))))

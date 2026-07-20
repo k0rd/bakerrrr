@@ -1,3 +1,4 @@
+from engine.derived_facts import cached_derived_fact
 from game.property_access import (
     DEFAULT_START_HOUR,
     DEFAULT_TICKS_PER_HOUR,
@@ -485,29 +486,39 @@ def _active_fire_cache_key(sim):
     state = getattr(sim, "fire_state", None)
     if not isinstance(state, dict):
         return ()
-    cells = state.get("cells", {})
-    if not isinstance(cells, dict) or not cells:
-        return ()
 
-    active = []
-    for coord, cell in cells.items():
-        if not isinstance(cell, dict):
-            continue
-        try:
-            fire_intensity = int(cell.get("fire_intensity", 0) or 0)
-        except (TypeError, ValueError):
-            fire_intensity = 0
-        if fire_intensity <= 0:
-            continue
-        try:
-            x = int(coord[0])
-            y = int(coord[1])
-            z = int(coord[2])
-        except (TypeError, ValueError, IndexError):
-            continue
-        active.append((x, y, z, fire_intensity))
-    active.sort()
-    return tuple(active)
+    def build():
+        cells = state.get("cells", {})
+        if not isinstance(cells, dict) or not cells:
+            return ()
+        active = []
+        for coord, cell in cells.items():
+            if not isinstance(cell, dict):
+                continue
+            try:
+                fire_intensity = int(cell.get("fire_intensity", 0) or 0)
+            except (TypeError, ValueError):
+                fire_intensity = 0
+            if fire_intensity <= 0:
+                continue
+            try:
+                x = int(coord[0])
+                y = int(coord[1])
+                z = int(coord[2])
+            except (TypeError, ValueError, IndexError):
+                continue
+            active.append((x, y, z, fire_intensity))
+        active.sort()
+        return tuple(active)
+
+    return cached_derived_fact(
+        sim,
+        "fire.active_lights",
+        "all",
+        build,
+        domains=("fire_light",),
+        max_entries=1,
+    )
 
 
 def _power_cut_active_at(sim, x, y, z=0, *, tick=None):

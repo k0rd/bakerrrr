@@ -9,6 +9,7 @@ VALID_ACCOUNTABLE_OBSERVATION_CHANNELS = frozenset({
     "authority_report",
     "official_report",
 })
+MAX_OBSERVER_NOTICE_RADIUS = 14
 
 
 def _observer_support():
@@ -416,8 +417,17 @@ def _watchers_for_position(sim, x, y, z, exclude_eid=None, exclude_eids=(), offe
     excluded = _combined_excluded_observer_eids(exclude_eid, exclude_eids)
 
     watchers = []
-    for observer_eid, observer_pos in positions.items():
+    nearby_eids = sim.entity_ids_in_radius(
+        int(x),
+        int(y),
+        int(z),
+        radius=MAX_OBSERVER_NOTICE_RADIUS,
+    )
+    for observer_eid in nearby_eids:
         if observer_eid in excluded:
+            continue
+        observer_pos = positions.get(observer_eid)
+        if observer_pos is None:
             continue
         if (
             offender_eid is not None

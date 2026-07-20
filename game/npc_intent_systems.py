@@ -17,6 +17,7 @@ from game.components import (
     AnimalPhysicalProfile,
     AnimalSocialProfile,
     ArmorLoadout,
+    BusinessKnowledge,
     Collider,
     ContactLedger,
     CoreStats,
@@ -26,6 +27,7 @@ from game.components import (
     EcologyProfile,
     FinancialProfile,
     HumanWildlifePresence,
+    IncidentKnowledge,
     InsightStats,
     Inventory,
     ItemUseProfile,
@@ -188,7 +190,12 @@ from game.system_support.actor_attention_runtime import (
     schedule_actor_due as _schedule_actor_due,
 )
 from game.outfit_impression import apply_visible_outfit_social_offset
-from game.criminal_justice_runtime import _noise_merits_attention, _observer_is_active_bodyguard
+from game.criminal_justice_runtime import (
+    _noise_attention_context_from_access,
+    _noise_attention_context_from_event,
+    _noise_merits_attention,
+    _observer_is_active_bodyguard,
+)
 from game.dialogue_runtime import (
     _active_contractor_record,
     _contractor_order_target_from_record,
@@ -276,6 +283,8 @@ from game.system_support.npc_behavior_runtime import (
     _find_lodging_target,
     _find_medical_aid_target,
     _find_shopping_target,
+    _shopping_consideration_due,
+    _shopping_need_is_urgent,
     _find_safe_spot_target,
     _find_scavenged_sale_target,
     _find_ground_credit_target,
@@ -444,8 +453,8 @@ def _routine_will_signature(sim, eid, ai, will, needs, *, suppression=None):
 
     Movement is intentionally absent: walking toward the chosen target should
     stay hot without forcing the actor to rediscover why it chose that target.
-    New knowledge, changed needs, work time, possessions, relationships, and
-    property reputation all invalidate the decision before its bounded lease.
+    New personal knowledge, changed needs, work time, possessions, and
+    relationships all invalidate the decision before its bounded lease.
     """
     target = getattr(ai, "target", None)
     if isinstance(target, (tuple, list)):
@@ -512,14 +521,39 @@ def _routine_will_signature(sim, eid, ai, will, needs, *, suppression=None):
         if isinstance(bond, dict)
     ))
 
+    business_knowledge = sim.ecs.get(BusinessKnowledge).get(eid)
+    business_signature = tuple(sorted(
+        (
+            str(property_id),
+            int((record or {}).get("last_learned_tick", (record or {}).get("learned_tick", -1)) or -1),
+            int(float((record or {}).get("confidence", 0.0) or 0.0) * 10),
+            int(float((record or {}).get("trust", 0.0) or 0.0) * 10),
+            int(float((record or {}).get("reliability", 0.0) or 0.0) * 10),
+            int(float((record or {}).get("fear", 0.0) or 0.0) * 10),
+            int(float((record or {}).get("heat", 0.0) or 0.0) * 10),
+            int(float((record or {}).get("price_fairness", 0.0) or 0.0) * 10),
+            int(float((record or {}).get("loyalty", 0.0) or 0.0) * 10),
+            int(float((record or {}).get("resentment", 0.0) or 0.0) * 10),
+        )
+        for property_id, record in dict(getattr(business_knowledge, "records", {}) or {}).items()
+        if isinstance(record, dict)
+    ))
+
+    incident_knowledge = sim.ecs.get(IncidentKnowledge).get(eid)
+    incident_signature = tuple(sorted(
+        (
+            int(incident_id),
+            int((record or {}).get("last_learned_tick", (record or {}).get("learned_tick", -1)) or -1),
+            int(float((record or {}).get("confidence", 0.0) or 0.0) * 10),
+            int((record or {}).get("severity", 0) or 0) // 5,
+            bool((record or {}).get("dismissed", False)),
+        )
+        for incident_id, record in dict(getattr(incident_knowledge, "records", {}) or {}).items()
+        if isinstance(record, dict)
+    ))
+
     vitality = sim.ecs.get(Vitality).get(eid)
     effects = sim.ecs.get(StatusEffects).get(eid)
-    reputation_stats = getattr(sim, "business_reputation_stats", None)
-    reputation_revision = (
-        int(reputation_stats.get("_revision", 0) or 0)
-        if isinstance(reputation_stats, dict)
-        else 0
-    )
     return (
         str(getattr(ai, "state", "") or "").strip().lower(),
         target,
@@ -539,7 +573,8 @@ def _routine_will_signature(sim, eid, ai, will, needs, *, suppression=None):
         memory_signature,
         knowledge_signature,
         social_signature,
-        reputation_revision,
+        business_signature,
+        incident_signature,
         int(getattr(sim, "next_property_id", 0) or 0),
     )
 
@@ -611,6 +646,10 @@ def _should_skip_live_will_update(sim, eid, ai, will, needs, pos, *, player_pos=
 def _emit_move_access_events(*args, **kwargs):
     return _facade()._emit_move_access_events(*args, **kwargs)
 
+
+def _derive_move_access_context(*args, **kwargs):
+    return _facade()._derive_move_access_context(*args, **kwargs)
+
 def _entity_status_move_speed_multiplier(*args, **kwargs):
     return _facade()._entity_status_move_speed_multiplier(*args, **kwargs)
 
@@ -653,6 +692,56 @@ def _pick_social_venue(*args, **kwargs):
 
 def _resolve_ai_target(*args, **kwargs):
     return _facade()._resolve_ai_target(*args, **kwargs)
+
+
+_ADJACENT_INTERACTION_STATES = frozenset({
+    "helping_victim",
+    "seeking_companionship",
+    "seeking_social",
+    "seeking_street_appraiser",
+    "seeking_street_buyer",
+    "soliciting_player",
+})
+
+
+def _adjacent_interaction_approach_target(sim, eid, ai, pos, target):
+    """Choose an open contact cell instead of pathing onto another actor."""
+
+    state = str(getattr(ai, "state", "") or "").strip().lower()
+    if state not in _ADJACENT_INTERACTION_STATES or getattr(ai, "target_eid", None) is None:
+        return target
+    try:
+        tx, ty, tz = int(target[0]), int(target[1]), int(target[2])
+    except (TypeError, ValueError, IndexError):
+        return target
+    if int(getattr(pos, "z", tz)) != tz or _manhattan(int(pos.x), int(pos.y), tx, ty) <= 1:
+        return target
+
+    candidates = []
+    for dx, dy in (
+        (0, -1),
+        (1, 0),
+        (0, 1),
+        (-1, 0),
+        (-1, -1),
+        (1, -1),
+        (-1, 1),
+        (1, 1),
+    ):
+        ax, ay = tx + dx, ty + dy
+        traversable, _reason = _is_traversable_for(sim, eid, ax, ay, tz)
+        if not traversable:
+            continue
+        candidates.append((
+            _manhattan(int(pos.x), int(pos.y), ax, ay),
+            abs(dx) + abs(dy),
+            ay,
+            ax,
+        ))
+    if not candidates:
+        return target
+    _distance, _shape, ay, ax = min(candidates)
+    return (int(ax), int(ay), int(tz))
 
 def _sa(*args, **kwargs):
     return _facade()._sa(*args, **kwargs)
@@ -4013,7 +4102,19 @@ class NPCWillSystem(System):
                 needs=needs,
                 vitality=vitality,
             )
-            if max(buy_provisions, buy_practical_gear, buy_quirky_items) >= 0.05:
+            shopping_active = str(getattr(ai, "state", "") or "").strip().lower() == "shopping"
+            shopping_urgent = _shopping_need_is_urgent(needs, vitality)
+            if (
+                max(buy_provisions, buy_practical_gear, buy_quirky_items) >= 0.05
+                and (not work_active or shopping_urgent)
+                and _shopping_consideration_due(
+                    self.sim,
+                    eid,
+                    needs=needs,
+                    vitality=vitality,
+                    active=shopping_active,
+                )
+            ):
                 shopping_target = _find_shopping_target(
                     self.sim,
                     eid,
@@ -4658,9 +4759,6 @@ class NPCInvestigateSystem(System):
         self.sim.events.subscribe("npc_intent_changed", self.on_npc_intent_changed)
         self.next_move_tick = {}
         self._live_timeskip_stride_phase = 0
-        self._move_due_by_tick = {}
-        self._move_due_membership = {}
-        self._urgent_move_eids = set()
         self._live_no_path_cache = {}
         self._danger_noise_pulses = {}
         self._doorway_obstruction_watch = {}
@@ -4713,17 +4811,40 @@ class NPCInvestigateSystem(System):
         )
         if not moved:
             return False
-        profile = noise_profiles.get(eid)
-        noise_radius = int(max(1, getattr(profile, "move_radius", 4)))
-        self.sim.emit(Event(
-            "noise",
-            source_eid=eid,
-            x=int(pos.x),
-            y=int(pos.y),
-            z=int(pos.z),
-            radius=noise_radius,
-            cause="move",
-        ))
+        access_context = _derive_move_access_context(
+            self.sim,
+            eid=eid,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            origin_z=origin_z,
+            target_x=int(pos.x),
+            target_y=int(pos.y),
+            target_z=int(pos.z),
+        )
+        ingress = access_context.get("ingress")
+        noise_context = None
+        if ingress is None or float(getattr(ingress, "breach_severity", 0.0) or 0.0) <= 0.0:
+            noise_context = _noise_attention_context_from_access(
+                eid,
+                "move",
+                access_context.get("prop"),
+                access_context.get("access"),
+            )
+        # Ordinary movement is quiet unless its already-derived access facts
+        # make it suspicious (for example footsteps inside protected space).
+        if bool(getattr(noise_context, "source_access_actionable", False)):
+            profile = noise_profiles.get(eid)
+            noise_radius = int(max(1, getattr(profile, "move_radius", 4)))
+            self.sim.emit(Event(
+                "noise",
+                source_eid=eid,
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+                radius=noise_radius,
+                cause="move",
+                _noise_attention_context=noise_context,
+            ))
         _emit_move_access_events(
             self.sim,
             eid=eid,
@@ -4735,6 +4856,7 @@ class NPCInvestigateSystem(System):
             target_y=int(pos.y),
             target_z=int(pos.z),
             emit_clear_offense=False,
+            access_context=access_context,
         )
         return True
 
@@ -4750,17 +4872,6 @@ class NPCInvestigateSystem(System):
         except (TypeError, ValueError):
             return None
         due_tick = self._normalize_due_tick(due_tick)
-        old_tick = self._move_due_membership.get(eid)
-        if old_tick == due_tick:
-            return due_tick
-        if old_tick is not None:
-            old_bucket = self._move_due_by_tick.get(old_tick)
-            if isinstance(old_bucket, set):
-                old_bucket.discard(eid)
-                if not old_bucket:
-                    self._move_due_by_tick.pop(old_tick, None)
-        self._move_due_by_tick.setdefault(due_tick, set()).add(eid)
-        self._move_due_membership[eid] = due_tick
         delay = max(0, int(due_tick) - int(getattr(self.sim, "tick", 0) or 0))
         _schedule_actor_due(self.sim, eid, "move", delay_ticks=delay, reason="npc_move")
         return due_tick
@@ -4770,18 +4881,8 @@ class NPCInvestigateSystem(System):
             eid = int(eid)
         except (TypeError, ValueError):
             return False
-        old_tick = self._move_due_membership.pop(eid, None)
-        if old_tick is None:
-            return False
-        bucket = self._move_due_by_tick.get(old_tick)
-        if isinstance(bucket, set):
-            bucket.discard(eid)
-            if not bucket:
-                self._move_due_by_tick.pop(old_tick, None)
-        self._urgent_move_eids.discard(eid)
         self._live_no_path_cache.pop(eid, None)
-        _clear_actor_attention(self.sim, eid, family="move")
-        return True
+        return bool(_clear_actor_attention(self.sim, eid, family="move"))
 
     def _handle_open_doorway_blocking(self, eid, ai, pos, *, wills, identities):
         role = str(getattr(ai, "role", "") or "").strip().lower()
@@ -4829,7 +4930,6 @@ class NPCInvestigateSystem(System):
                 will.target_eid = None
             _mark_actor_urgent(self.sim, eid, family="move", reason="clear_doorway", ttl_ticks=8)
             _mark_actor_urgent(self.sim, eid, family="will", reason="clear_doorway", ttl_ticks=8)
-            self._urgent_move_eids.add(int(eid))
 
         try:
             first_tick = int(record.get("first_tick", tick))
@@ -5039,34 +5139,9 @@ class NPCInvestigateSystem(System):
             return self._normalize_due_tick(getattr(throttle, "next_move_tick", 0))
         return self._normalize_due_tick(self.next_move_tick.get(eid, 0))
 
-    def _resync_live_move_due(self, ais, positions, move_throttles):
-        if not self._live_timeskip_active():
-            self._move_due_by_tick.clear()
-            self._move_due_membership.clear()
-            self._urgent_move_eids.clear()
-            return
-        for eid, ai in tuple(ais.items()):
-            state = str(getattr(ai, "state", "") or "").strip().lower()
-            if state not in self.MOVING_STATES or positions.get(eid) is None:
-                self._unschedule_move_due(eid)
-                continue
-            if getattr(ai, "target", None) is None and getattr(ai, "target_eid", None) is None:
-                self._unschedule_move_due(eid)
-                continue
-            next_tick = self._current_next_move_tick(eid, move_throttles.get(eid))
-            self._schedule_move_due(eid, next_tick)
-
     def _pop_due_move_eids(self):
         tick = self._normalize_due_tick(getattr(self.sim, "tick", 0))
-        ready = set()
-        for due_tick in sorted(raw for raw in self._move_due_by_tick.keys() if int(raw) <= tick):
-            bucket = self._move_due_by_tick.pop(due_tick, set())
-            for eid in tuple(bucket or ()):
-                if self._move_due_membership.get(eid) == due_tick:
-                    self._move_due_membership.pop(eid, None)
-                ready.add(eid)
-        ready.update(_pop_due_actors(self.sim, "move", current_tick=tick))
-        return ready
+        return set(_pop_due_actors(self.sim, "move", current_tick=tick))
 
     def on_npc_intent_changed(self, event):
         data = getattr(event, "data", {}) or {}
@@ -5091,7 +5166,6 @@ class NPCInvestigateSystem(System):
             if routine_defer:
                 self._schedule_move_due(npc_eid, int(getattr(self.sim, "tick", 0) or 0) + 120)
             else:
-                self._urgent_move_eids.add(npc_eid)
                 _mark_actor_urgent(self.sim, npc_eid, family="move", reason=f"intent:{intent}", ttl_ticks=12)
                 if intent in NPCWillSystem.LIVE_TIMESKIP_URGENT_STATES:
                     _mark_actor_urgent(self.sim, npc_eid, family="will", reason=f"intent:{intent}", ttl_ticks=12)
@@ -5106,6 +5180,7 @@ class NPCInvestigateSystem(System):
         nz = event.data["z"]
         radius = event.data["radius"]
         cause = event.data.get("cause")
+        attention_context = None
 
         ais = self.sim.ecs.get(AI)
         positions = self.sim.ecs.get(Position)
@@ -5159,7 +5234,6 @@ class NPCInvestigateSystem(System):
                     target=escape_target,
                     target_eid=None,
                 )
-                self._urgent_move_eids.add(int(eid))
                 _mark_actor_urgent(self.sim, eid, family="move", reason="noise:wildlife", ttl_ticks=12)
                 _mark_actor_urgent(self.sim, eid, family="will", reason="noise:wildlife", ttl_ticks=12)
                 self._schedule_move_due(eid, getattr(self.sim, "tick", 0))
@@ -5173,7 +5247,18 @@ class NPCInvestigateSystem(System):
             ):
                 continue
 
-            if not _noise_merits_attention(self.sim, eid, source_eid, nx, ny, nz, cause):
+            if attention_context is None:
+                attention_context = _noise_attention_context_from_event(self.sim, event)
+            if not _noise_merits_attention(
+                self.sim,
+                eid,
+                source_eid,
+                nx,
+                ny,
+                nz,
+                cause,
+                context=attention_context,
+            ):
                 continue
 
             state = str(getattr(ai, "state", "") or "").strip().lower()
@@ -5229,7 +5314,6 @@ class NPCInvestigateSystem(System):
                     target=retreat_target,
                     target_eid=None,
                 )
-                self._urgent_move_eids.add(int(eid))
                 _mark_actor_urgent(self.sim, eid, family="move", reason="noise:danger", ttl_ticks=12)
                 _mark_actor_urgent(self.sim, eid, family="will", reason="noise:danger", ttl_ticks=12)
                 self._schedule_move_due(eid, getattr(self.sim, "tick", 0))
@@ -5259,7 +5343,6 @@ class NPCInvestigateSystem(System):
                 "heard_tick": int(getattr(self.sim, "tick", 0) or 0),
             }
             ai.investigation_context = investigation_context
-            self._urgent_move_eids.add(int(eid))
             _mark_actor_urgent(self.sim, eid, family="move", reason="noise", ttl_ticks=12)
             _mark_actor_urgent(self.sim, eid, family="will", reason="noise", ttl_ticks=12)
             self._schedule_move_due(eid, getattr(self.sim, "tick", 0))
@@ -5703,7 +5786,13 @@ class NPCInvestigateSystem(System):
             rows.append((0, int(distance), str(prop.get("name", "") or ""), str(prop.get("id", "") or ""), prop, False))
             seen.add(str(prop.get("id", "") or ""))
 
-        for prop in self.sim.properties.values():
+        nearby_properties = self.sim.properties_in_radius(
+            int(pos.x),
+            int(pos.y),
+            int(pos.z),
+            r=max(self.COMMUTE_OWNED_VEHICLE_RADIUS, self.COMMUTE_VEHICLE_RADIUS),
+        )
+        for prop in nearby_properties:
             if not _property_is_vehicle(prop):
                 continue
             prop_id = str(prop.get("id", "") or "").strip()
@@ -6127,9 +6216,7 @@ class NPCInvestigateSystem(System):
         _refresh_actor_attention(self.sim, player_eid=player_eid)
         if live_timeskip_active:
             candidate_eids = self._pop_due_move_eids()
-            candidate_eids.update(self._urgent_move_eids)
             candidate_eids.update(active_emergency_actor_eids(self.sim))
-            self._urgent_move_eids.clear()
             ai_items = [(eid, ais[eid]) for eid in sorted(candidate_eids) if eid in ais]
         else:
             ai_items = tuple(ais.items())
@@ -7023,14 +7110,28 @@ class NPCInvestigateSystem(System):
                 "shopping",
                 "resting",
             }
+            path_tx, path_ty, path_tz = tx, ty, tz
+            if not quirk_target_override:
+                path_tx, path_ty, path_tz = _adjacent_interaction_approach_target(
+                    self.sim,
+                    eid,
+                    ai,
+                    pos,
+                    (tx, ty, tz),
+                )
             step = None
-            path_suppressed = live_timeskip_active and self._live_no_path_cached(eid, ai, pos, (tx, ty, tz))
+            path_suppressed = live_timeskip_active and self._live_no_path_cached(
+                eid,
+                ai,
+                pos,
+                (path_tx, path_ty, path_tz),
+            )
             commute_phase = str(getattr(ai, "vehicle_commute_phase", "") or "").strip().lower()
             if commute_phase == "drive":
                 step = self._vehicle_route_next_step(
                     eid,
                     (int(pos.x), int(pos.y), int(pos.z)),
-                    (tx, ty, tz),
+                    (path_tx, path_ty, path_tz),
                     str(getattr(ai, "vehicle_commute_vehicle_id", "") or "").strip(),
                 )
             if step is None and commute_phase != "drive" and routine_path_state and not path_suppressed:
@@ -7039,7 +7140,7 @@ class NPCInvestigateSystem(System):
                     eid,
                     ai.state,
                     pos,
-                    (tx, ty, tz),
+                    (path_tx, path_ty, path_tz),
                     max_nodes=256,
                 )
             if step is None and commute_phase != "drive" and not path_suppressed:
@@ -7048,8 +7149,8 @@ class NPCInvestigateSystem(System):
                     eid=eid,
                     sx=pos.x,
                     sy=pos.y,
-                    tx=tx,
-                    ty=ty,
+                    tx=path_tx,
+                    ty=path_ty,
                     z=pos.z,
                     max_nodes=192 if routine_path_state else 512,
                 )
@@ -7116,12 +7217,12 @@ class NPCInvestigateSystem(System):
                             self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
                         continue
 
-            if not step and _path_search_failed(self.sim, eid, pos.x, pos.y, tx, ty, pos.z):
+            if not step and _path_search_failed(self.sim, eid, pos.x, pos.y, path_tx, path_ty, pos.z):
                 if self._request_replan_after_failed_path(
                     eid,
                     ai,
                     pos,
-                    (tx, ty, tz),
+                    (path_tx, path_ty, path_tz),
                     wills=wills,
                 ):
                     continue
@@ -7248,7 +7349,13 @@ class NPCInvestigateSystem(System):
                             retry_cooldown = max(int(hold_cooldown), 10)
                         else:
                             retry_cooldown = max(int(hold_cooldown), 8)
-                        self._note_live_no_path(eid, ai, pos, (tx, ty, tz), delay_ticks=max(retry_cooldown, 30))
+                        self._note_live_no_path(
+                            eid,
+                            ai,
+                            pos,
+                            (path_tx, path_ty, path_tz),
+                            delay_ticks=max(retry_cooldown, 30),
+                        )
                     elif blocked_key == "active_fire":
                         retry_cooldown = max(int(hold_cooldown), 6)
                 if throttle:
@@ -7257,19 +7364,44 @@ class NPCInvestigateSystem(System):
                     self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + retry_cooldown)
                 continue
 
-            profile = noise_profiles.get(eid)
-            noise_radius = int(max(1, getattr(profile, "move_radius", 4)))
-            if vehicle_step:
-                noise_radius = max(noise_radius, 6)
-            self.sim.emit(Event(
-                "noise",
-                source_eid=eid,
-                x=int(pos.x),
-                y=int(pos.y),
-                z=int(pos.z),
-                radius=noise_radius,
-                cause="vehicle_move" if vehicle_step else "move",
-            ))
+            noise_cause = "vehicle_move" if vehicle_step else "move"
+            access_context = _derive_move_access_context(
+                self.sim,
+                eid=eid,
+                origin_x=origin_x,
+                origin_y=origin_y,
+                origin_z=origin_z,
+                target_x=int(pos.x),
+                target_y=int(pos.y),
+                target_z=int(pos.z),
+            )
+            ingress = access_context.get("ingress")
+            noise_context = None
+            if ingress is None or float(getattr(ingress, "breach_severity", 0.0) or 0.0) <= 0.0:
+                noise_context = _noise_attention_context_from_access(
+                    eid,
+                    noise_cause,
+                    access_context.get("prop"),
+                    access_context.get("access"),
+                )
+            if (
+                noise_cause not in QUIET_NOISE_CAUSES
+                or bool(getattr(noise_context, "source_access_actionable", False))
+            ):
+                profile = noise_profiles.get(eid)
+                noise_radius = int(max(1, getattr(profile, "move_radius", 4)))
+                if vehicle_step:
+                    noise_radius = max(noise_radius, 6)
+                self.sim.emit(Event(
+                    "noise",
+                    source_eid=eid,
+                    x=int(pos.x),
+                    y=int(pos.y),
+                    z=int(pos.z),
+                    radius=noise_radius,
+                    cause=noise_cause,
+                    _noise_attention_context=noise_context,
+                ))
             _emit_move_access_events(
                 self.sim,
                 eid=eid,
@@ -7281,6 +7413,7 @@ class NPCInvestigateSystem(System):
                 target_y=int(pos.y),
                 target_z=int(pos.z),
                 emit_clear_offense=False,
+                access_context=access_context,
             )
             if ai.state == "protecting" and threat_focus:
                 _sync_npc_cover_against_threat(

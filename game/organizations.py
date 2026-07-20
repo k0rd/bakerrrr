@@ -1,5 +1,6 @@
 import random
 
+from engine.derived_facts import cached_derived_fact, mark_derived_fact_changed
 from game.components import (
     OrganizationCrimePlans,
     Occupation,
@@ -1798,57 +1799,74 @@ def organization_policy_snapshot(sim, organization_eid=None, *, organization_key
     if profile is None:
         return None
 
-    root_eid = organization_root_eid(sim, organization_eid) or int(organization_eid)
-    root_profile = organization_profile(sim, root_eid)
-    current_tags = set(getattr(profile, "tags", ()) or ())
-    root_tags = set(getattr(root_profile, "tags", ()) or ()) if root_profile else set(current_tags)
+    organization_eid = int(organization_eid)
 
-    structure = _tag_prefix_value(current_tags, "org_structure:")
-    if not structure:
-        structure = _tag_prefix_value(root_tags, "org_structure:")
-    if structure not in ORGANIZATION_STRUCTURE_MODES:
-        structure = ORGANIZATION_STRUCTURE_BY_KIND.get(
-            _normalize_org_kind(getattr(root_profile, "kind", getattr(profile, "kind", "")), default="other"),
-            "flat",
+    def _build_policy_snapshot():
+        current_profile = organization_profile(sim, organization_eid)
+        if current_profile is None:
+            return None
+
+        root_eid = organization_root_eid(sim, organization_eid) or int(organization_eid)
+        root_profile = organization_profile(sim, root_eid)
+        current_tags = set(getattr(current_profile, "tags", ()) or ())
+        root_tags = set(getattr(root_profile, "tags", ()) or ()) if root_profile else set(current_tags)
+
+        structure = _tag_prefix_value(current_tags, "org_structure:")
+        if not structure:
+            structure = _tag_prefix_value(root_tags, "org_structure:")
+        if structure not in ORGANIZATION_STRUCTURE_MODES:
+            structure = ORGANIZATION_STRUCTURE_BY_KIND.get(
+                _normalize_org_kind(getattr(root_profile, "kind", getattr(current_profile, "kind", "")), default="other"),
+                "flat",
+            )
+
+        family = (
+            _family_from_tags(current_tags)
+            or _family_from_tags(root_tags)
+            or (
+                "street_gang"
+                if _normalize_org_kind(getattr(root_profile, "kind", getattr(current_profile, "kind", "")), default="other") in {"gang", "crew"}
+                else "criminal_network"
+                if _normalize_org_kind(getattr(root_profile, "kind", getattr(current_profile, "kind", "")), default="other") == "criminal"
+                else _normalize_org_kind(getattr(root_profile, "kind", getattr(current_profile, "kind", "")), default="other")
+            )
         )
 
-    family = (
-        _family_from_tags(current_tags)
-        or _family_from_tags(root_tags)
-        or (
-            "street_gang"
-            if _normalize_org_kind(getattr(root_profile, "kind", getattr(profile, "kind", "")), default="other") in {"gang", "crew"}
-            else "criminal_network"
-            if _normalize_org_kind(getattr(root_profile, "kind", getattr(profile, "kind", "")), default="other") == "criminal"
-            else _normalize_org_kind(getattr(root_profile, "kind", getattr(profile, "kind", "")), default="other")
-        )
+        role = _tag_prefix_value(current_tags, "org_role:")
+        if not role:
+            if int(root_eid) == int(organization_eid):
+                role = "root"
+            elif family == "municipal":
+                role = "department"
+            elif structure == "cell":
+                role = "cell"
+            else:
+                role = "operator"
+
+        return {
+            "organization_eid": int(organization_eid),
+            "organization_key": _text(current_profile.key),
+            "organization_name": _text(current_profile.name),
+            "organization_kind": _normalize_org_kind(current_profile.kind, default="other"),
+            "family": family,
+            "structure": structure,
+            "org_role": role,
+            "root_organization_eid": int(root_eid),
+            "root_organization_key": _text(getattr(root_profile, "key", "")),
+            "root_organization_name": _text(getattr(root_profile, "name", "")),
+            "root_organization_kind": _normalize_org_kind(getattr(root_profile, "kind", ""), default="other") if root_profile else "other",
+            "ancestor_chain": organization_ancestor_chain(sim, organization_eid, include_self=False),
+        }
+
+    snapshot = cached_derived_fact(
+        sim,
+        "organizations.policy",
+        organization_eid,
+        domains=("organizations",),
+        max_entries=4096,
+        builder=_build_policy_snapshot,
     )
-
-    role = _tag_prefix_value(current_tags, "org_role:")
-    if not role:
-        if int(root_eid) == int(organization_eid):
-            role = "root"
-        elif family == "municipal":
-            role = "department"
-        elif structure == "cell":
-            role = "cell"
-        else:
-            role = "operator"
-
-    return {
-        "organization_eid": int(organization_eid),
-        "organization_key": _text(profile.key),
-        "organization_name": _text(profile.name),
-        "organization_kind": _normalize_org_kind(profile.kind, default="other"),
-        "family": family,
-        "structure": structure,
-        "org_role": role,
-        "root_organization_eid": int(root_eid),
-        "root_organization_key": _text(getattr(root_profile, "key", "")),
-        "root_organization_name": _text(getattr(root_profile, "name", "")),
-        "root_organization_kind": _normalize_org_kind(getattr(root_profile, "kind", ""), default="other") if root_profile else "other",
-        "ancestor_chain": organization_ancestor_chain(sim, organization_eid, include_self=False),
-    }
+    return dict(snapshot) if isinstance(snapshot, dict) else None
 
 
 def ensure_organization(
@@ -1893,6 +1911,7 @@ def ensure_organization(
         organization_eid = index.get(key)
         profile = organization_profile(sim, organization_eid) if organization_eid is not None else None
 
+    profile_changed = False
     if profile is None:
         organization_eid = sim.ecs.create()
         profile = OrganizationProfile(
@@ -1904,19 +1923,25 @@ def ensure_organization(
         )
         sim.ecs.add(organization_eid, profile)
         profile = organization_profile(sim, organization_eid)
+        profile_changed = True
     else:
-        if name:
+        if name and _text(profile.name) != name:
             profile.name = name
-        if kind:
+            profile_changed = True
+        if kind and _normalize_org_kind(profile.kind, default="other") != kind:
             profile.kind = kind
+            profile_changed = True
         if tags:
+            previous_tags = set(profile.tags)
             profile.tags.update(
                 _text(tag).lower().replace(" ", "_")
                 for tag in tags
                 if _text(tag)
             )
-        if parent_org_eid is not None:
+            profile_changed = bool(profile_changed or profile.tags != previous_tags)
+        if parent_org_eid is not None and _safe_int(profile.parent_org_eid, default=0) != int(parent_org_eid):
             profile.parent_org_eid = int(parent_org_eid)
+            profile_changed = True
 
     index[key] = int(organization_eid)
     if key and (seed or name or tags or parent_organization_key):
@@ -1934,6 +1959,8 @@ def ensure_organization(
     # depending on its production-expression layer at module import time.
     from game.organization_production import ensure_organization_production_profile
     ensure_organization_production_profile(sim, int(organization_eid))
+    if profile_changed:
+        _invalidate_organization_runtime_caches(sim)
     return int(organization_eid)
 
 
@@ -3072,6 +3099,21 @@ def organization_practices(
     requested_kind = _text(practice_kind).lower().replace(" ", "_")
     if requested_kind and requested_kind not in ORGANIZATION_PRACTICE_KINDS:
         return ()
+    cache_state = _organization_runtime_cache_state(sim)
+    practices_cache = cache_state.setdefault("organization_practices", {})
+    cache_key = (
+        _safe_int(organization_eid, default=0),
+        _safe_int(current_tick, default=0),
+        bool(active_only),
+        requested_kind,
+        bool(include_future),
+        bool(include_expired),
+        bool(include_ancestors),
+        int(max_lineage_depth),
+    )
+    cached = practices_cache.get(cache_key)
+    if isinstance(cached, tuple):
+        return cached
     rows = []
     source_organization_eids = (
         _organization_lineage_eids(sim, organization_eid, include_self=True, max_depth=max_lineage_depth)
@@ -3109,7 +3151,9 @@ def organization_practices(
                     "lineage_depth": int(lineage_depth),
                 }
             )
-    return _sort_practice_rows(rows)
+    result = _sort_practice_rows(rows)
+    practices_cache[cache_key] = result
+    return result
 
 
 def _practice_targets_property(sim, row, prop):
@@ -3187,6 +3231,21 @@ def _collect_property_org_practices(
 ):
     if not isinstance(prop, dict):
         return ()
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    cache_state = _organization_runtime_cache_state(sim)
+    practices_cache = cache_state.setdefault("property_practices", {})
+    cache_key = (
+        _text(prop.get("id")) or f"prop-object:{id(prop)}",
+        _safe_int(organization_eid, default=0),
+        tick,
+        bool(active_only),
+        _text(practice_kind).lower().replace(" ", "_"),
+        bool(include_future),
+        bool(include_expired),
+    )
+    cached = practices_cache.get(cache_key)
+    if isinstance(cached, tuple):
+        return cached
     rows = []
     seen = set()
     for link in property_org_links(sim, prop, active_only=active_only):
@@ -3215,7 +3274,9 @@ def _collect_property_org_practices(
                 continue
             seen.add(key)
             rows.append({**row, "matched_link_kind": _text(link.get("link_kind")).lower() or None})
-    return _sort_practice_rows(rows)
+    result = _sort_practice_rows(rows)
+    practices_cache[cache_key] = result
+    return result
 
 
 def _practice_targets_membership(sim, row, actor_eid, membership):
@@ -4510,6 +4571,12 @@ def _trim_organization_crime_plans(component):
     return component
 
 
+def _invalidate_active_crime_plan_index(sim):
+    """Advance canonical crime-plan truth after a plan mutates."""
+
+    mark_derived_fact_changed(sim, "organization_crime_plans")
+
+
 def _refresh_crime_plan_briefings(sim, plan_row):
     if not isinstance(plan_row, dict):
         return None
@@ -4630,6 +4697,7 @@ def record_organization_crime_plan(
     normalized = _normalize_crime_plan_row(row, organization_eid=organization_eid, entry_id=entry_id)
     component.entries[clean_key] = normalized
     _trim_organization_crime_plans(component)
+    _invalidate_active_crime_plan_index(sim)
     _refresh_crime_plan_briefings(sim, normalized)
     return dict(normalized)
 
@@ -5213,22 +5281,35 @@ def _organization_member_read_active(sim):
 
 
 def _organization_runtime_cache_state(sim):
-    traits = getattr(sim, "world_traits", None)
-    if not isinstance(traits, dict):
-        sim.world_traits = {}
-        traits = sim.world_traits
-    state = traits.get("organization_runtime_cache")
+    state = getattr(sim, "_organization_runtime_cache", None)
     if not isinstance(state, dict):
         state = {}
-        traits["organization_runtime_cache"] = state
+        sim._organization_runtime_cache = state
     sim_tick = _safe_int(getattr(sim, "tick", 0), default=0)
     if _safe_int(state.get("sim_tick"), default=-1) != sim_tick:
         revision = _safe_int(state.get("revision"), default=0)
+        # Site-link topology changes only through organization mutations,
+        # whose invalidation clears this bucket explicitly.  Preserve that
+        # index across ticks while temporal watch, practice, and access facts
+        # continue to refresh on the simulation clock.
+        property_links = state.get("property_links")
+        if not isinstance(property_links, dict):
+            property_links = {}
         state.clear()
         state["sim_tick"] = sim_tick
         state["revision"] = revision
+        state["property_links"] = property_links
     state.setdefault("revision", 0)
-    for key in ("workplace_posture", "protective_pressure", "property_links", "access_posture", "property_members"):
+    for key in (
+        "workplace_posture",
+        "protective_pressure",
+        "property_links",
+        "access_posture",
+        "property_members",
+        "member_sources",
+        "organization_practices",
+        "property_practices",
+    ):
         cache = state.get(key)
         if not isinstance(cache, dict):
             cache = {}
@@ -5251,7 +5332,17 @@ def _organization_runtime_property_cache_key(prop, *, actor_eid=None, current_ti
 def _invalidate_organization_runtime_caches(sim):
     state = _organization_runtime_cache_state(sim)
     state["revision"] = _safe_int(state.get("revision"), default=0) + 1
-    for key in ("workplace_posture", "protective_pressure", "property_links", "access_posture", "property_members"):
+    mark_derived_fact_changed(sim, "organizations")
+    for key in (
+        "workplace_posture",
+        "protective_pressure",
+        "property_links",
+        "access_posture",
+        "property_members",
+        "member_sources",
+        "organization_practices",
+        "property_practices",
+    ):
         cache = state.get(key)
         if isinstance(cache, dict):
             cache.clear()
@@ -5475,6 +5566,22 @@ def _briefing_query_cache_key(actor_eid, prop=None):
     return f"{actor_eid}:{property_id or '-'}"
 
 
+def _invalidate_actor_briefing_query_cache(state, actor_eid, prop=None):
+    query_cache = state.get("query_cache", {}) if isinstance(state, dict) else {}
+    if not isinstance(query_cache, dict):
+        return
+    actor_prefix = f"{_safe_int(actor_eid, default=0)}:"
+    if isinstance(prop, dict):
+        exact_key = _briefing_query_cache_key(actor_eid, prop=prop)
+        unscoped_key = _briefing_query_cache_key(actor_eid)
+        for key in (exact_key, unscoped_key):
+            query_cache.pop(key, None)
+        return
+    for key in tuple(query_cache.keys()):
+        if str(key).startswith(actor_prefix):
+            query_cache.pop(key, None)
+
+
 def _briefing_packets_token(packets):
     return tuple(
         (
@@ -5507,7 +5614,7 @@ def refresh_actor_branch_briefing(sim, actor_eid, prop=None, reason=""):
             seen_property_ids.add(property_id)
             props.append(candidate)
     state = _organization_actor_briefing_state(sim)
-    state.get("query_cache", {}).clear()
+    _invalidate_actor_briefing_query_cache(state, actor_eid, prop=prop)
     packets = state["packets"]
     if not props:
         stale_keys = [
@@ -5770,6 +5877,11 @@ def actor_branch_briefing_packet(sim, actor_eid, prop=None, current_tick=None):
     state = _organization_actor_briefing_state(sim)
     query_cache = state.get("query_cache", {})
     cache_key = _briefing_query_cache_key(actor_eid, prop=prop)
+    cached = query_cache.get(cache_key)
+    if isinstance(cached, dict):
+        cached_packet = cached.get("packet")
+        if isinstance(cached_packet, dict):
+            return cached_packet
     packets = _briefing_branch_packets(sim, actor_eid, prop=prop)
     if not packets:
         packets = refresh_actor_branch_briefing(sim, actor_eid, prop=prop, reason="query")
@@ -6456,20 +6568,34 @@ def _recent_protective_history_rows(sim, prop, *, current_tick=None, max_age=PRO
 
 def _recent_official_incidents_for_property(sim, prop, *, current_tick=None, max_age=PROTECTIVE_PRESSURE_RECENT_TICKS):
     tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    def build_candidates():
+        recent = []
+        for incident in incident_records(sim):
+            if not isinstance(incident, dict):
+                continue
+            if not bool(incident.get("officially_reported") or incident.get("justice_accounted")):
+                continue
+            report_tick = max(
+                _safe_int(incident.get("justice_accounted_tick"), default=0),
+                _safe_int(incident.get("reported_tick"), default=0),
+                _safe_int(incident.get("last_observed_tick"), default=0),
+            )
+            if tick - report_tick <= int(max_age):
+                recent.append(incident)
+        return tuple(recent)
+
+    candidates = cached_derived_fact(
+        sim,
+        "incidents.recent_official",
+        int(max_age),
+        build_candidates,
+        domains=("incidents",),
+        tick_scoped=True,
+        max_entries=8,
+    )
     rows = []
-    for incident in incident_records(sim):
-        if not isinstance(incident, dict):
-            continue
-        if not bool(incident.get("officially_reported") or incident.get("justice_accounted")):
-            continue
+    for incident in candidates:
         if not _protective_incident_matches_property(sim, incident, prop):
-            continue
-        report_tick = max(
-            _safe_int(incident.get("justice_accounted_tick"), default=0),
-            _safe_int(incident.get("reported_tick"), default=0),
-            _safe_int(incident.get("last_observed_tick"), default=0),
-        )
-        if tick - report_tick > int(max_age):
             continue
         rows.append(dict(incident))
     return tuple(rows)
@@ -8486,14 +8612,81 @@ def _membership_targets_property(prop, organization_eid, membership):
     return False
 
 
+def _organization_member_source_index(sim):
+    """Build exact inverse workplace/membership indexes once per tick."""
+
+    cache_state = _organization_runtime_cache_state(sim)
+    cache = cache_state.get("member_sources", {})
+    cached = cache.get("index") if isinstance(cache, dict) else None
+    if isinstance(cached, dict):
+        return cached
+
+    occupation_property = {}
+    occupation_building = {}
+    for actor_eid, occupation in sim.ecs.get(Occupation).items():
+        workplace = getattr(occupation, "workplace", None)
+        property_id = ""
+        building_id = ""
+        if isinstance(workplace, str):
+            property_id = _text(workplace)
+        elif isinstance(workplace, dict):
+            property_id = _text(workplace.get("property_id"))
+            building_id = _text(workplace.get("building_id"))
+        if property_id:
+            occupation_property.setdefault(property_id, set()).add(int(actor_eid))
+        if building_id:
+            occupation_building.setdefault(building_id, set()).add(int(actor_eid))
+
+    affiliation_property = {}
+    affiliation_building = {}
+    for actor_eid, affiliations in sim.ecs.get(OrganizationAffiliations).items():
+        for raw_org_eid, membership in dict(getattr(affiliations, "memberships", {}) or {}).items():
+            if not isinstance(membership, dict) or not bool(membership.get("active", True)):
+                continue
+            organization_eid = _safe_int(
+                membership.get("organization_eid"),
+                default=_safe_int(raw_org_eid, default=0),
+            )
+            if organization_eid <= 0:
+                continue
+            property_id = _text(membership.get("site_property_id"))
+            building_id = _text(membership.get("site_building_id"))
+            if property_id:
+                affiliation_property.setdefault((organization_eid, property_id), set()).add(int(actor_eid))
+            if building_id:
+                affiliation_building.setdefault((organization_eid, building_id), set()).add(int(actor_eid))
+
+    result = {
+        "occupation_property": occupation_property,
+        "occupation_building": occupation_building,
+        "affiliation_property": affiliation_property,
+        "affiliation_building": affiliation_building,
+    }
+    _organization_runtime_cache_state(sim).setdefault("member_sources", {})["index"] = result
+    return result
+
+
 def _property_org_members_impl(sim, prop):
     organization_eid = property_organization_eid(sim, prop, ensure=True)
     occupations = sim.ecs.get(Occupation)
     affiliations_map = sim.ecs.get(OrganizationAffiliations)
+    source_index = _organization_member_source_index(sim)
+    property_id = _text(prop.get("id"))
+    metadata = _property_metadata(prop)
+    building_ids = {
+        _text(metadata.get("building_id")),
+        _text(metadata.get("local_building_id")),
+    } - {""}
     candidates = {}
 
     if organization_eid is not None:
-        for actor_eid, affiliations in affiliations_map.items():
+        affiliation_eids = set(source_index.get("affiliation_property", {}).get((int(organization_eid), property_id), ()))
+        for building_id in building_ids:
+            affiliation_eids.update(
+                source_index.get("affiliation_building", {}).get((int(organization_eid), building_id), ())
+            )
+        for actor_eid in sorted(affiliation_eids):
+            affiliations = affiliations_map.get(actor_eid)
             membership = affiliations.memberships.get(int(organization_eid)) if affiliations else None
             if not _membership_targets_property(prop, organization_eid, membership):
                 continue
@@ -8513,7 +8706,11 @@ def _property_org_members_impl(sim, prop):
                 "source": "affiliation",
             }
 
-    for actor_eid, occupation in occupations.items():
+    occupation_eids = set(source_index.get("occupation_property", {}).get(property_id, ()))
+    for building_id in building_ids:
+        occupation_eids.update(source_index.get("occupation_building", {}).get(building_id, ()))
+    for actor_eid in sorted(occupation_eids):
+        occupation = occupations.get(actor_eid)
         if not occupation_targets_property(prop, occupation):
             continue
         if organization_eid is not None and actor_eid not in candidates:

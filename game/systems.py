@@ -359,6 +359,7 @@ from game.movement_runtime import (
     _entity_blocks,
     _is_traversable_for,
     _movement_allows_auto_open,
+    _movement_planning_context,
     try_move_entity,
 )
 from game.property_runtime import (
@@ -1386,6 +1387,7 @@ def _npc_tactical_reachable_tiles(sim, eid, pos, *, max_steps=4):
         (-1, 1),
         (1, 1),
     )
+    planning_context = _movement_planning_context(sim, eid)
 
     while frontier:
         cx, cy, steps = frontier.popleft()
@@ -1404,6 +1406,7 @@ def _npc_tactical_reachable_tiles(sim, eid, pos, *, max_steps=4):
                 to_x=nx,
                 to_y=ny,
                 z=int(pos.z),
+                planning_context=planning_context,
             )
             if not step_ok:
                 continue
@@ -2085,19 +2088,26 @@ def _observer_can_notice_position(sim, observer_eid, x, y, z):
     )
 
 
-def _emit_move_access_events(
+def _derive_move_access_context(
     sim,
     *,
     eid,
-    action,
     origin_x,
     origin_y,
     origin_z,
     target_x,
     target_y,
     target_z,
-    emit_clear_offense=True,
 ):
+    signature = (
+        int(eid),
+        int(origin_x),
+        int(origin_y),
+        int(origin_z),
+        int(target_x),
+        int(target_y),
+        int(target_z),
+    )
     prop = _property_covering(sim, target_x, target_y, target_z)
     if prop and _property_cover_intended(prop):
         # Cover-intended fixtures (benches, bus stops, etc.) are street
@@ -2119,7 +2129,8 @@ def _emit_move_access_events(
         target_z,
         prop=prop,
     )
-    trespass_triggered = False
+    ingress = None
+    access = None
     if prop:
         ingress = _property_ingress_context(
             prop,
@@ -2129,6 +2140,7 @@ def _emit_move_access_events(
             to_x=target_x,
             to_y=target_y,
             to_z=target_z,
+            sim=sim,
         )
         access = _evaluate_property_access(
             sim,
@@ -2139,6 +2151,53 @@ def _emit_move_access_events(
             z=target_z,
             breach_severity=ingress.breach_severity,
         )
+    return {
+        "signature": signature,
+        "prop": prop,
+        "ingress": ingress,
+        "access": access,
+    }
+
+
+def _emit_move_access_events(
+    sim,
+    *,
+    eid,
+    action,
+    origin_x,
+    origin_y,
+    origin_z,
+    target_x,
+    target_y,
+    target_z,
+    emit_clear_offense=True,
+    access_context=None,
+):
+    expected_signature = (
+        int(eid),
+        int(origin_x),
+        int(origin_y),
+        int(origin_z),
+        int(target_x),
+        int(target_y),
+        int(target_z),
+    )
+    if not isinstance(access_context, dict) or access_context.get("signature") != expected_signature:
+        access_context = _derive_move_access_context(
+            sim,
+            eid=eid,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            origin_z=origin_z,
+            target_x=target_x,
+            target_y=target_y,
+            target_z=target_z,
+        )
+    prop = access_context.get("prop")
+    ingress = access_context.get("ingress")
+    access = access_context.get("access")
+    trespass_triggered = False
+    if prop and ingress is not None and access is not None:
         if access.inside_bounds and access.severity_score > 0:
             observation = observation_payload_for_position(
                 sim,
@@ -2455,7 +2514,7 @@ def _monotonic_path_nodes(sx, sy, tx, ty, *, diagonal_phase="early"):
     return tuple(nodes)
 
 
-def _direct_verified_path_step(sim, eid, sx, sy, tx, ty, z, *, max_distance=32):
+def _direct_verified_path_step(sim, eid, sx, sy, tx, ty, z, *, max_distance=32, planning_context=None):
     """Use current collision truth to prove a short route before searching."""
 
     distance = _grid_distance(sx, sy, tx, ty)
@@ -2480,6 +2539,7 @@ def _direct_verified_path_step(sim, eid, sx, sy, tx, ty, z, *, max_distance=32):
                 to_x=to_x,
                 to_y=to_y,
                 z=z,
+                planning_context=planning_context,
             )
             if not step_ok:
                 reason_text = str(reason or "").strip().lower()
@@ -2544,7 +2604,7 @@ def _path_search_failed(sim, eid, sx, sy, tx, ty, z):
     )
 
 
-def _cached_path_step(sim, eid, sx, sy, tx, ty, z):
+def _cached_path_step(sim, eid, sx, sy, tx, ty, z, *, planning_context=None):
     cache = _path_step_cache(sim)
     entry = cache.get(eid)
     if not isinstance(entry, dict):
@@ -2564,6 +2624,7 @@ def _cached_path_step(sim, eid, sx, sy, tx, ty, z):
         to_x=next_x,
         to_y=next_y,
         z=int(z),
+        planning_context=planning_context,
     )
     if not step_ok:
         cache.pop(eid, None)
@@ -2597,7 +2658,17 @@ def _path_next_step(sim, eid, sx, sy, tx, ty, z, max_nodes=512):
         _clear_path_search_failure(sim, eid)
         return None
 
-    cached_step, cached = _cached_path_step(sim, eid, sx, sy, tx, ty, z)
+    planning_context = _movement_planning_context(sim, eid)
+    cached_step, cached = _cached_path_step(
+        sim,
+        eid,
+        sx,
+        sy,
+        tx,
+        ty,
+        z,
+        planning_context=planning_context,
+    )
     if cached:
         return cached_step
 
@@ -2609,6 +2680,7 @@ def _path_next_step(sim, eid, sx, sy, tx, ty, z, max_nodes=512):
         tx,
         ty,
         z,
+        planning_context=planning_context,
     )
     if proven:
         _clear_path_search_failure(sim, eid)
@@ -2659,6 +2731,7 @@ def _path_next_step(sim, eid, sx, sy, tx, ty, z, max_nodes=512):
                 to_x=nx,
                 to_y=ny,
                 z=z,
+                planning_context=planning_context,
             )
             if not step_ok:
                 continue
@@ -3849,6 +3922,7 @@ from game.systems_business_events import (
     _business_event_scene_blueprint,
     BusinessPulseAftermathSystem,
     BusinessPulseSceneSystem,
+    BusinessSceneWorkSystem,
 )
 
 def _ingress_label(ingress_kind, aperture_kind=""):
@@ -4030,6 +4104,7 @@ from game.dialogue_runtime import (
 from game.criminal_justice_runtime import (
     _defender_excuses_window_shot,
     _entities_have_family_bond,
+    _noise_attention_context_from_event,
     _noise_merits_attention,
     _observer_is_active_bodyguard,
     _observer_is_active_contractor_ally,

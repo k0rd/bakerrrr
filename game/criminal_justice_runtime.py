@@ -1,5 +1,7 @@
 """Shared justice-facing witness and custody helpers."""
 
+from dataclasses import dataclass
+
 from game.checks import (
     crime_sensitivity as _crime_sensitivity,
     justice_level as _justice_level,
@@ -38,6 +40,18 @@ from game.property_runtime import property_covering as _property_covering
 from game.system_support.awareness_runtime import _watchers_for_position
 from game.system_support.combat_targeting_runtime import QUIET_NOISE_CAUSES
 from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS
+
+
+@dataclass(frozen=True, slots=True)
+class NoiseAttentionContext:
+    """Observer-invariant facts about one emitted noise."""
+
+    cause: str
+    quiet: bool
+    source_eid: object
+    prop: object = None
+    source_access_actionable: bool = False
+    source_access_severity_label: str = ""
 
 
 def observer_is_active_contractor_ally(sim, observer_eid, offender_eid):
@@ -150,22 +164,80 @@ def defender_excuses_window_shot(sim, defender_eid, offender_eid, prop, *, defen
     return False
 
 
-def noise_merits_attention(sim, observer_eid, source_eid, x, y, z, cause):
+def noise_attention_context(sim, source_eid, x, y, z, cause):
+    """Derive the source-side facts shared by every observer of a noise."""
+
     cause = str(cause or "").strip().lower()
+    quiet = cause in QUIET_NOISE_CAUSES
+    if not quiet or source_eid is None:
+        return NoiseAttentionContext(cause=cause, quiet=quiet, source_eid=source_eid)
+
+    prop = _property_covering(sim, x, y, z)
+    if not prop:
+        return NoiseAttentionContext(cause=cause, quiet=True, source_eid=source_eid)
+
+    access = _evaluate_property_access(sim, source_eid, prop, x=x, y=y, z=z)
+    return noise_attention_context_from_access(source_eid, cause, prop, access)
+
+
+def noise_attention_context_from_access(source_eid, cause, prop, access):
+    """Reuse an access result already derived by the source action."""
+
+    cause = str(cause or "").strip().lower()
+    quiet = cause in QUIET_NOISE_CAUSES
+    if not quiet or source_eid is None:
+        return NoiseAttentionContext(cause=cause, quiet=quiet, source_eid=source_eid)
+    actionable = bool(
+        isinstance(prop, dict)
+        and access is not None
+        and bool(getattr(access, "inside_bounds", False))
+        and int(getattr(access, "severity_score", 0) or 0) > 0
+    )
+    return NoiseAttentionContext(
+        cause=cause,
+        quiet=True,
+        source_eid=source_eid,
+        prop=prop,
+        source_access_actionable=actionable,
+        source_access_severity_label=str(getattr(access, "severity_label", "") or "").strip().lower(),
+    )
+
+
+def noise_attention_context_from_event(sim, event):
+    """Materialize source facts once for all subscribers to one noise event."""
+
+    data = getattr(event, "data", None)
+    if not isinstance(data, dict):
+        return noise_attention_context(sim, None, None, None, None, "")
+    cached = data.get("_noise_attention_context")
+    if isinstance(cached, NoiseAttentionContext):
+        return cached
+    context = noise_attention_context(
+        sim,
+        data.get("source_eid"),
+        data.get("x"),
+        data.get("y"),
+        data.get("z"),
+        data.get("cause"),
+    )
+    data["_noise_attention_context"] = context
+    return context
+
+
+def noise_merits_attention(sim, observer_eid, source_eid, x, y, z, cause, *, context=None):
+    if not isinstance(context, NoiseAttentionContext):
+        context = noise_attention_context(sim, source_eid, x, y, z, cause)
+    cause = context.cause
     if source_eid is not None and observer_is_active_contractor_ally(sim, observer_eid, source_eid):
         return False
-    if cause not in QUIET_NOISE_CAUSES:
+    if not context.quiet:
         return True
 
     if source_eid is None:
         return False
 
-    prop = _property_covering(sim, x, y, z)
-    if not prop:
-        return False
-
-    access = _evaluate_property_access(sim, source_eid, prop, x=x, y=y, z=z)
-    if not access.inside_bounds or access.severity_score <= 0:
+    prop = context.prop
+    if not isinstance(prop, dict) or not context.source_access_actionable:
         return False
 
     positions = sim.ecs.get(Position)
@@ -199,7 +271,7 @@ def noise_merits_attention(sim, observer_eid, source_eid, x, y, z, cause):
         return True
 
     law_drive = (_justice_level(justice) * 0.65) + (_crime_sensitivity(justice) * 0.35)
-    threshold = 0.8 if access.severity_label == "suspicious" else 0.68
+    threshold = 0.8 if context.source_access_severity_label == "suspicious" else 0.68
     return law_drive >= threshold
 
 
@@ -215,6 +287,8 @@ _justice_snapshot = _justice_snapshot
 _justice_summary_rows = _justice_summary_rows
 _mark_justice_in_custody = _mark_justice_in_custody
 _justice_provisional_incident_rows = _justice_provisional_incident_rows
+_noise_attention_context_from_access = noise_attention_context_from_access
+_noise_attention_context_from_event = noise_attention_context_from_event
 _noise_merits_attention = noise_merits_attention
 _observer_is_active_bodyguard = observer_is_active_bodyguard
 _observer_is_active_contractor_ally = observer_is_active_contractor_ally

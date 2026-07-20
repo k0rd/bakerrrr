@@ -1642,6 +1642,7 @@ def craft_herbal_medicine(
                 _add_inventory_item(sim, inventory, entry.get("item_id"), entry.get("quantity", 1), metadata=metadata, owner_eid=entry.get("owner_eid"), owner_tag=entry.get("owner_tag"))
         return {"ok": False, "reason": "inventory_full", "output_item_id": output_item_id, "quantity": 1}
 
+    _note_herbal_decay_deadline(sim, output_metadata.get("breakdown_tick"))
     output_entry = inventory.find(instance_id=instance_id)
     if not experiment_result or experiment_result in {"discovered_recipe", "exact_recipe"}:
         identify_item_for_actor(sim, eid, output_entry or {"item_id": output_item_id, "metadata": output_metadata}, source_kind="crafted", item_catalog=ITEM_CATALOG)
@@ -1686,6 +1687,25 @@ def _entry_breakdown_tick(entry):
         return int(breakdown_tick)
     except (TypeError, ValueError):
         return None
+
+
+def _note_herbal_decay_deadline(sim, breakdown_tick):
+    """Move the next authoritative decay scan earlier when new chemistry warrants it."""
+
+    if sim is None or breakdown_tick is None:
+        return None
+    try:
+        breakdown_tick = int(breakdown_tick)
+    except (TypeError, ValueError):
+        return None
+    current = getattr(sim, "_herbal_decay_next_tick", None)
+    try:
+        current = int(current) if current is not None else None
+    except (TypeError, ValueError):
+        current = None
+    if current is None or breakdown_tick < current:
+        sim._herbal_decay_next_tick = breakdown_tick
+    return int(sim._herbal_decay_next_tick)
 
 
 def decay_herbal_mixture_entry_if_due(
@@ -1770,27 +1790,23 @@ class HerbalMixtureDecaySystem(System):
     def __init__(self, sim, *, scan_interval_ticks=1):
         super().__init__(sim)
         self.scan_interval_ticks = max(1, int(scan_interval_ticks or 1))
-        self._last_scan_tick = None
+        self._needs_full_scan = True
 
-    def _should_scan(self):
+    def _review_entry(self, entry, **location):
+        breakdown_tick = _entry_breakdown_tick(entry)
+        if breakdown_tick is None:
+            return False
         tick = _safe_int(getattr(self.sim, "tick", 0), 0)
-        if self._last_scan_tick is None:
-            self._last_scan_tick = tick
-            return True
-        if tick < self._last_scan_tick:
-            self._last_scan_tick = tick
-            return True
-        if tick - int(self._last_scan_tick) >= self.scan_interval_ticks:
-            self._last_scan_tick = tick
-            return True
-        return False
+        if int(breakdown_tick) > tick:
+            _note_herbal_decay_deadline(self.sim, breakdown_tick)
+            return False
+        return decay_herbal_mixture_entry_if_due(self.sim, entry, **location)
 
     def _scan_inventory_entries(self):
         inventories = self.sim.ecs.get(Inventory)
         for eid, inventory in tuple(inventories.items()):
             for entry in tuple(getattr(inventory, "items", ()) or ()):
-                decay_herbal_mixture_entry_if_due(
-                    self.sim,
+                self._review_entry(
                     entry,
                     holder_kind="inventory",
                     holder_eid=eid,
@@ -1803,8 +1819,7 @@ class HerbalMixtureDecaySystem(System):
         for ground_item_id, entry in tuple(ground_items.items()):
             if not isinstance(entry, dict):
                 continue
-            decay_herbal_mixture_entry_if_due(
-                self.sim,
+            self._review_entry(
                 entry,
                 holder_kind="ground",
                 ground_item_id=ground_item_id,
@@ -1818,8 +1833,7 @@ class HerbalMixtureDecaySystem(System):
         if isinstance(cache_inventories, dict):
             for property_id, entries in tuple(cache_inventories.items()):
                 for entry in tuple(entries or ()):
-                    decay_herbal_mixture_entry_if_due(
-                        self.sim,
+                    self._review_entry(
                         entry,
                         holder_kind="container",
                         property_id=property_id,
@@ -1833,8 +1847,7 @@ class HerbalMixtureDecaySystem(System):
                 continue
             for property_id, entries in tuple(inventories.items()):
                 for entry in tuple(entries or ()):
-                    decay_herbal_mixture_entry_if_due(
-                        self.sim,
+                    self._review_entry(
                         entry,
                         holder_kind="container",
                         property_id=property_id,
@@ -1842,8 +1855,16 @@ class HerbalMixtureDecaySystem(System):
                     )
 
     def update(self):
-        if not self._should_scan():
+        tick = _safe_int(getattr(self.sim, "tick", 0), 0)
+        next_tick = getattr(self.sim, "_herbal_decay_next_tick", None)
+        try:
+            next_tick = int(next_tick) if next_tick is not None else None
+        except (TypeError, ValueError):
+            next_tick = None
+        if not self._needs_full_scan and (next_tick is None or tick < next_tick):
             return
+        self._needs_full_scan = False
+        self.sim._herbal_decay_next_tick = None
         self._scan_inventory_entries()
         self._scan_ground_entries()
         self._scan_container_entries()

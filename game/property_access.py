@@ -1,6 +1,8 @@
 import random
 from dataclasses import dataclass
 
+from engine.derived_facts import cached_derived_fact, derived_fact_revision
+
 from game.components import ContactLedger, Inventory, NPCSocial, NPCRoutine, Occupation, PlayerAssets, PropertyPortfolio
 from game.justice_runtime import custody_release_grace_active as _custody_release_grace_active
 from game.organizations import (
@@ -633,26 +635,38 @@ def _normalize_key_set(raw):
     return frozenset(_clean_key(value) for value in raw if _clean_key(value))
 
 
-def _shape_cells_2d(metadata, key):
+def _shape_cells_2d(metadata, key, *, sim=None):
     if not isinstance(metadata, dict):
         return frozenset()
     raw = metadata.get(key)
     if not isinstance(raw, (list, tuple, set, frozenset)):
         return frozenset()
 
-    cells = set()
-    for cell in raw:
-        if isinstance(cell, dict):
-            try:
-                cells.add((int(cell.get("x")), int(cell.get("y"))))
-            except (TypeError, ValueError):
-                continue
-        elif isinstance(cell, (list, tuple)) and len(cell) >= 2:
-            try:
-                cells.add((int(cell[0]), int(cell[1])))
-            except (TypeError, ValueError):
-                continue
-    return frozenset(cells)
+    def build():
+        cells = set()
+        for cell in raw:
+            if isinstance(cell, dict):
+                try:
+                    cells.add((int(cell.get("x")), int(cell.get("y"))))
+                except (TypeError, ValueError):
+                    continue
+            elif isinstance(cell, (list, tuple)) and len(cell) >= 2:
+                try:
+                    cells.add((int(cell[0]), int(cell[1])))
+                except (TypeError, ValueError):
+                    continue
+        return frozenset(cells)
+
+    if sim is None:
+        return build()
+    return cached_derived_fact(
+        sim,
+        "property.shape_cells",
+        (id(metadata), str(key)),
+        build,
+        signature=(id(raw), len(raw)),
+        max_entries=8_192,
+    )
 
 
 def _party_rep_proxy_actor(sim, actor_eid):
@@ -1890,11 +1904,6 @@ def _property_access_controller_runtime_cache(sim):
 
 
 def _property_access_controller_cache_key(sim, prop, metadata, hour):
-    organization_runtime = (
-        getattr(sim, "world_traits", {}).get("organization_runtime_cache", {})
-        if sim is not None and isinstance(getattr(sim, "world_traits", None), dict)
-        else {}
-    )
     player_business = metadata.get("player_business")
     business_revision = (
         int(player_business.get("_cache_revision", 0) or 0)
@@ -1922,7 +1931,7 @@ def _property_access_controller_cache_key(sim, prop, metadata, hour):
         int(metadata.get("controller_intrusion_until_tick", 0) or 0),
         metadata.get("controller_intrusion_actor_eid"),
         business_revision,
-        int(organization_runtime.get("revision", 0) or 0) if isinstance(organization_runtime, dict) else 0,
+        derived_fact_revision(sim, "organizations") if sim is not None else 0,
     )
 
 
@@ -2168,7 +2177,7 @@ def property_status_text(sim, prop, hour=None):
     return "open" if is_open else "closed"
 
 
-def _position_within_property(prop, x=None, y=None, z=None):
+def _position_within_property(prop, x=None, y=None, z=None, *, sim=None):
     if x is None or y is None:
         return False
 
@@ -2180,8 +2189,8 @@ def _position_within_property(prop, x=None, y=None, z=None):
         return False
 
     metadata = _property_metadata(prop)
-    explicit_cells = _shape_cells_2d(metadata, "footprint_cells")
-    excluded_cells = _shape_cells_2d(metadata, "footprint_excluded_cells")
+    explicit_cells = _shape_cells_2d(metadata, "footprint_cells", sim=sim)
+    excluded_cells = _shape_cells_2d(metadata, "footprint_excluded_cells", sim=sim)
     footprint = metadata.get("footprint")
     if isinstance(footprint, dict):
         try:
@@ -2234,7 +2243,7 @@ def _player_owns_property(sim, actor_eid, prop):
     return False
 
 
-def _credential_holder_standing(sim, actor_eid, prop):
+def _credential_holder_standing(sim, actor_eid, prop, *, controller=None):
     if actor_eid is None or not prop:
         return 0.0, ""
 
@@ -2253,7 +2262,8 @@ def _credential_holder_standing(sim, actor_eid, prop):
             or str(intrusion_access.get("reason", "") or "").strip().lower()
         )
 
-    controller = property_access_controller(sim, prop)
+    if not isinstance(controller, dict):
+        controller = property_access_controller(sim, prop)
     required_tier = max(1, _int_or_default(controller.get("required_credential_tier"), 1))
     accepted_credentials = controller.get("accepted_credentials", ())
     inventory = sim.ecs.get(Inventory).get(actor_eid)
@@ -2296,7 +2306,7 @@ def _employment_standing(sim, actor_eid, prop):
     return 0.92 if property_id and property_id == prop.get("id") else 0.86
 
 
-def _anchor_matches_property(prop, anchor):
+def _anchor_matches_property(prop, anchor, *, sim=None):
     if not isinstance(anchor, (list, tuple)) or len(anchor) < 3:
         return False
 
@@ -2307,7 +2317,7 @@ def _anchor_matches_property(prop, anchor):
     except (TypeError, ValueError):
         return False
 
-    if _position_within_property(prop, x=ax, y=ay, z=az):
+    if _position_within_property(prop, x=ax, y=ay, z=az, sim=sim):
         return True
 
     metadata = _property_metadata(prop)
@@ -2332,9 +2342,9 @@ def _routine_standing(sim, actor_eid, prop):
     if not routine:
         return 0.0, ""
 
-    if _anchor_matches_property(prop, getattr(routine, "home", None)):
+    if _anchor_matches_property(prop, getattr(routine, "home", None), sim=sim):
         return 0.94, "resident"
-    if _anchor_matches_property(prop, getattr(routine, "work", None)):
+    if _anchor_matches_property(prop, getattr(routine, "work", None), sim=sim):
         return 0.88, "employee"
     return 0.0, ""
 
@@ -2527,9 +2537,9 @@ def _boundary_tile(prop, x, y, z):
     return x in {left, right} or y in {top, bottom}
 
 
-def property_ingress_context(prop, from_x=None, from_y=None, from_z=None, to_x=None, to_y=None, to_z=None):
-    to_inside = _position_within_property(prop, x=to_x, y=to_y, z=to_z)
-    from_inside = _position_within_property(prop, x=from_x, y=from_y, z=from_z)
+def property_ingress_context(prop, from_x=None, from_y=None, from_z=None, to_x=None, to_y=None, to_z=None, *, sim=None):
+    to_inside = _position_within_property(prop, x=to_x, y=to_y, z=to_z, sim=sim)
+    from_inside = _position_within_property(prop, x=from_x, y=from_y, z=from_z, sim=sim)
     entered_bounds = bool(to_inside and not from_inside)
 
     if not to_inside:
@@ -2639,9 +2649,10 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
     access_level = room_context.effective_access_level or property_level
     public_facing = access_level == "public"
     hour = world_hour(sim)
-    opening_window = property_open_window(sim, prop)
-    currently_open = property_is_open(sim, prop, hour=hour)
-    inside_bounds = _position_within_property(prop, x=x, y=y, z=z)
+    controller = property_access_controller(sim, prop, hour=hour)
+    opening_window = controller.get("opening_window")
+    currently_open = None if opening_window is None else bool(_hour_in_window(hour, opening_window))
+    inside_bounds = _position_within_property(prop, x=x, y=y, z=z, sim=sim)
     archetype = str((prop.get("metadata", {}) or {}).get("archetype", "")).strip().lower()
 
     if inside_bounds and archetype in JUSTICE_CUSTODY_ARCHETYPES:
@@ -2717,7 +2728,12 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
     if owner_authority:
         standing, standing_reason = 1.0, "owner"
     else:
-        key_score, key_reason = _credential_holder_standing(sim, actor_eid, prop)
+        key_score, key_reason = _credential_holder_standing(
+            sim,
+            actor_eid,
+            prop,
+            controller=controller,
+        )
         standing, standing_reason = _standing_candidate(
             standing,
             standing_reason,
