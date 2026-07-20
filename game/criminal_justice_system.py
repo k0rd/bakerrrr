@@ -312,6 +312,9 @@ class CriminalJusticeSystem(System):
         "wanted": 1,
         "arrest_on_sight": 2,
     }
+    PLAYER_IDENTITY_CHECK_NOTICE_RADIUS = 8
+    PLAYER_IDENTITY_CHECK_PROMPT_RADIUS = 1
+    PLAYER_IDENTITY_CHECK_SCAN_TICKS = 3
     BOOKING_HOURS_BY_TIER = {
         "questioning": 1.0,
         "wanted": 3.0,
@@ -327,6 +330,7 @@ class CriminalJusticeSystem(System):
         self.player_eid = player_eid
         self.pending_detentions = {}
         self.player_surrender_prompt = None
+        self._next_player_identity_check_tick = 0
         self._streaming_system = None
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
@@ -5841,6 +5845,182 @@ class CriminalJusticeSystem(System):
             return False
         return bool(self._open_player_justice_prompt(held_by_eid, snapshot=snapshot, respect_cooldown=True))
 
+    def _identity_check_case_id(self, match_row):
+        if not isinstance(match_row, dict):
+            return None
+        case = match_row.get("case") if isinstance(match_row.get("case"), dict) else {}
+        try:
+            return int(case.get("incident_id"))
+        except (TypeError, ValueError):
+            return None
+
+    def _find_identity_check_enforcer(self, match_row):
+        player_pos = self._position_for(self.player_eid)
+        incident_id = self._identity_check_case_id(match_row)
+        if (
+            player_pos is None
+            or (match_row is not None and incident_id is None)
+            or _entity_is_downed(self.sim, self.player_eid)
+        ):
+            return None
+
+        positions = self.sim.ecs.get(Position)
+        ais = self.sim.ecs.get(AI)
+        wills = self.sim.ecs.get(NPCWill)
+        radius = int(self.PLAYER_IDENTITY_CHECK_NOTICE_RADIUS)
+        best = None
+        best_rank = None
+        nearby_eids = self.sim.entity_ids_in_radius(
+            player_pos.x,
+            player_pos.y,
+            player_pos.z,
+            radius,
+        )
+        for eid in nearby_eids:
+            pos = positions.get(eid)
+            if pos is None:
+                continue
+            if eid == self.player_eid or int(pos.z) != int(player_pos.z):
+                continue
+            dist = _manhattan(pos.x, pos.y, player_pos.x, player_pos.y)
+            if dist <= 0 or dist > radius or _entity_is_downed(self.sim, eid):
+                continue
+            enforcer, law_drive, priority = self._actor_is_enforcer(eid)
+            if not enforcer:
+                continue
+            ai = ais.get(eid)
+            will = wills.get(eid)
+            if ai is None or will is None:
+                continue
+            response_role = str(getattr(ai, "response_role", "") or "").strip().lower()
+            assigned_incident = getattr(ai, "incident_id", None)
+            try:
+                assigned_incident = int(assigned_incident) if assigned_incident is not None else None
+            except (TypeError, ValueError):
+                assigned_incident = None
+            already_approaching = (
+                incident_id is not None
+                and response_role == "identity_check"
+                and assigned_incident == incident_id
+            )
+            busy_state = str(getattr(ai, "state", "idle") or "idle").strip().lower()
+            if not already_approaching:
+                if busy_state in {
+                    "protecting",
+                    "reporting_incident",
+                    "helping_victim",
+                    "seeking_safety",
+                    "holding",
+                    "following",
+                    "ejecting_target",
+                    "leaving_property",
+                }:
+                    continue
+                if (
+                    incident_id is not None
+                    and busy_state == "investigating"
+                    and assigned_incident not in {None, incident_id}
+                ):
+                    continue
+            if not _shared_observer_can_see_position(
+                self.sim,
+                observer_eid=eid,
+                observer_x=pos.x,
+                observer_y=pos.y,
+                observer_z=pos.z,
+                target_x=player_pos.x,
+                target_y=player_pos.y,
+                target_z=player_pos.z,
+                radius=max(4, radius + 2),
+            ):
+                continue
+            rank = (0 if already_approaching else 1, dist, -priority, -law_drive, int(eid))
+            if best_rank is None or rank < best_rank:
+                best = int(eid)
+                best_rank = rank
+        return best
+
+    def _clear_identity_check_approach(self, enforcer_eid):
+        ai = self.sim.ecs.get(AI).get(enforcer_eid)
+        will = self.sim.ecs.get(NPCWill).get(enforcer_eid)
+        if ai is None or str(getattr(ai, "response_role", "") or "").strip().lower() != "identity_check":
+            return
+        ai.response_role = None
+        ai.incident_id = None
+        _sync_ai_intent(
+            ai,
+            will,
+            self.sim.tick,
+            "idle",
+            score=0.0,
+            target=None,
+            target_eid=None,
+        )
+
+    def _process_guard_initiated_player_identity_check(self):
+        if map_mode_active(self.sim):
+            return False
+        if self._player_surrender_prompt_open() or bool(self._dialog_ui_state().get("open", False)):
+            return False
+        if self._player_bookable_snapshot() is not None or _actor_in_live_combat(self.sim, self.player_eid):
+            return False
+        tick = int(getattr(self.sim, "tick", 0))
+        if tick < int(self._next_player_identity_check_tick):
+            return False
+        self._next_player_identity_check_tick = tick + int(self.PLAYER_IDENTITY_CHECK_SCAN_TICKS)
+
+        # Most ticks have no nearby officer. Use the maintained local entity
+        # index to prove there is a possible encounter before comparing the
+        # player's current appearance against any unresolved case records.
+        if self._find_identity_check_enforcer(None) is None:
+            return False
+        match_row = self._player_unresolved_identity_match()
+        if match_row is None:
+            return False
+        enforcer_eid = self._find_identity_check_enforcer(match_row)
+        if enforcer_eid is None:
+            return False
+        player_pos = self._position_for(self.player_eid)
+        enforcer_pos = self._position_for(enforcer_eid)
+        if player_pos is None or enforcer_pos is None:
+            return False
+        distance = _manhattan(enforcer_pos.x, enforcer_pos.y, player_pos.x, player_pos.y)
+        if distance <= int(self.PLAYER_IDENTITY_CHECK_PROMPT_RADIUS):
+            opened = bool(self._open_player_identity_check_prompt(enforcer_eid, match_row))
+            if opened:
+                self._clear_identity_check_approach(enforcer_eid)
+            return opened
+
+        ai = self.sim.ecs.get(AI).get(enforcer_eid)
+        will = self.sim.ecs.get(NPCWill).get(enforcer_eid)
+        if ai is None or will is None:
+            return False
+        incident_id = self._identity_check_case_id(match_row)
+        was_approaching = (
+            str(getattr(ai, "response_role", "") or "").strip().lower() == "identity_check"
+            and getattr(ai, "incident_id", None) == incident_id
+        )
+        _sync_ai_intent(
+            ai,
+            will,
+            tick,
+            "investigating",
+            score=82.0,
+            target=(int(player_pos.x), int(player_pos.y), int(player_pos.z)),
+            target_eid=self.player_eid,
+        )
+        ai.incident_id = incident_id
+        ai.response_role = "identity_check"
+        if not was_approaching:
+            self.sim.emit(Event(
+                "justice_identity_check_approach_started",
+                npc_eid=enforcer_eid,
+                eid=self.player_eid,
+                incident_id=incident_id,
+                distance=distance,
+            ))
+        return True
+
     def _process_resolved_npc_custody(self):
         tick = int(getattr(self.sim, "tick", 0))
         for offender_key, record in list(self._npc_custody_records().items()):
@@ -5933,7 +6113,9 @@ class CriminalJusticeSystem(System):
             self._clear_player_surrender_offer_records()
         for change in _decay_justice_records(self.sim):
             self._emit_change_events(change, source_event="justice_decay", reason=str(change.get("reason", "cooldown")))
-        self._process_guard_initiated_player_arrest()
+        arrest_started = self._process_guard_initiated_player_arrest()
+        if not arrest_started:
+            self._process_guard_initiated_player_identity_check()
         self._process_pending_detentions()
         self._process_resolved_npc_custody()
         self._process_pending_npc_exoneration_refunds()

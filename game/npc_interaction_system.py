@@ -293,6 +293,7 @@ from game.bodyguard_runtime import BODYGUARD_JOB, fire_bodyguard_contract
 from game.dialogue_runtime import (
     _active_contractor_record,
     _career_label,
+    _employment_career_label,
     _contact_benefit_labels,
     _contractor_order_target_from_record,
     _dialog_backup_cursor_payload,
@@ -360,10 +361,13 @@ from game.player_businesses import (
     actor_player_business_employment,
     fire_actor_from_player_business,
     hire_actor_into_player_business,
+    player_business_effective_hourly_wage,
     player_business_role_fit,
     player_business_staffing_targets,
     player_business_status_snapshot,
 )
+from game.system_support.npc_income_runtime import npc_hourly_wage
+from game.npc_relationships import current_relationship_for_actor
 from game.final_operation import (
     active_final_operation_target_property_id,
     ensure_final_operation_unlocked,
@@ -1856,7 +1860,12 @@ class NPCInteractionSystem(System):
     def _bond_tone(self, bond):
         if not bond:
             return "neutral"
-        score = (float(bond.get("closeness", 0.0)) * 0.45) + (float(bond.get("trust", 0.0)) * 0.55)
+        resentment = max(0.0, min(1.0, float(bond.get("resentment", 0.0) or 0.0)))
+        score = (
+            (float(bond.get("closeness", 0.0)) * 0.45)
+            + (float(bond.get("trust", 0.0)) * 0.55)
+            - (resentment * 0.32)
+        )
         if score < 0.25:
             return "wary"
         if score < 0.45:
@@ -2653,7 +2662,7 @@ class NPCInteractionSystem(System):
                 "name": name,
                 "relation_kind": relation_kind,
                 "relation_text": relation_kind.replace("_", " ").strip() or "contact",
-                "career_text": _career_label(occupation),
+                "career_text": _employment_career_label(occupation),
                 "property_id": place_prop.get("id") if isinstance(place_prop, dict) else None,
                 "place_name": place_name,
                 "place_role": place_role,
@@ -6634,6 +6643,126 @@ class NPCInteractionSystem(System):
             "nearby_names": tuple(nearby_names[:2]),
         }
 
+    def _pending_player_business_hire_offer(self, npc_eid):
+        if npc_eid is None:
+            return None
+        offer = self._dialogue_memory(npc_eid).get("pending_player_business_hire_offer")
+        if not isinstance(offer, dict):
+            return None
+        property_id = str(offer.get("property_id", "") or "").strip()
+        if not property_id or not isinstance(self.sim.properties.get(property_id), dict):
+            self._dialogue_memory(npc_eid).pop("pending_player_business_hire_offer", None)
+            return None
+        return dict(offer)
+
+    def _stage_player_business_hire_offer(self, npc_eid, option, factors):
+        if npc_eid is None or not isinstance(option, dict) or not isinstance(factors, dict):
+            return None
+        staged = {
+            "property_id": str(option.get("property_id", "") or "").strip(),
+            "business_name": str(option.get("business_name", "the business") or "the business").strip() or "the business",
+            "role": str(option.get("role", "staff") or "staff").strip().lower() or "staff",
+            "quoted_wage": max(1, int(factors.get("quoted_wage", 1) or 1)),
+            "current_wage": max(0, int(factors.get("current_wage", 0) or 0)),
+            "target_market_wage": max(1, int(factors.get("target_market_wage", 1) or 1)),
+            "poaching": bool(factors.get("poaching")),
+            "current_business_name": str(factors.get("current_business_name", "") or "").strip(),
+            "commute_delta": factors.get("commute_delta"),
+            "nearby_social_names": tuple(factors.get("nearby_social_names", ()) or ()),
+            "created_tick": int(getattr(self.sim, "tick", 0) or 0),
+        }
+        self._dialogue_memory(npc_eid)["pending_player_business_hire_offer"] = staged
+        return dict(staged)
+
+    def _clear_player_business_hire_offer(self, npc_eid):
+        if npc_eid is not None:
+            self._dialogue_memory(npc_eid).pop("pending_player_business_hire_offer", None)
+
+    def _player_business_hire_quote(self, context, option):
+        if not isinstance(context, dict) or not isinstance(option, dict):
+            return False, "no_opening", {}
+        if bool(context.get("guarded")):
+            return False, "guarded", {}
+
+        role_id = str(context.get("role_id", "") or "").strip().lower()
+        raw_career = str(getattr(context.get("occupation"), "career", "") or "").strip().lower()
+        if role_id == "guard" or "guard" in raw_career or "security" in raw_career:
+            return False, "career_conflict", {}
+
+        factors = self._player_business_hire_offer_factors(context, option)
+        npc_eid = context.get("npc_eid")
+        role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
+        target_prop = option.get("prop")
+        target_wage = player_business_effective_hourly_wage(
+            self.sim,
+            npc_eid,
+            target_prop,
+            role="worker",
+            career=raw_career,
+            staff_role=role,
+        )
+        target_market_wage = max(1, int(target_wage.get("competitive_wage", 1) or 1))
+        current_wage = 0
+        if bool(factors.get("poaching")):
+            current_prop = option.get("current_prop") or context.get("workplace_prop")
+            workplace = getattr(context.get("occupation"), "workplace", None)
+            current_staff_role = (
+                str(workplace.get("authority_role", "staff") or "staff").strip().lower()
+                if isinstance(workplace, dict)
+                else "staff"
+            )
+            current_wage = npc_hourly_wage(
+                self.sim,
+                npc_eid,
+                role=role_id or "worker",
+                career=raw_career,
+                workplace_prop=current_prop,
+                staff_role=current_staff_role,
+            )
+
+        quoted_wage = int(target_market_wage)
+        if bool(factors.get("poaching")):
+            lifestyle_credit = 1 if (
+                float(factors.get("commute_score", 0.0) or 0.0) >= 0.08
+                or float(factors.get("social_bonus", 0.0) or 0.0) >= 0.08
+            ) else 0
+            quoted_wage = max(quoted_wage, int(current_wage) + 1 - lifestyle_credit)
+            burden = (
+                float(factors.get("job_attachment_penalty", 0.0) or 0.0)
+                + float(factors.get("current_social_pull", 0.0) or 0.0)
+                + max(0.0, -float(factors.get("commute_score", 0.0) or 0.0))
+                - float(factors.get("social_bonus", 0.0) or 0.0)
+                - max(0.0, float(factors.get("commute_score", 0.0) or 0.0))
+            )
+            premium = max(0, min(3, int(max(0.0, burden - 0.06) / 0.08 + 0.999)))
+            quoted_wage = max(quoted_wage, int(current_wage) + premium)
+        if str(context.get("pressure_tier", "") or "").strip().lower() == "high":
+            quoted_wage += 1
+
+        factors = dict(factors)
+        factors.update({
+            "current_wage": int(max(0, current_wage)),
+            "target_market_wage": int(target_market_wage),
+            "quoted_wage": int(max(1, min(20, quoted_wage))),
+        })
+        return True, "quote", factors
+
+    def _spoiled_partner_hire_line(self, context, option, quoted_wage):
+        occupation = context.get("occupation") if isinstance(context, dict) else None
+        career = str(getattr(occupation, "career", "") or "").strip().lower()
+        if career not in {"resident", "lodger", "shelter_guest"}:
+            return ""
+        npc_eid = context.get("npc_eid")
+        relationship = current_relationship_for_actor(self.sim, npc_eid, minimum_stage="spouse")
+        if not isinstance(relationship, dict) or str(relationship.get("stage", "") or "").strip().lower() != "spouse":
+            return ""
+        roll = random.Random(
+            f"{self.sim.seed}:spoiled-partner-hire:{npc_eid}:{option.get('property_id')}:{option.get('role')}"
+        ).random()
+        if roll >= 0.46:
+            return ""
+        return f"My partner keeps me spoiled, so getting me onto a schedule takes {_credit_amount_label(quoted_wage)} an hour."
+
     def _player_business_hire_offer_factors(self, context, option):
         if not isinstance(context, dict) or not isinstance(option, dict):
             return {"score_delta": 0.0, "threshold_delta": 0.0, "decline_reason": ""}
@@ -6704,57 +6833,6 @@ class NPCInteractionSystem(System):
             "nearby_social_names": tuple(social_fit.get("nearby_names", ()) or ()),
             "current_business_name": str(option.get("current_business_name", "") or context.get("player_business_hire_current_name", "") or "").strip(),
         }
-
-    def _player_business_hire_decision(self, context, option):
-        if not isinstance(option, dict):
-            return False, "no_opening", {}
-        if bool(context.get("guarded")):
-            return False, "guarded", {}
-
-        role_id = str(context.get("role_id", "") or "").strip().lower()
-        career_text = str(context.get("career_text", "") or "").strip().lower()
-        if role_id == "guard" or "guard" in career_text or "security" in career_text:
-            return False, "career_conflict", {}
-
-        npc_needs = context.get("npc_needs")
-        tone = str(context.get("tone", "neutral") or "neutral").strip().lower()
-        pressure_tier = str(context.get("pressure_tier", "low") or "low").strip().lower()
-        conversation = float(_actor_skill(self.sim, self.player_eid, "conversation", default=5.0))
-        streetwise = float(_actor_skill(self.sim, self.player_eid, "streetwise", default=5.0))
-        social_standing = float(context.get("social_standing", 0.0) or 0.0)
-        offer_factors = self._player_business_hire_offer_factors(context, option)
-
-        score = 0.26
-        score += social_standing * 0.38
-        score += (conversation / 10.0) * 0.18
-        score += (streetwise / 10.0) * 0.08
-        score += float(offer_factors.get("score_delta", 0.0) or 0.0)
-        if str(option.get("role", "staff")).strip().lower() == "manager" and (
-            "manager" in career_text or "lead" in career_text or "supervisor" in career_text
-        ):
-            score += 0.08
-        if isinstance(context.get("current_prop"), dict) and str(context["current_prop"].get("id", "")).strip() == str(option.get("property_id", "")).strip():
-            score += 0.08
-        if tone == "friendly":
-            score += 0.06
-        elif tone in {"wary", "guarded"}:
-            score -= 0.08
-        if pressure_tier == "high":
-            score -= 0.008
-        elif pressure_tier == "medium":
-            score -= 0.003
-        if npc_needs:
-            if float(getattr(npc_needs, "safety", 100.0)) < 38.0:
-                score -= 0.06
-            if float(getattr(npc_needs, "energy", 100.0)) < 28.0:
-                score -= 0.04
-
-        threshold = 0.5 if str(option.get("role", "staff")).strip().lower() == "staff" else 0.56
-        threshold += float(offer_factors.get("threshold_delta", 0.0) or 0.0)
-        accepted = score >= threshold
-        if accepted:
-            return True, "accepted", offer_factors
-        return False, str(offer_factors.get("decline_reason", "") or "declined"), offer_factors
 
     def _player_business_hire_option_for_role(self, context, role):
         option = context.get("player_business_hire_option") if isinstance(context, dict) else None
@@ -6830,7 +6908,7 @@ class NPCInteractionSystem(System):
     def _resolve_player_business_hire(self, context, option, *, npc_eid):
         if not isinstance(option, dict):
             return {"npc_lines": ["No. I am not taking work from you right now."]}
-        accepted, reason, offer_factors = self._player_business_hire_decision(context, option)
+        accepted, reason, offer_factors = self._player_business_hire_quote(context, option)
         business_name = str(option.get("business_name", "the business")).strip() or "the business"
         role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
         current_business_name = str(
@@ -6843,25 +6921,40 @@ class NPCInteractionSystem(System):
                 line = "No. Not after this."
             elif reason == "career_conflict":
                 line = f"No. {business_name} is not my kind of work."
-            elif reason == "heat":
-                line = f"No. {business_name} might work, but there is too much heat around you right now."
-            elif reason == "commute":
-                line = f"No. {current_business_name} fits my days better than {business_name}."
-            elif reason == "current_ties":
-                line = f"No. I still have people depending on me at {current_business_name}."
-            elif reason == "poach":
-                line = f"Not right now. Leaving {current_business_name} for {business_name} is not enough of a step up."
             elif role == "manager":
                 line = f"Not me. I am not taking point on {business_name}."
             else:
                 line = f"Maybe another time. I am not taking work at {business_name} right now."
             return {"npc_lines": [line]}
+        pending = self._stage_player_business_hire_offer(npc_eid, option, offer_factors)
+        quoted_wage = int((pending or {}).get("quoted_wage", 1) or 1)
+        if bool(offer_factors.get("poaching")):
+            line = (
+                f"I would leave {current_business_name} for {business_name} at "
+                f"{_credit_amount_label(quoted_wage)} an hour."
+            )
+        elif role == "manager":
+            line = f"I would run {business_name} for {_credit_amount_label(quoted_wage)} an hour."
+        else:
+            line = f"I would take shifts at {business_name} for {_credit_amount_label(quoted_wage)} an hour."
+        spoiled_line = self._spoiled_partner_hire_line(context, option, quoted_wage)
+        return {"npc_lines": [spoiled_line or line]}
+
+    def _complete_player_business_hire(self, context, option, *, npc_eid, offer_factors, contracted_wage):
+        business_name = str(option.get("business_name", "the business")).strip() or "the business"
+        role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
+        current_business_name = str(
+            offer_factors.get("current_business_name", "")
+            or option.get("current_business_name", "")
+            or "my current job"
+        ).strip() or "my current job"
         outcome = hire_actor_into_player_business(
             self.sim,
             self.player_eid,
             npc_eid,
             option.get("prop"),
             role=role,
+            contracted_wage=contracted_wage,
         )
         if not isinstance(outcome, dict):
             return {"npc_lines": [f"I cannot commit to {business_name} right now."]}
@@ -6873,6 +6966,7 @@ class NPCInteractionSystem(System):
             business_name=outcome.get("business_name"),
             role=outcome.get("role"),
             career=outcome.get("career"),
+            contracted_wage=outcome.get("contracted_wage"),
             housing_kind=outcome.get("housing_kind"),
             housing_local=outcome.get("housing_local"),
             housing_relocated=outcome.get("housing_relocated"),
@@ -6888,9 +6982,9 @@ class NPCInteractionSystem(System):
         housing_kind = str(outcome.get("housing_kind", "") or "").strip().lower()
         housing_name = str(outcome.get("housing_name", "") or "").strip()
         if role == "manager":
-            line = f"Yeah. I can run {business_name} for you."
+            line = f"Deal. I can run {business_name} for {_credit_amount_label(contracted_wage)} an hour."
         else:
-            line = f"Sure. I can take a shift at {business_name}."
+            line = f"Deal. I can take shifts at {business_name} for {_credit_amount_label(contracted_wage)} an hour."
         if bool(offer_factors.get("poaching")):
             if role == "manager":
                 line = f"Yeah. I can leave {current_business_name} and run {business_name} for you."
@@ -6910,6 +7004,25 @@ class NPCInteractionSystem(System):
         elif housing_kind in {"nearby_housing", "nearby_lodging"} and housing_name:
             line = line[:-1] + f" and stay at {housing_name}."
         return {"npc_lines": [line], "close": True}
+
+    def _accept_player_business_hire_offer(self, context):
+        npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
+        pending = self._pending_player_business_hire_offer(npc_eid)
+        if not isinstance(pending, dict):
+            return {"npc_lines": ["There is no live wage offer between us."]}
+        role = str(pending.get("role", "staff") or "staff").strip().lower() or "staff"
+        option = self._player_business_hire_option_for_role(context, role)
+        if not isinstance(option, dict) or str(option.get("property_id", "") or "").strip() != str(pending.get("property_id", "") or "").strip():
+            self._clear_player_business_hire_offer(npc_eid)
+            return {"npc_lines": ["That opening is no longer there."]}
+        self._clear_player_business_hire_offer(npc_eid)
+        return self._complete_player_business_hire(
+            context,
+            option,
+            npc_eid=npc_eid,
+            offer_factors=pending,
+            contracted_wage=max(1, int(pending.get("quoted_wage", 1) or 1)),
+        )
 
     def _organization_snapshot(self, npc_eid, occupation, workplace_prop):
         workplace = getattr(occupation, "workplace", None)
@@ -7100,7 +7213,7 @@ class NPCInteractionSystem(System):
             title_case=True,
         )
         npc_name_known = _viewer_knows_entity_name(self.sim, self.player_eid, npc_eid)
-        career_text = _career_label(occupation)
+        career_text = _employment_career_label(occupation)
         role_id = str(getattr(ai, "role", "") or "").strip().lower() or "local"
         role_text = str(getattr(ai, "role", "") or "").replace("_", " ").strip() or "local"
         state_text = self._state_text(ai)
@@ -7732,6 +7845,17 @@ class NPCInteractionSystem(System):
             "player_business_hire_current_name": str((hire_option or {}).get("current_business_name", "")).strip(),
             "player_business_fire_name": str((fire_option or {}).get("business_name", "")).strip(),
             "player_business_fire_role": str((fire_option or {}).get("role", "")).strip().lower(),
+        })
+        pending_hire_offer = self._pending_player_business_hire_offer(npc_eid)
+        context.update({
+            "player_business_hire_pending_offer": pending_hire_offer,
+            "player_business_hire_quote_wage": int((pending_hire_offer or {}).get("quoted_wage", 0) or 0),
+            "player_business_hire_quote_text": (
+                _credit_amount_label((pending_hire_offer or {}).get("quoted_wage", 0))
+                if pending_hire_offer
+                else ""
+            ),
+            "player_business_hire_quote_business": str((pending_hire_offer or {}).get("business_name", "") or "").strip(),
         })
         hire_manager_option = self._player_business_hire_option_for_role(context, "manager")
         hire_staff_option = self._player_business_hire_option_for_role(context, "staff")
@@ -12695,6 +12819,8 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "hire_staff" and not context.get("player_business_hire_staff_option"):
                 continue
+            if topic_id in {"hire_accept", "hire_decline"} and not context.get("player_business_hire_pending_offer"):
+                continue
             if topic_id in {"hire_manager", "hire_staff"} and len(tuple(context.get("player_business_hire_roles", ()) or ())) <= 1:
                 continue
             if topic_id == "fire" and not context.get("player_business_fire_option"):
@@ -13397,6 +13523,13 @@ class NPCInteractionSystem(System):
             if not isinstance(option, dict):
                 return {"npc_lines": ["That slot is not open right now."]}
             return self._resolve_player_business_hire(context, option, npc_eid=npc_eid)
+        if topic_id == "hire_accept":
+            return self._accept_player_business_hire_offer(context)
+        if topic_id == "hire_decline":
+            pending = self._pending_player_business_hire_offer(npc_eid)
+            self._clear_player_business_hire_offer(npc_eid)
+            business_name = str((pending or {}).get("business_name", "the business") or "the business").strip() or "the business"
+            return {"npc_lines": [f"All right. No agreement on {business_name}."]}
         if topic_id == "fire":
             option = context.get("player_business_fire_option")
             if not isinstance(option, dict):
@@ -15122,7 +15255,7 @@ class NPCInteractionSystem(System):
             ),
             None,
         )
-        if topic_id in {"hire", "hire_manager", "hire_staff", "fire"} and not (
+        if topic_id in {"hire", "hire_manager", "hire_staff", "hire_accept", "hire_decline", "fire"} and not (
             isinstance(selected_row, dict) and str(selected_row.get("id", "")).strip().lower() == topic_id
         ):
             selected_row = topic_row or selected_row
@@ -15202,11 +15335,14 @@ class NPCInteractionSystem(System):
         state["subtitle"] = refreshed.get("subtitle", "")
         pending_street_buy_offer = bool(refreshed.get("street_buy_offer_pending"))
         pending_side_job_offer = bool(refreshed.get("side_job_pending_offer"))
+        pending_hire_offer = bool(refreshed.get("player_business_hire_pending_offer"))
         highlight_topic_ids = ()
         if pending_street_buy_offer:
             highlight_topic_ids = ("street_buy_accept", "street_buy_next", "street_buy_decline")
         elif pending_side_job_offer:
             highlight_topic_ids = ("side_job_accept", "side_job_decline")
+        elif pending_hire_offer:
+            highlight_topic_ids = ("hire_accept", "hire_decline")
         refreshed_topics = self._prioritize_dialog_topics(
             self._available_dialog_topics(refreshed),
             highlight_topic_ids=highlight_topic_ids,
@@ -15247,6 +15383,15 @@ class NPCInteractionSystem(System):
                     row
                     for row in list(state.get("topics", ()) or ())
                     if str(row.get("id", "")).strip().lower() == "side_job_accept"
+                ),
+                preferred_row,
+            )
+        if topic_id in {"hire", "hire_manager", "hire_staff"} and pending_hire_offer:
+            preferred_row = next(
+                (
+                    row
+                    for row in list(state.get("topics", ()) or ())
+                    if str(row.get("id", "")).strip().lower() == "hire_accept"
                 ),
                 preferred_row,
             )

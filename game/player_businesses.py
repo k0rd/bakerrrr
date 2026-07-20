@@ -15,7 +15,7 @@ import random
 from engine.world import World
 from engine.events import Event
 from engine.systems import System
-from game.components import AI, CreatureIdentity, NPCSocial, NPCRoutine, NPCWill, Occupation, OrganizationAffiliations, PlayerAssets, Position
+from game.components import AI, CreatureIdentity, NPCMemory, NPCSettlement, NPCSocial, NPCRoutine, NPCWill, Occupation, OrganizationAffiliations, PlayerAssets, Position
 from game.dialogue_runtime import _queue_npc_initiated_dialogue
 from game.economy import chunk_economy_profile, pick_career_for_workplace, workplace_archetype_weight
 from game.organizations import (
@@ -269,8 +269,11 @@ OPERATING_STYLE_PROFILES = {
 GENERIC_JOBLESS_CAREERS = {
     "",
     "civilian",
+    "drifter",
     "drunk",
+    "lodger",
     "resident",
+    "shelter_guest",
     "thief",
     "unemployed",
 }
@@ -1007,6 +1010,27 @@ def player_business_state(prop, create=False):
                 wage_levels[str(clean_eid)] = clean_level
     state["employee_wage_levels"] = wage_levels
 
+    valid_staff_eids = set(roster) | {
+        _int_or(raw_eid, default=0)
+        for raw_eid in roles.keys()
+        if _int_or(raw_eid, default=0) > 0
+    }
+    for field in ("employee_contract_wages", "employee_wage_promises"):
+        raw_values = state.get(field)
+        values = {}
+        if isinstance(raw_values, dict):
+            for raw_eid, raw_wage in raw_values.items():
+                clean_eid = _int_or(raw_eid, default=0)
+                clean_wage = _int_or(raw_wage, default=0)
+                if clean_eid <= 0 or clean_wage <= 0:
+                    continue
+                if valid_staff_eids and clean_eid not in valid_staff_eids:
+                    continue
+                values[str(clean_eid)] = min(20, clean_wage)
+        state[field] = values
+    raw_breaches = state.get("employee_wage_breaches")
+    state["employee_wage_breaches"] = dict(raw_breaches) if isinstance(raw_breaches, dict) else {}
+
     summary = state.get("last_summary")
     state["last_summary"] = dict(summary) if isinstance(summary, dict) else {}
     state["last_scene_nuisance_note"] = str(state.get("last_scene_nuisance_note", "") or "").strip()
@@ -1227,6 +1251,11 @@ def player_business_set_employee_wage_level(prop, actor_eid, level, *, sim=None)
         wage_levels.pop(str(actor_eid), None)
     else:
         wage_levels[str(actor_eid)] = clean
+    # Selecting a normal wage tier replaces the active negotiated rate, but
+    # not the promise against which the next real payroll will be judged.
+    contract_wages = state.setdefault("employee_contract_wages", {})
+    if isinstance(contract_wages, dict):
+        contract_wages.pop(str(actor_eid), None)
     _touch_player_business_runtime(prop, sim=sim)
     return clean
 
@@ -1248,20 +1277,35 @@ def player_business_effective_hourly_wage(sim, actor_eid, prop, *, role="", care
         workplace_prop=prop,
         staff_role=staff_role,
     )))
+    state = player_business_state(prop, create=False)
+    contract_wages = (state or {}).get("employee_contract_wages")
+    contracted = (
+        _int_or(contract_wages.get(str(actor_eid)), default=0)
+        if isinstance(contract_wages, dict)
+        else 0
+    )
     level = player_business_employee_wage_level(prop, actor_eid)
     multiplier = _business_wage_level_multiplier(level)
-    effective = int(round(float(competitive) * float(multiplier)))
+    effective = contracted if contracted > 0 else int(round(float(competitive) * float(multiplier)))
     if competitive > 0:
         effective = max(1, effective)
+    promise_wages = (state or {}).get("employee_wage_promises")
+    promised = (
+        _int_or(promise_wages.get(str(actor_eid)), default=0)
+        if isinstance(promise_wages, dict)
+        else 0
+    )
     return {
         "actor_eid": int(actor_eid),
         "role": role,
         "career": career,
         "staff_role": staff_role,
-        "wage_level": level,
-        "wage_level_label": _business_wage_level_label(level),
+        "wage_level": "contract" if contracted > 0 else level,
+        "wage_level_label": "contracted pay" if contracted > 0 else _business_wage_level_label(level),
         "competitive_wage": int(competitive),
         "effective_wage": int(max(0, effective)),
+        "contracted_wage": int(max(0, contracted)),
+        "promised_wage": int(max(0, promised)),
     }
 
 
@@ -1322,7 +1366,15 @@ def player_business_wage_pressure(prop, rows=None):
             for level in dict(state.get("employee_wage_levels", {}) if isinstance(state.get("employee_wage_levels"), dict) else {}).values()
         ]
     else:
-        levels = [_normalize_business_wage_level((row or {}).get("wage_level")) for row in tuple(rows or ())]
+        levels = []
+        for row in tuple(rows or ()):
+            level = str((row or {}).get("wage_level", "") or "").strip().lower()
+            if level == "contract":
+                competitive = max(1, _int_or((row or {}).get("competitive_wage"), default=1))
+                effective = max(0, _int_or((row or {}).get("effective_wage"), default=0))
+                ratio = float(effective) / float(competitive)
+                level = "premium" if ratio >= 1.3 else "good" if ratio >= 1.08 else "lean" if ratio < 0.92 else "fair"
+            levels.append(_normalize_business_wage_level(level))
     if any(level == "lean" for level in levels):
         return {
             "kind": "lean",
@@ -1993,6 +2045,8 @@ def _staff_mood_label(values):
     operating_note = _text((values or {}).get("operating_note")).lower()
     if _int_or((values or {}).get("unpaid_wages"), default=0) > 0:
         return "unpaid and tense"
+    if _int_or((values or {}).get("wage_promise_breaches"), default=0) > 0:
+        return "resentful crew"
     if staff_total <= 0:
         return "no crew"
     if staff_total < required_staff:
@@ -2448,6 +2502,17 @@ def _sync_staff_roster(sim, prop, state, *, retain_incumbents=False):
         }
     else:
         state["employee_wage_levels"] = {}
+    roster_set = set(roster)
+    for field in ("employee_contract_wages", "employee_wage_promises", "employee_wage_breaches"):
+        raw_values = state.get(field)
+        if not isinstance(raw_values, dict):
+            state[field] = {}
+            continue
+        state[field] = {
+            str(_int_or(raw_eid, default=0)): value
+            for raw_eid, value in raw_values.items()
+            if _int_or(raw_eid, default=0) in roster_set
+        }
 
     manager_count = sum(1 for role in roles.values() if str(role).strip().lower() == "manager")
     staff_count = sum(1 for role in roles.values() if str(role).strip().lower() == "staff")
@@ -2560,6 +2625,7 @@ def player_business_summary(sim, prop):
         "churn_delta_pct": int(reputation.get("churn_delta_pct", 0) or 0),
         "note": note,
         "unpaid_wages": _int_or((last_summary or {}).get("unpaid_wages"), default=0) if isinstance(last_summary, dict) else 0,
+        "wage_promise_breaches": _int_or((last_summary or {}).get("wage_promise_breaches"), default=0) if isinstance(last_summary, dict) else 0,
     }
     style = _operating_style_from_values(sim, prop, signal_inputs)
     signal_inputs.update({
@@ -3124,7 +3190,7 @@ def _ensure_work_routine(sim, actor_eid, prop):
     return routine
 
 
-def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role=""):
+def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="", contracted_wage=None):
     if sim is None or owner_eid is None or actor_eid is None:
         return None
     if int(actor_eid) == int(owner_eid):
@@ -3182,6 +3248,10 @@ def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="")
         state["staff_roles"] = roles
         state["staff_roster"] = sorted(roster)
         _sync_staff_roster(sim, prop, state)
+        promised_wage = max(0, min(20, _int_or(contracted_wage, default=0)))
+        if promised_wage > 0:
+            state.setdefault("employee_contract_wages", {})[str(int(actor_eid))] = int(promised_wage)
+            state.setdefault("employee_wage_promises", {})[str(int(actor_eid))] = int(promised_wage)
         _touch_player_business_runtime(prop, sim=sim)
 
     return {
@@ -3197,6 +3267,7 @@ def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="")
         "housing_name": str((housing_plan or {}).get("label", "")).strip(),
         "previous_property_id": _text(previous_departure.get("previous_property_id")),
         "previous_business_name": str(previous_departure.get("previous_business_name", "") or "").strip(),
+        "contracted_wage": int(max(0, min(20, _int_or(contracted_wage, default=0)))),
     }
 
 
@@ -3600,6 +3671,7 @@ class PlayerBusinessSystem(System):
                 "wage_level": str(wage.get("wage_level", "fair")).strip() or "fair",
                 "competitive_wage": int(wage.get("competitive_wage", wage_due) or wage_due),
                 "wage_due": int(max(0, wage_due)),
+                "promised_wage": int(max(0, wage.get("promised_wage", 0) or 0)),
             })
         return rows
 
@@ -3638,8 +3710,19 @@ class PlayerBusinessSystem(System):
         property_name = _property_label(prop)
         wallet_total = 0
         paid_count = 0
+        promise_breaches = 0
         for row, paid in tuple(rows_with_pay or ()):
             paid = max(0, _int_or(paid, default=0))
+            promised = max(0, _int_or(row.get("promised_wage"), default=0))
+            if promised > 0 and paid < promised:
+                if self._record_wage_promise_breach(
+                    prop,
+                    actor_eid=_int_or(row.get("actor_eid"), default=0),
+                    promised_wage=promised,
+                    paid_wage=paid,
+                    hour_counter=hour_counter,
+                ):
+                    promise_breaches += 1
             if paid <= 0:
                 continue
             paid_count += 1
@@ -3659,7 +3742,102 @@ class PlayerBusinessSystem(System):
         return {
             "wages_disbursed": int(wallet_total),
             "payroll_recipient_count": int(paid_count),
+            "wage_promise_breaches": int(promise_breaches),
         }
+
+    def _record_wage_promise_breach(self, prop, *, actor_eid, promised_wage, paid_wage, hour_counter):
+        actor_eid = _int_or(actor_eid, default=0)
+        promised_wage = max(1, _int_or(promised_wage, default=1))
+        paid_wage = max(0, _int_or(paid_wage, default=0))
+        if actor_eid <= 0 or paid_wage >= promised_wage:
+            return False
+
+        state = player_business_state(prop, create=True)
+        if state is None:
+            return False
+        breaches = state.setdefault("employee_wage_breaches", {})
+        if not isinstance(breaches, dict):
+            breaches = {}
+            state["employee_wage_breaches"] = breaches
+        key = str(actor_eid)
+        previous = breaches.get(key) if isinstance(breaches.get(key), dict) else {}
+        if _int_or(previous.get("last_hour"), default=-1) == int(hour_counter):
+            return False
+        count = max(0, _int_or(previous.get("count"), default=0)) + 1
+        breaches[key] = {
+            "count": int(count),
+            "last_hour": int(hour_counter),
+            "promised_wage": int(promised_wage),
+            "paid_wage": int(paid_wage),
+        }
+
+        owner_eid = prop.get("owner_eid")
+        if owner_eid in {None, "", 0}:
+            owner_eid = getattr(self.sim, "player_eid", None)
+        owner_eid = _int_or(owner_eid, default=0)
+        shortfall = max(1, promised_wage - paid_wage)
+        severity = _clamp(float(shortfall) / float(max(1, promised_wage)), 0.18, 1.0)
+
+        memory = self.sim.ecs.get(NPCMemory).get(actor_eid)
+        if memory is None:
+            memory = NPCMemory()
+            self.sim.ecs.add(actor_eid, memory)
+        memory.remember(
+            int(getattr(self.sim, "tick", 0) or 0),
+            "broken_wage_promise",
+            strength=min(1.0, 0.5 + (severity * 0.5)),
+            property_id=_text(prop.get("id")),
+            offender_eid=owner_eid or None,
+            promised_wage=int(promised_wage),
+            paid_wage=int(paid_wage),
+        )
+
+        settlement = self.sim.ecs.get(NPCSettlement).get(actor_eid)
+        if settlement is not None:
+            # Make the ordinary life-review seam eligible on its next active
+            # pass; the settlement system still owns the actual job decision.
+            review_tick = int(getattr(self.sim, "tick", 0) or 0) - 1800
+            settlement.last_life_tick = min(int(getattr(settlement, "last_life_tick", review_tick) or review_tick), review_tick)
+
+        if owner_eid > 0:
+            for source_eid, target_eid, scale in (
+                (actor_eid, owner_eid, 1.0),
+                (owner_eid, actor_eid, 0.45),
+            ):
+                social = self.sim.ecs.get(NPCSocial).get(source_eid)
+                if social is None:
+                    continue
+                bond = social.bonds.get(target_eid)
+                if not isinstance(bond, dict):
+                    continue
+                old_trust = float(bond.get("trust", 0.0) or 0.0)
+                old_closeness = float(bond.get("closeness", 0.0) or 0.0)
+                trust_loss = (0.12 + (severity * 0.16)) * scale
+                closeness_loss = (0.04 + (severity * 0.07)) * scale
+                bond["trust"] = max(0.0, old_trust - trust_loss)
+                bond["closeness"] = max(0.0, old_closeness - closeness_loss)
+                bond["resentment"] = min(1.0, float(bond.get("resentment", 0.0) or 0.0) + ((0.2 + severity * 0.3) * scale))
+                _record_actor_social_warmth(
+                    self.sim,
+                    source_eid,
+                    other_eid=target_eid,
+                    reason="broken_wage_promise",
+                    trust_delta=float(bond.get("trust", 0.0) or 0.0) - old_trust,
+                    closeness_delta=float(bond.get("closeness", 0.0) or 0.0) - old_closeness,
+                    post_bond=bond,
+                )
+
+        self.sim.emit(Event(
+            "player_business_wage_promise_broken",
+            eid=owner_eid or getattr(self.sim, "player_eid", None),
+            npc_eid=actor_eid,
+            property_id=_text(prop.get("id")),
+            property_name=_property_label(prop),
+            promised_wage=int(promised_wage),
+            paid_wage=int(paid_wage),
+            breach_count=int(count),
+        ))
+        return True
 
     def _process_business_hour(self, prop, state, hour_counter):
         previous_summary = dict(state.get("last_summary", {})) if isinstance(state.get("last_summary"), dict) else {}
@@ -3803,6 +3981,7 @@ class PlayerBusinessSystem(System):
             "wages_paid": int(wages_paid),
             "wages_disbursed": int(payroll_disbursement.get("wages_disbursed", 0)),
             "payroll_recipient_count": int(payroll_disbursement.get("payroll_recipient_count", 0)),
+            "wage_promise_breaches": int(payroll_disbursement.get("wage_promise_breaches", 0)),
             "upkeep_due": int(upkeep_due),
             "upkeep_paid": int(upkeep_paid),
             "unpaid_wages": int(unpaid_wages),

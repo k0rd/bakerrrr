@@ -538,6 +538,34 @@ def career_label(occupation, title_case=False):
     return label.title() if title_case else label
 
 
+NON_EMPLOYMENT_CAREERS = {
+    "",
+    "civilian",
+    "drifter",
+    "drunk",
+    "lodger",
+    "resident",
+    "shelter_guest",
+    "thief",
+    "unemployed",
+}
+
+
+def employment_career_label(occupation, title_case=False):
+    """Return a career only when it describes actual employment.
+
+    ``Occupation.career`` predates the settlement layer and still carries a
+    handful of population classes and living situations.  Those values remain
+    useful to simulation code, but should not make somebody say that being a
+    resident or a drunk is their job.
+    """
+    label = career_label(occupation, title_case=False)
+    career_id = label.lower().replace(" ", "_")
+    if career_id in NON_EMPLOYMENT_CAREERS:
+        return ""
+    return label.title() if title_case else label
+
+
 def disguise_role_label(role_id, *, title_case=False):
     label = str(role_id or "").replace("_", " ").strip()
     if not label:
@@ -565,6 +593,7 @@ def workplace_property(sim, occupation=None, routine=None):
 
 _active_contractor_record = active_contractor_record
 _career_label = career_label
+_employment_career_label = employment_career_label
 _contact_benefit_labels = contact_benefit_labels
 _contractor_order_target_from_record = contractor_order_target_from_record
 _dialog_backup_cursor_payload = dialog_backup_cursor_payload

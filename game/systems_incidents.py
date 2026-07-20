@@ -113,6 +113,8 @@ class IncidentKnowledgeSystem(System):
     MIN_ACTION_OFFENSE_SCORE = 8
     MIN_SOCIAL_QUEUE_SCORE = 0.24
     MIN_URGENT_QUEUE_SCORE = 0.55
+    MIN_FIRSTHAND_URGENT_QUEUE_SCORE = 0.34
+    MIN_SURVIVOR_RESPONSE_SCORE = 0.62
 
     def __init__(self, sim):
         super().__init__(sim)
@@ -313,7 +315,39 @@ class IncidentKnowledgeSystem(System):
 
         social_queued = False
         if queue and str(source_kind or "").strip().lower() != "self":
-            if urgency >= self.MIN_URGENT_QUEUE_SCORE:
+            urgent_threshold = self.MIN_URGENT_QUEUE_SCORE
+            incident_tags = {
+                str(tag or "").strip().lower()
+                for tag in tuple(incident.get("tags", ()) or ())
+                if str(tag or "").strip()
+            }
+            firsthand_violence = bool(incident_tags & {
+                "violence",
+                "assault",
+                "unarmed_assault",
+                "melee_assault",
+                "armed_assault",
+                "homicide",
+                "fire_weapon",
+                "explosive_discharge",
+            })
+            if (
+                firsthand
+                and bool(incident.get("official_reportable"))
+                and firsthand_violence
+                and str(source_kind or "").strip().lower() in {
+                    "witnessed",
+                    "camera",
+                    "linked_drone_camera",
+                    "drone_radio_feed",
+                }
+            ):
+                # A firsthand observer should get to make a personal response
+                # choice even when an ordinary assault is not severe enough to
+                # trip the high-priority dispatch threshold. Triage still
+                # decides whether they report, help, retreat, or look away.
+                urgent_threshold = self.MIN_FIRSTHAND_URGENT_QUEUE_SCORE
+            if urgency >= urgent_threshold:
                 knowledge.queue_incident(
                     incident_id,
                     queue="urgent",
@@ -1079,7 +1113,7 @@ class IncidentKnowledgeSystem(System):
                 return
         except (TypeError, ValueError):
             pass
-        self._learn_incident(
+        record = self._learn_incident(
             victim_eid,
             incident_id,
             source_kind="victim",
@@ -1089,6 +1123,26 @@ class IncidentKnowledgeSystem(System):
             propagation_depth=0,
             queue=False,
         )
+        if not isinstance(record, dict):
+            return
+        # Surviving an assault creates a private intention to respond, not an
+        # official report. The observed-response systems will make the victim
+        # escape first when necessary and only expose the incident to justice
+        # after a real phone, officer, alarm, work, or home reporting route.
+        score = max(
+            self.MIN_SURVIVOR_RESPONSE_SCORE,
+            float(record.get("urgency", 0.0) or 0.0),
+        )
+        record["urgency"] = score
+        record["survivor_response_pending"] = True
+        knowledge = self._knowledge_for(victim_eid, create=False)
+        if knowledge is not None:
+            knowledge.queue_incident(
+                incident_id,
+                queue="urgent",
+                score=score,
+                tick=getattr(self.sim, "tick", 0),
+            )
 
     def on_action_offense(self, event):
         if event_is_vision_only(event):

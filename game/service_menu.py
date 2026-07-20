@@ -3292,8 +3292,11 @@ class ServiceMenuSystem(System):
             level_label = str(row.get("wage_level_label", "")).strip() or player_business_employee_wage_level_label(row.get("wage_level"))
             effective = int(row.get("effective_wage", 0) or 0)
             competitive = int(row.get("competitive_wage", effective) or effective)
+            promised = int(row.get("promised_wage", 0) or 0)
+            promise_text = f" | promised {_credit_amount_label(promised)}/hr" if promised > 0 else ""
             lines.append(
-                f"{name}: {staff_role} | {career} | {level_label} {_credit_amount_label(effective)}/hr (market {_credit_amount_label(competitive)}/hr)."
+                f"{name}: {staff_role} | {career} | {level_label} {_credit_amount_label(effective)}/hr "
+                f"(market {_credit_amount_label(competitive)}/hr){promise_text}."
             )
         return lines
 
@@ -3312,11 +3315,13 @@ class ServiceMenuSystem(System):
             current_label = str(row.get("wage_level_label", "")).strip() or player_business_employee_wage_level_label(row.get("wage_level"))
             effective = int(row.get("effective_wage", 0) or 0)
             competitive = int(row.get("competitive_wage", effective) or effective)
+            promised = int(row.get("promised_wage", 0) or 0)
+            promise_text = f", promised {_credit_amount_label(promised)}" if promised > 0 else ""
             topics.append({
                 "id": f"{prefix}_wage:{business_id}:{actor_eid}:{next_level}",
                 "label": (
                     f"{name}: {current_label} {_credit_amount_label(effective)}/hr "
-                    f"(market {_credit_amount_label(competitive)}) -> {next_label}"
+                    f"(market {_credit_amount_label(competitive)}{promise_text}) -> {next_label}"
                 ),
             })
         return topics

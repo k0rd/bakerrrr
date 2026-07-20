@@ -129,6 +129,14 @@ def npc_hourly_wage(sim, actor_eid=None, *, role="", career="", workplace_prop=N
     """Return a small employer-sensitive hourly NPC wage in credits."""
     from game.population import _npc_wallet_range
 
+    metadata = _property_metadata(workplace_prop)
+    explicit_wage = metadata.get("hourly_wage")
+    if explicit_wage not in {None, ""}:
+        try:
+            return int(max(1, min(20, round(float(explicit_wage)))))
+        except (TypeError, ValueError):
+            pass
+
     role, career = _actor_role_and_career(sim, actor_eid, role=role, career=career)
     staff_role = _text(staff_role).lower()
     economy_profile = _economy_profile_for_property(sim, workplace_prop)

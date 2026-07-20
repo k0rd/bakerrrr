@@ -139,6 +139,8 @@ class ObservedIncidentResponseSystem(System):
             "target_eid": route.get("target_eid"),
             "urgency": _float(data.get("urgency"), 0.0),
             "reason": _text(data.get("reason")),
+            "deferred_report": bool(data.get("deferred_report", False)),
+            "deferred_report_methods": tuple(data.get("deferred_report_methods") or ()),
             "created_tick": now,
             "expires_tick": now + DEFAULT_RESPONSE_TTL,
             "completed": False,
@@ -555,6 +557,10 @@ class ObservedIncidentResponseSystem(System):
         reporter_eid = _int(cue.get("npc_eid"), -1)
         reporter_knowledge = self.sim.ecs.get(IncidentKnowledge).get(reporter_eid)
         reporter_record = reporter_knowledge.records.get(incident_id) if reporter_knowledge is not None else None
+        if isinstance(reporter_record, dict):
+            reporter_record["survivor_response_pending"] = False
+            reporter_record["deferred_report_pending"] = False
+            reporter_record["deferred_report_completed"] = True
         subject_account = transmitted_subject_account(
             (reporter_record or {}).get("subject_account"),
             channel="authority_report",
@@ -677,6 +683,32 @@ class ObservedIncidentResponseSystem(System):
         self.completed.add((_int(npc_eid, -1), _int(cue.get("incident_id"), -1), _text(cue.get("cue_kind"))))
         self.pending.pop(npc_eid, None)
         self._clear_actor_cue(npc_eid, cue.get("incident_id"))
+        if not bool(cue.get("deferred_report", False)):
+            return
+        incident_id = _int(cue.get("incident_id"), -1)
+        incident = incident_record(self.sim, incident_id)
+        if not isinstance(incident, dict):
+            return
+        if bool(incident.get("officially_reported")):
+            knowledge = self.sim.ecs.get(IncidentKnowledge).get(_int(npc_eid, -1))
+            record = knowledge.records.get(incident_id) if knowledge is not None else None
+            if isinstance(record, dict):
+                record["survivor_response_pending"] = False
+                record["deferred_report_pending"] = False
+                record["deferred_report_satisfied_by_existing_report"] = True
+            return
+        self.sim.emit(Event(
+            "observed_response_cue",
+            npc_eid=_int(npc_eid, -1),
+            incident_id=incident_id,
+            cue_kind="report_authority",
+            target=self._incident_position(incident),
+            target_eid=None,
+            urgency=max(0.38, _float(cue.get("urgency"), 0.0)),
+            reason="followup_after_safety_or_aid",
+            preferred_methods=tuple(cue.get("deferred_report_methods") or REPORT_METHOD_PRIORITY),
+            deferred_report=False,
+        ))
 
     def _drop_cue(self, npc_eid, cue, *, reason=""):
         self.sim.observed_response_stats["dropped"] += 1

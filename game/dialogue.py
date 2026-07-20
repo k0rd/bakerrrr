@@ -30,6 +30,8 @@ TOPIC_ORDER = (
     "hire",
     "hire_manager",
     "hire_staff",
+    "hire_accept",
+    "hire_decline",
     "fire",
     "services",
     "service_fuel",
@@ -236,15 +238,25 @@ TOPIC_DEFS = {
     "hire": {
         "label": "Want a job?",
         "root": True,
-        "unlocks": ("hire_manager", "hire_staff"),
+        "unlocks": ("hire_manager", "hire_staff", "hire_accept", "hire_decline"),
     },
     "hire_manager": {
         "label": "Run the place.",
         "root": False,
-        "unlocks": (),
+        "unlocks": ("hire_accept", "hire_decline"),
     },
     "hire_staff": {
         "label": "Take a staff shift.",
+        "root": False,
+        "unlocks": ("hire_accept", "hire_decline"),
+    },
+    "hire_accept": {
+        "label": "Agree to the wage.",
+        "root": False,
+        "unlocks": (),
+    },
+    "hire_decline": {
+        "label": "No deal.",
         "root": False,
         "unlocks": (),
     },
@@ -1348,6 +1360,14 @@ PLAYER_TOPIC_BANKS = {
         "Are you looking for counter or floor work?",
         "Want a spot on the schedule?",
     ),
+    "hire_accept": (
+        "Deal. I'll pay that rate.",
+        "Agreed. That hourly rate works.",
+    ),
+    "hire_decline": (
+        "No deal.",
+        "I can't agree to that rate.",
+    ),
     "fire": (
         "I need to take you off staff at {player_business_fire_name}.",
         "I am ending your position at {player_business_fire_name}.",
@@ -2174,6 +2194,8 @@ PLAYER_CONNECTIVE_SKIP_TOPICS = {
     "hire",
     "hire_manager",
     "hire_staff",
+    "hire_accept",
+    "hire_decline",
     "fire",
     "hire_runner",
     "backup_orders",
@@ -2191,6 +2213,8 @@ PLAYER_MENU_BASE_LABEL_TOPICS = {
     "hire",
     "hire_manager",
     "hire_staff",
+    "hire_accept",
+    "hire_decline",
     "fire",
     "street_buy_accept",
     "street_buy_next",
@@ -5332,6 +5356,11 @@ def topic_label(topic_id, context=None):
                 "player_business_hire_staff_fit_hint",
             )
         return _with_hint(f"Would you take a shift at {context['player_business_hire_name']}?", "player_business_hire_staff_fit_hint")
+    if topic_id == "hire_accept" and context.get("player_business_hire_quote_text"):
+        business_name = str(context.get("player_business_hire_quote_business", "the business") or "the business")
+        return f"Agree to {context['player_business_hire_quote_text']}/hr at {business_name}."
+    if topic_id == "hire_decline" and context.get("player_business_hire_pending_offer"):
+        return "No deal."
     if topic_id == "fire" and context.get("player_business_fire_name"):
         return f"I need to take you off staff at {context['player_business_fire_name']}."
     if topic_id == "owner" and context.get("owner_place_name"):

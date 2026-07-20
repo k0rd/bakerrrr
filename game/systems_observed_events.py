@@ -40,6 +40,7 @@ from game.npc_relationships import incident_relationship_override
 from game.organizations import actor_org_memberships
 from game.property_runtime import property_covering as _property_covering
 from game.system_support.social_knowledge_runtime import hydrate_incident_social_knowledge
+from game.system_support.actor_runtime import _entity_is_downed
 from game.criminal_justice_runtime import _observer_is_active_bodyguard
 
 
@@ -633,6 +634,11 @@ class ObservedIncidentConsequenceSystem(System):
             return False
 
     def _handle_urgent_incident(self, eid, incident_id, source_record, incident):
+        if _entity_is_downed(self.sim, eid):
+            # Keep the private queue intact so an unconscious survivor or
+            # witness can act after recovery instead of making a phone call
+            # while downed.
+            return False
         now = getattr(self.sim, "tick", 0)
         key = (eid, incident_id, "urgent")
         if now - self._last_urgent_attempt.get(key, -10_000) < URGENT_RESPONSE_COOLDOWN_TICKS:
@@ -645,6 +651,12 @@ class ObservedIncidentConsequenceSystem(System):
         self._maybe_emit_mutual_fight_questioning(eid, incident_id, source_record, incident)
         decision = self._choose_urgent_response(eid, incident, source_record)
         cue_kind = decision["kind"]
+        deferred_report = self._should_defer_report(
+            eid,
+            incident,
+            source_record,
+            decision,
+        )
 
         # Dispatched responders can keep acting/investigating, but they should
         # not recursively re-report the same incident they were assigned to.
@@ -676,6 +688,8 @@ class ObservedIncidentConsequenceSystem(System):
         if cue_kind == "seek_shelter":
             source_record["sought_shelter"] = True
             self.sim.observed_incident_stats["sought_shelter"] += 1
+        if deferred_report:
+            source_record["deferred_report_pending"] = True
 
         target = decision.get("target") or self._cue_target_position(incident)
         self.sim.emit(Event(
@@ -688,6 +702,8 @@ class ObservedIncidentConsequenceSystem(System):
             urgency=round(float(decision.get("score", 0.0)), 3),
             reason=decision.get("reason", ""),
             preferred_methods=tuple(decision.get("preferred_methods", ())),
+            deferred_report=deferred_report,
+            deferred_report_methods=("cell_phone", "alarm", "work_phone", "home_phone", "peace_officer"),
         ))
         self._soft_apply_response_intent(eid, cue_kind, target, decision.get("target_eid"), decision.get("score", 0.0))
         knowledge = self.sim.ecs.get(IncidentKnowledge).get(eid)
@@ -794,6 +810,34 @@ class ObservedIncidentConsequenceSystem(System):
         return tuple(sorted(set(witnesses)))
 
     def _choose_urgent_response(self, eid, incident, source_record):
+        source_kind = _key(source_record.get("source_kind"))
+        try:
+            is_surviving_victim = (
+                source_kind == "victim"
+                and int(incident.get("victim_eid")) == int(eid)
+            )
+        except (TypeError, ValueError):
+            is_surviving_victim = False
+        if is_surviving_victim:
+            scores = self._urgent_scores(eid, incident, source_record)
+            shelter_response = self._violent_witness_shelter_response(
+                eid,
+                incident,
+                source_record,
+                scores=scores,
+                best_score=max(scores.values()),
+            )
+            if shelter_response is not None and shelter_response.get("kind") == "seek_shelter":
+                shelter_response["reason"] = "survivor_reaches_safety_before_reporting"
+                return shelter_response
+            return {
+                "kind": "report_authority",
+                "score": max(scores.get("report", 0.0), 0.62),
+                "target_eid": None,
+                "reason": "survivor_reports_assault",
+                "preferred_methods": ("cell_phone", "alarm", "work_phone", "home_phone", "peace_officer"),
+            }
+
         relationship_override = incident_relationship_override(self.sim, eid, incident)
         if relationship_override is not None:
             return relationship_override
@@ -841,6 +885,23 @@ class ObservedIncidentConsequenceSystem(System):
             "score": max(best_score, 0.2),
             "reason": "insufficient_motivation_to_act",
         }
+
+    def _should_defer_report(self, eid, incident, source_record, decision):
+        if _key(decision.get("kind")) not in {"help_victim", "seek_shelter"}:
+            return False
+        if not bool(source_record.get("firsthand")):
+            return False
+        if bool(incident.get("officially_reported")):
+            return False
+        source_kind = _key(source_record.get("source_kind"))
+        try:
+            if source_kind == "victim" and int(incident.get("victim_eid")) == int(eid):
+                return True
+        except (TypeError, ValueError):
+            pass
+        if not bool(incident.get("official_reportable")):
+            return False
+        return self._urgent_scores(eid, incident, source_record).get("report", 0.0) >= 0.30
 
     def _urgent_scores(self, eid, incident, source_record):
         severity = _int(incident.get("severity"), 0) / 100.0

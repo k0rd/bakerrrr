@@ -30,6 +30,8 @@ from game.system_support.actor_attention_runtime import (
     refresh_actor_attention as _refresh_actor_attention,
     schedule_actor_due as _schedule_actor_due,
 )
+from game.system_support.npc_income_runtime import npc_hourly_wage
+from game.player_businesses import player_business_effective_hourly_wage
 
 AI = _systems.AI
 CreatureIdentity = _systems.CreatureIdentity
@@ -1055,6 +1057,7 @@ class NPCSettlementSystem(System):
                 "offense": 1.35,
                 "ally_threatened": 1.15,
                 "conflict_side": 1.0,
+                "broken_wage_promise": 1.8,
             }.get(kind, 0.0)
             if weight <= 0.0:
                 continue
@@ -1131,6 +1134,30 @@ class NPCSettlementSystem(System):
             total += (float(_actor_skill(self.sim, eid, "streetwise", default=5.0)) - 5.0) * 0.08
         return _clamp(total * 0.42, lo=-0.95, hi=1.45)
 
+    def _workplace_hourly_wage(self, eid, prop, *, occupation=None, staff_role="staff"):
+        ai = self.sim.ecs.get(AI).get(eid)
+        role = str(getattr(ai, "role", "") or "worker")
+        career = str(getattr(occupation, "career", "") or "")
+        wage = player_business_effective_hourly_wage(
+            self.sim,
+            eid,
+            prop,
+            role=role,
+            career=career,
+            staff_role=staff_role,
+        )
+        effective = int(wage.get("effective_wage", 0) or 0)
+        if effective > 0:
+            return effective
+        return npc_hourly_wage(
+            self.sim,
+            eid,
+            role=role,
+            career=career,
+            workplace_prop=prop,
+            staff_role=staff_role,
+        )
+
     def _chunk_context(self, chunk):
         if not isinstance(chunk, (tuple, list)) or len(chunk) < 2 or getattr(self.sim, "world", None) is None:
             return None, {}, {}, {}
@@ -1167,6 +1194,17 @@ class NPCSettlementSystem(System):
         }.get(category, 0.15)
         if eid is not None:
             score += self._actor_workplace_skill_fit(eid, category, archetype=archetype)
+            workplace = getattr(occupation, "workplace", None) if occupation is not None else None
+            authority_role = ""
+            if isinstance(workplace, dict) and str(workplace.get("property_id", "") or "").strip() == str(prop.get("id", "") or "").strip():
+                authority_role = str(workplace.get("authority_role", "") or "").strip().lower()
+            hourly_wage = self._workplace_hourly_wage(
+                eid,
+                prop,
+                occupation=occupation,
+                staff_role=authority_role or "staff",
+            )
+            score += max(0.0, float(hourly_wage) - 2.0) * 0.28
         career = str(getattr(occupation, "career", "") or "").strip().lower().replace(" ", "_")
         if career and getattr(getattr(self.sim, "world", None), "careers_for_building", None) is not None:
             careers = {
@@ -1794,7 +1832,34 @@ class NPCSettlementSystem(System):
             _property_archetype(candidate_prop),
             storefront=bool(_property_is_storefront(candidate_prop)),
         )
+        occupation = self.sim.ecs.get(Occupation).get(eid)
+        workplace = getattr(occupation, "workplace", None) if occupation is not None else None
+        current_staff_role = (
+            str(workplace.get("authority_role", "staff") or "staff").strip().lower()
+            if isinstance(workplace, dict)
+            else "staff"
+        )
+        current_wage = self._workplace_hourly_wage(
+            eid,
+            current_prop,
+            occupation=occupation,
+            staff_role=current_staff_role,
+        )
+        candidate_wage = self._workplace_hourly_wage(
+            eid,
+            candidate_prop,
+            occupation=occupation,
+            staff_role="staff",
+        )
+        wage_delta = int(candidate_wage) - int(current_wage)
         if float(candidate_score) >= float(current_score) + _NPC_LIFE_LOCAL_JOB_SWITCH_DELTA:
+            return True
+        # A real two-credit raise is itself a material improvement in this
+        # economy.  A one-credit raise needs another meaningful advantage,
+        # keeping ordinary review from turning into constant job churn.
+        if wage_delta >= 2 and float(candidate_score) >= float(current_score) + 0.4:
+            return True
+        if wage_delta >= 1 and float(candidate_score) >= float(current_score) + 0.62:
             return True
         conflict_pressure = self._memory_pressure(eid, target_prop=current_prop, memory=memory)
         if conflict_pressure >= _NPC_LIFE_LOCAL_CONFLICT_MOVE_PRESSURE and float(candidate_score) >= float(current_score) - 0.15:

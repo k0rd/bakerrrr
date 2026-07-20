@@ -652,6 +652,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("player_business_staff_hired", self.on_player_business_staff_hired)
         self.sim.events.subscribe("player_business_staff_fired", self.on_player_business_staff_fired)
         self.sim.events.subscribe("player_business_staff_resigned", self.on_player_business_staff_resigned)
+        self.sim.events.subscribe("player_business_wage_promise_broken", self.on_player_business_wage_promise_broken)
         self.sim.events.subscribe("property_purchase_blocked", self.on_property_purchase_blocked)
         self.sim.events.subscribe("trade_bought", self.on_trade_bought)
         self.sim.events.subscribe("street_vendor_purchase", self.on_street_vendor_purchase)
@@ -7071,6 +7072,19 @@ class EventLogSystem(System):
         business_name = str(event.data.get("business_name", "Business")).strip() or "Business"
         npc_name = self._npc_label(event.data.get("npc_eid"))
         self.sim.log.add(f"{npc_name} resigns from {business_name}.")
+
+    def on_player_business_wage_promise_broken(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        business_name = str(event.data.get("property_name", "Business")).strip() or "Business"
+        npc_name = self._npc_label(event.data.get("npc_eid"))
+        promised = int(event.data.get("promised_wage", 0) or 0)
+        paid = int(event.data.get("paid_wage", 0) or 0)
+        self.sim.log.add(
+            f"{npc_name} was promised {promised}cr/hr at {business_name} and received {paid}cr. They are angry.",
+            channel="social",
+            priority="high",
+        )
 
     def on_property_purchase_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
