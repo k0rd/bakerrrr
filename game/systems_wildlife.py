@@ -37,6 +37,7 @@ _clamp = _systems._clamp
 _grid_distance = _systems._grid_distance
 _has_line_of_sight = _systems._has_line_of_sight
 _manhattan = _systems._manhattan
+_movement_planning_context = _systems._movement_planning_context
 _property_covering = _systems._property_covering
 _weapon_is_melee = _systems._weapon_is_melee
 _world_hour = _systems._world_hour
@@ -2221,6 +2222,7 @@ def _wildlife_reachable_escape_tiles(sim, eid, pos, *, radius):
     radius = max(1, int(radius))
     habitat = _wildlife_habitat_property(sim, *origin)
     habitat_id = str((habitat or {}).get("id", "") or "").strip() if isinstance(habitat, dict) else ""
+    planning_context = _movement_planning_context(sim, eid)
     reached = {origin}
     queue = [origin]
     index = 0
@@ -2257,6 +2259,7 @@ def _wildlife_reachable_escape_tiles(sim, eid, pos, *, radius):
                 to_x=to_x,
                 to_y=to_y,
                 z=z,
+                planning_context=planning_context,
             )
             if not step_ok:
                 continue

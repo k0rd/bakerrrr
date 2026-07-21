@@ -85,23 +85,57 @@ def _business_reputation_stats(sim):
         stats = {}
         sim.business_reputation_stats = stats
     stats.setdefault("_revision", 0)
+    stats.setdefault("_property_revisions", {})
     return stats
 
 
-def _bump_business_reputation_revision(sim):
+def _bump_business_reputation_revision(sim, property_id=None):
     if sim is None:
         return 0
     stats = _business_reputation_stats(sim)
     stats["_revision"] = int(stats.get("_revision", 0) or 0) + 1
+    property_key = _text(property_id)
+    if property_key:
+        revisions = stats.get("_property_revisions")
+        if not isinstance(revisions, dict):
+            revisions = {}
+            stats["_property_revisions"] = revisions
+        revisions[property_key] = int(revisions.get(property_key, 0) or 0) + 1
     return int(stats["_revision"])
 
 
-def _business_reputation_tick_cache(sim, key):
+def _business_reputation_property_signature(sim, stats, property_id):
+    property_key = _text(property_id)
+    revisions = stats.get("_property_revisions")
+    property_revision = int(revisions.get(property_key, 0) or 0) if isinstance(revisions, dict) else 0
+    prop = (getattr(sim, "properties", {}) or {}).get(property_key)
+    metadata = prop.get("metadata") if isinstance(prop, dict) else None
+    state = metadata.get("player_business") if isinstance(metadata, dict) else None
+    business_revision = int(state.get("_cache_revision", 0) or 0) if isinstance(state, dict) else 0
+    return (
+        property_revision,
+        business_revision,
+        len(getattr(sim, "properties", {}) or {}),
+    )
+
+
+def _business_reputation_tick_cache(sim, key, *, property_id=None):
     stats = _business_reputation_stats(sim)
     cache = stats.get(key)
     if not isinstance(cache, dict):
         cache = {}
         stats[key] = cache
+    property_key = _text(property_id)
+    if property_key:
+        signatures = cache.get("_property_signatures")
+        if not isinstance(signatures, dict):
+            signatures = {}
+            cache["_property_signatures"] = signatures
+        signature = _business_reputation_property_signature(sim, stats, property_key)
+        if signatures.get(property_key) != signature:
+            cache.pop(property_key, None)
+            signatures[property_key] = signature
+        return cache
     signature = (
         int(stats.get("_revision", 0) or 0),
         len(getattr(sim, "properties", {}) or {}),
@@ -498,7 +532,7 @@ def _property_business_reputation_core_snapshot(sim, property_id):
     if sim is None or not property_key:
         return dict(base)
 
-    cache = _business_reputation_tick_cache(sim, "property_core_cache")
+    cache = _business_reputation_tick_cache(sim, "property_core_cache", property_id=property_key)
     cached = cache.get(property_key)
     if isinstance(cached, dict):
         return dict(cached)
@@ -576,7 +610,7 @@ def _property_business_community_signal(sim, property_id):
     }
     if sim is None or not property_key:
         return dict(base)
-    cache = _business_reputation_tick_cache(sim, "community_signal_cache")
+    cache = _business_reputation_tick_cache(sim, "community_signal_cache", property_id=property_key)
     cached = cache.get(property_key)
     if isinstance(cached, dict):
         return dict(cached)
@@ -695,8 +729,6 @@ def _property_business_community_ripple(sim, property_id):
     for other_prop in nearby_properties:
         other_id = _text(other_prop.get("id")) if isinstance(other_prop, dict) else ""
         if _text(other_id) == property_key:
-            continue
-        if not property_supports_business_reputation(other_prop):
             continue
         other_point = _property_point(other_prop)
         if other_point is None or int(other_point[2]) != int(point[2]):
@@ -1106,7 +1138,7 @@ class BusinessReputationSystem(System):
             incident_id=incident_id,
         )
         if isinstance(record, dict):
-            _bump_business_reputation_revision(self.sim)
+            _bump_business_reputation_revision(self.sim, property_id)
             queue_score = self._queue_score(record)
             if queue_score >= self.MIN_SOCIAL_QUEUE_SCORE:
                 knowledge.queue_property(property_id, score=queue_score, tick=getattr(self.sim, "tick", 0))

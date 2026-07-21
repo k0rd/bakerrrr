@@ -783,8 +783,14 @@ def remember_active_target(sim, actor_eid, state, target, *, property_id=None, l
     }
     previous = knowledge.active_targets.get(state_key)
     if isinstance(previous, dict):
-        path_goal = previous.get("path_goal")
-        if path_goal == row.get("target"):
+        # ``path_goal`` may intentionally differ from the actor's raw target:
+        # movement toward an interior property target is normalized to the
+        # public entry while the active target remains the interior tile.  The
+        # old comparison therefore discarded a perfectly valid path on every
+        # movement tick and rebuilt the same graph from the actor's new cell.
+        # Cache identity belongs to the raw target; ``next_active_target_step``
+        # separately validates the normalized goal before reusing its nodes.
+        if previous.get("target") == row.get("target"):
             row["path_nodes"] = previous.get("path_nodes")
             row["path_goal"] = previous.get("path_goal")
     knowledge.active_targets[state_key] = row

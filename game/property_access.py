@@ -1,5 +1,6 @@
 import random
 from dataclasses import dataclass
+from functools import lru_cache
 
 from engine.derived_facts import cached_derived_fact, derived_fact_revision
 
@@ -855,23 +856,15 @@ def default_site_services_for_archetype(archetype, *, seed_token=""):
     return _dedupe_service_ids(base)
 
 
-def site_services_for_property(prop):
-    metadata = _property_metadata(prop)
-    configured = metadata.get("site_services", [])
-    services = []
-    if isinstance(configured, (list, tuple, set)):
-        services = [str(service).strip().lower() for service in configured if str(service).strip()]
-    elif isinstance(configured, str) and configured.strip():
-        services = [configured.strip().lower()]
-
+@lru_cache(maxsize=8192)
+def _resolved_site_services(archetype, configured, replace_defaults, extend_defaults, seed_token):
+    services = list(configured)
     if not services:
         services = list(default_site_services_for_archetype(
-            metadata.get("archetype"),
-            seed_token=_optional_site_service_seed_token(prop),
+            archetype,
+            seed_token=seed_token,
         ))
-    elif not bool(metadata.get("site_services_replace_defaults", False)):
-        archetype = str(metadata.get("archetype", "") or "").strip().lower()
-        extend_defaults = bool(metadata.get("site_services_extend_defaults", False))
+    elif not replace_defaults:
         if extend_defaults or archetype in DEFAULT_SITE_SERVICE_EXTEND_ARCHETYPES:
             for service in DEFAULT_SITE_SERVICES_BY_ARCHETYPE.get(archetype, ()):
                 clean_service = str(service).strip().lower()
@@ -879,6 +872,25 @@ def site_services_for_property(prop):
                     services.append(clean_service)
 
     return _dedupe_service_ids(services)
+
+
+def site_services_for_property(prop):
+    metadata = _property_metadata(prop)
+    configured = metadata.get("site_services", [])
+    if isinstance(configured, (list, tuple, set)):
+        configured_services = _dedupe_service_ids(configured)
+    elif isinstance(configured, str) and configured.strip():
+        configured_services = _dedupe_service_ids((configured,))
+    else:
+        configured_services = ()
+    archetype = str(metadata.get("archetype", "") or "").strip().lower()
+    return _resolved_site_services(
+        archetype,
+        configured_services,
+        bool(metadata.get("site_services_replace_defaults", False)),
+        bool(metadata.get("site_services_extend_defaults", False)),
+        _optional_site_service_seed_token(prop),
+    )
 
 
 def _property_offers_lodging_or_shelter(prop):

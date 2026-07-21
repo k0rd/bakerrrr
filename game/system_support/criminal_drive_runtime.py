@@ -92,6 +92,7 @@ def _criminal_drive_runtime_cache(sim, *, current_tick=None):
             "tick": tick,
             "nearby_buildings": {},
             "property_terms": {},
+            "property_fact_index": None,
         }
         sim.criminal_drive_runtime_cache = state
     return state
@@ -389,23 +390,66 @@ def _property_footprint(prop):
     return left, right, top, bottom
 
 
-def _ground_items_for_property(sim, prop):
+def _criminal_drive_property_fact_index(sim, *, current_tick=None):
+    cache = _criminal_drive_runtime_cache(sim, current_tick=current_tick)
+    indexed = cache.get("property_fact_index")
+    if isinstance(indexed, dict):
+        return indexed
+
+    ground_items_by_tile = {}
+    for ground in getattr(sim, "ground_items", {}).values():
+        if not isinstance(ground, dict):
+            continue
+        try:
+            tile = (
+                int(ground.get("x")),
+                int(ground.get("y")),
+                int(ground.get("z", 0)),
+            )
+        except (TypeError, ValueError):
+            continue
+        ground_items_by_tile.setdefault(tile, []).append(ground)
+
+    guard_positions_by_z = {}
+    positions = sim.ecs.get(Position)
+    ais = sim.ecs.get(AI)
+    for eid, pos in positions.items():
+        role = _text(getattr(ais.get(eid), "role", "")).lower()
+        if role not in {"guard", "scout"}:
+            continue
+        z = int(getattr(pos, "z", 0) or 0)
+        guard_positions_by_z.setdefault(z, []).append((int(pos.x), int(pos.y)))
+
+    indexed = {
+        "ground_items_by_tile": ground_items_by_tile,
+        "guard_positions_by_z": guard_positions_by_z,
+    }
+    cache["property_fact_index"] = indexed
+    return indexed
+
+
+def _ground_items_for_property(sim, prop, *, ground_items_by_tile=None):
     footprint = _property_footprint(prop)
     if footprint is None:
         return ()
     left, right, top, bottom = footprint
     base_z = int(prop.get("z", 0) or 0)
     rows = []
-    for ground in getattr(sim, "ground_items", {}).values():
-        try:
-            x = int(ground.get("x"))
-            y = int(ground.get("y"))
-            z = int(ground.get("z", base_z))
-        except (TypeError, ValueError):
-            continue
-        if z != base_z or not (left <= x <= right and top <= y <= bottom):
-            continue
-        rows.append(ground)
+    if isinstance(ground_items_by_tile, dict):
+        for y in range(top, bottom + 1):
+            for x in range(left, right + 1):
+                rows.extend(ground_items_by_tile.get((x, y, base_z), ()))
+    else:
+        for ground in getattr(sim, "ground_items", {}).values():
+            try:
+                x = int(ground.get("x"))
+                y = int(ground.get("y"))
+                z = int(ground.get("z", base_z))
+            except (TypeError, ValueError):
+                continue
+            if z != base_z or not (left <= x <= right and top <= y <= bottom):
+                continue
+            rows.append(ground)
     rows.sort(
         key=lambda row: (
             -_ground_item_base_value(row, sim=sim, prop=prop),
@@ -415,12 +459,18 @@ def _ground_items_for_property(sim, prop):
     return tuple(rows)
 
 
-def _property_guard_count(sim, prop):
+def _property_guard_count(sim, prop, *, guard_positions_by_z=None):
     footprint = _property_footprint(prop)
     if footprint is None:
         return 0
     left, right, top, bottom = footprint
     base_z = int(prop.get("z", 0) or 0)
+    if isinstance(guard_positions_by_z, dict):
+        return sum(
+            1
+            for x, y in tuple(guard_positions_by_z.get(base_z, ()) or ())
+            if left <= int(x) <= right and top <= int(y) <= bottom
+        )
     count = 0
     positions = sim.ecs.get(Position)
     ais = sim.ecs.get(AI)
@@ -476,7 +526,12 @@ def _shared_crime_property_terms(sim, prop, *, current_tick=None):
         terms_cache[property_id] = terms
         return terms
 
-    ground_items = _ground_items_for_property(sim, prop)
+    fact_index = _criminal_drive_property_fact_index(sim, current_tick=current_tick)
+    ground_items = _ground_items_for_property(
+        sim,
+        prop,
+        ground_items_by_tile=fact_index.get("ground_items_by_tile"),
+    )
     visible_value = sum(_ground_item_base_value(row, sim=sim, prop=prop) for row in ground_items[:4])
     valuable_item = ground_items[0] if ground_items else None
     instability = organization_instability_profile(sim, prop=prop, ensure=True)
@@ -487,7 +542,11 @@ def _shared_crime_property_terms(sim, prop, *, current_tick=None):
         "ground_items": ground_items,
         "visible_value": float(visible_value),
         "valuable_item": valuable_item if isinstance(valuable_item, dict) else None,
-        "guard_count": int(_property_guard_count(sim, prop)),
+        "guard_count": int(_property_guard_count(
+            sim,
+            prop,
+            guard_positions_by_z=fact_index.get("guard_positions_by_z"),
+        )),
         "camera_count": int(_property_camera_presence(prop)),
         "covert_fit": float(_property_covert_fit(prop)),
         "underrepresented": bool((instability or {}).get("underrepresented")),

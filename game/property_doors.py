@@ -47,8 +47,14 @@ def _ordinary_door_state_at(sim, x, y, z=0):
     return state
 
 
-def _operable_door_state_at(sim, x, y, z=0):
-    state = _door_state_at(sim, x, y, z)
+def _operable_door_state_at(sim, x, y, z=0, *, states=None):
+    if isinstance(states, dict):
+        try:
+            state = states.get((int(x), int(y), int(z)))
+        except (TypeError, ValueError):
+            state = None
+    else:
+        state = _door_state_at(sim, x, y, z)
     if not isinstance(state, dict):
         return None
     kind = str(state.get("kind", "door") or "door").strip().lower() or "door"

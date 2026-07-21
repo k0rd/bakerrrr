@@ -3915,6 +3915,7 @@ from game.systems_business_events import (
     _business_event_followup_seed,
     _business_event_consequence_seed,
     _business_event_frontage_anchor,
+    _building_roam_pulse_snapshot,
     _building_pulse_snapshot,
     _business_event_seed_scene_specs,
     _business_event_scene_fixture_interaction,
@@ -4585,7 +4586,7 @@ def _pick_property_roam_tile(sim, prop, eid, *, role="", intent=""):
         str(metadata.get("archetype", "") or "").strip().lower(),
         storefront=bool(_property_is_storefront(prop)),
     )
-    pulse = _building_pulse_snapshot(sim, prop=prop)
+    pulse = _building_roam_pulse_snapshot(sim, prop=prop)
     pulse_emphasis = str(pulse.get("emphasis", "") or "").strip().lower()
     try:
         perimeter_bonus = max(0.0, float(pulse.get("perimeter_bonus", 0.0) or 0.0))
@@ -4593,6 +4594,7 @@ def _pick_property_roam_tile(sim, prop, eid, *, role="", intent=""):
         perimeter_bonus = 0.0
 
     interior_weighted = []
+    room_preference_scores = {}
     if isinstance(footprint, dict):
         try:
             left = int(footprint.get("left"))
@@ -4643,14 +4645,16 @@ def _pick_property_roam_tile(sim, prop, eid, *, role="", intent=""):
                     weight = 1.0
                     if (tile[0], tile[1]) not in doorway_tiles:
                         weight += 0.35
-                    weight += _property_room_preference_score(
-                        prop,
-                        room_kind,
-                        role=role,
-                        intent=intent,
-                        building_category=building_category,
-                        pulse_emphasis=pulse_emphasis,
-                    )
+                    if room_kind not in room_preference_scores:
+                        room_preference_scores[room_kind] = _property_room_preference_score(
+                            prop,
+                            room_kind,
+                            role=role,
+                            intent=intent,
+                            building_category=building_category,
+                            pulse_emphasis=pulse_emphasis,
+                        )
+                    weight += room_preference_scores[room_kind]
                     interior_weighted.append((tile, weight))
                 if interior_weighted:
                     break

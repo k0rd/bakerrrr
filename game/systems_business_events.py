@@ -40,7 +40,11 @@ from game.property_runtime import (
     property_status_text as _property_status_text,
     property_runtime_container_entries as _property_runtime_container_entries,
 )
-from game.systems_business_reputation import property_business_reputation_snapshot, property_supports_business_reputation
+from game.systems_business_reputation import (
+    _property_business_reputation_core_snapshot,
+    property_business_reputation_snapshot,
+    property_supports_business_reputation,
+)
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
 from game.system_support.actor_attention_runtime import record_area_warmth
 from game.system_support.ai_intent_runtime import _sync_ai_intent
@@ -1307,6 +1311,10 @@ def _business_reputation_micro_event(sim, prop=None, base_pulse=None):
     if category in {"secure", "residential"}:
         return {}
 
+    core_snapshot = _property_business_reputation_core_snapshot(sim, property_id)
+    if max(0, int(core_snapshot.get("awareness_count", 0) or 0)) < 3:
+        return {}
+
     snapshot = property_business_reputation_snapshot(sim, property_id)
     awareness_count = max(0, int(snapshot.get("awareness_count", 0) or 0))
     if awareness_count < 3:
@@ -1402,6 +1410,14 @@ def _business_reputation_traffic_profile(sim, prop=None, base_pulse=None):
 
     property_id = str(prop.get("id", "") or "").strip()
     if not property_id:
+        return {}
+
+    core_snapshot = _property_business_reputation_core_snapshot(sim, property_id)
+    core_awareness = max(
+        float(core_snapshot.get("weighted_awareness", 0.0) or 0.0),
+        float(int(core_snapshot.get("awareness_count", 0) or 0)),
+    )
+    if core_awareness < 2.0:
         return {}
 
     snapshot = property_business_reputation_snapshot(sim, property_id)
@@ -1534,6 +1550,14 @@ def _business_reputation_scene_consequence_profile(sim, prop=None, base_pulse=No
 
     property_id = str(prop.get("id", "") or "").strip()
     if not property_id:
+        return {}
+
+    core_snapshot = _property_business_reputation_core_snapshot(sim, property_id)
+    core_awareness = max(
+        float(core_snapshot.get("weighted_awareness", 0.0) or 0.0),
+        float(int(core_snapshot.get("awareness_count", 0) or 0)),
+    )
+    if core_awareness < 1.6:
         return {}
 
     snapshot = property_business_reputation_snapshot(sim, property_id)
@@ -1929,6 +1953,31 @@ def _building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=No
     if property_id not in visible_ids:
         return {}
     return event
+
+
+def _building_roam_pulse_snapshot(sim, prop=None, structure=None, *, respect_chunk_cap=True):
+    """Project the building pulse fields that can alter routine roam targets."""
+
+    pulse = _base_building_pulse_snapshot(sim, prop=prop, structure=structure)
+    event = _building_micro_event_snapshot(
+        sim,
+        prop=prop,
+        structure=structure,
+        base_pulse=pulse,
+        respect_chunk_cap=respect_chunk_cap,
+    )
+    if event:
+        event_emphasis = str(event.get("emphasis", "") or "").strip().lower()
+        if event_emphasis:
+            pulse["emphasis"] = event_emphasis
+        try:
+            pulse["perimeter_bonus"] = max(0.0, float(event.get("perimeter_bonus", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            pulse["perimeter_bonus"] = 0.0
+    return {
+        "emphasis": str(pulse.get("emphasis", "") or "").strip().lower(),
+        "perimeter_bonus": max(0.0, float(pulse.get("perimeter_bonus", 0.0) or 0.0)),
+    }
 
 
 def _building_pulse_snapshot(sim, prop=None, structure=None, *, respect_chunk_cap=True):

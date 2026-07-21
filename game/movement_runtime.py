@@ -1,6 +1,6 @@
 """Shared entity movement and doorway transition helpers."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from engine.events import Event
 
@@ -33,13 +33,25 @@ class MovementPlanningContext:
     known_armed_trap_positions: frozenset
     colliders: object
     fire_cells: object
+    chunk_size: int
+    chunk_detail: object
+    world_coord_limit: int
+    tiles_by_floor: object
+    entities: object
+    door_states: object
+    door_access_permissions: dict = field(default_factory=dict, compare=False, repr=False)
 
 
-def _entity_blocks(sim, moving_eid, x, y, z, *, colliders=None):
+def _entity_blocks(sim, moving_eid, x, y, z, *, colliders=None, entities=None):
     if colliders is None:
         colliders = sim.ecs.get(Collider)
 
-    for other_eid in sim.tilemap.entities_at(x, y, z):
+    occupants = (
+        entities.get((x, y, z), ())
+        if isinstance(entities, dict)
+        else sim.tilemap.entities_at(x, y, z)
+    )
+    for other_eid in occupants:
         if other_eid == moving_eid:
             continue
 
@@ -69,6 +81,12 @@ def _movement_planning_context(sim, moving_eid):
         ),
         colliders=sim.ecs.get(Collider),
         fire_cells=cells if isinstance(cells, dict) else {},
+        chunk_size=max(1, int(getattr(sim, "chunk_size", 1) or 1)),
+        chunk_detail=getattr(sim, "chunk_detail", {}),
+        world_coord_limit=int(getattr(sim.tilemap, "world_coord_limit", 1_000_000) or 1_000_000),
+        tiles_by_floor=getattr(sim.tilemap, "tiles_by_floor", {}),
+        entities=getattr(sim.tilemap, "entities", {}),
+        door_states=getattr(sim, "door_states", {}),
     )
 
 
@@ -135,7 +153,12 @@ def _closed_door_move_block_reason(sim, eid, x, y, z):
 
 
 def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z, *, planning_context=None):
-    state = _operable_door_state_at(sim, to_x, to_y, z)
+    door_states = (
+        planning_context.door_states
+        if isinstance(planning_context, MovementPlanningContext)
+        else None
+    )
+    state = _operable_door_state_at(sim, to_x, to_y, z, states=door_states)
     if state is None or bool(state.get("open", False)) or bool(state.get("broken", False)):
         return False
     is_animal = (
@@ -196,18 +219,32 @@ def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z
         if not bool(lock_state.get("locked")):
             return True
 
-        access = _evaluate_property_access(
+        breach_severity = float(getattr(ingress, "breach_severity", 0.0) or 0.0)
+        if isinstance(planning_context, MovementPlanningContext):
+            access_key = (id(prop), int(to_x), int(to_y), int(z), breach_severity)
+            permitted = planning_context.door_access_permissions.get(access_key)
+            if permitted is None:
+                permitted = bool(_evaluate_property_access(
+                    sim,
+                    eid,
+                    prop,
+                    x=to_x,
+                    y=to_y,
+                    z=z,
+                    breach_severity=breach_severity,
+                ).permitted)
+                planning_context.door_access_permissions[access_key] = permitted
+            return permitted
+
+        return bool(_evaluate_property_access(
             sim,
             eid,
             prop,
             x=to_x,
             y=to_y,
             z=z,
-            breach_severity=float(getattr(ingress, "breach_severity", 0.0) or 0.0),
-        )
-        if access.permitted:
-            return True
-        return False
+            breach_severity=breach_severity,
+        ).permitted)
 
     return not bool(state.get("locked", False))
 
@@ -268,12 +305,28 @@ def _animal_npc_cannot_cross_doorway(sim, moving_eid, from_x, from_y, to_x, to_y
 
 
 def _is_traversable_for(sim, moving_eid, x, y, z, *, planning_context=None):
-    if sim.detail_for_xy(x, y) == "unloaded":
-        return False, "out_of_bounds"
-    if not sim.tilemap.in_bounds(x, y):
-        return False, "out_of_bounds"
-    if not sim.tilemap.is_walkable(x, y, z):
-        return False, "blocked_tile"
+    if isinstance(planning_context, MovementPlanningContext):
+        chunk_coord = (x // planning_context.chunk_size, y // planning_context.chunk_size)
+        if planning_context.chunk_detail.get(chunk_coord, "unloaded") == "unloaded":
+            return False, "out_of_bounds"
+        try:
+            tile_x = int(x)
+            tile_y = int(y)
+        except (TypeError, ValueError):
+            return False, "out_of_bounds"
+        if abs(tile_x) > planning_context.world_coord_limit or abs(tile_y) > planning_context.world_coord_limit:
+            return False, "out_of_bounds"
+        floor = planning_context.tiles_by_floor.get(z)
+        tile = floor.get((tile_x, tile_y)) if isinstance(floor, dict) else None
+        if not bool(tile and tile.walkable):
+            return False, "blocked_tile"
+    else:
+        if sim.detail_for_xy(x, y) == "unloaded":
+            return False, "out_of_bounds"
+        if not sim.tilemap.in_bounds(x, y):
+            return False, "out_of_bounds"
+        if not sim.tilemap.is_walkable(x, y, z):
+            return False, "blocked_tile"
     if isinstance(planning_context, MovementPlanningContext):
         is_nonplayer_ai = planning_context.is_nonplayer_ai
     elif isinstance(planning_context, dict):
@@ -297,7 +350,8 @@ def _is_traversable_for(sim, moving_eid, x, y, z, *, planning_context=None):
         if known_trap:
             return False, "known_trap"
     colliders = planning_context.colliders if isinstance(planning_context, MovementPlanningContext) else None
-    blocked, blocker_eid = _entity_blocks(sim, moving_eid, x, y, z, colliders=colliders)
+    entities = planning_context.entities if isinstance(planning_context, MovementPlanningContext) else None
+    blocked, blocker_eid = _entity_blocks(sim, moving_eid, x, y, z, colliders=colliders, entities=entities)
     if blocked:
         return False, f"blocked_entity:{blocker_eid}"
     return True, None
