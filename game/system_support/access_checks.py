@@ -6,7 +6,7 @@ import random
 
 from engine.events import Event
 
-from game.components import Inventory
+from game.components import Inventory, WeaponLoadout
 from game.items import ITEM_CATALOG, apply_item_durability_loss, item_display_name
 from game.skills import access_skill_practice_awards as _access_skill_practice_awards
 
@@ -127,7 +127,19 @@ def _resolve_access_skill_check(
     }
 
 
-def _maybe_damage_access_tool(sim, eid, tool_terms, *, prop, score, required, context, channel, fumbled=False):
+def _maybe_damage_access_tool(
+    sim,
+    eid,
+    tool_terms,
+    *,
+    prop,
+    score,
+    required,
+    context,
+    channel,
+    fumbled=False,
+    force_wear=False,
+):
     enabled_ids = tuple(str(item_id).strip().lower() for item_id in tool_terms.get("enabled_item_ids", ()))
     selected_instance_id = str(tool_terms.get("selected_instance_id", "")).strip()
     if not enabled_ids:
@@ -167,7 +179,16 @@ def _maybe_damage_access_tool(sim, eid, tool_terms, *, prop, score, required, co
     strain_chance *= tool_wear_mult
     strain_chance = max(0.01, min(0.85, strain_chance))
 
-    if _access_attempt_roll_impl()(sim, eid=eid, prop=prop, context=context, channel=f"{channel}:tool_break") >= strain_chance:
+    if (
+        not force_wear
+        and _access_attempt_roll_impl()(
+            sim,
+            eid=eid,
+            prop=prop,
+            context=context,
+            channel=f"{channel}:tool_break",
+        ) >= strain_chance
+    ):
         return None
 
     pick_roll = _access_attempt_roll_impl()(sim, eid=eid, prop=prop, context=context, channel=f"{channel}:tool_pick")
@@ -197,6 +218,12 @@ def _maybe_damage_access_tool(sim, eid, tool_terms, *, prop, score, required, co
         removed = inventory.remove_item(instance_id=instance_id, quantity=1)
         if not removed:
             return None
+        weapon_id = str(ITEM_CATALOG.get(item_id, {}).get("weapon_id", "") or "").strip()
+        loadout = sim.ecs.get(WeaponLoadout).get(eid)
+        if weapon_id and loadout is not None:
+            linked_instance_id = str(loadout.weapon_inventory_instance_id(weapon_id) or "").strip()
+            if not linked_instance_id or linked_instance_id == str(instance_id or "").strip():
+                loadout.remove_weapon(weapon_id)
         item_name = item_display_name(
             str(removed.get("item_id", "")).strip() or item_id,
             metadata=removed.get("metadata"),

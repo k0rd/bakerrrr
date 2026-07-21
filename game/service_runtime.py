@@ -10,6 +10,7 @@ import random
 from collections import Counter
 
 from engine.buildings import layout_chunk_building, world_building_id
+from engine.derived_facts import cached_derived_fact
 from engine.sites import layout_chunk_site
 from game.components import AI, NPCNeeds, Occupation, PlayerAssets, Position
 from game.color_words import casino_color_word
@@ -579,6 +580,44 @@ def _property_transit_archetype(prop):
     ).strip().lower()
 
 
+def _property_transit_node_index(sim):
+    """Materialize property-backed transit facts once per infrastructure revision."""
+
+    def build():
+        indexed = {}
+        transit_ids = set(TRANSIT_SERVICE_IDS)
+        archetype_services = {}
+        for service in TRANSIT_SERVICE_IDS:
+            profile = _transit_service_profile(service) or {}
+            for archetype in tuple(profile.get("node_archetypes", ()) or ()):
+                key = str(archetype or "").strip().lower()
+                if key:
+                    archetype_services.setdefault(key, set()).add(str(service).strip().lower())
+
+        for prop in tuple(getattr(sim, "properties", {}).values()):
+            if not isinstance(prop, dict):
+                continue
+            services = set(_property_service_ids(prop)).intersection(transit_ids)
+            services.update(archetype_services.get(_property_transit_archetype(prop), ()))
+            if not services:
+                continue
+            chunk = _property_chunk(sim, prop)
+            indexed.setdefault(chunk, set()).update(services)
+        return {
+            chunk: frozenset(services)
+            for chunk, services in indexed.items()
+        }
+
+    return cached_derived_fact(
+        sim,
+        "transit.property_nodes",
+        "all",
+        build,
+        domains=("transit_nodes",),
+        max_entries=1,
+    )
+
+
 def _chunk_has_transit_service_node(sim, chunk, service):
     profile = _transit_service_profile(service)
     if not profile or getattr(sim, "world", None) is None:
@@ -595,15 +634,8 @@ def _chunk_has_transit_service_node(sim, chunk, service):
     if not node_archetypes:
         return False
 
-    for prop in tuple(getattr(sim, "properties", {}).values()):
-        if not isinstance(prop, dict):
-            continue
-        if _property_chunk(sim, prop) != chunk:
-            continue
-        if service in _property_service_ids(prop):
-            return True
-        if _property_transit_archetype(prop) in node_archetypes:
-            return True
+    if service in _property_transit_node_index(sim).get(chunk, ()):
+        return True
 
     world_chunk = sim.world.get_chunk(chunk[0], chunk[1])
     for block in tuple((world_chunk or {}).get("blocks", ()) or ()):
@@ -630,24 +662,36 @@ def _transit_services_connecting_chunks(sim, origin_chunk, target_chunk, *, serv
         target_chunk = (int(target_chunk[0]), int(target_chunk[1]))
     except (TypeError, ValueError, IndexError):
         return ()
-    distance = _manhattan(origin_chunk[0], origin_chunk[1], target_chunk[0], target_chunk[1])
-    if distance <= 0:
-        return ()
     requested = tuple(services or TRANSIT_SERVICE_IDS)
-    connected = []
-    for service in requested:
-        profile = _transit_service_profile(service)
-        if not profile:
-            continue
-        radius = max(1, int(profile.get("search_radius", 6) or 6))
-        if distance > radius:
-            continue
-        if not _chunk_has_transit_service_node(sim, origin_chunk, service):
-            continue
-        if not _chunk_has_transit_service_node(sim, target_chunk, service):
-            continue
-        connected.append(str(service).strip().lower())
-    return tuple(connected)
+    requested = tuple(str(service or "").strip().lower() for service in requested if str(service or "").strip())
+
+    def build():
+        distance = _manhattan(origin_chunk[0], origin_chunk[1], target_chunk[0], target_chunk[1])
+        if distance <= 0:
+            return ()
+        connected = []
+        for service in requested:
+            profile = _transit_service_profile(service)
+            if not profile:
+                continue
+            radius = max(1, int(profile.get("search_radius", 6) or 6))
+            if distance > radius:
+                continue
+            if not _chunk_has_transit_service_node(sim, origin_chunk, service):
+                continue
+            if not _chunk_has_transit_service_node(sim, target_chunk, service):
+                continue
+            connected.append(service)
+        return tuple(connected)
+
+    return cached_derived_fact(
+        sim,
+        "transit.chunk_connections",
+        (origin_chunk, target_chunk, requested),
+        build,
+        domains=("transit_nodes",),
+        max_entries=8_192,
+    )
 
 
 def _chunk_data_has_transit_node(chunk, node_archetypes, profile):

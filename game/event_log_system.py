@@ -4205,11 +4205,16 @@ class EventLogSystem(System):
         if not (self._player_can_perceive_entity(npc_eid) or self._player_can_perceive_event_position(event)):
             return
         success = bool(event.data.get("success"))
-        reason = str(event.data.get("reason", "") or "").strip().replace("_", " ")
+        reason_key = str(event.data.get("reason", "") or "").strip().lower()
+        reason = reason_key.replace("_", " ")
         method_label = str(event.data.get("plan_method_label", "") or "").strip()
         plan_stage = str(event.data.get("plan_stage", "") or "").strip().lower()
         npc_name = self._npc_label(npc_eid)
-        if success:
+        if reason_key == "cased_target":
+            text = f"{npc_name} seems to finish sizing up the target and moves on."
+        elif reason_key == "casing_lost_contact":
+            text = f"{npc_name} gives up trying to get a clean look at the target."
+        elif success:
             if method_label:
                 text = f"{npc_name} pulls off the {method_label} and starts clearing out."
             else:
@@ -4224,7 +4229,7 @@ class EventLogSystem(System):
         self._log(
             text,
             channel="alerts",
-            priority="high" if success else "normal",
+            priority="high" if success and reason_key != "cased_target" else "normal",
             dedupe_window=8,
             dedupe_key=f"npc_crime_resolved:{npc_eid}:{str(event.data.get('plan_key', '') or '')}:{int(success)}",
         )

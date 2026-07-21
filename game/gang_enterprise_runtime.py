@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import random
 
+from engine.derived_facts import mark_derived_fact_changed
 from engine.events import Event
 from engine.systems import System
 from game.appearance_loadout import apply_tattoo_service, appearance_loadout_for
@@ -457,6 +458,7 @@ def apply_gang_house_game_to_property(sim, gang_org_eid, prop, *, exposure="fron
         normalized_services.append(game_id)
     metadata["site_services"] = normalized_services
     metadata["site_services_extend_defaults"] = True
+    mark_derived_fact_changed(sim, "transit_nodes")
     metadata["gang_house_game"] = {
         "organization_eid": int(gang_org_eid),
         "favored_game": game_id,

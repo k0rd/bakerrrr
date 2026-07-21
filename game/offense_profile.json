@@ -3,7 +3,7 @@
     "schema_version": 1
   },
   "action_base": {
-    "move": 2,
+    "move": 0,
     "floor_change": 3,
     "wait": 0,
     "interact": 14,

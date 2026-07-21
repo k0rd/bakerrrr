@@ -100,6 +100,8 @@ CORE_ITEM_BASE_VALUES = {
     "black_market_stim": 44,
     "shiv_knife": 72,
     "crowbar_club": 84,
+    "halligan_bar": 112,
+    "sledgehammer": 104,
     "telescopic_baton": 92,
     "trail_machete": 88,
     "fire_axe": 98,

@@ -1,4 +1,4 @@
-from engine.derived_facts import cached_derived_fact
+from engine.derived_facts import cached_derived_fact, derived_fact_revision
 from game.property_access import (
     DEFAULT_START_HOUR,
     DEFAULT_TICKS_PER_HOUR,
@@ -185,6 +185,13 @@ def _int_or_default(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _float_or_default(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _default_light_profile_for_property(prop, default_profile="storefront_warm"):
@@ -893,6 +900,37 @@ def _local_light_sources(sim, clock=None):
     return sources
 
 
+def _local_light_sources_near(sim, x, y, z, *, clock=None):
+    """Return only sources whose exact radius covers the sampled cell."""
+
+    sources = _local_light_sources(sim, clock=clock)
+    state = lighting_state(sim)
+    source_key = tuple(state.get("source_cache_key", ()))
+    if tuple(state.get("source_spatial_cache_key", ())) != source_key:
+        spatial = {}
+        for source in sources:
+            try:
+                sx = int(source.get("x"))
+                sy = int(source.get("y"))
+                sz = int(source.get("z", 0))
+                radius = max(1, int(source.get("radius", 0)))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            for dy in range(-radius, radius + 1):
+                remaining = radius - abs(dy)
+                for dx in range(-remaining, remaining + 1):
+                    spatial.setdefault((sx + dx, sy + dy, sz), []).append(source)
+        state["local_light_source_spatial"] = {
+            key: tuple(rows)
+            for key, rows in spatial.items()
+        }
+        state["source_spatial_cache_key"] = source_key
+    spatial = state.get("local_light_source_spatial", {})
+    if not isinstance(spatial, dict):
+        return ()
+    return tuple(spatial.get((int(x), int(y), int(z)), ()) or ())
+
+
 def _structure_building_id(sim, x, y, z=0):
     structure = _structure_at(sim, x, y, z)
     if not isinstance(structure, dict):
@@ -977,6 +1015,23 @@ def _world_event_grid_light_mult(sim, x, y):
     return max(0.0, min(1.0, mult))
 
 
+def _world_grid_light_event_key(sim):
+    traits = getattr(sim, "world_traits", None)
+    state = traits.get("world_events") if isinstance(traits, dict) else None
+    active = state.get("active") if isinstance(state, dict) else None
+    rows = []
+    for event in tuple(active or ()):
+        if not isinstance(event, dict):
+            continue
+        rows.append((
+            str(event.get("key", "") or "").strip().lower(),
+            _int_or_default(event.get("cx"), -9999),
+            _int_or_default(event.get("cy"), -9999),
+            round(_float_or_default(event.get("fixture_light_mult"), 1.0), 4),
+        ))
+    return tuple(sorted(rows))
+
+
 def _local_light_contributions(sim, x, y, z=0, inside=False, aperture_bleed=0.0, clock=None):
     if clock is None:
         clock = clock_snapshot(sim)
@@ -991,7 +1046,7 @@ def _local_light_contributions(sim, x, y, z=0, inside=False, aperture_bleed=0.0,
     contributions = []
     sample_building_id = _structure_building_id(sim, x, y, z) if inside else None
     outside_bleed = _clamp_unit(aperture_bleed, default=0.0)
-    for source in _local_light_sources(sim, clock=clock):
+    for source in _local_light_sources_near(sim, x, y, z, clock=clock):
         try:
             sx = int(source.get("x"))
             sy = int(source.get("y"))
@@ -1122,6 +1177,37 @@ def _local_light_level(sim, x, y, z=0, inside=False, aperture_bleed=0.0, clock=N
 def ambient_snapshot(sim, x, y, z=0, clock=None):
     if clock is None:
         clock = clock_snapshot(sim)
+    try:
+        x, y, z = int(x), int(y), int(z)
+    except (TypeError, ValueError):
+        x, y, z = 0, 0, 0
+
+    # Rendering and perception frequently ask the same exact lighting question
+    # several times while simulation time is paused.  All dependencies below
+    # are canonical revisions or compact state signatures; the cached answer is
+    # discarded immediately when fire, fixtures, topology, or time changes.
+    _local_light_sources(sim, clock=clock)
+    state = lighting_state(sim)
+    tilemap = getattr(sim, "tilemap", None)
+    cache_signature = (
+        int(clock.get("tick", getattr(sim, "tick", 0)) or 0),
+        tuple(state.get("source_cache_key", ())),
+        int(getattr(tilemap, "visibility_revision", 0) or 0),
+        derived_fact_revision(sim, "transit_nodes"),
+        _world_grid_light_event_key(sim),
+    )
+    if tuple(state.get("ambient_cache_signature", ())) != cache_signature:
+        state["ambient_cache_signature"] = cache_signature
+        state["ambient_cache"] = {}
+    ambient_cache = state.get("ambient_cache")
+    if not isinstance(ambient_cache, dict):
+        ambient_cache = {}
+        state["ambient_cache"] = ambient_cache
+    cache_key = (x, y, z)
+    cached = ambient_cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
     outdoor_ambient = _clamp_unit(
         clock.get("outdoor_ambient", clock.get("outside_ambient", 1.0)),
         default=1.0,
@@ -1132,7 +1218,7 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
         local_light = _combine_local_light(contributions)
         light_tint, light_sources = _light_tint_from_contributions(contributions)
         ambient = _clamp_unit(outdoor_ambient + ((1.0 - outdoor_ambient) * local_light), default=outdoor_ambient)
-        return {
+        result = {
             "phase": str(clock.get("phase", "day")),
             "ambient": ambient,
             "outside_ambient": outdoor_ambient,
@@ -1142,6 +1228,8 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
             "light_tint": light_tint,
             "light_sources": light_sources,
         }
+        ambient_cache[cache_key] = result
+        return result
 
     interior_base = max(0.12, min(0.48, outdoor_ambient * 0.58))
     bleed = _neighbor_aperture_bonus(sim, x, y, z)
@@ -1150,7 +1238,7 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
     local_light = _combine_local_light(contributions)
     light_tint, light_sources = _light_tint_from_contributions(contributions)
     interior = _clamp_unit(interior + ((1.0 - interior) * local_light), default=interior_base)
-    return {
+    result = {
         "phase": str(clock.get("phase", "day")),
         "ambient": interior,
         "outside_ambient": outdoor_ambient,
@@ -1160,6 +1248,8 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
         "light_tint": light_tint,
         "light_sources": light_sources,
     }
+    ambient_cache[cache_key] = result
+    return result
 
 
 def _visibility_ambient_from_sample(sample):
@@ -1207,6 +1297,10 @@ def lighting_state(sim):
         "player_glare": {},
         "source_cache_key": (),
         "local_light_sources": [],
+        "source_spatial_cache_key": (),
+        "local_light_source_spatial": {},
+        "ambient_cache_signature": (),
+        "ambient_cache": {},
         "source_count": 0,
     }
     world_traits["lighting"] = state

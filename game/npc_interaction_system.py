@@ -23,6 +23,7 @@ from game.components import (
     JusticeProfile,
     MovementThrottle,
     NPCMemory,
+    NPCEmergencyState,
     NPCNeeds,
     NPCRoutine,
     NPCSettlement,
@@ -51,6 +52,12 @@ from game.components import (
     WeaponUseProfile,
 )
 from game.quick_travel_ramps import map_mode_active
+from game.purposeful_observation import (
+    finish_purposeful_observation,
+    is_purposeful_observation,
+    observation_watch_position,
+    refresh_purposeful_observation,
+)
 from game.service_runtime import (
     CASINO_GAME_SERVICE_IDS,
     TRANSIT_SERVICE_IDS,
@@ -14538,7 +14545,7 @@ class NPCInteractionSystem(System):
             if topic_id == "backup_follow":
                 self._set_contractor_order(contractor, "passive")
                 if peaceful_orders_only:
-                    self._assign_peaceful_surrender_follow(npc_eid, self.player_eid, player_pos)
+                    self._assign_peaceful_surrender_follow(npc_eid, self.player_eid, player_pos, contractor)
                 else:
                     self._assign_contractor_backup(npc_eid, self.player_eid, player_pos, contractor)
                 return {"npc_lines": [self._say("backup_follow", context, topic_id=topic_id, count=ask_count)]}
@@ -15496,60 +15503,151 @@ class NPCInteractionSystem(System):
             )
         return bond
 
-    def _contractor_follow_target(self, npc_eid, npc_pos, ally_pos):
-        if not npc_pos or not ally_pos:
+    def _contractor_follow_purpose(self, rec):
+        job = str((rec or {}).get("job", "backup") or "backup").strip().lower()
+        if job == "party":
+            return "social_companion"
+        if job == "surrendered":
+            return "peaceful_follow"
+        return "hired_backup"
+
+    def _contractor_follow_interrupted(self, npc_eid, ai):
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        has_target = getattr(ai, "target", None) is not None or getattr(ai, "target_eid", None) is not None
+        if not has_target:
+            return False
+        if state in {
+            "reporting_incident",
+            "helping_victim",
+            "warning",
+            "ejecting_target",
+            "leaving_property",
+            "seeking_safety",
+        }:
+            return True
+        if state in {"protecting", "chasing"}:
+            emergency = self.sim.ecs.get(NPCEmergencyState).get(npc_eid)
+            return bool(emergency and getattr(emergency, "active", False))
+        return False
+
+    def _contractor_can_see(self, observer_pos, subject_pos):
+        if observer_pos is None or subject_pos is None or int(observer_pos.z) != int(subject_pos.z):
+            return False
+        try:
+            return bool(_has_line_of_sight(
+                self.sim,
+                int(observer_pos.x),
+                int(observer_pos.y),
+                int(observer_pos.z),
+                int(subject_pos.x),
+                int(subject_pos.y),
+                int(subject_pos.z),
+            ))
+        except Exception:
+            return _manhattan(observer_pos.x, observer_pos.y, subject_pos.x, subject_pos.y) <= 6
+
+    def _contractor_follow_target(self, npc_eid, npc_pos, ally_eid, ally_pos, rec):
+        if not npc_pos or not ally_pos or not isinstance(rec, dict):
             return None
+        purpose = self._contractor_follow_purpose(rec)
+        context = rec.get("follow_observation")
+        context_matches = is_purposeful_observation(context, purpose=purpose)
+        current = (int(npc_pos.x), int(npc_pos.y), int(npc_pos.z))
         if int(npc_pos.z) != int(ally_pos.z):
-            return (int(npc_pos.x), int(npc_pos.y), int(npc_pos.z))
-        if _manhattan(npc_pos.x, npc_pos.y, ally_pos.x, ally_pos.y) <= 1:
-            return (int(npc_pos.x), int(npc_pos.y), int(npc_pos.z))
+            if context_matches and context.get("active") is not False:
+                rec["follow_observation"] = finish_purposeful_observation(
+                    context,
+                    current_tick=self.sim.tick,
+                    reason="floor_changed",
+                )
+            return current
 
-        candidates = []
-        offsets = (
-            (0, 1), (1, 0), (0, -1), (-1, 0),
-            (1, 1), (1, -1), (-1, 1), (-1, -1),
-            (0, 2), (2, 0), (0, -2), (-2, 0),
-        )
-        for dx, dy in offsets:
-            tx = int(ally_pos.x) + int(dx)
-            ty = int(ally_pos.y) + int(dy)
-            tz = int(ally_pos.z)
-            if not self.sim.tilemap.is_walkable(tx, ty, tz):
-                continue
-            blocker = _first_blocking_entity_at(self.sim, tx, ty, tz, exclude_eid=npc_eid)
-            if blocker is not None:
-                continue
-            dist_to_ally = _manhattan(tx, ty, ally_pos.x, ally_pos.y)
-            dist_to_npc = _manhattan(tx, ty, npc_pos.x, npc_pos.y)
-            candidates.append((dist_to_ally, dist_to_npc, tx, ty, tz))
-        if candidates:
-            candidates.sort()
-            best = candidates[0]
-            return (best[2], best[3], best[4])
-        return (int(npc_pos.x), int(npc_pos.y), int(npc_pos.z))
+        if self._contractor_can_see(npc_pos, ally_pos):
+            follow_target = observation_watch_position(
+                self.sim,
+                npc_eid,
+                ally_pos,
+                purpose=purpose,
+            )
+            if follow_target is None:
+                follow_target = current
+            context = refresh_purposeful_observation(
+                self.sim,
+                npc_eid,
+                ally_eid,
+                purpose=purpose,
+                subject_pos=ally_pos,
+                watch_position=follow_target,
+                existing=context if context_matches and context.get("active") is not False else None,
+                include_subject_account=False,
+            )
+            rec["follow_observation"] = context
+            rec["ally_known_position"] = (int(ally_pos.x), int(ally_pos.y), int(ally_pos.z))
+            rec["ally_known_tick"] = int(self.sim.tick)
+            return tuple(context.get("watch_position", current))
 
-    def _contractor_focus_threat(self, rec, ally_pos):
+        if context_matches:
+            context = dict(context)
+            lost_since = context.get("lost_contact_since_tick")
+            try:
+                lost_since = int(lost_since) if lost_since is not None else None
+            except (TypeError, ValueError):
+                lost_since = None
+            if lost_since is None:
+                lost_since = int(self.sim.tick)
+                context["lost_contact_since_tick"] = lost_since
+            context["updated_tick"] = int(self.sim.tick)
+            grace = max(0, int(context.get("lost_contact_grace_ticks", 0) or 0))
+            if context.get("active") is not False and int(self.sim.tick) - lost_since > grace:
+                context = finish_purposeful_observation(
+                    context,
+                    current_tick=self.sim.tick,
+                    reason="lost_ally_contact",
+                )
+            rec["follow_observation"] = context
+            last_seen = context.get("last_seen_position")
+            if isinstance(last_seen, (tuple, list)) and len(last_seen) >= 3:
+                target = (int(last_seen[0]), int(last_seen[1]), int(last_seen[2]))
+                blocker = _first_blocking_entity_at(self.sim, *target, exclude_eid=npc_eid)
+                return current if blocker is not None else target
+
+        known = rec.get("ally_known_position")
+        if isinstance(known, (tuple, list)) and len(known) >= 3:
+            target = (int(known[0]), int(known[1]), int(known[2]))
+            blocker = _first_blocking_entity_at(self.sim, *target, exclude_eid=npc_eid)
+            return current if blocker is not None else target
+        return current
+
+    def _contractor_focus_threat(self, npc_pos, rec, ally_pos):
         threat_eid = rec.get("focus_threat_eid")
         if threat_eid is None or int(rec.get("focus_threat_until", 0) or 0) <= int(self.sim.tick):
             rec.pop("focus_threat_eid", None)
             rec.pop("focus_threat_until", None)
             return None
         threat_pos = self.sim.ecs.get(Position).get(threat_eid)
-        if not threat_pos or not ally_pos or int(threat_pos.z) != int(ally_pos.z):
+        if not threat_pos or not ally_pos or not npc_pos or int(threat_pos.z) != int(ally_pos.z):
             return None
         if _entity_is_downed(self.sim, threat_eid):
+            return None
+        if not self._contractor_can_see(npc_pos, threat_pos):
             return None
         return threat_eid
 
     def _contractor_backup_threat(self, npc_eid, npc_pos, ally_eid, ally_pos, rec, *, protect_ally=True):
-        focused = self._contractor_focus_threat(rec, ally_pos) if protect_ally else None
+        focused = self._contractor_focus_threat(npc_pos, rec, ally_pos) if protect_ally else None
         if focused is not None:
             return focused
 
         ais = self.sim.ecs.get(AI)
         positions = self.sim.ecs.get(Position)
+        candidate_eids = set(self.sim.entity_ids_in_radius(npc_pos.x, npc_pos.y, npc_pos.z, 12))
+        if ally_pos is not None and int(ally_pos.z) == int(npc_pos.z):
+            candidate_eids.update(self.sim.entity_ids_in_radius(ally_pos.x, ally_pos.y, ally_pos.z, 12))
         best = None
-        for other_eid, other_ai in ais.items():
+        for other_eid in candidate_eids:
+            other_ai = ais.get(other_eid)
+            if other_ai is None:
+                continue
             if other_eid in {npc_eid, ally_eid}:
                 continue
             if str(getattr(other_ai, "state", "") or "").strip().lower() not in THREAT_STATES:
@@ -15564,6 +15662,8 @@ class NPCInteractionSystem(System):
             if not other_pos or not ally_pos or int(other_pos.z) != int(ally_pos.z):
                 continue
             if _entity_is_downed(self.sim, other_eid):
+                continue
+            if not self._contractor_can_see(npc_pos, other_pos):
                 continue
             player_dist = _manhattan(other_pos.x, other_pos.y, ally_pos.x, ally_pos.y)
             npc_dist = _manhattan(other_pos.x, other_pos.y, npc_pos.x, npc_pos.y)
@@ -15643,9 +15743,9 @@ class NPCInteractionSystem(System):
                             rec["order_wait_started"] = tick
                         elif tick - wait_started >= int(rec.get("order_wait_ticks", self.CONTRACTOR_RETURN_WAIT_TICKS) or self.CONTRACTOR_RETURN_WAIT_TICKS):
                             self._set_contractor_order(rec, "passive")
-                            self._assign_peaceful_surrender_follow(npc_eid, ally_eid, ally_pos)
+                            self._assign_peaceful_surrender_follow(npc_eid, ally_eid, ally_pos, rec)
                 else:
-                    self._assign_peaceful_surrender_follow(npc_eid, ally_eid, ally_pos)
+                    self._assign_peaceful_surrender_follow(npc_eid, ally_eid, ally_pos, rec)
             elif job in {"backup", "party"}:
                 order = self._contractor_order_mode(rec)
                 if order == "distraction":
@@ -15690,6 +15790,8 @@ class NPCInteractionSystem(System):
         if job == "bodyguard":
             return
         if job in {"backup", "party"}:
+            if isinstance(rec, dict) and ally_pos is not None:
+                rec.setdefault("ally_known_position", (int(ally_pos.x), int(ally_pos.y), int(ally_pos.z)))
             self._assign_contractor_backup(npc_eid, ally_eid, ally_pos, rec if isinstance(rec, dict) else {})
         else:
             self._assign_contractor_distraction(npc_eid, ally_pos)
@@ -15708,7 +15810,7 @@ class NPCInteractionSystem(System):
             if self._contractor_order_mode(rec) != "passive":
                 continue
             if job == "surrendered":
-                self._assign_peaceful_surrender_follow(npc_eid, self.player_eid, player_pos)
+                self._assign_peaceful_surrender_follow(npc_eid, self.player_eid, player_pos, rec)
             else:
                 self._assign_contractor_backup(npc_eid, self.player_eid, player_pos, rec)
 
@@ -15722,10 +15824,14 @@ class NPCInteractionSystem(System):
         if not isinstance(contractors, dict) or not contractors:
             return
         player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        source_pos = self.sim.ecs.get(Position).get(source_eid)
         for npc_eid, rec in list(contractors.items()):
             if str(rec.get("job", "") or "").strip().lower() not in {"backup", "party"}:
                 continue
             if self._contractor_order_mode(rec) != "passive":
+                continue
+            npc_pos = self.sim.ecs.get(Position).get(npc_eid)
+            if npc_pos is None or source_pos is None or not self._contractor_can_see(npc_pos, source_pos):
                 continue
             rec["focus_threat_eid"] = source_eid
             rec["focus_threat_until"] = int(self.sim.tick) + 45
@@ -15766,7 +15872,7 @@ class NPCInteractionSystem(System):
             target_eid=None,
         )
 
-    def _assign_peaceful_surrender_follow(self, npc_eid, ally_eid, ally_pos):
+    def _assign_peaceful_surrender_follow(self, npc_eid, ally_eid, ally_pos, rec):
         ai = self.sim.ecs.get(AI).get(npc_eid)
         will = self.sim.ecs.get(NPCWill).get(npc_eid)
         npc_pos = self.sim.ecs.get(Position).get(npc_eid)
@@ -15776,7 +15882,7 @@ class NPCInteractionSystem(System):
             _apply_downed_actor_state(self.sim, npc_eid, tick=self.sim.tick)
             return
 
-        follow_target = self._contractor_follow_target(npc_eid, npc_pos, ally_pos)
+        follow_target = self._contractor_follow_target(npc_eid, npc_pos, ally_eid, ally_pos, rec)
         if follow_target is None:
             return
         _sync_ai_intent(
@@ -15942,7 +16048,10 @@ class NPCInteractionSystem(System):
                 ))
             return
 
-        follow_target = self._contractor_follow_target(npc_eid, npc_pos, ally_pos)
+        if self._contractor_follow_interrupted(npc_eid, ai):
+            return
+
+        follow_target = self._contractor_follow_target(npc_eid, npc_pos, ally_eid, ally_pos, rec)
         if follow_target is None:
             return
         _sync_ai_intent(

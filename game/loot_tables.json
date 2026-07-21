@@ -3718,6 +3718,14 @@
       "weight": 16
     },
     {
+      "item_id": "halligan_bar",
+      "weight": 6
+    },
+    {
+      "item_id": "sledgehammer",
+      "weight": 8
+    },
+    {
       "item_id": "signal_jammer",
       "weight": 8
     },

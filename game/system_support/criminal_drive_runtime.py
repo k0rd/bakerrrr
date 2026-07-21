@@ -57,6 +57,8 @@ TARGET_EXCLUDED_ARCHETYPES = {
 }
 CRIME_TARGET_RADIUS = 14
 AFFILIATION_RADIUS = 18
+CASING_KNOWLEDGE_TTL = 180
+CASING_KNOWLEDGE_LIMIT = 16
 _ACTIVE_PLAN_UNSET = object()
 
 
@@ -109,6 +111,65 @@ def criminal_drive_state(sim, actor_eid, *, create=False):
     return state
 
 
+def criminal_casing_knowledge(state, property_id, *, current_tick, max_age=CASING_KNOWLEDGE_TTL):
+    if state is None:
+        return None
+    property_key = _text(property_id)
+    rows = getattr(state, "cased_property_knowledge", None)
+    if not property_key or not isinstance(rows, dict):
+        return None
+    row = rows.get(property_key)
+    if not isinstance(row, dict):
+        return None
+    cased_tick = _safe_int(row.get("cased_tick"), default=-10_000)
+    if _safe_int(current_tick, default=0) - cased_tick > max(1, _safe_int(max_age, default=CASING_KNOWLEDGE_TTL)):
+        return None
+    return dict(row)
+
+
+def record_criminal_casing_knowledge(
+    state,
+    property_id,
+    *,
+    current_tick,
+    observation_ticks=0,
+    aperture_position=None,
+):
+    if state is None:
+        return None
+    property_key = _text(property_id)
+    if not property_key:
+        return None
+    rows = getattr(state, "cased_property_knowledge", None)
+    if not isinstance(rows, dict):
+        rows = {}
+        state.cased_property_knowledge = rows
+    tick = _safe_int(current_tick, default=0)
+    aperture = None
+    if isinstance(aperture_position, (tuple, list)) and len(aperture_position) >= 3:
+        try:
+            aperture = (int(aperture_position[0]), int(aperture_position[1]), int(aperture_position[2]))
+        except (TypeError, ValueError):
+            aperture = None
+    rows[property_key] = {
+        "property_id": property_key,
+        "cased_tick": tick,
+        "observation_ticks": max(0, _safe_int(observation_ticks, default=0)),
+        "aperture_position": aperture,
+    }
+    fresh_rows = sorted(
+        (
+            (key, row)
+            for key, row in rows.items()
+            if isinstance(row, dict)
+            and tick - _safe_int(row.get("cased_tick"), default=-10_000) <= CASING_KNOWLEDGE_TTL
+        ),
+        key=lambda entry: (-_safe_int(entry[1].get("cased_tick"), default=0), entry[0]),
+    )[:CASING_KNOWLEDGE_LIMIT]
+    state.cased_property_knowledge = {key: dict(row) for key, row in fresh_rows}
+    return dict(state.cased_property_knowledge[property_key])
+
+
 def clear_criminal_drive_activity(state):
     if state is None:
         return None
@@ -125,6 +186,7 @@ def clear_criminal_drive_activity(state):
     state.current_activity_kind = None
     state.current_activity_stage = None
     state.current_activity_summary = None
+    state.current_target_was_cased = False
     return state
 
 
@@ -1168,7 +1230,13 @@ def update_criminal_drive_state(sim, actor_eid, *, current_tick=None, active_pla
     elif isinstance(opportunistic_target, dict):
         state.current_target_property_id = _text(opportunistic_target.get("property_id")) or None
         state.current_target_ground_item_id = _text(opportunistic_target.get("target_ground_item_id")) or None
-        if float(confidence) < 0.46:
+        casing_knowledge = criminal_casing_knowledge(
+            state,
+            state.current_target_property_id,
+            current_tick=current_tick,
+        )
+        state.current_target_was_cased = casing_knowledge is not None
+        if float(confidence) < 0.46 and not state.current_target_was_cased:
             state.current_target_x = _safe_int(opportunistic_target.get("casing_x"), default=opportunistic_target.get("x", 0))
             state.current_target_y = _safe_int(opportunistic_target.get("casing_y"), default=opportunistic_target.get("y", 0))
             state.current_target_z = _safe_int(opportunistic_target.get("casing_z"), default=opportunistic_target.get("z", 0))

@@ -24,6 +24,7 @@ from game.property_keys import property_lock_state
 from game.property_runtime import (
     property_aperture_at as _property_aperture_at,
     property_covering as _property_covering,
+    property_enclosing_structure as _property_enclosing_structure,
 )
 from game.social_boundary_runtime import active_ejection_state, ejection_key
 from game.skills import actor_skill as _actor_skill
@@ -33,6 +34,7 @@ from game.system_support.building_repair_runtime import record_building_damage a
 from game.system_support.structure_damage_runtime import (
     STRUCTURE_MAX_HP,
     apply_structural_damage as _apply_structural_damage,
+    structural_surface_kind as _structural_surface_kind,
     structural_surface_label as _structural_surface_label,
 )
 from game.system_support.access_checks import (
@@ -410,7 +412,6 @@ class PropertyIngressRuntime:
         sneak_active = bool(modes and modes.sneak)
         ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
         aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
-        side_entry_terms = self.action_system._access_tool_terms_for(eid, prop, context="side_entry")
         door_like_ingress = (
             ingress_kind == "ordinary_entry"
             or (ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind))
@@ -420,6 +421,8 @@ class PropertyIngressRuntime:
             return "deep_breach", 10, 12
         if ingress_kind == "boundary_breach":
             return "forced_breach", 8, 10
+
+        side_entry_terms = self.action_system._access_tool_terms_for(eid, prop, context="side_entry")
 
         if ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
             if side_entry_terms.get("enabled") and sneak_active:
@@ -473,10 +476,11 @@ class PropertyIngressRuntime:
         if profile["automatic"]:
             return profile
 
-        tool_terms = self.action_system._access_tool_terms_for(eid, prop, context="side_entry")
+        ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
+        tool_context = "wall_breach" if ingress_kind in {"boundary_breach", "deep_breach"} else "side_entry"
+        tool_terms = self.action_system._access_tool_terms_for(eid, prop, context=tool_context)
         score = self.action_system._access_override_score(eid, tool_terms=tool_terms)
         required = self.action_system._lock_override_required(prop, tool_terms=tool_terms)
-        ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
         aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
         breach_severity = max(0.0, float(getattr(ingress, "breach_severity", 0.0) or 0.0))
         athletics = _actor_skill(self.sim, eid, "athletics")
@@ -542,11 +546,24 @@ class PropertyIngressRuntime:
             return f"{base} {hint}".strip()
         return base
 
-    def ingress_structure_damage_amount(self, ingress, ingress_method, *, success=False, fumbled=False):
+    def ingress_structure_damage_amount(
+        self,
+        ingress,
+        ingress_method,
+        *,
+        success=False,
+        fumbled=False,
+        tool_terms=None,
+    ):
         method = str(ingress_method or "").strip().lower()
         ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
         aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
         if ingress_kind in {"boundary_breach", "deep_breach"}:
+            if bool((tool_terms or {}).get("improvised_wall_tool")):
+                wall_damage = max(1, _safe_int((tool_terms or {}).get("wall_damage"), 6))
+                if success:
+                    return wall_damage
+                return max(1, wall_damage // (3 if fumbled else 2))
             if success:
                 return STRUCTURE_MAX_HP["wall"] + (14 if ingress_kind == "deep_breach" else 8)
             return 5 if fumbled else 12
@@ -562,13 +579,23 @@ class PropertyIngressRuntime:
             return 3 if fumbled else 6
         return 0
 
-    def apply_ingress_structure_damage(self, eid, candidate, ingress_method, *, success=False, fumbled=False):
+    def apply_ingress_structure_damage(
+        self,
+        eid,
+        candidate,
+        ingress_method,
+        *,
+        success=False,
+        fumbled=False,
+        tool_terms=None,
+    ):
         ingress = candidate.get("ingress")
         amount = self.ingress_structure_damage_amount(
             ingress,
             ingress_method,
             success=success,
             fumbled=fumbled,
+            tool_terms=tool_terms,
         )
         if amount <= 0:
             return None
@@ -682,7 +709,13 @@ class PropertyIngressRuntime:
         return True
 
     def internal_ingress_candidate(self, pos, prop, target_x, target_y, target_z, *, tile=None, aperture=None):
-        origin_prop = _property_covering(self.sim, pos.x, pos.y, pos.z)
+        origin_prop = _property_enclosing_structure(
+            self.sim,
+            pos.x,
+            pos.y,
+            pos.z,
+            prop=_property_covering(self.sim, pos.x, pos.y, pos.z),
+        )
         if not origin_prop or origin_prop.get("id") != prop.get("id"):
             return None
 
@@ -708,15 +741,25 @@ class PropertyIngressRuntime:
 
         if tile is None:
             tile = self.sim.tilemap.tile_at(target_x, target_y, target_z)
-        if tile and not tile.walkable and _property_boundary_tile(prop, target_x, target_y, target_z):
+        surface_kind = _structural_surface_kind(
+            self.sim,
+            prop,
+            target_x,
+            target_y,
+            target_z,
+            tile=tile,
+            aperture=aperture,
+        )
+        if tile and not tile.walkable and surface_kind == "wall":
+            boundary = _property_boundary_tile(prop, target_x, target_y, target_z)
             return PropertyIngressResult(
                 property_id=prop.get("id") if isinstance(prop, dict) else None,
                 from_inside=True,
                 to_inside=True,
                 entered_bounds=False,
-                ingress_kind="boundary_breach",
+                ingress_kind="boundary_breach" if boundary else "deep_breach",
                 aperture_kind="",
-                breach_severity=0.58,
+                breach_severity=0.58 if boundary else 0.82,
             )
         return None
 
@@ -727,7 +770,14 @@ class PropertyIngressRuntime:
             ty = pos.y + dy
             tz = pos.z
 
-            prop = _property_covering(self.sim, tx, ty, tz)
+            covered_prop = _property_covering(self.sim, tx, ty, tz)
+            prop = _property_enclosing_structure(
+                self.sim,
+                tx,
+                ty,
+                tz,
+                prop=covered_prop,
+            )
             if not prop or str(prop.get("kind", "") or "").strip().lower() != "building":
                 continue
 
@@ -900,6 +950,13 @@ class PropertyIngressRuntime:
     def handle_ingress_action(self, eid, pos, ingress_mode):
         cover = self.action_system._cover_state_for(eid)
         had_cover = bool(cover and cover.active)
+        if str(ingress_mode or "").strip().lower() == "forced_breach" and int(pos.z) > 0:
+            _log_player_feedback(
+                self.sim,
+                "You cannot breach structural walls above the ground floor.",
+                kind="movement",
+            )
+            return
         candidates = self.adjacent_ingress_candidates(pos, ingress_mode=ingress_mode)
         if not candidates:
             _log_player_feedback(
@@ -912,6 +969,17 @@ class PropertyIngressRuntime:
         candidate = candidates[0]
         prop = candidate["prop"]
         ingress = candidate["ingress"]
+        ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
+        wall_breach = ingress_kind in {"boundary_breach", "deep_breach"}
+        if wall_breach:
+            wall_tool_terms = self.action_system._access_tool_terms_for(eid, prop, context="wall_breach")
+            if not wall_tool_terms.get("enabled"):
+                _log_player_feedback(
+                    self.sim,
+                    "You need a sturdy wall-breaching tool, such as a prybar, fire axe, or sledgehammer.",
+                    kind="movement",
+                )
+                return
         claim_reason = self.authorized_side_entry_reason(eid, candidate)
         ingress_profile = self.ingress_attempt_profile(eid, prop, ingress, claim_reason)
         ingress_method = ingress_profile["method"]
@@ -929,6 +997,7 @@ class PropertyIngressRuntime:
                     ingress_method,
                     success=False,
                     fumbled=bool(attempt.get("fumbled")),
+                    tool_terms=ingress_profile.get("tool_terms") or {},
                 )
                 self.emit_failed_ingress_attempt(
                     eid,
@@ -949,6 +1018,7 @@ class PropertyIngressRuntime:
                     context=ingress_profile.get("context") or "side_entry",
                     channel=ingress_profile.get("channel") or "ingress_attempt",
                     fumbled=bool(attempt.get("fumbled")),
+                    force_wear=wall_breach,
                 )
                 _log_player_feedback(
                     self.sim,
@@ -976,7 +1046,39 @@ class PropertyIngressRuntime:
             ingress_method,
             success=not ingress_profile["automatic"],
             fumbled=False,
+            tool_terms=ingress_profile.get("tool_terms") or {},
         )
+        if wall_breach:
+            attempt = ingress_profile.get("attempt") or {}
+            _maybe_damage_access_tool(
+                self.sim,
+                eid,
+                ingress_profile.get("tool_terms") or {},
+                prop=prop,
+                score=attempt.get("score", 0.0),
+                required=attempt.get("required", 0.0),
+                context=ingress_profile.get("context") or "wall_breach",
+                channel=ingress_profile.get("channel") or "wall_breach",
+                fumbled=False,
+                force_wear=True,
+            )
+            if damage_result and not damage_result.get("broken"):
+                self.emit_failed_ingress_attempt(
+                    eid,
+                    candidate,
+                    prop,
+                    ingress,
+                    ingress_method,
+                    severity_bonus=severity_bonus,
+                    offense_bonus=offense_bonus,
+                )
+                damage_text = self.structural_damage_feedback(damage_result)
+                _log_player_feedback(
+                    self.sim,
+                    f"Your blow lands, but the wall holds. {damage_text}".strip(),
+                    kind="movement",
+                )
+                return
         self.open_ingress_tile(
             candidate,
             hostile=bool(hostile or ingress_method == "forced_side_entry"),

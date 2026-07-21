@@ -4,6 +4,7 @@ import random
 
 from game.components import CoreStats, InsightStats, Inventory, SkillProfile, StatusEffects
 from game.items import ITEM_CATALOG, item_instance_condition
+from game.weapons import WEAPON_CATALOG
 
 
 SKILL_DEFS = {
@@ -740,6 +741,8 @@ def _tool_terms_template(context_key):
         "enabled_item_ids": (),
         "selected_item_id": "",
         "selected_instance_id": "",
+        "improvised_wall_tool": False,
+        "wall_damage": 0,
     }
 
 
@@ -789,10 +792,35 @@ def actor_tool_terms(sim, eid, context):
             candidate["perception_bonus"] += _num(profile.get("perception_bonus"), 0.0)
             candidate["score_bonus"] += _num(profile.get("score_bonus"), 0.0)
             candidate["requirement_delta"] += _num(profile.get("requirement_delta"), 0.0)
+            candidate["tool_wear_mult"] *= max(0.25, min(4.0, _num(profile.get("tool_wear_mult"), 1.0)))
 
             enable_contexts = tuple(profile.get("enable_contexts", ()))
             if context_key in enable_contexts or "any" in enable_contexts:
                 candidate["enabled"] = True
+
+        if context_key == "wall_breach" and not candidate["enabled"]:
+            weapon_id = str(item_def.get("weapon_id", "") or "").strip().lower()
+            weapon = WEAPON_CATALOG.get(weapon_id, {}) if weapon_id else {}
+            weapon_tags = {
+                str(tag or "").strip().lower()
+                for tag in tuple(weapon.get("tags", ()) or ())
+                if str(tag or "").strip()
+            }
+            item_tags = {
+                str(tag or "").strip().lower()
+                for tag in tuple(item_def.get("tags", ()) or ())
+                if str(tag or "").strip()
+            }
+            impact_tags = weapon_tags | item_tags
+            if "melee" in impact_tags and impact_tags.intersection({"baton", "blunt", "club", "hammer"}):
+                base_damage = max(1.0, _num(weapon.get("base_damage"), 8.0))
+                candidate["enabled"] = True
+                candidate["mechanics_bonus"] += 0.05
+                candidate["score_bonus"] += max(0.1, min(0.7, (base_damage - 8.0) * 0.08))
+                candidate["requirement_delta"] -= 0.15
+                candidate["tool_wear_mult"] *= 1.65
+                candidate["improvised_wall_tool"] = True
+                candidate["wall_damage"] = max(6, min(18, int(round(base_damage * 0.85))))
 
         condition = item_instance_condition(item_id, metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG)
         if not bool(condition.get("usable", True)):
@@ -889,6 +917,9 @@ def access_skill_practice_awards(context, *, success, fumbled=False):
         mechanics += 0.14 if success else 0.1
     elif context_key in {"schedule_controller", "biometric_controller"}:
         mechanics += 0.1 if success else 0.07
+    elif context_key == "wall_breach":
+        intrusion *= 0.45
+        mechanics += 0.3 if success else 0.2
     elif context_key in {"mechanical_lock", "side_entry"}:
         mechanics += 0.06 if success else 0.04
     elif context_key == "badge_controller":

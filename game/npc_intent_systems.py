@@ -103,6 +103,13 @@ from game.npc_emergency_runtime import (
     npc_emergency_state,
 )
 from game.place_mood_runtime import strongest_rumor_weather_anchor
+from game.purposeful_observation import (
+    advance_purposeful_anchor_observation,
+    begin_purposeful_anchor_observation,
+    finish_purposeful_observation,
+    is_purposeful_observation,
+    purposeful_observation_holds_at_target,
+)
 from game.property_access import (
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
@@ -2703,6 +2710,38 @@ class NPCWillSystem(System):
                 ids.append(int(eid))
         return tuple(sorted(set(ids)))
 
+    def _prepare_criminal_casing(self, eid, ai, target):
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            return None
+        drive = criminal_drive_state(self.sim, eid, create=False)
+        property_id = str(getattr(drive, "current_target_property_id", "") or "").strip() if drive is not None else ""
+        try:
+            context = begin_purposeful_anchor_observation(
+                self.sim,
+                eid,
+                target,
+                purpose="criminal_casing",
+                anchor_kind="property_aperture",
+                anchor_id=property_id or None,
+                existing=getattr(ai, "observation_context", None),
+            )
+        except ValueError:
+            ai.observation_context = finish_purposeful_observation(
+                getattr(ai, "observation_context", None),
+                current_tick=self.sim.tick,
+                reason="no_watch_position",
+            )
+            if drive is not None:
+                drive.cooldown_until_tick = max(
+                    int(getattr(drive, "cooldown_until_tick", 0) or 0),
+                    int(self.sim.tick) + 4,
+                )
+            return None
+        ai.observation_context = context
+        if drive is not None:
+            drive.current_activity_stage = "seeking_watch_post"
+        return tuple(context["watch_position"])
+
     def _set_intent(self, eid, ai, will, intent, score, target=None, target_eid=None):
         active_target_states = {
             "selling_scavenged": "scavenged_sale",
@@ -2720,6 +2759,12 @@ class NPCWillSystem(System):
             _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
             return
         previous = (ai.state, ai.target, ai.target_eid)
+        if previous[0] == "casing_target" and intent != "casing_target":
+            ai.observation_context = finish_purposeful_observation(
+                getattr(ai, "observation_context", None),
+                current_tick=self.sim.tick,
+                reason="preempted",
+            )
         next_state = (intent, target, target_eid)
         if previous == next_state and will.intent == intent:
             will.score = score
@@ -2817,6 +2862,16 @@ class NPCWillSystem(System):
                     organization_name = str(getattr(profile, "name", "") or "").strip()
                     organization_key = str(getattr(profile, "key", "") or "").strip()
                     organization_kind = str(getattr(profile, "kind", "") or "").strip().lower()
+            crime_event_target = target
+            watch_target = None
+            observation = getattr(ai, "observation_context", None)
+            if intent == "casing_target" and is_purposeful_observation(
+                observation,
+                purpose="criminal_casing",
+                active_only=True,
+            ):
+                crime_event_target = observation.get("anchor_position") or target
+                watch_target = observation.get("watch_position")
             self.sim.emit(Event(
                 "npc_crime_attempt_started",
                 npc_eid=eid,
@@ -2832,9 +2887,12 @@ class NPCWillSystem(System):
                 organization_kind=organization_kind or None,
                 **plan_fields,
                 summary=str(getattr(drive, "current_activity_summary", "") or "").strip() or None,
-                x=int(target[0]) if isinstance(target, (list, tuple)) and len(target) >= 1 else None,
-                y=int(target[1]) if isinstance(target, (list, tuple)) and len(target) >= 2 else None,
-                z=int(target[2]) if isinstance(target, (list, tuple)) and len(target) >= 3 else None,
+                x=int(crime_event_target[0]) if isinstance(crime_event_target, (list, tuple)) and len(crime_event_target) >= 1 else None,
+                y=int(crime_event_target[1]) if isinstance(crime_event_target, (list, tuple)) and len(crime_event_target) >= 2 else None,
+                z=int(crime_event_target[2]) if isinstance(crime_event_target, (list, tuple)) and len(crime_event_target) >= 3 else None,
+                watch_x=int(watch_target[0]) if isinstance(watch_target, (list, tuple)) and len(watch_target) >= 1 else None,
+                watch_y=int(watch_target[1]) if isinstance(watch_target, (list, tuple)) and len(watch_target) >= 2 else None,
+                watch_z=int(watch_target[2]) if isinstance(watch_target, (list, tuple)) and len(watch_target) >= 3 else None,
             ))
 
     def _rumor_weather_posture_cooldowns(self):
@@ -4317,7 +4375,10 @@ class NPCWillSystem(System):
                         opportunistic_score = float(getattr(drive_state, "opportunistic_crime_score", 0.0) or 0.0) * (
                             0.42 + (opportunistic_behavior * 0.68)
                         )
-                        if float(getattr(drive_state, "confidence", 0.0) or 0.0) < 0.46:
+                        if (
+                            float(getattr(drive_state, "confidence", 0.0) or 0.0) < 0.46
+                            and not bool(getattr(drive_state, "current_target_was_cased", False))
+                        ):
                             intent = "casing_target"
                             opportunistic_score *= 0.92
                         else:
@@ -4555,6 +4616,16 @@ class NPCWillSystem(System):
                             best_target = duty_anchor
                             best_target_eid = None
 
+            if best_intent == "casing_target":
+                casing_watch_target = self._prepare_criminal_casing(eid, ai, best_target)
+                if casing_watch_target is None:
+                    best_intent = "idle"
+                    best_score = 0.0
+                    best_target = None
+                    best_target_eid = None
+                else:
+                    best_target = casing_watch_target
+
             if best_intent == "idle":
                 self._set_intent(eid, ai, will, "idle", 0.0, None, None)
             else:
@@ -4762,6 +4833,39 @@ class NPCInvestigateSystem(System):
         self._live_no_path_cache = {}
         self._danger_noise_pulses = {}
         self._doorway_obstruction_watch = {}
+
+    def _ensure_criminal_casing_observation(self, eid, ai, drive_state):
+        context = getattr(ai, "observation_context", None)
+        if is_purposeful_observation(
+            context,
+            purpose="criminal_casing",
+            active_only=True,
+        ):
+            return context
+        if drive_state is None:
+            return None
+        anchor = (
+            getattr(drive_state, "current_target_x", None),
+            getattr(drive_state, "current_target_y", None),
+            getattr(drive_state, "current_target_z", None),
+        )
+        if any(value is None for value in anchor):
+            return None
+        try:
+            context = begin_purposeful_anchor_observation(
+                self.sim,
+                eid,
+                anchor,
+                purpose="criminal_casing",
+                anchor_kind="property_aperture",
+                anchor_id=getattr(drive_state, "current_target_property_id", None),
+            )
+        except ValueError:
+            return None
+        ai.observation_context = context
+        ai.target = tuple(context["watch_position"])
+        drive_state.current_activity_stage = "seeking_watch_post"
+        return context
 
     def _live_timeskip_active(self):
         state = getattr(self.sim, "live_timeskip", None)
@@ -5061,6 +5165,12 @@ class NPCInvestigateSystem(System):
                     int(getattr(drive_state, "cooldown_until_tick", 0) or 0),
                     int(getattr(self.sim, "tick", 0) or 0) + 2,
                 )
+        if state == "casing_target":
+            ai.observation_context = finish_purposeful_observation(
+                getattr(ai, "observation_context", None),
+                current_tick=self.sim.tick,
+                reason="unreachable_watch_post",
+            )
         ai.state = "idle"
         ai.target = None
         ai.target_eid = None
@@ -6384,6 +6494,12 @@ class NPCInvestigateSystem(System):
                             tz = int(tactical_target["z"])
 
             if pos.z != tz:
+                if ai.state == "casing_target":
+                    ai.observation_context = finish_purposeful_observation(
+                        getattr(ai, "observation_context", None),
+                        current_tick=self.sim.tick,
+                        reason="floor_changed",
+                    )
                 ai.state = "idle"
                 ai.target = None
                 ai.target_eid = None
@@ -6465,11 +6581,64 @@ class NPCInvestigateSystem(System):
             if pos.x == tx and pos.y == ty:
                 drive_state = criminal_drive_state(self.sim, eid, create=False)
                 if ai.state == "casing_target":
+                    observation = self._ensure_criminal_casing_observation(eid, ai, drive_state)
+                    if observation is None:
+                        observation_status = "invalid"
+                        replacement_target = None
+                    else:
+                        observation, observation_status, replacement_target = advance_purposeful_anchor_observation(
+                            self.sim,
+                            eid,
+                            observation,
+                        )
+                        ai.observation_context = observation
+                    anchor_target = (
+                        tuple(observation.get("anchor_position"))
+                        if isinstance(observation, dict) and isinstance(observation.get("anchor_position"), (tuple, list))
+                        else (
+                            getattr(drive_state, "current_target_x", tx) if drive_state is not None else tx,
+                            getattr(drive_state, "current_target_y", ty) if drive_state is not None else ty,
+                            getattr(drive_state, "current_target_z", tz) if drive_state is not None else tz,
+                        )
+                    )
+                    try:
+                        anchor_target = (int(anchor_target[0]), int(anchor_target[1]), int(anchor_target[2]))
+                    except (TypeError, ValueError, IndexError):
+                        anchor_target = (int(tx), int(ty), int(tz))
+                    if observation_status == "reposition" and replacement_target is not None:
+                        ai.target = tuple(replacement_target)
+                        will = wills.get(eid)
+                        if will is not None:
+                            will.target = tuple(replacement_target)
+                            will.last_tick = self.sim.tick
+                        if drive_state is not None:
+                            drive_state.current_activity_stage = "seeking_watch_post"
+                        if throttle:
+                            throttle.next_move_tick = self.sim.tick + 1
+                        else:
+                            self.next_move_tick[eid] = self.sim.tick + 1
+                        continue
+                    if observation_status == "observing":
+                        if drive_state is not None:
+                            drive_state.current_activity_stage = "casing"
+                        if throttle:
+                            throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
+                        else:
+                            self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                        continue
+
+                    cased_target = observation_status == "complete"
                     if drive_state is not None:
-                        drive_state.current_activity_stage = "cased"
+                        drive_state.current_activity_stage = "cased" if cased_target else "casing_aborted"
                         drive_state.cooldown_until_tick = max(
                             int(self.sim.tick) + 8,
                             int(getattr(drive_state, "cooldown_until_tick", 0) or 0),
+                        )
+                    if not cased_target:
+                        ai.observation_context = finish_purposeful_observation(
+                            observation,
+                            current_tick=self.sim.tick,
+                            reason="lost_contact" if observation_status == "lost" else "invalid_anchor",
                         )
                     ai.state = "idle"
                     ai.target = None
@@ -6479,12 +6648,22 @@ class NPCInvestigateSystem(System):
                         "npc_crime_attempt_resolved",
                         npc_eid=eid,
                         success=False,
-                        reason="cased_target",
+                        reason="cased_target" if cased_target else "casing_lost_contact",
                         plan_key=plan_key or None,
+                        property_id=(
+                            str(getattr(drive_state, "current_target_property_id", "") or "").strip() or None
+                            if drive_state is not None
+                            else None
+                        ),
+                        observation_ticks=(
+                            int(observation.get("observed_ticks", 0) or 0)
+                            if isinstance(observation, dict)
+                            else 0
+                        ),
                         **_crime_plan_event_fields(self.sim, eid, plan_key),
-                        x=tx,
-                        y=ty,
-                        z=tz,
+                        x=int(anchor_target[0]),
+                        y=int(anchor_target[1]),
+                        z=int(anchor_target[2]),
                     ))
                     if throttle:
                         throttle.next_move_tick = self.sim.tick + 1
@@ -6572,7 +6751,22 @@ class NPCInvestigateSystem(System):
                     if needs:
                         needs.energy = _clamp(needs.energy + 0.55)
 
+                if ai.state == "investigating" and purposeful_observation_holds_at_target(
+                    getattr(ai, "investigation_context", None),
+                    current_tick=self.sim.tick,
+                ):
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                    continue
+
                 if ai.state == "investigating":
+                    ai.investigation_context = finish_purposeful_observation(
+                        getattr(ai, "investigation_context", None),
+                        current_tick=self.sim.tick,
+                        reason="lost_contact",
+                    )
                     self.sim.emit(Event("npc_investigation_complete", npc_eid=eid, x=tx, y=ty, z=tz))
 
                 if ai.state == "scavenging":
@@ -6807,6 +7001,20 @@ class NPCInvestigateSystem(System):
                     ai.target = None
                     ai.target_eid = None
                 elif ai.state == "investigating":
+                    if purposeful_observation_holds_at_target(
+                        getattr(ai, "investigation_context", None),
+                        current_tick=self.sim.tick,
+                    ):
+                        if throttle:
+                            throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
+                        else:
+                            self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                        continue
+                    ai.investigation_context = finish_purposeful_observation(
+                        getattr(ai, "investigation_context", None),
+                        current_tick=self.sim.tick,
+                        reason="lost_contact",
+                    )
                     ai.state = "idle"
                     ai.target = None
                     ai.target_eid = None

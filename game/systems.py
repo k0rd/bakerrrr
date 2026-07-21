@@ -2286,6 +2286,7 @@ def _emit_move_access_events(
                     x=target_x,
                     y=target_y,
                     z=target_z,
+                    **observation,
                 )
             trespass_triggered = True
 

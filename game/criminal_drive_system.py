@@ -30,6 +30,7 @@ from game.system_support.criminal_drive_runtime import (
     clear_criminal_drive_activity,
     criminal_drive_state,
     criminal_affiliation_targets,
+    record_criminal_casing_knowledge,
     update_criminal_drive_state,
 )
 from game.system_support.entity_naming import _entity_display_name
@@ -548,6 +549,20 @@ class CriminalDriveSystem(System):
         state = criminal_drive_state(self.sim, actor_eid, create=True)
         tick = _safe_int(getattr(self.sim, "tick", 0), default=0)
         state.last_attempt_tick = tick
+        if reason == "cased_target":
+            property_id = _text(event.data.get("property_id")) or _text(getattr(state, "current_target_property_id", ""))
+            record_criminal_casing_knowledge(
+                state,
+                property_id,
+                current_tick=tick,
+                observation_ticks=_safe_int(event.data.get("observation_ticks"), default=0),
+                aperture_position=(event.data.get("x"), event.data.get("y"), event.data.get("z")),
+            )
+            state.cooldown_until_tick = tick + 8
+            state.current_activity_stage = "cased"
+            if plan_key:
+                state.current_plan_key = plan_key
+            return
         state.cooldown_until_tick = tick + (18 if success else 28)
         if success:
             state.last_success_tick = tick

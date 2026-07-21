@@ -7,6 +7,7 @@ compatibility facade for the rest of the project.
 
 import random
 
+from engine.derived_facts import derived_fact_revision
 from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
@@ -667,6 +668,9 @@ class NPCSettlementSystem(System):
         self._last_backfill_tick = -10_000
         self._backfill_cursor = 0
         self._life_cursor = 0
+        self._settlement_name_cache = {}
+        self._settlement_transit_chunks_cache = {}
+        self._transit_link_profile_cache = {}
 
     def _world_streaming_system(self):
         current = self._streaming_system
@@ -786,15 +790,25 @@ class NPCSettlementSystem(System):
     def _settlement_name(self, chunk):
         if not isinstance(chunk, (tuple, list)) or len(chunk) < 2 or getattr(self.sim, "world", None) is None:
             return ""
-        descriptor = self.sim.world.overworld_descriptor(int(chunk[0]), int(chunk[1]))
-        return str((descriptor or {}).get("settlement_name", "") or "").strip().lower()
+        key = (int(chunk[0]), int(chunk[1]))
+        cached = self._settlement_name_cache.get(key)
+        if cached is not None:
+            return cached
+        descriptor = self.sim.world.overworld_descriptor(key[0], key[1])
+        name = str((descriptor or {}).get("settlement_name", "") or "").strip().lower()
+        self._settlement_name_cache[key] = name
+        return name
 
     def _settlement_transit_chunks(self, chunk):
         if not isinstance(chunk, (tuple, list)) or len(chunk) < 2 or getattr(self.sim, "world", None) is None:
             return []
         origin = (int(chunk[0]), int(chunk[1]))
+        cached = self._settlement_transit_chunks_cache.get(origin)
+        if cached is not None:
+            return list(cached)
         settlement_name = self._settlement_name(origin)
         if not settlement_name:
+            self._settlement_transit_chunks_cache[origin] = (origin,)
             return [origin]
         candidates = [origin]
         seen = {origin}
@@ -808,6 +822,7 @@ class NPCSettlementSystem(System):
                     continue
                 seen.add(candidate)
                 candidates.append(candidate)
+        self._settlement_transit_chunks_cache[origin] = tuple(candidates)
         return candidates
 
     def _bond_destination_chunks(self, social):
@@ -976,10 +991,20 @@ class NPCSettlementSystem(System):
             return {"required": False, "connected": False, "score_bonus": 0.0, "service": ""}
         current_chunk = (int(current_chunk[0]), int(current_chunk[1]))
         target_chunk = (int(target_chunk[0]), int(target_chunk[1]))
+        cache_key = (
+            current_chunk,
+            target_chunk,
+            int(derived_fact_revision(self.sim, "transit_nodes")),
+        )
+        cached = self._transit_link_profile_cache.get(cache_key)
+        if isinstance(cached, dict):
+            return dict(cached)
         distance = _manhattan(current_chunk[0], current_chunk[1], target_chunk[0], target_chunk[1])
         required = distance >= _NPC_LIFE_REMOTE_TRANSIT_REQUIRED_DISTANCE
         if distance <= 0:
-            return {"required": False, "connected": True, "score_bonus": 0.0, "service": ""}
+            result = {"required": False, "connected": True, "score_bonus": 0.0, "service": ""}
+            self._transit_link_profile_cache[cache_key] = dict(result)
+            return result
         best = None
         for origin_option in self._settlement_transit_chunks(current_chunk):
             for target_option in self._settlement_transit_chunks(target_chunk):
@@ -1009,8 +1034,15 @@ class NPCSettlementSystem(System):
                             "target_chunk": target_option,
                         }
         if best is not None:
+            if len(self._transit_link_profile_cache) >= 4096:
+                self._transit_link_profile_cache.clear()
+            self._transit_link_profile_cache[cache_key] = dict(best)
             return best
-        return {"required": bool(required), "connected": False, "score_bonus": 0.0, "service": ""}
+        result = {"required": bool(required), "connected": False, "score_bonus": 0.0, "service": ""}
+        if len(self._transit_link_profile_cache) >= 4096:
+            self._transit_link_profile_cache.clear()
+        self._transit_link_profile_cache[cache_key] = dict(result)
+        return result
 
     def _memory_entry_chunk(self, entry):
         data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}

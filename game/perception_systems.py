@@ -22,6 +22,7 @@ from game.components import (
     SuppressionState,
     Vitality,
 )
+from game.npc_emergency_runtime import npc_emergency_active as _npc_emergency_active
 from game.property_access import (
     evaluate_property_access as _evaluate_property_access,
     property_claim_reason as _property_claim_reason,
@@ -30,6 +31,11 @@ from game.property_runtime import (
     property_cover_intended as _property_cover_intended,
     property_covering as _property_covering,
     property_enclosing_structure as _property_enclosing_structure,
+)
+from game.purposeful_observation import (
+    is_purposeful_observation as _is_purposeful_observation,
+    observation_watch_position as _observation_watch_position,
+    refresh_purposeful_observation as _refresh_purposeful_observation,
 )
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
@@ -729,65 +735,43 @@ class StealthSystem(System):
             z=int(pos.z),
         )
 
-    def _sneak_tail_target(self, observer_eid, player_pos):
-        observer_pos = self.sim.ecs.get(Position).get(observer_eid)
-        if observer_pos is None or int(observer_pos.z) != int(player_pos.z):
-            return (int(player_pos.x), int(player_pos.y), int(player_pos.z))
-        current = (int(observer_pos.x), int(observer_pos.y), int(observer_pos.z))
-        current_dist = _manhattan(observer_pos.x, observer_pos.y, player_pos.x, player_pos.y)
-        if 3 <= current_dist <= 5:
-            return current
-
-        ais = self.sim.ecs.get(AI)
-        candidates = []
-        for dx in range(-5, 6):
-            for dy in range(-5, 6):
-                stand_off = abs(dx) + abs(dy)
-                if stand_off < 3 or stand_off > 5:
-                    continue
-                tx = int(player_pos.x) + dx
-                ty = int(player_pos.y) + dy
-                tz = int(player_pos.z)
-                if not self.sim.tilemap.in_bounds(tx, ty) or not self.sim.tilemap.is_walkable(tx, ty, tz):
-                    continue
-                if any(
-                    other_eid != observer_eid and ais.get(other_eid) is not None
-                    for other_eid in self.sim.tilemap.entities_at(tx, ty, tz)
-                ):
-                    continue
-                travel = _manhattan(observer_pos.x, observer_pos.y, tx, ty)
-                candidates.append((travel + (abs(stand_off - 4) * 2), travel, tx, ty, tz))
-        if not candidates:
-            return current
-        _, _, tx, ty, tz = min(candidates)
-        return (tx, ty, tz)
-
     def _set_sneak_investigation(self, observer_eid, pos, *, score, announce=True):
         ai = self.sim.ecs.get(AI).get(observer_eid)
-        if ai is None or str(getattr(ai, "state", "") or "").strip().lower() in {
+        if ai is None or _npc_emergency_active(self.sim, observer_eid) or str(getattr(ai, "state", "") or "").strip().lower() in {
             "protecting",
             "chasing",
             "seeking_safety",
             "reporting_incident",
             "helping_victim",
+            "warning",
             "ejecting_target",
+            "leaving_property",
+            "surrendered",
             "downed",
         }:
             return False
-        target = self._sneak_tail_target(observer_eid, pos)
+        target = _observation_watch_position(
+            self.sim,
+            observer_eid,
+            pos,
+            purpose="visible_sneak",
+        )
+        if target is None:
+            return False
+        existing_context = getattr(ai, "investigation_context", None)
         ai.state = "investigating"
         ai.target = target
         ai.target_eid = None
-        ai.investigation_context = {
-            "kind": "visible_sneak",
-            "posture": "tailing",
-            "source_eid": self.player_eid,
-            "offense_assumed": False,
-            "x": target[0],
-            "y": target[1],
-            "z": target[2],
-            "seen_tick": int(getattr(self.sim, "tick", 0)),
-        }
+        ai.investigation_context = _refresh_purposeful_observation(
+            self.sim,
+            observer_eid,
+            self.player_eid,
+            purpose="visible_sneak",
+            subject_pos=pos,
+            watch_position=target,
+            existing=existing_context,
+            capture_subject_account=bool(announce),
+        )
         ai.visible_sneak_handled_tick = int(getattr(self.sim, "tick", 0))
         will = self.sim.ecs.get(NPCWill).get(observer_eid)
         if will is not None:
@@ -987,8 +971,11 @@ class StealthSystem(System):
 
             investigation_context = getattr(observer_ai, "investigation_context", None)
             if (
-                isinstance(investigation_context, dict)
-                and str(investigation_context.get("kind", "") or "").strip().lower() == "visible_sneak"
+                _is_purposeful_observation(
+                    investigation_context,
+                    purpose="visible_sneak",
+                    active_only=True,
+                )
                 and str(investigation_context.get("posture", "") or "").strip().lower() == "tailing"
             ):
                 # Keep a live tail at observation distance while the player is

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 
+from engine.derived_facts import mark_derived_fact_changed
 from engine.world import World
 from engine.events import Event
 from engine.systems import System
@@ -1494,6 +1495,7 @@ def player_business_apply_remodel(sim, prop, target_archetype):
     finance_defaults = tuple(_FINANCE_SERVICE_FALLBACKS.get(target, ()) or ())
     metadata["finance_services"] = list(finance_defaults)
     metadata.pop("access_controller_hours", None)
+    mark_derived_fact_changed(sim, "transit_nodes")
 
     state = player_business_state(prop, create=True)
     if isinstance(state, dict):

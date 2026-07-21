@@ -16,7 +16,11 @@ from game.system_support.awareness_runtime import observation_payload_for_positi
 
 
 DEFAULT_ACTION_OFFENSE_BASE = {
-    "move": 2,
+    # Ordinary movement is observable, but it is not itself an offense.  Access
+    # checks promote an actual trespass to an explicit non-zero score below;
+    # leaving this non-zero made every legal step run the full witness and NPC
+    # memory pipeline only for downstream justice systems to discard it.
+    "move": 0,
     "cover_hop": 2,
     "floor_change": 3,
     "wait": 0,

@@ -29,6 +29,12 @@ from game.components import (
 from game.items import ITEM_CATALOG
 from game.population import _give_item, _spawn_human
 from game.property_runtime import property_covering
+from game.purposeful_observation import (
+    finish_purposeful_observation,
+    is_purposeful_observation,
+    observation_watch_position,
+    refresh_purposeful_observation,
+)
 from game.service_runtime import _manhattan
 from game.system_support.actor_attention_runtime import mark_actor_urgent
 from game.system_support.ai_intent_runtime import _sync_ai_intent
@@ -58,6 +64,22 @@ BODYGUARD_RING_DISTANCES = {
     2: 5,
     3: 9,
 }
+BODYGUARD_FORMATION_BANDS = {
+    1: (1, 2, 3),
+    2: (4, 5, 6),
+    3: (7, 9, 11),
+}
+BODYGUARD_POST_INTERRUPT_STATES = frozenset({
+    "protecting",
+    "chasing",
+    "seeking_safety",
+    "reporting_incident",
+    "helping_victim",
+    "warning",
+    "ejecting_target",
+    "leaving_property",
+})
+BODYGUARD_MAX_WARNING_SUBJECTS = 12
 BODYGUARD_MAX_CHANNEL_GUARDS = sum(BODYGUARD_RING_CAPACITY.values())
 BODYGUARD_NPC_DEMAND_INTERVAL = 211
 _BODYGUARD_REASON_TOKENS = (
@@ -84,6 +106,18 @@ def _safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _position_xyz(value):
+    if isinstance(value, (tuple, list)) and len(value) >= 3:
+        try:
+            return (int(value[0]), int(value[1]), int(value[2]))
+        except (TypeError, ValueError):
+            return None
+    try:
+        return (int(value.x), int(value.y), int(value.z))
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
 def _clean_text(value):
@@ -486,6 +520,32 @@ def _principal_guard_point(sim, principal_pos, *, ring=1, slot=0):
     )
 
 
+def _principal_guard_slot_anchor(principal_pos, *, ring=1, slot=0):
+    ring = max(1, min(3, _safe_int(ring, 1)))
+    radius = BODYGUARD_RING_DISTANCES.get(ring, 2)
+    principal_xyz = _position_xyz(principal_pos)
+    if principal_xyz is None:
+        return None
+    offsets = (
+        (-radius, 0),
+        (radius, 0),
+        (0, radius),
+        (0, -radius),
+        (-radius, -1),
+        (radius, 1),
+        (-1, radius),
+        (1, -radius),
+        (-radius, radius),
+        (radius, -radius),
+    )
+    dx, dy = offsets[_safe_int(slot, 0) % len(offsets)]
+    return (
+        principal_xyz[0] + dx,
+        principal_xyz[1] + dy,
+        principal_xyz[2],
+    )
+
+
 def _give_bodyguard_kit(sim, eid, *, tier, team_size):
     inventory = sim.ecs.get(Inventory).get(eid)
     if inventory is None:
@@ -591,6 +651,7 @@ def hire_bodyguard_contract(sim, hirer_eid, provider_prop, *, tier, assignment_k
 
     assets.credits = max(0, credits - cost)
     team_id = _next_team_id(sim)
+    principal_pos = sim.ecs.get(Position).get(principal_eid) if principal_eid is not None else None
     rng = random.Random(f"{getattr(sim, 'seed', 0)}:bodyguard:{team_id}:{tier}:{assignment_kind}:{principal_eid}:{property_id}")
     guard_eids = []
     for index in range(count):
@@ -627,6 +688,11 @@ def hire_bodyguard_contract(sim, hirer_eid, provider_prop, *, tier, assignment_k
             "cost": cost,
             "warning_state": {},
             "guard_point": None,
+            "principal_known_position": (
+                (int(principal_pos.x), int(principal_pos.y), int(principal_pos.z))
+                if principal_pos is not None
+                else None
+            ),
         }
         _contractors(sim)[guard_eid] = rec
         mark_actor_urgent(sim, guard_eid, reason="bodyguard_contract", ttl_ticks=BODYGUARD_URGENCY_TICKS)
@@ -748,6 +814,11 @@ def create_bodyguard_detail_for_principal(
             "cost": 0,
             "warning_state": {},
             "guard_point": None,
+            "principal_known_position": (
+                int(principal_pos.x),
+                int(principal_pos.y),
+                int(principal_pos.z),
+            ),
             "source_kind": _clean_key(source_kind),
             "source_id": _clean_text(source_id),
         }
@@ -976,7 +1047,7 @@ class BodyguardSystem(System):
         for guard_eid, rec in list(active_bodyguard_contracts(self.sim)):
             if not _is_living_actor(self.sim, guard_eid):
                 continue
-            target = self._assignment_target(rec)
+            target = self._assignment_target(rec, guard_eid=guard_eid)
             if not target:
                 self._end_contract(guard_eid, rec, "lost_assignment")
                 continue
@@ -985,10 +1056,107 @@ class BodyguardSystem(System):
                 self._set_guard_protecting(guard_eid, rec, threat_eid, "active_threat")
                 continue
             rec.pop("focus_threat_eid", None)
+            rec.pop("focus_threat_reason", None)
+            rec.pop("focus_threat_tick", None)
+            if self._guard_post_interrupted(guard_eid):
+                mark_actor_urgent(self.sim, guard_eid, reason="bodyguard_interrupted", ttl_ticks=BODYGUARD_URGENCY_TICKS)
+                continue
             self._assign_guard_post(guard_eid, rec, target)
             self._scan_guard_zone(guard_eid, rec, target)
 
-    def _assignment_target(self, rec):
+    def _guard_post_interrupted(self, guard_eid):
+        ai = self.sim.ecs.get(AI).get(guard_eid)
+        if ai is None:
+            return False
+        state = _clean_key(getattr(ai, "state", ""))
+        if state not in BODYGUARD_POST_INTERRUPT_STATES:
+            return False
+        if state in {"protecting", "chasing"}:
+            target_eid = _int_or_none(getattr(ai, "target_eid", None))
+            return target_eid is not None and _is_living_actor(self.sim, target_eid)
+        return getattr(ai, "target", None) is not None or getattr(ai, "target_eid", None) is not None
+
+    def _principal_formation_target(self, guard_eid, rec, principal_pos, *, ring, slot):
+        guard_pos = self.sim.ecs.get(Position).get(guard_eid)
+        if guard_pos is None:
+            return None, None
+        tick = _safe_int(getattr(self.sim, "tick", 0), 0)
+        context = rec.get("formation_observation")
+        context_is_formation = is_purposeful_observation(context, purpose="bodyguard_formation")
+        visible = (
+            int(guard_pos.z) == int(principal_pos.z)
+            and self._guard_can_see(guard_pos, principal_pos)
+        )
+        band = BODYGUARD_FORMATION_BANDS.get(ring, BODYGUARD_FORMATION_BANDS[1])
+
+        if visible:
+            preferred = _principal_guard_slot_anchor(principal_pos, ring=ring, slot=slot)
+            watch_position = observation_watch_position(
+                self.sim,
+                guard_eid,
+                principal_pos,
+                purpose="bodyguard_formation",
+                distance_band=band,
+                preferred_position=preferred,
+            )
+            if watch_position is None:
+                watch_position = (int(guard_pos.x), int(guard_pos.y), int(guard_pos.z))
+            context = refresh_purposeful_observation(
+                self.sim,
+                guard_eid,
+                rec.get("principal_eid"),
+                purpose="bodyguard_formation",
+                subject_pos=principal_pos,
+                watch_position=watch_position,
+                existing=context if context_is_formation and context.get("active") is not False else None,
+                include_subject_account=False,
+                distance_band=band,
+                preferred_position=preferred,
+            )
+            rec["formation_observation"] = context
+            rec["principal_known_position"] = (
+                int(principal_pos.x),
+                int(principal_pos.y),
+                int(principal_pos.z),
+            )
+            rec["principal_known_tick"] = tick
+            return rec["principal_known_position"], tuple(context.get("watch_position"))
+
+        if context_is_formation:
+            context = dict(context)
+            lost_since = _int_or_none(context.get("lost_contact_since_tick"))
+            if lost_since is None:
+                lost_since = tick
+                context["lost_contact_since_tick"] = tick
+            context["updated_tick"] = tick
+            grace = max(0, _safe_int(context.get("lost_contact_grace_ticks"), 0))
+            if context.get("active") is not False and tick - lost_since > grace:
+                context = finish_purposeful_observation(
+                    context,
+                    current_tick=tick,
+                    reason="lost_principal_contact",
+                )
+            rec["formation_observation"] = context
+            known_position = _position_xyz(context.get("last_seen_position"))
+            watch_position = _position_xyz(context.get("watch_position"))
+            if known_position is not None and watch_position is not None:
+                return known_position, watch_position
+
+        known_position = _position_xyz(rec.get("principal_known_position"))
+        if known_position is None:
+            return None, None
+        preferred = _principal_guard_slot_anchor(known_position, ring=ring, slot=slot)
+        watch_position = observation_watch_position(
+            self.sim,
+            guard_eid,
+            known_position,
+            purpose="bodyguard_formation",
+            distance_band=band,
+            preferred_position=preferred,
+        )
+        return known_position, watch_position or (int(guard_pos.x), int(guard_pos.y), int(guard_pos.z))
+
+    def _assignment_target(self, rec, *, guard_eid=None):
         kind = _clean_key(rec.get("assignment_kind"))
         positions = self.sim.ecs.get(Position)
         ring = max(1, min(3, _safe_int(rec.get("protection_ring"), 1)))
@@ -1000,13 +1168,30 @@ class BodyguardSystem(System):
             principal_pos = positions.get(principal_eid)
             if principal_pos is None:
                 return None
-            principal_prop = property_covering(self.sim, principal_pos.x, principal_pos.y, principal_pos.z)
+            if guard_eid is None:
+                point = _principal_guard_point(self.sim, principal_pos, ring=ring, slot=slot)
+                known_position = (int(principal_pos.x), int(principal_pos.y), int(principal_pos.z))
+            else:
+                known_position, point = self._principal_formation_target(
+                    guard_eid,
+                    rec,
+                    principal_pos,
+                    ring=ring,
+                    slot=slot,
+                )
+                if known_position is None or point is None:
+                    return None
+            principal_prop = property_covering(
+                self.sim,
+                known_position[0],
+                known_position[1],
+                known_position[2],
+            )
             if principal_prop is not None:
                 points = _property_guard_points(self.sim, principal_prop, count=max(1, ring_count), ring=ring, inside=False)
                 point = points[slot % len(points)]
-                return {"kind": "principal_inside", "point": point, "principal_pos": principal_pos, "property": principal_prop, "ring": ring}
-            point = _principal_guard_point(self.sim, principal_pos, ring=ring, slot=slot)
-            return {"kind": "principal_outside", "point": point, "principal_pos": principal_pos, "property": None, "ring": ring}
+                return {"kind": "principal_inside", "point": point, "principal_pos": known_position, "property": principal_prop, "ring": ring}
+            return {"kind": "principal_outside", "point": point, "principal_pos": known_position, "property": None, "ring": ring}
         prop = self.sim.properties.get(rec.get("property_id"))
         if not isinstance(prop, dict):
             return None
@@ -1034,20 +1219,26 @@ class BodyguardSystem(System):
         guard_pos = self.sim.ecs.get(Position).get(guard_eid)
         if guard_pos is None:
             return
+        self._expire_guard_warnings(rec)
         anchor = target.get("principal_pos") if target.get("kind") == "principal_outside" else None
         if anchor is None:
             point = target.get("point") or (guard_pos.x, guard_pos.y, guard_pos.z)
-            class _Anchor:
-                pass
-            anchor = _Anchor()
-            anchor.x, anchor.y, anchor.z = int(point[0]), int(point[1]), int(point[2])
+            anchor = _position_xyz(point)
+        else:
+            anchor = _position_xyz(anchor)
+        if anchor is None:
+            return
         radius = BODYGUARD_WARNING_RADIUS if target.get("kind") == "principal_outside" else BODYGUARD_PROPERTY_WARNING_RADIUS
-        for other_eid, other_pos in list(self.sim.ecs.get(Position).items()):
+        positions = self.sim.ecs.get(Position)
+        for other_eid in self.sim.entity_ids_in_radius(anchor[0], anchor[1], anchor[2], radius):
+            other_pos = positions.get(other_eid)
+            if other_pos is None:
+                continue
             if other_eid == guard_eid or not _is_living_actor(self.sim, other_eid):
                 continue
             if int(other_pos.z) != int(guard_pos.z):
                 continue
-            if _manhattan(other_pos.x, other_pos.y, anchor.x, anchor.y) > radius:
+            if _manhattan(other_pos.x, other_pos.y, anchor[0], anchor[1]) > radius:
                 continue
             if not self._guard_can_see(guard_pos, other_pos):
                 continue
@@ -1060,6 +1251,35 @@ class BodyguardSystem(System):
             if property_target and not danger and not self._actor_known_hostile_to_property(other_eid, rec, target):
                 continue
             self._warn_or_escalate(guard_eid, rec, other_eid, danger=danger, property_target=target.get("kind") != "principal_outside")
+
+    def _expire_guard_warnings(self, rec):
+        state = rec.get("warning_state")
+        if not isinstance(state, dict) or not state:
+            return
+        tick = _safe_int(getattr(self.sim, "tick", 0), 0)
+        expired = []
+        for key, warning in tuple(state.items()):
+            if not isinstance(warning, dict):
+                expired.append(key)
+                continue
+            observation = warning.get("observation")
+            if not is_purposeful_observation(observation, purpose="bodyguard_threat_watch"):
+                last_tick = _safe_int(warning.get("last_tick"), tick)
+                if tick - last_tick > 6:
+                    expired.append(key)
+                continue
+            last_seen_tick = _safe_int(observation.get("last_seen_tick"), tick)
+            grace = max(0, _safe_int(observation.get("lost_contact_grace_ticks"), 0))
+            if tick - last_seen_tick <= grace:
+                continue
+            warning["observation"] = finish_purposeful_observation(
+                observation,
+                current_tick=tick,
+                reason="subject_withdrew",
+            )
+            expired.append(key)
+        for key in expired:
+            state.pop(key, None)
 
     def _guard_can_see(self, guard_pos, other_pos):
         try:
@@ -1150,15 +1370,46 @@ class BodyguardSystem(System):
         state = rec.setdefault("warning_state", {})
         key = str(subject_eid)
         warning = state.get(key) if isinstance(state.get(key), dict) else {}
+        guard_pos = self.sim.ecs.get(Position).get(guard_eid)
+        subject_pos = self.sim.ecs.get(Position).get(subject_eid)
+        if guard_pos is None or subject_pos is None or not self._guard_can_see(guard_pos, subject_pos):
+            return
+        existing_observation = warning.get("observation")
+        warning["observation"] = refresh_purposeful_observation(
+            self.sim,
+            guard_eid,
+            subject_eid,
+            purpose="bodyguard_threat_watch",
+            subject_pos=subject_pos,
+            watch_position=(int(guard_pos.x), int(guard_pos.y), int(guard_pos.z)),
+            existing=existing_observation,
+        )
         last_tick = _safe_int(warning.get("last_tick"), -100000)
-        warned_tick = _safe_int(warning.get("first_tick"), 0)
-        if danger or (warned_tick and tick - warned_tick >= BODYGUARD_WARNING_PATIENCE):
+        has_first_tick = "first_tick" in warning
+        warned_tick = _safe_int(warning.get("first_tick"), tick)
+        if danger or (has_first_tick and tick - warned_tick >= BODYGUARD_WARNING_PATIENCE):
             self._team_focus_threat(rec, subject_eid, reason="ignored_warning" if not danger else "overt_threat")
             self._emit_threat_response(guard_eid, rec, subject_eid, reason="overt_threat" if danger else "ignored_warning")
             return
         if tick - last_tick < BODYGUARD_WARNING_COOLDOWN:
+            state[key] = warning
             return
-        state[key] = {"first_tick": warned_tick or tick, "last_tick": tick, "count": _safe_int(warning.get("count"), 0) + 1}
+        warning["first_tick"] = warned_tick if has_first_tick else tick
+        warning["last_tick"] = tick
+        warning["count"] = _safe_int(warning.get("count"), 0) + 1
+        state[key] = warning
+        while len(state) > BODYGUARD_MAX_WARNING_SUBJECTS:
+            # Keep the subject currently in front of the guard even if an old
+            # save or clock rollback left other rows with future timestamps.
+            eviction_candidates = [warning_key for warning_key in state if warning_key != key] or list(state)
+            oldest = min(
+                eviction_candidates,
+                key=lambda warning_key: _safe_int(
+                    state.get(warning_key, {}).get("last_tick") if isinstance(state.get(warning_key), dict) else -1,
+                    -1,
+                ),
+            )
+            state.pop(oldest, None)
         self.sim.emit(Event(
             "bodyguard_warning",
             guard_eid=guard_eid,
@@ -1209,7 +1460,7 @@ class BodyguardSystem(System):
         threat_pos = self.sim.ecs.get(Position).get(threat_eid)
         if guard_pos is None or threat_pos is None or int(guard_pos.z) != int(threat_pos.z):
             return False
-        target = self._assignment_target(rec)
+        target = self._assignment_target(rec, guard_eid=guard_eid)
         if target and self._interior_activity_outside_contract(guard_pos, threat_pos, rec, target):
             return False
         ring = max(1, min(3, _safe_int(rec.get("protection_ring"), 1)))
@@ -1267,7 +1518,7 @@ class BodyguardSystem(System):
         for guard_eid in tuple(event.data.get("guard_eids", ()) or ()):
             rec = _contractors(self.sim).get(guard_eid)
             if isinstance(rec, dict):
-                target = self._assignment_target(rec)
+                target = self._assignment_target(rec, guard_eid=guard_eid)
                 if target:
                     self._assign_guard_post(guard_eid, rec, target)
 

@@ -264,6 +264,7 @@ class RuntimeSemanticCatalog:
             self.render_layers,
         )
         self.semantics = self.data.get("semantics", {}) if isinstance(self.data.get("semantics"), dict) else {}
+        self._semantic_id_cache = {}
 
     def render_layer_order(self, layer_name):
         layer_key = str(layer_name or "").strip().lower() or "ground_overlay"
@@ -412,16 +413,22 @@ class RuntimeSemanticCatalog:
             return None
 
         color_name = str(color_key or "default").strip() or "default"
+        preferred_key = tuple(str(value or "").strip() for value in tuple(preferred_categories or ()))
+        strict_key = tuple(str(value or "").strip() for value in tuple(strict_categories or ()))
+        cache_key = (glyph_key, color_name, preferred_key, strict_key, bool(allow_defaults))
+        if cache_key in self._semantic_id_cache:
+            return self._semantic_id_cache[cache_key]
+
         strict = tuple(
             category_name
-            for category_name in strict_categories
+            for category_name in strict_key
             if isinstance(self.categories.get(category_name), dict)
         )
         if not strict:
             strict = self.strict_categories_for_color(color_name)
 
         ordered_categories = []
-        for category_name in preferred_categories:
+        for category_name in preferred_key:
             category_key = str(category_name or "").strip()
             if category_key and category_key not in ordered_categories and isinstance(self.categories.get(category_key), dict):
                 ordered_categories.append(category_key)
@@ -432,6 +439,7 @@ class RuntimeSemanticCatalog:
         if strict:
             ordered_categories = [category_name for category_name in ordered_categories if category_name in strict]
 
+        resolved = None
         for category_name in ordered_categories:
             semantic_id = self.semantic_id_for_key(
                 category_name,
@@ -440,21 +448,24 @@ class RuntimeSemanticCatalog:
                 allow_defaults=False,
             )
             if semantic_id:
-                return semantic_id
+                resolved = semantic_id
+                break
 
-        if not allow_defaults:
-            return None
-
-        for category_name in ordered_categories:
-            semantic_id = self.semantic_id_for_key(
-                category_name,
-                glyph_key,
-                color_name,
-                allow_defaults=True,
-            )
-            if semantic_id:
-                return semantic_id
-        return None
+        if resolved is None and allow_defaults:
+            for category_name in ordered_categories:
+                semantic_id = self.semantic_id_for_key(
+                    category_name,
+                    glyph_key,
+                    color_name,
+                    allow_defaults=True,
+                )
+                if semantic_id:
+                    resolved = semantic_id
+                    break
+        if len(self._semantic_id_cache) >= 32_768:
+            self._semantic_id_cache.clear()
+        self._semantic_id_cache[cache_key] = resolved
+        return resolved
 
 
 @lru_cache(maxsize=4)

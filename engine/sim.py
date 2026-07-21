@@ -1,6 +1,7 @@
 import random
 
 from .buildings import layout_chunk_building, world_building_id
+from .derived_facts import mark_derived_fact_changed
 from .ecs import ECS
 from .events import Event, EventBus
 from .underground import chunk_underground_network_plan, chunk_underground_site_plans
@@ -1319,12 +1320,14 @@ class Simulation:
         self.next_ground_item_order = 0
         for ground_item_id, item in self.ground_items.items():
             self._index_ground_item_record(str(ground_item_id), item)
+        mark_derived_fact_changed(self, "transit_nodes")
 
     def move_property(self, property_id, x, y, z=0):
         prop = self.properties.get(property_id)
         if not isinstance(prop, dict):
             return False
 
+        previous_chunk = self._property_record_chunk_key(prop)
         self._unindex_property_record(property_id, prop)
         try:
             prop["x"] = int(x)
@@ -1340,6 +1343,11 @@ class Simulation:
         self._index_property_record(property_id, prop)
         self._invalidate_properties_in_radius_cache()
         self._sync_property_chunk_record(property_id, prop)
+        if (
+            str(prop.get("kind", "") or "").strip().lower() != "vehicle"
+            and previous_chunk != self._property_record_chunk_key(prop)
+        ):
+            mark_derived_fact_changed(self, "transit_nodes")
         return True
 
     def _property_record_chunk_key(self, prop):
@@ -3075,6 +3083,8 @@ class Simulation:
         self._index_property_record(property_id, self.properties[property_id])
         self._invalidate_properties_in_radius_cache()
         self.property_registry_dirty = True
+        if str(kind or "").strip().lower() != "vehicle":
+            mark_derived_fact_changed(self, "transit_nodes")
         reputation_stats = getattr(self, "business_reputation_stats", None)
         if isinstance(reputation_stats, dict):
             reputation_stats["_revision"] = int(reputation_stats.get("_revision", 0) or 0) + 1
@@ -3100,6 +3110,8 @@ class Simulation:
         self.property_order.pop(property_id, None)
         self._invalidate_properties_in_radius_cache()
         self.property_registry_dirty = True
+        if str(removed.get("kind", "") or "").strip().lower() != "vehicle":
+            mark_derived_fact_changed(self, "transit_nodes")
         reputation_stats = getattr(self, "business_reputation_stats", None)
         if isinstance(reputation_stats, dict):
             reputation_stats["_revision"] = int(reputation_stats.get("_revision", 0) or 0) + 1

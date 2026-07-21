@@ -273,6 +273,7 @@ def _normalize_tool_profiles(value):
             "perception_bonus": _float_or_default(raw.get("perception_bonus"), 0.0),
             "score_bonus": _float_or_default(raw.get("score_bonus"), 0.0),
             "requirement_delta": _float_or_default(raw.get("requirement_delta"), 0.0),
+            "tool_wear_mult": max(0.25, min(4.0, _float_or_default(raw.get("tool_wear_mult"), 1.0))),
         })
     return parsed
 
@@ -888,9 +889,10 @@ DEFAULT_ITEM_CATALOG = {
         "name": "Prybar",
         "glyph": ")",
         "stack_max": 1,
-        "tags": ["tool", "illegal"],
+        "tags": ["tool", "weapon", "melee", "club", "illegal"],
         "legal_status": "illegal",
         "effects": [],
+        "weapon_id": "prybar",
         "tool_profiles": [
             {
                 "contexts": ["side_entry"],
@@ -898,6 +900,14 @@ DEFAULT_ITEM_CATALOG = {
                 "intrusion_bonus": 0.45,
                 "mechanics_bonus": 0.2,
                 "requirement_delta": -0.9,
+            },
+            {
+                "contexts": ["wall_breach"],
+                "enable_contexts": ["wall_breach"],
+                "mechanics_bonus": 0.65,
+                "score_bonus": 0.45,
+                "requirement_delta": -1.0,
+                "tool_wear_mult": 0.8,
             },
         ],
     },
@@ -958,6 +968,72 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "restricted",
         "effects": [],
         "weapon_id": "crowbar_club",
+        "tool_profiles": [
+            {
+                "contexts": ["wall_breach"],
+                "enable_contexts": ["wall_breach"],
+                "mechanics_bonus": 0.45,
+                "score_bonus": 0.3,
+                "requirement_delta": -0.7,
+                "tool_wear_mult": 1.15,
+            },
+        ],
+    },
+    "halligan_bar": {
+        "name": "Halligan Bar",
+        "glyph": ")",
+        "stack_max": 1,
+        "tags": ["tool", "weapon", "melee", "club", "pry", "rescue", "restricted"],
+        "legal_status": "restricted",
+        "effects": [],
+        "weapon_id": "halligan_bar",
+        "condition_profile": {
+            "supports_quality": True,
+            "supports_durability": True,
+            "max_durability": 7,
+        },
+        "tool_profiles": [
+            {
+                "contexts": ["side_entry"],
+                "enable_contexts": ["side_entry"],
+                "intrusion_bonus": 0.45,
+                "mechanics_bonus": 0.7,
+                "requirement_delta": -0.95,
+                "tool_wear_mult": 0.75,
+            },
+            {
+                "contexts": ["wall_breach"],
+                "enable_contexts": ["wall_breach"],
+                "mechanics_bonus": 0.8,
+                "score_bonus": 0.7,
+                "requirement_delta": -1.2,
+                "tool_wear_mult": 0.7,
+            },
+        ],
+    },
+    "sledgehammer": {
+        "name": "Sledgehammer",
+        "glyph": ")",
+        "stack_max": 1,
+        "tags": ["tool", "weapon", "melee", "club", "hammer", "demolition", "legal"],
+        "legal_status": "legal",
+        "effects": [],
+        "weapon_id": "sledgehammer",
+        "condition_profile": {
+            "supports_quality": True,
+            "supports_durability": True,
+            "max_durability": 8,
+        },
+        "tool_profiles": [
+            {
+                "contexts": ["wall_breach"],
+                "enable_contexts": ["wall_breach"],
+                "mechanics_bonus": 0.25,
+                "score_bonus": 1.65,
+                "requirement_delta": -1.5,
+                "tool_wear_mult": 1.05,
+            },
+        ],
     },
     "trail_machete": {
         "name": "Trail Machete",

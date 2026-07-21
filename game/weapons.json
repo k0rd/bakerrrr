@@ -72,6 +72,114 @@
       ]
     },
     {
+      "id": "prybar",
+      "name": "Prybar",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.0,
+      "range": 1,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 10,
+      "cooldown_ticks": 2,
+      "noise_radius": 3,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.0,
+      "tags": [
+        "melee",
+        "club",
+        "blunt",
+        "utility"
+      ],
+      "named_prefixes": [
+        "Yard",
+        "Entry",
+        "Iron",
+        "Breaker"
+      ],
+      "named_suffixes": [
+        "Pry",
+        "Lever",
+        "Bar",
+        "Hook"
+      ]
+    },
+    {
+      "id": "halligan_bar",
+      "name": "Halligan Bar",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.0,
+      "range": 1,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 12,
+      "cooldown_ticks": 2,
+      "noise_radius": 3,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.0,
+      "tags": [
+        "melee",
+        "club",
+        "pry",
+        "rescue",
+        "utility"
+      ],
+      "named_prefixes": [
+        "Rescue",
+        "Station",
+        "Entry",
+        "Redline"
+      ],
+      "named_suffixes": [
+        "Halligan",
+        "Fork",
+        "Pike",
+        "Bar"
+      ]
+    },
+    {
+      "id": "sledgehammer",
+      "name": "Sledgehammer",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 0.9,
+      "range": 1,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 17,
+      "cooldown_ticks": 3,
+      "noise_radius": 4,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.0,
+      "tags": [
+        "melee",
+        "club",
+        "hammer",
+        "blunt",
+        "demolition",
+        "utility"
+      ],
+      "named_prefixes": [
+        "Yard",
+        "Breaker",
+        "Foundry",
+        "Deadfall"
+      ],
+      "named_suffixes": [
+        "Sledge",
+        "Maul",
+        "Hammer",
+        "Driver"
+      ]
+    },
+    {
       "id": "telescopic_baton",
       "name": "Telescopic Baton",
       "glyph": "!",

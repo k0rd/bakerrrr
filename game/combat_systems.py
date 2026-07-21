@@ -32,7 +32,13 @@ from game.components import (
     WeaponLoadout,
     WeaponUseProfile,
 )
-from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
+from game.items import (
+    ITEM_CATALOG,
+    apply_item_durability_loss,
+    credstick_total_credits,
+    is_credstick_item,
+    item_display_name,
+)
 from game.fauna_genetics import animal_genome_payload
 from game.hunting_runtime import hunting_legality_snapshot
 from game.appearance_loadout import appearance_metadata_as_loose_item
@@ -217,6 +223,115 @@ class WeaponSystem(System):
         if not loadout:
             return {}
         return loadout.weapon_instance(weapon_id)
+
+    def _melee_armor_wear_roll(self, *, source_eid, target_eid, weapon_id):
+        return self.rng.random()
+
+    def _maybe_strain_melee_weapon_against_armor(
+        self,
+        *,
+        source_eid,
+        target_eid,
+        weapon_id,
+        raw_damage,
+    ):
+        weapon_id = str(weapon_id or "").strip()
+        if not weapon_id or weapon_id == "unarmed":
+            return None
+
+        armor_absorb = 0.0
+        armor_name = ""
+        armor_loadout = self.sim.ecs.get(ArmorLoadout).get(target_eid)
+        if armor_loadout and armor_loadout.equipped_instance_id:
+            armor_absorb = max(0.0, min(0.85, float(armor_loadout.damage_reduction)))
+            armor_name = str(armor_loadout.equipped_name or armor_loadout.equipped_item_id or "").strip()
+        drone_state = self.sim.ecs.get(DroneState).get(target_eid)
+        hull_absorb = drone_hull_damage_absorb(drone_state, weapon_id=weapon_id, damage_kind="melee")
+        if hull_absorb > armor_absorb:
+            armor_absorb = float(hull_absorb)
+            chassis = str(getattr(drone_state, "chassis_class", "") or "").strip().upper()
+            armor_name = f"{chassis}-class hull" if chassis else "drone hull"
+        if armor_absorb <= 0.0:
+            return None
+
+        loadout = self.sim.ecs.get(WeaponLoadout).get(source_eid)
+        inventory = self.sim.ecs.get(Inventory).get(source_eid)
+        if loadout is None or inventory is None:
+            return None
+        instance_id = str(loadout.weapon_inventory_instance_id(weapon_id) or "").strip()
+        if not instance_id:
+            return None
+        entry = inventory.find(instance_id=instance_id)
+        if not entry:
+            return None
+
+        weapon = weapon_by_id(weapon_id)
+        weapon_tags = {
+            str(tag or "").strip().lower()
+            for tag in tuple((weapon or {}).get("tags", ()) or ())
+            if str(tag or "").strip()
+        }
+        strain_chance = 0.04 + (float(armor_absorb) * 0.65)
+        if weapon_tags.intersection({"axe", "blade", "knife"}):
+            strain_chance += 0.08
+        if weapon_tags.intersection({"demolition", "hammer"}):
+            strain_chance -= 0.06
+        if int(raw_damage) >= 14:
+            strain_chance += 0.04
+        strain_chance = max(0.03, min(0.65, strain_chance))
+        if self._melee_armor_wear_roll(
+            source_eid=source_eid,
+            target_eid=target_eid,
+            weapon_id=weapon_id,
+        ) >= strain_chance:
+            return None
+
+        item_id = str(entry.get("item_id", "") or "").strip()
+        wear_amount = 2 if armor_absorb >= 0.45 and weapon_tags.intersection({"axe", "blade", "knife"}) else 1
+        wear = apply_item_durability_loss(
+            item_id,
+            metadata=entry.get("metadata"),
+            amount=wear_amount,
+            item_catalog=ITEM_CATALOG,
+        )
+        if int(wear.get("lost", 0)) <= 0:
+            return None
+
+        item_name = item_display_name(item_id, metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG)
+        event_data = {
+            "eid": source_eid,
+            "source_eid": source_eid,
+            "target_eid": target_eid,
+            "weapon_id": weapon_id,
+            "item_id": item_id,
+            "item_name": item_name,
+            "instance_id": instance_id,
+            "armor_absorb": round(float(armor_absorb), 3),
+            "armor_name": armor_name or "armor",
+            "durability_before": int(wear.get("before", 0)),
+            "durability_after": int(wear.get("after", 0)),
+            "durability_lost": int(wear.get("lost", 0)),
+            "durability_max": int(wear.get("max_durability", 0)),
+        }
+        if wear.get("broken"):
+            removed = inventory.remove_item(instance_id=instance_id, quantity=1)
+            if not removed:
+                return None
+            loadout.remove_weapon(weapon_id)
+            if int(source_eid) == int(self.player_eid):
+                self.sim.log.add(f"Your {item_name} breaks against {event_data['armor_name']}.")
+            self.sim.emit(Event("melee_weapon_broken", **event_data))
+            return {**event_data, "broken": True}
+
+        if inventory.update_item_metadata(instance_id, wear.get("metadata")) is None:
+            return None
+        if int(source_eid) == int(self.player_eid):
+            self.sim.log.add(
+                f"Your {item_name} takes strain against {event_data['armor_name']} "
+                f"({event_data['durability_after']}/{event_data['durability_max']})."
+            )
+        self.sim.emit(Event("melee_weapon_damaged", **event_data))
+        return {**event_data, "broken": False}
 
     def _consume_weapon_ammo(self, eid, loadout, weapon):
         if not _weapon_uses_ammo(weapon):
@@ -620,6 +735,13 @@ class WeaponSystem(System):
         if not hit:
             self.sim.emit(Event("weapon_fire_blocked", eid=eid, reason="no_target"))
             return True
+
+        self._maybe_strain_melee_weapon_against_armor(
+            source_eid=eid,
+            target_eid=target_eid,
+            weapon_id=melee_weapon_id,
+            raw_damage=raw_damage,
+        )
 
         target_vitality = self.sim.ecs.get(Vitality).get(target_eid)
         self.sim.emit(Event(

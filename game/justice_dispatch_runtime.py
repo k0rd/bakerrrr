@@ -36,7 +36,10 @@ def _available_for_dispatch(sim, eid):
 def _dispatch_candidates(sim, x, y, z, *, radius=80):
     positions = sim.ecs.get(Position)
     rows = []
-    for eid, pos in positions.items():
+    for eid in sim.entity_ids_in_radius(x, y, z, radius):
+        pos = positions.get(eid)
+        if pos is None:
+            continue
         if _safe_int(getattr(pos, "z", 0)) != int(z):
             continue
         if not _actor_is_peace(sim, eid) or not _available_for_dispatch(sim, eid):

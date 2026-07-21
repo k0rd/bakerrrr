@@ -118,6 +118,7 @@ from game.criminal_justice_runtime import (
     _justice_wanted_tier_for,
 )
 from game.justice_identity_runtime import (
+    PROVISIONAL_MAX_SCENE_DISTANCE,
     justice_case_for_incident,
     justice_case_recently_checked,
     justice_case_event_payload,
@@ -256,6 +257,14 @@ from game.justice_force_runtime import (
     force_payload,
     mitigated_force_severity,
 )
+from game.purposeful_observation import (
+    begin_purposeful_anchor_observation,
+    finish_purposeful_observation,
+    is_purposeful_observation,
+    observation_purpose_profile,
+    observation_watch_position,
+    refresh_purposeful_observation,
+)
 from game.vision_scene_runtime import event_is_vision_only
 from game.organizations import local_protective_pressure_snapshot
 from game.skills import actor_skill
@@ -315,6 +324,10 @@ class CriminalJusticeSystem(System):
     PLAYER_IDENTITY_CHECK_NOTICE_RADIUS = 8
     PLAYER_IDENTITY_CHECK_PROMPT_RADIUS = 1
     PLAYER_IDENTITY_CHECK_SCAN_TICKS = 3
+    JUSTICE_DETENTION_NOTICE_RADIUS = 10
+    JUSTICE_DETENTION_CONTACT_RADIUS = 1
+    BOUNTY_PICKUP_DISPATCH_RADIUS = 80
+    BOUNTY_PICKUP_VERIFY_RADIUS = 3
     BOOKING_HOURS_BY_TIER = {
         "questioning": 1.0,
         "wanted": 3.0,
@@ -328,7 +341,7 @@ class CriminalJusticeSystem(System):
     def __init__(self, sim, player_eid):
         super().__init__(sim)
         self.player_eid = player_eid
-        self.pending_detentions = {}
+        self.pending_detentions = self._pending_detention_records()
         self.player_surrender_prompt = None
         self._next_player_identity_check_tick = 0
         self._streaming_system = None
@@ -414,6 +427,38 @@ class CriminalJusticeSystem(System):
         if not isinstance(records, dict):
             records = {}
             state["player_surrender_offers"] = records
+        return records
+
+    def _pending_detention_records(self):
+        state = self._justice_state()
+        records = state.get("pending_detentions")
+        if not isinstance(records, dict):
+            records = {}
+            state["pending_detentions"] = records
+        return records
+
+    def _identity_check_approach_records(self):
+        state = self._justice_state()
+        records = state.get("identity_check_approaches")
+        if not isinstance(records, dict):
+            records = {}
+            state["identity_check_approaches"] = records
+        return records
+
+    def _detention_approach_records(self):
+        state = self._justice_state()
+        records = state.get("detention_approaches")
+        if not isinstance(records, dict):
+            records = {}
+            state["detention_approaches"] = records
+        return records
+
+    def _bounty_pickup_records(self):
+        state = self._justice_state()
+        records = state.get("bounty_pickups")
+        if not isinstance(records, dict):
+            records = {}
+            state["bounty_pickups"] = records
         return records
 
     def _clear_player_surrender_offer_records(self):
@@ -1481,9 +1526,24 @@ class CriminalJusticeSystem(System):
         description = account.get("description") if isinstance(account.get("description"), dict) else {}
         if not description:
             return None
+        try:
+            scene_x = int(case.get("x"))
+            scene_y = int(case.get("y"))
+            scene_z = int(case.get("z", 0) or 0)
+        except (TypeError, ValueError):
+            return None
         candidates = []
         identities = self.sim.ecs.get(CreatureIdentity)
-        for actor_eid, pos in self.sim.ecs.get(Position).items():
+        positions = self.sim.ecs.get(Position)
+        for actor_eid in self.sim.entity_ids_in_radius(
+            scene_x,
+            scene_y,
+            scene_z,
+            PROVISIONAL_MAX_SCENE_DISTANCE,
+        ):
+            pos = positions.get(actor_eid)
+            if pos is None:
+                continue
             if actor_eid == self.player_eid or actor_eid == reporter_eid:
                 continue
             identity = identities.get(actor_eid)
@@ -3511,7 +3571,15 @@ class CriminalJusticeSystem(System):
         radius = max(1, int(radius or max(self.DETENTION_RADIUS, 8)))
         positions = self.sim.ecs.get(Position)
         candidates = []
-        for eid, pos in positions.items():
+        for eid in self.sim.entity_ids_in_radius(
+            player_pos.x,
+            player_pos.y,
+            player_pos.z,
+            radius,
+        ):
+            pos = positions.get(eid)
+            if pos is None:
+                continue
             if eid == self.player_eid or pos.z != player_pos.z:
                 continue
             dist = _manhattan(pos.x, pos.y, player_pos.x, player_pos.y)
@@ -3519,6 +3587,8 @@ class CriminalJusticeSystem(System):
                 continue
             enforcer, law_drive, priority = self._actor_is_enforcer(eid)
             if not enforcer:
+                continue
+            if self._justice_response_interrupted(eid, response_role="justice_detention"):
                 continue
             if int(eid) != int(primary_eid or -1):
                 if not _shared_observer_can_see_position(
@@ -4195,7 +4265,15 @@ class CriminalJusticeSystem(System):
         positions = self.sim.ecs.get(Position)
         best = None
         best_rank = None
-        for eid, pos in positions.items():
+        for eid in self.sim.entity_ids_in_radius(
+            player_pos.x,
+            player_pos.y,
+            player_pos.z,
+            radius,
+        ):
+            pos = positions.get(eid)
+            if pos is None:
+                continue
             if eid == self.player_eid or pos.z != player_pos.z:
                 continue
             dist = _manhattan(pos.x, pos.y, player_pos.x, player_pos.y)
@@ -4203,6 +4281,8 @@ class CriminalJusticeSystem(System):
                 continue
             enforcer, law_drive, priority = self._actor_is_enforcer(eid)
             if not enforcer:
+                continue
+            if self._justice_response_interrupted(eid, response_role="justice_detention"):
                 continue
             if not _shared_observer_can_see_position(
                 self.sim,
@@ -5040,29 +5120,116 @@ class CriminalJusticeSystem(System):
         )
         return True
 
-    def _find_detaining_enforcer(self, offender_eid):
+    def _justice_response_interrupted(self, enforcer_eid, *, response_role):
+        ai = self.sim.ecs.get(AI).get(enforcer_eid)
+        if ai is None or _entity_is_downed(self.sim, enforcer_eid):
+            return True
+        current_role = str(getattr(ai, "response_role", "") or "").strip().lower()
+        if current_role and current_role != str(response_role or "").strip().lower():
+            return True
+        if _actor_in_live_combat(self.sim, enforcer_eid):
+            return True
+        state = str(getattr(ai, "state", "idle") or "idle").strip().lower()
+        return state in {
+            "protecting",
+            "chasing",
+            "reporting_incident",
+            "helping_victim",
+            "seeking_safety",
+            "holding",
+            "following",
+            "warning",
+            "ejecting_target",
+            "leaving_property",
+            "surrendered",
+        }
+
+    def _find_detaining_enforcer(self, offender_eid, *, radius=None, preferred_eid=None):
         positions = self.sim.ecs.get(Position)
         offender_pos = positions.get(offender_eid)
         if offender_pos is None:
             return None
 
+        radius = max(0, int(self.DETENTION_RADIUS if radius is None else radius))
         best = None
         best_rank = None
-        for eid, pos in positions.items():
+        nearby_eids = self.sim.entity_ids_in_radius(
+            offender_pos.x,
+            offender_pos.y,
+            offender_pos.z,
+            radius,
+        )
+        for eid in nearby_eids:
+            pos = positions.get(eid)
+            if pos is None:
+                continue
             if eid == offender_eid or pos.z != offender_pos.z:
                 continue
             dist = _manhattan(pos.x, pos.y, offender_pos.x, offender_pos.y)
-            if dist > int(self.DETENTION_RADIUS):
+            if dist > radius:
                 continue
 
             enforcer, law_drive, priority = self._actor_is_enforcer(eid)
             if not enforcer:
                 continue
-            rank = (dist, -priority, -law_drive, int(eid))
+            if self._justice_response_interrupted(eid, response_role="justice_detention"):
+                continue
+            if not _shared_observer_can_see_position(
+                self.sim,
+                observer_eid=eid,
+                observer_x=pos.x,
+                observer_y=pos.y,
+                observer_z=pos.z,
+                target_x=offender_pos.x,
+                target_y=offender_pos.y,
+                target_z=offender_pos.z,
+                radius=max(4, radius + 2),
+            ):
+                continue
+            rank = (0 if preferred_eid is not None and int(eid) == int(preferred_eid) else 1, dist, -priority, -law_drive, int(eid))
             if best_rank is None or rank < best_rank:
                 best = int(eid)
                 best_rank = rank
         return best
+
+    def _complete_pending_npc_detention(self, offender_eid, held_by_eid, *, snapshot=None):
+        pos = self._position_for(offender_eid)
+        if pos is None or held_by_eid is None:
+            return False
+        snapshot = snapshot if isinstance(snapshot, dict) else _justice_snapshot(self.sim, offender_eid)
+        if bool(snapshot.get("in_custody", False)):
+            return False
+        custody_change = _mark_justice_in_custody(
+            self.sim,
+            offender_eid,
+            held_by_eid=held_by_eid,
+            x=pos.x,
+            y=pos.y,
+        )
+        self._emit_change_events(custody_change, source_event="actor_detained", reason="custody")
+        self.sim.emit(Event(
+            "actor_detained",
+            eid=offender_eid,
+            by_eid=held_by_eid,
+            x=pos.x,
+            y=pos.y,
+            z=pos.z,
+            before_tier=str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear",
+            after_tier=str((custody_change or {}).get("after_tier", "held")).strip().lower() or "held",
+            jurisdiction_key=str((custody_change or {}).get("jurisdiction_key", "") or "").strip().lower(),
+            jurisdiction_name=str((custody_change or {}).get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office",
+        ))
+        self._store_npc_custody_record(
+            offender_eid,
+            snapshot,
+            held_by_eid=held_by_eid,
+            pos=pos,
+        )
+        record = self._npc_custody_records().get(str(int(offender_eid)))
+        if isinstance(record, dict):
+            self._move_npc_to_custody(offender_eid, record)
+        self.pending_detentions.pop(int(offender_eid), None)
+        return True
 
     def on_property_trespass(self, event):
         if event_is_vision_only(event):
@@ -5766,6 +5933,313 @@ class CriminalJusticeSystem(System):
             return
         self.pending_detentions[int(offender_eid)] = int(getattr(self.sim, "tick", 0)) + int(self.DETENTION_QUEUE_WINDOW)
 
+    def _clear_detention_approach(self, offender_eid, *, reason="ended"):
+        records = self._detention_approach_records()
+        record = records.pop(str(int(offender_eid)), None)
+        if not isinstance(record, dict):
+            return
+        responder_eid = record.get("responder_eid")
+        try:
+            responder_eid = int(responder_eid)
+        except (TypeError, ValueError):
+            return
+        ai = self.sim.ecs.get(AI).get(responder_eid)
+        will = self.sim.ecs.get(NPCWill).get(responder_eid)
+        if ai is None or str(getattr(ai, "response_role", "") or "").strip().lower() != "justice_detention":
+            return
+        context = getattr(ai, "investigation_context", None)
+        if is_purposeful_observation(context, purpose="justice_detention"):
+            ai.investigation_context = finish_purposeful_observation(
+                context,
+                current_tick=self.sim.tick,
+                reason=reason,
+            )
+        ai.response_role = None
+        ai.incident_id = None
+        if str(getattr(ai, "state", "") or "").strip().lower() in {"idle", "investigating"}:
+            _sync_ai_intent(ai, will, self.sim.tick, "idle", score=0.0, target=None, target_eid=None)
+
+    def _advance_or_assign_detention_approach(self, offender_eid):
+        records = self._detention_approach_records()
+        key = str(int(offender_eid))
+        record = records.get(key)
+        if not isinstance(record, dict):
+            responder_eid = self._find_detaining_enforcer(
+                offender_eid,
+                radius=self.JUSTICE_DETENTION_NOTICE_RADIUS,
+            )
+            if responder_eid is None:
+                return None
+            record = {
+                "offender_eid": int(offender_eid),
+                "responder_eid": int(responder_eid),
+                "started_tick": int(getattr(self.sim, "tick", 0)),
+            }
+            records[key] = record
+        try:
+            responder_eid = int(record.get("responder_eid"))
+        except (TypeError, ValueError):
+            records.pop(key, None)
+            return None
+        ai = self.sim.ecs.get(AI).get(responder_eid)
+        will = self.sim.ecs.get(NPCWill).get(responder_eid)
+        if ai is None or will is None or self._position_for(offender_eid) is None:
+            self._clear_detention_approach(offender_eid, reason="invalid_target")
+            return None
+        if self._justice_response_interrupted(responder_eid, response_role="justice_detention"):
+            return None
+        context, contact, target = self._purposeful_actor_approach(
+            responder_eid,
+            offender_eid,
+            purpose="justice_detention",
+            existing=getattr(ai, "investigation_context", None),
+            notice_radius=self.JUSTICE_DETENTION_NOTICE_RADIUS,
+            capture_subject_account=False,
+        )
+        ai.investigation_context = context
+        responder_pos = self._position_for(responder_eid)
+        offender_pos = self._position_for(offender_eid)
+        if contact == "visible" and responder_pos is not None and offender_pos is not None:
+            if _manhattan(responder_pos.x, responder_pos.y, offender_pos.x, offender_pos.y) <= int(self.JUSTICE_DETENTION_CONTACT_RADIUS):
+                return responder_eid
+        if target is None:
+            self._clear_detention_approach(offender_eid, reason="lost_contact")
+            return None
+        was_approaching = str(getattr(ai, "response_role", "") or "").strip().lower() == "justice_detention"
+        _sync_ai_intent(
+            ai,
+            will,
+            self.sim.tick,
+            "investigating",
+            score=88.0,
+            target=target,
+            target_eid=None,
+        )
+        ai.response_role = "justice_detention"
+        if not was_approaching:
+            self.sim.emit(Event(
+                "justice_detention_approach_started",
+                npc_eid=responder_eid,
+                target_eid=offender_eid,
+                x=target[0],
+                y=target[1],
+                z=target[2],
+            ))
+        return None
+
+    def _bounty_target_is_restrained(self, target_eid):
+        suppression = self.sim.ecs.get(SuppressionState).get(target_eid)
+        if bool(getattr(suppression, "surrendered", False)):
+            return True
+        ai = self.sim.ecs.get(AI).get(target_eid)
+        return str(getattr(ai, "state", "") or "").strip().lower() == "surrendered"
+
+    def _clear_bounty_pickup(self, target_eid, *, reason="ended"):
+        records = self._bounty_pickup_records()
+        record = records.pop(str(int(target_eid)), None)
+        if not isinstance(record, dict):
+            return
+        responder_eid = record.get("responder_eid")
+        try:
+            responder_eid = int(responder_eid)
+        except (TypeError, ValueError):
+            responder_eid = None
+        ai = self.sim.ecs.get(AI).get(responder_eid) if responder_eid is not None else None
+        will = self.sim.ecs.get(NPCWill).get(responder_eid) if responder_eid is not None else None
+        if ai is not None and str(getattr(ai, "response_role", "") or "").strip().lower() == "bounty_pickup":
+            context = getattr(ai, "investigation_context", None)
+            if is_purposeful_observation(context, purpose="bounty_pickup"):
+                ai.investigation_context = finish_purposeful_observation(
+                    context,
+                    current_tick=self.sim.tick,
+                    reason=reason,
+                )
+            ai.response_role = None
+            ai.incident_id = None
+            if str(getattr(ai, "state", "") or "").strip().lower() in {"idle", "investigating"}:
+                _sync_ai_intent(ai, will, self.sim.tick, "idle", score=0.0, target=None, target_eid=None)
+        self.sim.emit(Event(
+            "bounty_pickup_ended",
+            target_eid=int(target_eid),
+            responder_eid=responder_eid,
+            reason=str(reason or "ended").strip().lower(),
+        ))
+
+    def _assign_bounty_pickup_responder(self, record):
+        if not isinstance(record, dict):
+            return False
+        reported = record.get("reported_position")
+        if not isinstance(reported, (tuple, list)) or len(reported) < 3:
+            return False
+        try:
+            rx, ry, rz = int(reported[0]), int(reported[1]), int(reported[2])
+        except (TypeError, ValueError):
+            return False
+        positions = self.sim.ecs.get(Position)
+        candidates = []
+        for eid in self.sim.entity_ids_in_radius(rx, ry, rz, self.BOUNTY_PICKUP_DISPATCH_RADIUS):
+            pos = positions.get(eid)
+            if pos is None or int(pos.z) != rz or int(eid) == int(record.get("target_eid", -1) or -1):
+                continue
+            enforcer, law_drive, priority = self._actor_is_enforcer(eid)
+            if not enforcer or self._justice_response_interrupted(eid, response_role="bounty_pickup"):
+                continue
+            if self.sim.ecs.get(NPCWill).get(eid) is None:
+                continue
+            distance = _manhattan(pos.x, pos.y, rx, ry)
+            if distance > int(self.BOUNTY_PICKUP_DISPATCH_RADIUS):
+                continue
+            candidates.append((distance, -priority, -law_drive, int(eid)))
+        if not candidates:
+            return False
+        for _distance, _priority, _law_drive, responder_eid in sorted(candidates):
+            try:
+                context = begin_purposeful_anchor_observation(
+                    self.sim,
+                    responder_eid,
+                    (rx, ry, rz),
+                    purpose="bounty_pickup",
+                    anchor_kind="reported_bounty_pickup",
+                    anchor_id=record.get("opportunity_id"),
+                )
+            except ValueError:
+                continue
+            ai = self.sim.ecs.get(AI).get(responder_eid)
+            will = self.sim.ecs.get(NPCWill).get(responder_eid)
+            if ai is None or will is None:
+                continue
+            target = tuple(context.get("watch_position", (rx, ry, rz)))
+            ai.investigation_context = context
+            _sync_ai_intent(ai, will, self.sim.tick, "investigating", score=86.0, target=target, target_eid=None)
+            ai.response_role = "bounty_pickup"
+            ai.incident_id = None
+            record["responder_eid"] = int(responder_eid)
+            record["assigned_tick"] = int(getattr(self.sim, "tick", 0))
+            record["state"] = "en_route"
+            self.sim.emit(Event(
+                "bounty_pickup_responder_assigned",
+                target_eid=int(record.get("target_eid")),
+                responder_eid=int(responder_eid),
+                x=rx,
+                y=ry,
+                z=rz,
+            ))
+            return True
+        return False
+
+    def _process_bounty_pickups(self):
+        tick = int(getattr(self.sim, "tick", 0))
+        records = self._bounty_pickup_records()
+        for raw_target_eid, record in tuple(records.items()):
+            try:
+                target_eid = int(raw_target_eid)
+            except (TypeError, ValueError):
+                records.pop(raw_target_eid, None)
+                continue
+            if not isinstance(record, dict):
+                records.pop(raw_target_eid, None)
+                continue
+            if tick > int(record.get("expires_at", tick) or tick):
+                self._clear_bounty_pickup(target_eid, reason="pickup_expired")
+                continue
+            snapshot = _justice_snapshot(self.sim, target_eid)
+            if bool(snapshot.get("in_custody", False)):
+                self._clear_bounty_pickup(target_eid, reason="already_in_custody")
+                continue
+            target_pos = self._position_for(target_eid)
+            if target_pos is None or str(snapshot.get("wanted_tier", "clear") or "clear").strip().lower() not in {"wanted", "arrest_on_sight"}:
+                self._clear_bounty_pickup(target_eid, reason="target_unavailable")
+                continue
+            responder_eid = record.get("responder_eid")
+            try:
+                responder_eid = int(responder_eid) if responder_eid is not None else None
+            except (TypeError, ValueError):
+                responder_eid = None
+            if responder_eid is None or self.sim.ecs.get(AI).get(responder_eid) is None:
+                if tick >= int(record.get("next_assignment_tick", 0) or 0):
+                    if not self._assign_bounty_pickup_responder(record):
+                        record["next_assignment_tick"] = tick + 12
+                continue
+            if self._justice_response_interrupted(responder_eid, response_role="bounty_pickup"):
+                continue
+            responder_pos = self._position_for(responder_eid)
+            ai = self.sim.ecs.get(AI).get(responder_eid)
+            will = self.sim.ecs.get(NPCWill).get(responder_eid)
+            if responder_pos is None or ai is None or will is None:
+                record["responder_eid"] = None
+                record["next_assignment_tick"] = tick + 3
+                continue
+            distance = _manhattan(responder_pos.x, responder_pos.y, target_pos.x, target_pos.y)
+            visible = (
+                int(responder_pos.z) == int(target_pos.z)
+                and distance <= int(self.BOUNTY_PICKUP_VERIFY_RADIUS)
+                and _shared_observer_can_see_position(
+                    self.sim,
+                    observer_eid=responder_eid,
+                    observer_x=responder_pos.x,
+                    observer_y=responder_pos.y,
+                    observer_z=responder_pos.z,
+                    target_x=target_pos.x,
+                    target_y=target_pos.y,
+                    target_z=target_pos.z,
+                    radius=max(4, int(self.BOUNTY_PICKUP_VERIFY_RADIUS) + 2),
+                )
+            )
+            if visible:
+                if not self._bounty_target_is_restrained(target_eid):
+                    self._clear_bounty_pickup(target_eid, reason="restraint_not_verified")
+                    continue
+                context, _contact, target = self._purposeful_actor_approach(
+                    responder_eid,
+                    target_eid,
+                    purpose="bounty_pickup",
+                    existing=getattr(ai, "investigation_context", None),
+                    notice_radius=self.BOUNTY_PICKUP_VERIFY_RADIUS,
+                    capture_subject_account=False,
+                )
+                ai.investigation_context = context
+                if distance <= int(self.JUSTICE_DETENTION_CONTACT_RADIUS):
+                    if self._complete_pending_npc_detention(target_eid, responder_eid, snapshot=snapshot):
+                        self._clear_bounty_pickup(target_eid, reason="pickup_verified")
+                    continue
+                if target is not None:
+                    _sync_ai_intent(ai, will, tick, "investigating", score=90.0, target=target, target_eid=None)
+                    ai.response_role = "bounty_pickup"
+                    record["state"] = "target_verified"
+                continue
+
+            reported = record.get("reported_position")
+            watch_position = None
+            context = getattr(ai, "investigation_context", None)
+            if is_purposeful_observation(context, purpose="bounty_pickup"):
+                watch_position = context.get("watch_position")
+            if not isinstance(watch_position, (tuple, list)) or len(watch_position) < 3:
+                watch_position = reported
+            try:
+                watch_position = (int(watch_position[0]), int(watch_position[1]), int(watch_position[2]))
+            except (TypeError, ValueError, IndexError):
+                self._clear_bounty_pickup(target_eid, reason="invalid_reported_position")
+                continue
+            if _manhattan(responder_pos.x, responder_pos.y, watch_position[0], watch_position[1]) <= 1:
+                arrived_tick = record.get("arrived_tick")
+                if arrived_tick is None:
+                    record["arrived_tick"] = tick
+                    record["state"] = "verifying_report"
+                    self.sim.emit(Event(
+                        "bounty_pickup_responder_arrived",
+                        target_eid=target_eid,
+                        responder_eid=responder_eid,
+                        x=watch_position[0],
+                        y=watch_position[1],
+                        z=watch_position[2],
+                    ))
+                grace = max(0, int(observation_purpose_profile("bounty_pickup").get("lost_contact_grace_ticks", 0) or 0))
+                if tick - int(record.get("arrived_tick", tick) or tick) > grace:
+                    self._clear_bounty_pickup(target_eid, reason="target_not_verified")
+                continue
+            _sync_ai_intent(ai, will, tick, "investigating", score=86.0, target=watch_position, target_eid=None)
+            ai.response_role = "bounty_pickup"
+
     def on_bounty_pickup_dispatch_requested(self, event):
         offender_eid = event.data.get("target_eid")
         if offender_eid in {None, self.player_eid}:
@@ -5777,7 +6251,39 @@ class CriminalJusticeSystem(System):
         snapshot = _justice_snapshot(self.sim, offender_eid)
         if bool(snapshot.get("in_custody", False)):
             return
-        self.pending_detentions[offender_eid] = int(getattr(self.sim, "tick", 0)) + int(self.DETENTION_QUEUE_WINDOW * 2)
+        pos = self._position_for(offender_eid)
+        if pos is None:
+            return
+        try:
+            reported_position = (
+                int(event.data.get("x", pos.x)),
+                int(event.data.get("y", pos.y)),
+                int(event.data.get("z", pos.z)),
+            )
+        except (TypeError, ValueError):
+            reported_position = (int(pos.x), int(pos.y), int(pos.z))
+        tick = int(getattr(self.sim, "tick", 0))
+        expires_at = tick + max(int(self.DETENTION_QUEUE_WINDOW * 2), 90)
+        self.pending_detentions[offender_eid] = expires_at
+        # A caller-supplied pickup location is now the responder's only lawful
+        # location lead.  Retire any older generic detention approach so it
+        # cannot keep steering another officer toward stale/live target state
+        # in parallel with this dedicated dispatch.
+        self._clear_detention_approach(offender_eid, reason="bounty_pickup_called")
+        record = {
+            "target_eid": int(offender_eid),
+            "requested_by_eid": event.data.get("eid"),
+            "opportunity_id": int(event.data.get("opportunity_id", 0) or 0),
+            "target_name": str(event.data.get("target_name", "the target") or "the target").strip() or "the target",
+            "reported_position": reported_position,
+            "requested_tick": tick,
+            "expires_at": expires_at,
+            "responder_eid": None,
+            "next_assignment_tick": tick,
+            "state": "requested",
+        }
+        self._bounty_pickup_records()[str(int(offender_eid))] = record
+        self._assign_bounty_pickup_responder(record)
 
     def _process_pending_detentions(self):
         positions = self.sim.ecs.get(Position)
@@ -5785,59 +6291,49 @@ class CriminalJusticeSystem(System):
         for offender_eid, expires_at in list(self.pending_detentions.items()):
             if tick > int(expires_at):
                 self.pending_detentions.pop(int(offender_eid), None)
+                self._clear_detention_approach(offender_eid, reason="detention_window_expired")
+                self._clear_bounty_pickup(offender_eid, reason="pickup_expired")
                 continue
             pos = positions.get(offender_eid)
             if pos is None:
                 self.pending_detentions.pop(int(offender_eid), None)
+                self._clear_detention_approach(offender_eid, reason="target_unavailable")
+                self._clear_bounty_pickup(offender_eid, reason="target_unavailable")
                 continue
             snapshot = _justice_snapshot(self.sim, offender_eid)
             if bool(snapshot.get("in_custody", False)):
                 self.pending_detentions.pop(int(offender_eid), None)
+                self._clear_detention_approach(offender_eid, reason="already_in_custody")
+                self._clear_bounty_pickup(offender_eid, reason="already_in_custody")
                 continue
             if str(snapshot.get("wanted_tier", "clear")).strip().lower() not in {"wanted", "arrest_on_sight"}:
                 self.pending_detentions.pop(int(offender_eid), None)
+                self._clear_detention_approach(offender_eid, reason="record_cleared")
+                self._clear_bounty_pickup(offender_eid, reason="record_cleared")
+                continue
+            if str(int(offender_eid)) in self._bounty_pickup_records():
                 continue
 
-            held_by_eid = self._find_detaining_enforcer(offender_eid)
+            approach_record = self._detention_approach_records().get(str(int(offender_eid)))
+            preferred_eid = approach_record.get("responder_eid") if isinstance(approach_record, dict) else None
+            held_by_eid = self._find_detaining_enforcer(
+                offender_eid,
+                radius=self.JUSTICE_DETENTION_CONTACT_RADIUS,
+                preferred_eid=preferred_eid,
+            )
+            if held_by_eid is None:
+                held_by_eid = self._advance_or_assign_detention_approach(offender_eid)
             if held_by_eid is None:
                 continue
-
-            custody_change = _mark_justice_in_custody(
-                self.sim,
-                offender_eid,
-                held_by_eid=held_by_eid,
-                x=pos.x,
-                y=pos.y,
-            )
-            self._emit_change_events(custody_change, source_event="actor_detained", reason="custody")
-            self.sim.emit(Event(
-                "actor_detained",
-                eid=offender_eid,
-                by_eid=held_by_eid,
-                x=pos.x,
-                y=pos.y,
-                z=pos.z,
-                before_tier=str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear",
-                after_tier=str((custody_change or {}).get("after_tier", "held")).strip().lower() or "held",
-                jurisdiction_key=str((custody_change or {}).get("jurisdiction_key", "") or "").strip().lower(),
-                jurisdiction_name=str((custody_change or {}).get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office",
-            ))
-            self._store_npc_custody_record(
-                offender_eid,
-                snapshot,
-                held_by_eid=held_by_eid,
-                pos=pos,
-            )
-            record = self._npc_custody_records().get(str(int(offender_eid)))
-            if isinstance(record, dict):
-                self._move_npc_to_custody(offender_eid, record)
-            self.pending_detentions.pop(int(offender_eid), None)
+            if self._complete_pending_npc_detention(offender_eid, held_by_eid, snapshot=snapshot):
+                self._clear_detention_approach(offender_eid, reason="custody_verified")
 
     def _process_guard_initiated_player_arrest(self):
         if map_mode_active(self.sim):
             return False
         snapshot = self._player_bookable_snapshot()
         if snapshot is None:
+            self._clear_detention_approach(self.player_eid, reason="player_record_clear")
             return False
         if self._player_surrender_prompt_open():
             return False
@@ -5845,8 +6341,13 @@ class CriminalJusticeSystem(System):
             return False
         held_by_eid = self._find_auto_arrest_enforcer(snapshot)
         if held_by_eid is None:
-            return False
-        return bool(self._open_player_justice_prompt(held_by_eid, snapshot=snapshot, respect_cooldown=True))
+            held_by_eid = self._advance_or_assign_detention_approach(self.player_eid)
+            if held_by_eid is None:
+                return False
+        opened = bool(self._open_player_justice_prompt(held_by_eid, snapshot=snapshot, respect_cooldown=True))
+        if opened:
+            self._clear_detention_approach(self.player_eid, reason="surrender_prompt_opened")
+        return opened
 
     def _identity_check_case_id(self, match_row):
         if not isinstance(match_row, dict):
@@ -5944,10 +6445,18 @@ class CriminalJusticeSystem(System):
         return best
 
     def _clear_identity_check_approach(self, enforcer_eid):
+        self._identity_check_approach_records().pop(str(int(enforcer_eid)), None)
         ai = self.sim.ecs.get(AI).get(enforcer_eid)
         will = self.sim.ecs.get(NPCWill).get(enforcer_eid)
         if ai is None or str(getattr(ai, "response_role", "") or "").strip().lower() != "identity_check":
             return
+        context = getattr(ai, "investigation_context", None)
+        if is_purposeful_observation(context, purpose="justice_identity_check"):
+            ai.investigation_context = finish_purposeful_observation(
+                context,
+                current_tick=self.sim.tick,
+                reason="identity_check_ended",
+            )
         ai.response_role = None
         ai.incident_id = None
         _sync_ai_intent(
@@ -5960,6 +6469,209 @@ class CriminalJusticeSystem(System):
             target_eid=None,
         )
 
+    def _purposeful_actor_approach(
+        self,
+        observer_eid,
+        subject_eid,
+        *,
+        purpose,
+        existing=None,
+        notice_radius,
+        capture_subject_account=False,
+    ):
+        observer_pos = self._position_for(observer_eid)
+        subject_pos = self._position_for(subject_eid)
+        if observer_pos is None or subject_pos is None:
+            return existing, "invalid", None
+        tick = int(getattr(self.sim, "tick", 0))
+        distance = _manhattan(observer_pos.x, observer_pos.y, subject_pos.x, subject_pos.y)
+        visible = (
+            int(observer_pos.z) == int(subject_pos.z)
+            and distance <= max(1, int(notice_radius))
+            and _shared_observer_can_see_position(
+                self.sim,
+                observer_eid=observer_eid,
+                observer_x=observer_pos.x,
+                observer_y=observer_pos.y,
+                observer_z=observer_pos.z,
+                target_x=subject_pos.x,
+                target_y=subject_pos.y,
+                target_z=subject_pos.z,
+                radius=max(4, int(notice_radius) + 2),
+            )
+        )
+        context = existing if is_purposeful_observation(existing, purpose=purpose) else None
+        if visible:
+            watch_position = observation_watch_position(
+                self.sim,
+                observer_eid,
+                subject_pos,
+                purpose=purpose,
+            )
+            if watch_position is None and distance <= 1:
+                watch_position = (int(observer_pos.x), int(observer_pos.y), int(observer_pos.z))
+            if watch_position is None:
+                return context, "blocked", None
+            context = refresh_purposeful_observation(
+                self.sim,
+                observer_eid,
+                subject_eid,
+                purpose=purpose,
+                subject_pos=subject_pos,
+                watch_position=watch_position,
+                existing=context,
+                capture_subject_account=bool(capture_subject_account and context is None),
+                include_subject_account=bool(capture_subject_account),
+            )
+            context["lost_contact_since_tick"] = None
+            return context, "visible", tuple(watch_position)
+
+        if not is_purposeful_observation(context, purpose=purpose, active_only=True):
+            return context, "lost", None
+        context = dict(context)
+        lost_since = context.get("lost_contact_since_tick")
+        try:
+            lost_since = int(lost_since) if lost_since is not None else tick
+        except (TypeError, ValueError):
+            lost_since = tick
+        context["lost_contact_since_tick"] = lost_since
+        context["updated_tick"] = tick
+        grace = max(0, int(context.get("lost_contact_grace_ticks", 0) or 0))
+        if tick - lost_since > grace:
+            return (
+                finish_purposeful_observation(
+                    context,
+                    current_tick=tick,
+                    reason="lost_contact",
+                ),
+                "lost",
+                None,
+            )
+        last_seen = context.get("last_seen_position")
+        if isinstance(last_seen, (tuple, list)) and len(last_seen) >= 3:
+            try:
+                return context, "last_seen", (int(last_seen[0]), int(last_seen[1]), int(last_seen[2]))
+            except (TypeError, ValueError):
+                pass
+        return context, "lost", None
+
+    def _start_identity_check_approach(self, enforcer_eid, match_row):
+        incident_id = self._identity_check_case_id(match_row)
+        if incident_id is None:
+            return False
+        self._identity_check_approach_records()[str(int(enforcer_eid))] = {
+            "enforcer_eid": int(enforcer_eid),
+            "incident_id": int(incident_id),
+            "started_tick": int(getattr(self.sim, "tick", 0)),
+        }
+        return bool(self._advance_identity_check_approach(enforcer_eid))
+
+    def _advance_identity_check_approach(self, enforcer_eid):
+        records = self._identity_check_approach_records()
+        record = records.get(str(int(enforcer_eid)))
+        if not isinstance(record, dict):
+            return False
+        ai = self.sim.ecs.get(AI).get(enforcer_eid)
+        will = self.sim.ecs.get(NPCWill).get(enforcer_eid)
+        if ai is None or will is None or _entity_is_downed(self.sim, enforcer_eid):
+            records.pop(str(int(enforcer_eid)), None)
+            return False
+        if self._player_bookable_snapshot() is not None:
+            self._clear_identity_check_approach(enforcer_eid)
+            return False
+        if _actor_in_live_combat(self.sim, enforcer_eid) or _actor_in_live_combat(self.sim, self.player_eid):
+            return True
+        busy_state = str(getattr(ai, "state", "idle") or "idle").strip().lower()
+        response_role = str(getattr(ai, "response_role", "") or "").strip().lower()
+        if response_role not in {"", "identity_check"} or busy_state in {
+            "protecting",
+            "reporting_incident",
+            "helping_victim",
+            "seeking_safety",
+            "warning",
+            "ejecting_target",
+            "leaving_property",
+        }:
+            return True
+
+        incident_id = int(record.get("incident_id", -1) or -1)
+        case = justice_case_for_incident(self.sim, incident_id)
+        if not isinstance(case, dict) or str(case.get("status", "unresolved") or "unresolved").strip().lower() != "unresolved":
+            self._clear_identity_check_approach(enforcer_eid)
+            return False
+        context = getattr(ai, "investigation_context", None)
+        context, contact, target = self._purposeful_actor_approach(
+            enforcer_eid,
+            self.player_eid,
+            purpose="justice_identity_check",
+            existing=context,
+            notice_radius=self.PLAYER_IDENTITY_CHECK_NOTICE_RADIUS,
+            capture_subject_account=True,
+        )
+        ai.investigation_context = context
+        if contact == "visible":
+            match_row = self._player_unresolved_identity_match()
+            if self._identity_check_case_id(match_row) != incident_id:
+                self._clear_identity_check_approach(enforcer_eid)
+                return False
+            player_pos = self._position_for(self.player_eid)
+            enforcer_pos = self._position_for(enforcer_eid)
+            if player_pos is None or enforcer_pos is None:
+                self._clear_identity_check_approach(enforcer_eid)
+                return False
+            distance = _manhattan(enforcer_pos.x, enforcer_pos.y, player_pos.x, player_pos.y)
+            if distance <= int(self.PLAYER_IDENTITY_CHECK_PROMPT_RADIUS):
+                opened = bool(self._open_player_identity_check_prompt(enforcer_eid, match_row))
+                if opened:
+                    self._clear_identity_check_approach(enforcer_eid)
+                return opened
+        if target is None:
+            self._clear_identity_check_approach(enforcer_eid)
+            return False
+
+        was_approaching = response_role == "identity_check"
+        _sync_ai_intent(
+            ai,
+            will,
+            self.sim.tick,
+            "investigating",
+            score=82.0,
+            target=target,
+            target_eid=None,
+        )
+        ai.incident_id = incident_id
+        ai.response_role = "identity_check"
+        if not was_approaching:
+            observer_pos = self._position_for(enforcer_eid)
+            player_pos = self._position_for(self.player_eid)
+            distance = (
+                _manhattan(observer_pos.x, observer_pos.y, player_pos.x, player_pos.y)
+                if observer_pos is not None and player_pos is not None
+                else 0
+            )
+            self.sim.emit(Event(
+                "justice_identity_check_approach_started",
+                npc_eid=enforcer_eid,
+                eid=self.player_eid,
+                incident_id=incident_id,
+                distance=distance,
+            ))
+        return True
+
+    def _advance_identity_check_approaches(self):
+        records = self._identity_check_approach_records()
+        if not records:
+            return False
+        handled = False
+        for raw_eid in tuple(records):
+            try:
+                enforcer_eid = int(raw_eid)
+            except (TypeError, ValueError):
+                records.pop(raw_eid, None)
+                continue
+            handled = bool(self._advance_identity_check_approach(enforcer_eid)) or handled
+        return handled
+
     def _process_guard_initiated_player_identity_check(self):
         if map_mode_active(self.sim):
             return False
@@ -5967,6 +6679,8 @@ class CriminalJusticeSystem(System):
             return False
         if self._player_bookable_snapshot() is not None or _actor_in_live_combat(self.sim, self.player_eid):
             return False
+        if self._advance_identity_check_approaches():
+            return True
         tick = int(getattr(self.sim, "tick", 0))
         if tick < int(self._next_player_identity_check_tick):
             return False
@@ -5983,46 +6697,7 @@ class CriminalJusticeSystem(System):
         enforcer_eid = self._find_identity_check_enforcer(match_row)
         if enforcer_eid is None:
             return False
-        player_pos = self._position_for(self.player_eid)
-        enforcer_pos = self._position_for(enforcer_eid)
-        if player_pos is None or enforcer_pos is None:
-            return False
-        distance = _manhattan(enforcer_pos.x, enforcer_pos.y, player_pos.x, player_pos.y)
-        if distance <= int(self.PLAYER_IDENTITY_CHECK_PROMPT_RADIUS):
-            opened = bool(self._open_player_identity_check_prompt(enforcer_eid, match_row))
-            if opened:
-                self._clear_identity_check_approach(enforcer_eid)
-            return opened
-
-        ai = self.sim.ecs.get(AI).get(enforcer_eid)
-        will = self.sim.ecs.get(NPCWill).get(enforcer_eid)
-        if ai is None or will is None:
-            return False
-        incident_id = self._identity_check_case_id(match_row)
-        was_approaching = (
-            str(getattr(ai, "response_role", "") or "").strip().lower() == "identity_check"
-            and getattr(ai, "incident_id", None) == incident_id
-        )
-        _sync_ai_intent(
-            ai,
-            will,
-            tick,
-            "investigating",
-            score=82.0,
-            target=(int(player_pos.x), int(player_pos.y), int(player_pos.z)),
-            target_eid=self.player_eid,
-        )
-        ai.incident_id = incident_id
-        ai.response_role = "identity_check"
-        if not was_approaching:
-            self.sim.emit(Event(
-                "justice_identity_check_approach_started",
-                npc_eid=enforcer_eid,
-                eid=self.player_eid,
-                incident_id=incident_id,
-                distance=distance,
-            ))
-        return True
+        return self._start_identity_check_approach(enforcer_eid, match_row)
 
     def _process_resolved_npc_custody(self):
         tick = int(getattr(self.sim, "tick", 0))
@@ -6119,6 +6794,7 @@ class CriminalJusticeSystem(System):
         arrest_started = self._process_guard_initiated_player_arrest()
         if not arrest_started:
             self._process_guard_initiated_player_identity_check()
+        self._process_bounty_pickups()
         self._process_pending_detentions()
         self._process_resolved_npc_custody()
         self._process_pending_npc_exoneration_refunds()
