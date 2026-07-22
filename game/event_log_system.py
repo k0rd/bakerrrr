@@ -501,6 +501,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("vehicle_delivery_failed", self.on_vehicle_delivery_failed)
         self.sim.events.subscribe("property_closing_time_warning", self.on_property_closing_time_warning)
         self.sim.events.subscribe("npc_investigate", self.on_npc_investigate)
+        self.sim.events.subscribe("purposeful_search_started", self.on_purposeful_search_started)
+        self.sim.events.subscribe("purposeful_search_reacquired", self.on_purposeful_search_reacquired)
+        self.sim.events.subscribe("purposeful_search_abandoned", self.on_purposeful_search_abandoned)
         self.sim.events.subscribe("npc_warn_property", self.on_npc_warn_property)
         self.sim.events.subscribe("npc_protect_ally", self.on_npc_protect_ally)
         self.sim.events.subscribe("npc_defend_property", self.on_npc_defend_property)
@@ -4001,6 +4004,68 @@ class EventLogSystem(System):
             priority="critical" if combat_noise and self._investigation_bark_is_direct_target(npc_eid, event) else "high",
         )
 
+    def _purposeful_search_is_player_legible(self, event):
+        observer_eid = event.data.get("observer_eid")
+        return bool(
+            self._player_can_perceive_entity(observer_eid)
+            or self._player_can_perceive_event_position(event)
+        )
+
+    def on_purposeful_search_started(self, event):
+        if not self._purposeful_search_is_player_legible(event):
+            return
+        observer_eid = event.data.get("observer_eid")
+        subject_eid = event.data.get("subject_eid")
+        observer = self._npc_label(observer_eid)
+        if subject_eid == self.player_eid:
+            text = f"{observer} starts checking the places around where they lost sight of you."
+        else:
+            subject = self._npc_label(subject_eid)
+            text = f"{observer} starts searching around for {subject}."
+        self._log(
+            text,
+            channel="alerts",
+            priority="high" if subject_eid == self.player_eid else "normal",
+            dedupe_window=10,
+            dedupe_key=f"purposeful_search_started:{observer_eid}:{subject_eid}",
+        )
+
+    def on_purposeful_search_reacquired(self, event):
+        if not self._purposeful_search_is_player_legible(event):
+            return
+        observer_eid = event.data.get("observer_eid")
+        subject_eid = event.data.get("subject_eid")
+        observer = self._npc_label(observer_eid)
+        if subject_eid == self.player_eid:
+            text = f"{observer} spots you again."
+        else:
+            text = f"{observer} catches sight of {self._npc_label(subject_eid)} again."
+        self._log(
+            text,
+            channel="alerts",
+            priority="high" if subject_eid == self.player_eid else "normal",
+            dedupe_window=8,
+            dedupe_key=f"purposeful_search_reacquired:{observer_eid}:{subject_eid}",
+        )
+
+    def on_purposeful_search_abandoned(self, event):
+        if not self._purposeful_search_is_player_legible(event):
+            return
+        observer_eid = event.data.get("observer_eid")
+        subject_eid = event.data.get("subject_eid")
+        observer = self._npc_label(observer_eid)
+        if subject_eid == self.player_eid:
+            text = f"{observer} gives up the search."
+        else:
+            text = f"{observer} gives up searching for {self._npc_label(subject_eid)}."
+        self._log(
+            text,
+            channel="alerts",
+            priority="normal",
+            dedupe_window=10,
+            dedupe_key=f"purposeful_search_abandoned:{observer_eid}:{subject_eid}",
+        )
+
     def on_npc_protect_ally(self, event):
         if event.data.get("against_eid") != self.player_eid:
             return
@@ -4038,7 +4103,24 @@ class EventLogSystem(System):
             return
         npc_eid = event.data.get("npc_eid") or event.data.get("enforcer_eid")
         place = str(event.data.get("property_name", "") or "").strip() or "this place"
-        if bool(event.data.get("follow_required", False)):
+        boundary_scope = str(event.data.get("boundary_scope", "property") or "property").strip().lower()
+        room_kind = str(event.data.get("room_kind", "") or "").strip().lower().replace("_", " ")
+        room_level = str(event.data.get("room_access_level", "") or "").strip().lower()
+        origin_room = str(event.data.get("origin_room_kind", "") or "").strip().lower().replace("_", " ")
+        if boundary_scope == "room":
+            restricted_label = room_kind or "back room"
+            if room_level == "staff_only":
+                access_label = "staff only"
+            elif room_level == "private":
+                access_label = "private"
+            else:
+                access_label = "restricted"
+            return_label = origin_room or "the public area"
+            if bool(event.data.get("follow_required", False)):
+                quote = f"That {restricted_label} is {access_label}. Come back toward {return_label}."
+            else:
+                quote = f"That {restricted_label} is {access_label}. Step back into {return_label}."
+        elif bool(event.data.get("follow_required", False)):
             quote = f"Follow me out of {place}."
         else:
             quote = f"You need to leave {place}."
@@ -4056,8 +4138,13 @@ class EventLogSystem(System):
         if event.data.get("target_eid") != self.player_eid:
             return
         place = str(event.data.get("property_name", "") or "").strip() or "the property"
+        if str(event.data.get("boundary_scope", "property") or "property").strip().lower() == "room":
+            room_kind = str(event.data.get("room_kind", "") or "").strip().lower().replace("_", " ") or "restricted room"
+            text = f"You step back from the {room_kind} before it escalates."
+        else:
+            text = f"You leave {place} before it escalates."
         self._log(
-            f"You leave {place} before it escalates.",
+            text,
             channel="general",
             priority="normal",
             dedupe_window=4,
@@ -4068,8 +4155,13 @@ class EventLogSystem(System):
         if event.data.get("target_eid") != self.player_eid:
             return
         place = str(event.data.get("property_name", "") or "").strip() or "the property"
+        if str(event.data.get("boundary_scope", "property") or "property").strip().lower() == "room":
+            room_kind = str(event.data.get("room_kind", "") or "").strip().lower().replace("_", " ") or "restricted room"
+            text = f"You stay inside the {room_kind} after being warned; this is trespassing now."
+        else:
+            text = f"You are still inside {place}; this is trespassing now."
         self._log(
-            f"You are still inside {place}; this is trespassing now.",
+            text,
             channel="alerts",
             priority="high",
             dedupe_window=4,

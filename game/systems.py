@@ -310,6 +310,8 @@ from game.property_access import (
     property_apertures as _property_apertures,
     property_ingress_context as _property_ingress_context,
     property_claim_reason as _property_claim_reason,
+    property_access_transition as _property_access_transition,
+    property_access_transition_event_payload as _property_access_transition_event_payload,
     room_access_event_payload as _room_access_event_payload,
     room_access_level_for_kind as _room_access_level_for_kind,
     shared_property_interest_event_payload as _shared_property_interest_event_payload,
@@ -2088,6 +2090,79 @@ def _observer_can_notice_position(sim, observer_eid, x, y, z):
     )
 
 
+def _movement_access_property_at(sim, x, y, z):
+    """Resolve the structured property whose access rules govern one cell."""
+
+    prop = _property_covering(sim, x, y, z)
+    if prop and _property_cover_intended(prop):
+        # Cover-intended fixtures (benches, bus stops, etc.) are street
+        # furniture — they should never source access events themselves.  If
+        # one sits inside a building, use that enclosing building instead.
+        key = (int(x), int(y), int(z))
+        cover_index = getattr(sim, "property_cover_index", {})
+        prop = None
+        for property_id in cover_index.get(key, ()):
+            candidate = sim.properties.get(property_id)
+            if candidate is not None:
+                prop = candidate
+                break
+    return _property_enclosing_structure(sim, x, y, z, prop=prop)
+
+
+def _move_access_for_property(
+    sim,
+    *,
+    eid,
+    prop,
+    origin_x,
+    origin_y,
+    origin_z,
+    target_x,
+    target_y,
+    target_z,
+):
+    if not isinstance(prop, dict):
+        return {"prop": None, "ingress": None, "access": None, "transition": None}
+    ingress = _property_ingress_context(
+        prop,
+        from_x=origin_x,
+        from_y=origin_y,
+        from_z=origin_z,
+        to_x=target_x,
+        to_y=target_y,
+        to_z=target_z,
+        sim=sim,
+    )
+    access = _evaluate_property_access(
+        sim,
+        eid,
+        prop,
+        x=target_x,
+        y=target_y,
+        z=target_z,
+        breach_severity=ingress.breach_severity,
+    )
+    transition = _property_access_transition(
+        sim,
+        eid,
+        prop,
+        from_x=origin_x,
+        from_y=origin_y,
+        from_z=origin_z,
+        to_x=target_x,
+        to_y=target_y,
+        to_z=target_z,
+        ingress=ingress,
+        destination_access=access,
+    )
+    return {
+        "prop": prop,
+        "ingress": ingress,
+        "access": access,
+        "transition": transition,
+    }
+
+
 def _derive_move_access_context(
     sim,
     *,
@@ -2108,55 +2183,130 @@ def _derive_move_access_context(
         int(target_y),
         int(target_z),
     )
-    prop = _property_covering(sim, target_x, target_y, target_z)
-    if prop and _property_cover_intended(prop):
-        # Cover-intended fixtures (benches, bus stops, etc.) are street
-        # furniture — they should never source trespass events themselves.
-        # If the fixture sits inside a building's footprint, charge that
-        # building instead.
-        key = (int(target_x), int(target_y), int(target_z))
-        cover_index = getattr(sim, "property_cover_index", {})
-        prop = None
-        for _pid in cover_index.get(key, ()):
-            _enc = sim.properties.get(_pid)
-            if _enc is not None:
-                prop = _enc
-                break
-    prop = _property_enclosing_structure(
+    destination_prop = _movement_access_property_at(
         sim,
         target_x,
         target_y,
         target_z,
-        prop=prop,
     )
-    ingress = None
-    access = None
-    if prop:
-        ingress = _property_ingress_context(
-            prop,
-            from_x=origin_x,
-            from_y=origin_y,
-            from_z=origin_z,
-            to_x=target_x,
-            to_y=target_y,
-            to_z=target_z,
-            sim=sim,
-        )
-        access = _evaluate_property_access(
+    origin_prop = _movement_access_property_at(
+        sim,
+        origin_x,
+        origin_y,
+        origin_z,
+    )
+    destination_id = str((destination_prop or {}).get("id", "") or "")
+    origin_id = str((origin_prop or {}).get("id", "") or "")
+
+    # Access consequences are governed by the destination.  When a move only
+    # leaves a property, the origin becomes the primary context so the exit is
+    # still a real transition.  A direct property-to-property step carries both
+    # an origin exit and a destination entry in movement order.
+    primary_prop = destination_prop or origin_prop
+    primary = _move_access_for_property(
+        sim,
+        eid=eid,
+        prop=primary_prop,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        origin_z=origin_z,
+        target_x=target_x,
+        target_y=target_y,
+        target_z=target_z,
+    )
+    departure = None
+    if origin_prop is not None and destination_prop is not None and origin_id != destination_id:
+        departure = _move_access_for_property(
             sim,
-            eid,
-            prop,
-            x=target_x,
-            y=target_y,
-            z=target_z,
-            breach_severity=ingress.breach_severity,
+            eid=eid,
+            prop=origin_prop,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            origin_z=origin_z,
+            target_x=target_x,
+            target_y=target_y,
+            target_z=target_z,
         )
-    return {
-        "signature": signature,
-        "prop": prop,
-        "ingress": ingress,
-        "access": access,
-    }
+    primary.update({"signature": signature, "departure": departure})
+    return primary
+
+
+def _transition_with_runtime_access_change(sim, eid, prop, access, transition, *, action="move"):
+    """Fold non-geometric authority changes into the same transition language."""
+
+    if transition is None or access is None or not isinstance(prop, dict):
+        return transition
+    state = getattr(sim, "_actor_property_access_runtime", None)
+    if not isinstance(state, dict):
+        state = {}
+        setattr(sim, "_actor_property_access_runtime", state)
+    key = (int(eid), str(prop.get("id", "") or ""))
+    previous = state.get(key)
+    state[key] = access
+    if len(state) > 4096:
+        for stale_key in tuple(state)[:1024]:
+            if stale_key != key:
+                state.pop(stale_key, None)
+
+    if str(getattr(transition, "boundary_kind", "") or "").strip().lower() != "internal":
+        return transition
+    if not bool(getattr(access, "inside_bounds", False)) or bool(getattr(access, "permitted", False)):
+        return transition
+
+    prior_was_permitted = bool(previous is not None and getattr(previous, "permitted", False))
+    first_stationary_read = bool(
+        previous is None
+        and str(action or "").strip().lower() == "wait"
+        and tuple(getattr(transition, "origin_position", ()) or ())
+        == tuple(getattr(transition, "destination_position", ()) or ())
+    )
+    if not prior_was_permitted and not first_stationary_read:
+        return transition
+    return replace(
+        transition,
+        boundary_kind="authorization_expired",
+        crossed_boundary=True,
+        entered_more_restricted=True,
+        entered_unauthorized=True,
+        origin_access=previous if previous is not None else transition.origin_access,
+    )
+
+
+def _emit_property_access_boundary_crossed(
+    sim,
+    *,
+    eid,
+    prop,
+    access,
+    transition,
+    x,
+    y,
+    z,
+):
+    if (
+        not isinstance(prop, dict)
+        or access is None
+        or transition is None
+        or not bool(getattr(transition, "crossed_boundary", False))
+    ):
+        return False
+    sim.emit(Event(
+        "property_access_boundary_crossed",
+        eid=eid,
+        actor_eid=eid,
+        property_id=prop.get("id"),
+        owner_eid=prop.get("owner_eid"),
+        x=x,
+        y=y,
+        z=z,
+        access_level=access.access_level,
+        permitted=bool(access.permitted),
+        severity_score=access.severity_score,
+        severity_label=access.severity_label,
+        **_room_access_event_payload(access),
+        **_property_access_transition_event_payload(transition),
+    ))
+    return True
 
 
 def _emit_move_access_events(
@@ -2193,12 +2343,64 @@ def _emit_move_access_events(
             target_y=target_y,
             target_z=target_z,
         )
+    departure = access_context.get("departure")
+    if isinstance(departure, dict):
+        departure_prop = departure.get("prop")
+        departure_access = departure.get("access")
+        departure_transition = _transition_with_runtime_access_change(
+            sim,
+            eid,
+            departure_prop,
+            departure_access,
+            departure.get("transition"),
+            action=action,
+        )
+        _emit_property_access_boundary_crossed(
+            sim,
+            eid=eid,
+            prop=departure_prop,
+            access=departure_access,
+            transition=departure_transition,
+            x=target_x,
+            y=target_y,
+            z=target_z,
+        )
+
     prop = access_context.get("prop")
     ingress = access_context.get("ingress")
     access = access_context.get("access")
+    transition = access_context.get("transition")
+    transition = _transition_with_runtime_access_change(
+        sim,
+        eid,
+        prop,
+        access,
+        transition,
+        action=action,
+    )
     trespass_triggered = False
     if prop and ingress is not None and access is not None:
+        transition_payload = (
+            _property_access_transition_event_payload(transition)
+            if transition is not None
+            else {}
+        )
+        _emit_property_access_boundary_crossed(
+            sim,
+            eid=eid,
+            prop=prop,
+            access=access,
+            transition=transition,
+            x=target_x,
+            y=target_y,
+            z=target_z,
+        )
         if access.inside_bounds and access.severity_score > 0:
+            if transition is not None and not bool(getattr(transition, "entered_unauthorized", False)):
+                # The factual boundary was already crossed.  Continuing to walk
+                # inside one restricted room must not manufacture a fresh crime
+                # or rescan every observer for every tile.
+                return True
             observation = observation_payload_for_position(
                 sim,
                 target_x,
@@ -2250,6 +2452,7 @@ def _emit_move_access_events(
                 ingress_method=ingress_method,
                 action=action,
                 offense_score=offense_score,
+                transition=transition,
             ):
                 trespass_triggered = True
                 return trespass_triggered
@@ -2274,6 +2477,7 @@ def _emit_move_access_events(
                 ingress_method=ingress_method,
                 breach_severity=ingress.breach_severity,
                 **room_access_payload,
+                **transition_payload,
                 **shared_interest_payload,
             ))
             if witnesses:

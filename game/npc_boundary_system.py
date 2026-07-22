@@ -13,7 +13,8 @@ from game.organizations import (
     refresh_loaded_organization_branch_briefings,
 )
 from game.player_businesses import actor_player_business_employment, fire_actor_from_player_business
-from game.property_runtime import property_covering
+from game.property_access import evaluate_property_access
+from game.property_runtime import property_covering, property_enclosing_structure
 from game.quick_travel_ramps import map_mode_active
 from game.social_boundary_runtime import (
     BOUNDARY_DIALOGUE_BAN_TICKS,
@@ -190,6 +191,38 @@ def _same_floor_exit_path(sim, prop, start_pos):
     return tuple(reversed(path))
 
 
+def _same_floor_path_to_position(sim, start_pos, destination, *, max_cells=256):
+    tilemap = getattr(sim, "tilemap", None)
+    if tilemap is None or start_pos is None or not isinstance(destination, (tuple, list)) or len(destination) < 3:
+        return ()
+    start = (int(start_pos.x), int(start_pos.y), int(start_pos.z))
+    goal = (int(destination[0]), int(destination[1]), int(destination[2]))
+    if start[2] != goal[2] or not tilemap.in_bounds(goal[0], goal[1]) or not tilemap.is_walkable(*goal):
+        return ()
+    queue = deque([start])
+    seen = {start}
+    parent = {start: None}
+    while queue and len(seen) < int(max_cells):
+        current = queue.popleft()
+        if current == goal:
+            path = []
+            while current is not None:
+                path.append(current)
+                current = parent.get(current)
+            return tuple(reversed(path))
+        x, y, z = current
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            key = (x + dx, y + dy, z)
+            if key in seen:
+                continue
+            if not tilemap.in_bounds(key[0], key[1]) or not tilemap.is_walkable(*key):
+                continue
+            seen.add(key)
+            parent[key] = current
+            queue.append(key)
+    return ()
+
+
 def _nearest_same_floor_exit(sim, prop, start_pos):
     path = _same_floor_exit_path(sim, prop, start_pos)
     if not path:
@@ -224,6 +257,31 @@ class NPCBoundaryEnforcementSystem(System):
             actor_eid=target_eid,
             reason=_text(reason) or "dialogue_boundary",
             source_event=_text(event),
+        )
+
+    def _remember_property_boundary_warning(self, npc_eid, target_eid, event):
+        if _text(event.data.get("boundary_scope")).lower() != "room":
+            return
+        memories = self.sim.ecs.get(NPCMemory)
+        memory = memories.get(npc_eid) if memories else None
+        if memories is not None and memory is None:
+            memory = NPCMemory()
+            self.sim.ecs.add(npc_eid, memory)
+        if memory is None:
+            return
+        memory.remember(
+            tick=int(self.sim.tick),
+            kind="property_boundary_warning",
+            strength=0.72,
+            target_eid=_safe_int(target_eid, default=0),
+            property_id=_text(event.data.get("property_id")),
+            room_kind=_text(event.data.get("room_kind")).lower(),
+            room_access_level=_text(event.data.get("room_access_level")).lower(),
+            origin_room_kind=_text(event.data.get("origin_room_kind")).lower(),
+            context=_text(event.data.get("context")).lower() or "restricted_room_entry",
+            x=event.data.get("x"),
+            y=event.data.get("y"),
+            z=event.data.get("z"),
         )
 
     def _emit_violence_eligible_offense(self, event):
@@ -364,7 +422,7 @@ class NPCBoundaryEnforcementSystem(System):
             target_eid=target_eid,
         ))
 
-    def _set_enforcer_leading_intent(self, enforcer_eid, target_eid, prop, *, exit_path=()):
+    def _set_enforcer_leading_intent(self, enforcer_eid, target_eid, prop, *, exit_path=(), boundary_scope="property"):
         ais = self.sim.ecs.get(AI)
         wills = self.sim.ecs.get(NPCWill)
         positions = self.sim.ecs.get(Position)
@@ -372,8 +430,11 @@ class NPCBoundaryEnforcementSystem(System):
         enforcer_pos = positions.get(enforcer_eid) if positions else None
         if not ai or enforcer_pos is None:
             return None
-        leader_path = _same_floor_exit_path(self.sim, prop, enforcer_pos)
-        lead_target = tuple(leader_path[-1]) if leader_path else (tuple(exit_path[-1]) if exit_path else None)
+        if _text(boundary_scope).lower() == "room" and exit_path:
+            lead_target = tuple(exit_path[-1])
+        else:
+            leader_path = _same_floor_exit_path(self.sim, prop, enforcer_pos)
+            lead_target = tuple(leader_path[-1]) if leader_path else (tuple(exit_path[-1]) if exit_path else None)
         if lead_target is None:
             return None
         _sync_ai_intent(
@@ -394,11 +455,15 @@ class NPCBoundaryEnforcementSystem(System):
         ))
         return lead_target
 
-    def _ejectee_exit_path(self, target_eid, prop):
+    def _ejectee_exit_path(self, target_eid, prop, *, boundary_scope="property", return_position=None):
         positions = self.sim.ecs.get(Position)
         target_pos = positions.get(target_eid) if positions else None
         if not target_pos:
             return ()
+        if _text(boundary_scope).lower() == "room" and return_position is not None:
+            path = _same_floor_path_to_position(self.sim, target_pos, return_position)
+            if path:
+                return path
         return _same_floor_exit_path(self.sim, prop, target_pos)
 
     def _set_target_leaving(self, target_eid, prop, *, exit_path=()):
@@ -471,6 +536,12 @@ class NPCBoundaryEnforcementSystem(System):
         violation_count=0,
         violence_eligible=False,
         record_watchlist=True,
+        boundary_scope="property",
+        return_position=None,
+        room_kind="",
+        room_access_level="",
+        origin_room_kind="",
+        origin_room_access_level="",
     ):
         property_id = _property_id(prop)
         key = ejection_key(property_id, target_eid)
@@ -494,7 +565,20 @@ class NPCBoundaryEnforcementSystem(System):
         now = int(self.sim.tick)
         row = state.get(key) if isinstance(state.get(key), dict) else {}
         grace_until = max(_safe_int(row.get("grace_until_tick"), default=0), now + BOUNDARY_EJECTION_GRACE_TICKS)
-        exit_path = self._ejectee_exit_path(target_eid, prop)
+        boundary_scope = "room" if _text(boundary_scope).lower() == "room" else "property"
+        normalized_return = None
+        if isinstance(return_position, (tuple, list)) and len(return_position) >= 3:
+            normalized_return = (
+                _safe_int(return_position[0]),
+                _safe_int(return_position[1]),
+                _safe_int(return_position[2]),
+            )
+        exit_path = self._ejectee_exit_path(
+            target_eid,
+            prop,
+            boundary_scope=boundary_scope,
+            return_position=normalized_return,
+        )
         monitor_target = self._enforcer_monitor_target(enforcer_eid, target_eid, prop, exit_path=exit_path)
         follow_ejector = not bool(exit_path) or monitor_target is None
         if follow_ejector:
@@ -520,6 +604,12 @@ class NPCBoundaryEnforcementSystem(System):
                 "follow_required": bool(follow_ejector),
                 "follow_grace_until_tick": grace_until if follow_ejector else 0,
                 "monitor_target": monitor_target,
+                "boundary_scope": boundary_scope,
+                "return_position": normalized_return,
+                "room_kind": _text(room_kind).lower(),
+                "room_access_level": _text(room_access_level).lower(),
+                "origin_room_kind": _text(origin_room_kind).lower(),
+                "origin_room_access_level": _text(origin_room_access_level).lower(),
             }
         )
         state[key] = row
@@ -540,7 +630,13 @@ class NPCBoundaryEnforcementSystem(System):
         lead_target = None
         follow_target = None
         if follow_ejector:
-            lead_target = self._set_enforcer_leading_intent(enforcer_eid, target_eid, prop, exit_path=exit_path)
+            lead_target = self._set_enforcer_leading_intent(
+                enforcer_eid,
+                target_eid,
+                prop,
+                exit_path=exit_path,
+                boundary_scope=boundary_scope,
+            )
             follow_target = self._set_target_following_ejector(target_eid, enforcer_eid)
             exit_target = lead_target
             row["lead_target"] = lead_target
@@ -568,6 +664,12 @@ class NPCBoundaryEnforcementSystem(System):
             lead_target=lead_target,
             follow_target=follow_target,
             exit_target=exit_target,
+            boundary_scope=boundary_scope,
+            return_position=normalized_return,
+            room_kind=row["room_kind"],
+            room_access_level=row["room_access_level"],
+            origin_room_kind=row["origin_room_kind"],
+            origin_room_access_level=row["origin_room_access_level"],
         ))
         return row
 
@@ -631,6 +733,7 @@ class NPCBoundaryEnforcementSystem(System):
             strength=0.34 + (0.12 * max(0, violation_count)),
             event="npc_boundary_violation",
         )
+        self._remember_property_boundary_warning(npc_eid, target_eid, event)
 
         prop = None
         property_id = _text(event.data.get("property_id"))
@@ -653,6 +756,12 @@ class NPCBoundaryEnforcementSystem(System):
                 violation_count=violation_count,
                 violence_eligible=violence_eligible,
                 record_watchlist=bool(event.data.get("record_watchlist", True)),
+                boundary_scope=event.data.get("boundary_scope") or "property",
+                return_position=event.data.get("return_position"),
+                room_kind=event.data.get("room_kind"),
+                room_access_level=event.data.get("room_access_level"),
+                origin_room_kind=event.data.get("origin_room_kind"),
+                origin_room_access_level=event.data.get("origin_room_access_level"),
             )
             return
 
@@ -747,7 +856,35 @@ class NPCBoundaryEnforcementSystem(System):
         pos = positions.get(target_eid) if positions else None
         if pos is None:
             return False
-        return _property_id(property_covering(self.sim, pos.x, pos.y, pos.z)) == _text(property_id)
+        direct = property_covering(self.sim, pos.x, pos.y, pos.z)
+        current = property_enclosing_structure(self.sim, pos.x, pos.y, pos.z, prop=direct)
+        return _property_id(current) == _text(property_id)
+
+    def _target_still_violates_boundary(self, row):
+        target_eid = _safe_int(row.get("target_eid"), default=0)
+        property_id = _text(row.get("property_id"))
+        if target_eid <= 0 or not property_id:
+            return False
+        if _text(row.get("boundary_scope")).lower() != "room":
+            return self._target_in_property(target_eid, property_id)
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(target_eid) if positions else None
+        prop = getattr(self.sim, "properties", {}).get(property_id)
+        if pos is None or not isinstance(prop, dict):
+            return False
+        direct = property_covering(self.sim, pos.x, pos.y, pos.z)
+        current = property_enclosing_structure(self.sim, pos.x, pos.y, pos.z, prop=direct)
+        if _property_id(current) != property_id:
+            return False
+        access = evaluate_property_access(
+            self.sim,
+            target_eid,
+            prop,
+            x=pos.x,
+            y=pos.y,
+            z=pos.z,
+        )
+        return bool(access.inside_bounds and not access.permitted)
 
     def _emit_ejection_refused(self, row, *, ingress_method="refused_ejection"):
         if bool(row.get("refused", False)):
@@ -770,6 +907,11 @@ class NPCBoundaryEnforcementSystem(System):
             reason=row.get("reason"),
             ingress_method=ingress_method,
             violence_eligible=bool(row.get("violence_eligible", False)),
+            boundary_scope=row.get("boundary_scope") or "property",
+            room_kind=row.get("room_kind"),
+            room_access_level=row.get("room_access_level"),
+            origin_room_kind=row.get("origin_room_kind"),
+            return_position=row.get("return_position"),
         ))
         pos = self.sim.ecs.get(Position).get(target_eid)
         self.sim.emit(Event(
@@ -787,6 +929,11 @@ class NPCBoundaryEnforcementSystem(System):
             severity_score=34 if bool(row.get("violence_eligible", False)) else 24,
             severity_label="serious_trespass" if bool(row.get("violence_eligible", False)) else "trespass",
             source_event="npc_ejection_refused",
+            boundary_scope=row.get("boundary_scope") or "property",
+            room_kind=row.get("room_kind"),
+            room_access_level=row.get("room_access_level"),
+            origin_room_kind=row.get("origin_room_kind"),
+            return_position=row.get("return_position"),
         ))
 
     def _emit_ejection_complied(self, key, row):
@@ -798,6 +945,10 @@ class NPCBoundaryEnforcementSystem(System):
             property_id=_text(row.get("property_id")),
             property_name=row.get("property_name"),
             reason=row.get("reason"),
+            boundary_scope=row.get("boundary_scope") or "property",
+            room_kind=row.get("room_kind"),
+            room_access_level=row.get("room_access_level"),
+            origin_room_kind=row.get("origin_room_kind"),
         ))
         active_ejection_state(self.sim).pop(key, None)
 
@@ -817,6 +968,7 @@ class NPCBoundaryEnforcementSystem(System):
             target_eid,
             prop,
             exit_path=tuple(row.get("egress_path", ()) or ()),
+            boundary_scope=row.get("boundary_scope") or "property",
         )
         follow_target = self._set_target_following_ejector(target_eid, enforcer_eid)
         if lead_target is not None:
@@ -937,6 +1089,11 @@ class NPCBoundaryEnforcementSystem(System):
             return
         if target_eid == getattr(self.sim, "player_eid", None) and map_mode_active(self.sim):
             return
+        for key, row in tuple(active_ejection_state(self.sim).items()):
+            if not isinstance(row, dict) or _safe_int(row.get("target_eid"), default=0) != _safe_int(target_eid, default=-1):
+                continue
+            if not self._target_still_violates_boundary(row):
+                self._emit_ejection_complied(key, row)
         self._enforce_denials_for_entity(target_eid)
 
     def update(self):
@@ -959,7 +1116,7 @@ class NPCBoundaryEnforcementSystem(System):
             if _actor_owns_property(self.sim, target_eid, prop):
                 state.pop(key, None)
                 continue
-            if not self._target_in_property(target_eid, property_id):
+            if not self._target_still_violates_boundary(row):
                 self._emit_ejection_complied(key, row)
                 continue
             if bool(row.get("follow_required", False)):

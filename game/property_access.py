@@ -2478,6 +2478,27 @@ class PropertyAccessResult:
 
 
 @dataclass(frozen=True)
+class PropertyAccessTransition:
+    """Access facts that changed across one physical movement.
+
+    The transition is deliberately separate from the consequence.  Movement,
+    witnesses, guards, cameras, justice, and future disguise consumers can all
+    use the same scene truth without teaching property access how they react.
+    """
+
+    property_id: str | None
+    boundary_kind: str
+    crossed_boundary: bool
+    entered_more_restricted: bool
+    entered_unauthorized: bool
+    returned_to_authorized: bool
+    origin_position: tuple[int, int, int]
+    destination_position: tuple[int, int, int]
+    origin_access: PropertyAccessResult
+    destination_access: PropertyAccessResult
+
+
+@dataclass(frozen=True)
 class PropertyIngressResult:
     property_id: str | None
     from_inside: bool
@@ -2962,6 +2983,166 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
         common_area_kind=room_context.common_area_kind,
         room_floor=room_context.floor,
     )
+
+
+_EFFECTIVE_ACCESS_RANK = {
+    "public": 0,
+    "protected": 2,
+    "restricted": 4,
+}
+
+_ROOM_ACCESS_RANK = {
+    "": 0,
+    "property": 0,
+    "public": 0,
+    "semi_public": 1,
+    "staff_only": 2,
+    "private": 3,
+    "secure": 4,
+}
+
+
+def _access_restriction_rank(access):
+    if access is None:
+        return 0
+    effective = _clean_key(getattr(access, "access_level", ""))
+    room_level = _clean_key(getattr(access, "room_access_level", ""))
+    return max(
+        int(_EFFECTIVE_ACCESS_RANK.get(effective, 2)),
+        int(_ROOM_ACCESS_RANK.get(room_level, 0)),
+    )
+
+
+def property_access_transition(
+    sim,
+    actor_eid,
+    prop,
+    *,
+    from_x,
+    from_y,
+    from_z,
+    to_x,
+    to_y,
+    to_z,
+    ingress=None,
+    destination_access=None,
+):
+    """Derive one reusable boundary-crossing fact from authoritative access.
+
+    A continuing walk inside the same unauthorized room is not a fresh
+    boundary crossing.  A public-to-stockroom step, a stockroom-to-vault step,
+    and an exterior entry are.  This distinction keeps factual trespass from
+    being redundantly rematerialized on every movement tick.
+    """
+
+    if ingress is None:
+        ingress = property_ingress_context(
+            prop,
+            from_x=from_x,
+            from_y=from_y,
+            from_z=from_z,
+            to_x=to_x,
+            to_y=to_y,
+            to_z=to_z,
+            sim=sim,
+        )
+    if destination_access is None:
+        destination_access = evaluate_property_access(
+            sim,
+            actor_eid,
+            prop,
+            x=to_x,
+            y=to_y,
+            z=to_z,
+            breach_severity=getattr(ingress, "breach_severity", 0.0),
+        )
+    origin_access = evaluate_property_access(
+        sim,
+        actor_eid,
+        prop,
+        x=from_x,
+        y=from_y,
+        z=from_z,
+        breach_severity=0.0,
+    )
+
+    origin_inside = bool(getattr(origin_access, "inside_bounds", False))
+    destination_inside = bool(getattr(destination_access, "inside_bounds", False))
+    origin_room = (
+        _clean_key(getattr(origin_access, "room_kind", "")),
+        _clean_key(getattr(origin_access, "room_access_level", "")),
+    )
+    destination_room = (
+        _clean_key(getattr(destination_access, "room_kind", "")),
+        _clean_key(getattr(destination_access, "room_access_level", "")),
+    )
+
+    if destination_inside and not origin_inside:
+        boundary_kind = "property_entry"
+    elif origin_inside and not destination_inside:
+        boundary_kind = "property_exit"
+    elif origin_inside and destination_inside and origin_room != destination_room:
+        boundary_kind = "room_transition"
+    else:
+        boundary_kind = "internal"
+
+    crossed_boundary = boundary_kind != "internal"
+    entered_more_restricted = bool(
+        destination_inside
+        and boundary_kind in {"property_entry", "room_transition"}
+        and _access_restriction_rank(destination_access) > _access_restriction_rank(origin_access)
+    )
+    entered_unauthorized = bool(
+        destination_inside
+        and not bool(getattr(destination_access, "permitted", False))
+        and boundary_kind in {"property_entry", "room_transition"}
+        and (
+            boundary_kind == "property_entry"
+            or bool(getattr(origin_access, "permitted", False))
+            or entered_more_restricted
+        )
+    )
+    returned_to_authorized = bool(
+        origin_inside
+        and not bool(getattr(origin_access, "permitted", False))
+        and (
+            not destination_inside
+            or bool(getattr(destination_access, "permitted", False))
+        )
+    )
+    return PropertyAccessTransition(
+        property_id=_property_id(prop) or None,
+        boundary_kind=boundary_kind,
+        crossed_boundary=crossed_boundary,
+        entered_more_restricted=entered_more_restricted,
+        entered_unauthorized=entered_unauthorized,
+        returned_to_authorized=returned_to_authorized,
+        origin_position=(int(from_x), int(from_y), int(from_z)),
+        destination_position=(int(to_x), int(to_y), int(to_z)),
+        origin_access=origin_access,
+        destination_access=destination_access,
+    )
+
+
+def property_access_transition_event_payload(transition):
+    origin = getattr(transition, "origin_access", None)
+    destination = getattr(transition, "destination_access", None)
+    return {
+        "boundary_kind": _clean_key(getattr(transition, "boundary_kind", "internal")) or "internal",
+        "crossed_access_boundary": bool(getattr(transition, "crossed_boundary", False)),
+        "entered_more_restricted": bool(getattr(transition, "entered_more_restricted", False)),
+        "entered_unauthorized": bool(getattr(transition, "entered_unauthorized", False)),
+        "returned_to_authorized": bool(getattr(transition, "returned_to_authorized", False)),
+        "origin_access_level": _clean_key(getattr(origin, "access_level", "")),
+        "origin_permitted": bool(getattr(origin, "permitted", False)),
+        "origin_room_kind": _clean_key(getattr(origin, "room_kind", "")),
+        "origin_room_access_level": _clean_key(getattr(origin, "room_access_level", "")),
+        "destination_access_level": _clean_key(getattr(destination, "access_level", "")),
+        "destination_permitted": bool(getattr(destination, "permitted", False)),
+        "destination_room_kind": _clean_key(getattr(destination, "room_kind", "")),
+        "destination_room_access_level": _clean_key(getattr(destination, "room_access_level", "")),
+        "return_position": tuple(getattr(transition, "origin_position", ()) or ()),
+    }
 
 
 def organization_guard_grace_active(sim, actor_eid, prop, current_tick=None):

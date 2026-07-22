@@ -909,6 +909,9 @@ class NPCMemorySystem(System):
             # A social read of conspicuous sneaking should last long enough to
             # color the encounter, but not become a permanent obsession.
             "suspicious_behavior": 0.012,
+            # A direct access warning should survive long enough for an honest
+            # repeat crossing to mean something, including across save/load.
+            "property_boundary_warning": 0.0012,
             # Consequence memory should linger.
             "offense": 0.0001,
             "property_threat": 0.0002,

@@ -104,10 +104,12 @@ from game.npc_emergency_runtime import (
 )
 from game.place_mood_runtime import strongest_rumor_weather_anchor
 from game.purposeful_observation import (
+    advance_purposeful_actor_observation,
     advance_purposeful_anchor_observation,
     begin_purposeful_anchor_observation,
     finish_purposeful_observation,
     is_purposeful_observation,
+    observation_context_purpose,
     purposeful_observation_holds_at_target,
 )
 from game.property_access import (
@@ -6291,6 +6293,69 @@ class NPCInvestigateSystem(System):
         ))
         return True, None, origin_x, origin_y, origin_z
 
+    def _advance_visible_sneak_search(self, eid, ai, pos, *, will=None):
+        context = getattr(ai, "investigation_context", None)
+        if not is_purposeful_observation(context, purpose="visible_sneak", active_only=True):
+            return False
+        search = context.get("search_state") if isinstance(context, dict) else None
+        search_active = isinstance(search, dict) and search.get("active") is True
+        subject_eid = context.get("subject_eid") if isinstance(context, dict) else None
+        try:
+            subject_eid = int(subject_eid)
+        except (TypeError, ValueError):
+            subject_eid = None
+        if subject_eid is None:
+            status = "invalid"
+            target = None
+            updated = finish_purposeful_observation(
+                context,
+                current_tick=self.sim.tick,
+                reason="invalid_subject",
+            )
+        else:
+            updated, status, target = advance_purposeful_actor_observation(
+                self.sim,
+                eid,
+                subject_eid,
+                purpose="visible_sneak",
+                existing=context,
+                include_subject_account=True,
+                # Continued sneaking is refreshed by StealthSystem.  This
+                # movement pass may reacquire a search, but must not turn a
+                # now-calm, still-visible subject into an endless live tether.
+                refresh_visible=search_active,
+            )
+        ai.investigation_context = updated
+        if target is not None:
+            ai.target = tuple(target)
+            ai.target_eid = None
+            if will is not None:
+                will.target = tuple(target)
+                will.target_eid = None
+                will.last_tick = int(self.sim.tick)
+        if status not in {"abandoned", "invalid"}:
+            return False
+
+        ai.state = "idle"
+        ai.target = None
+        ai.target_eid = None
+        if will is not None:
+            will.intent = "idle"
+            will.target = None
+            will.target_eid = None
+            will.last_tick = int(self.sim.tick)
+        self.sim.emit(Event(
+            "npc_investigation_complete",
+            npc_eid=eid,
+            subject_eid=subject_eid,
+            purpose="visible_sneak",
+            reason="search_abandoned" if status == "abandoned" else "invalid_subject",
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        ))
+        return True
+
     def update(self):
         ais = self.sim.ecs.get(AI)
         positions = self.sim.ecs.get(Position)
@@ -6404,6 +6469,14 @@ class NPCInvestigateSystem(System):
                 if live_timeskip_active:
                     self._schedule_move_due(eid, next_move_tick)
                 continue
+
+            if ai.state == "investigating" and observation_context_purpose(
+                getattr(ai, "investigation_context", None)
+            ) == "visible_sneak":
+                if self._advance_visible_sneak_search(eid, ai, pos, will=wills.get(eid)):
+                    if live_timeskip_active:
+                        self._unschedule_move_due(eid)
+                    continue
 
             target = _resolve_ai_target(self.sim, ai)
             if not target:

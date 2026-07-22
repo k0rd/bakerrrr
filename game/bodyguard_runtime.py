@@ -30,6 +30,7 @@ from game.items import ITEM_CATALOG
 from game.population import _give_item, _spawn_human
 from game.property_runtime import property_covering
 from game.purposeful_observation import (
+    advance_purposeful_actor_observation,
     finish_purposeful_observation,
     is_purposeful_observation,
     observation_watch_position,
@@ -1083,64 +1084,31 @@ class BodyguardSystem(System):
         tick = _safe_int(getattr(self.sim, "tick", 0), 0)
         context = rec.get("formation_observation")
         context_is_formation = is_purposeful_observation(context, purpose="bodyguard_formation")
-        visible = (
-            int(guard_pos.z) == int(principal_pos.z)
-            and self._guard_can_see(guard_pos, principal_pos)
-        )
         band = BODYGUARD_FORMATION_BANDS.get(ring, BODYGUARD_FORMATION_BANDS[1])
-
-        if visible:
-            preferred = _principal_guard_slot_anchor(principal_pos, ring=ring, slot=slot)
-            watch_position = observation_watch_position(
-                self.sim,
-                guard_eid,
-                principal_pos,
-                purpose="bodyguard_formation",
-                distance_band=band,
-                preferred_position=preferred,
-            )
-            if watch_position is None:
-                watch_position = (int(guard_pos.x), int(guard_pos.y), int(guard_pos.z))
-            context = refresh_purposeful_observation(
-                self.sim,
-                guard_eid,
-                rec.get("principal_eid"),
-                purpose="bodyguard_formation",
-                subject_pos=principal_pos,
-                watch_position=watch_position,
-                existing=context if context_is_formation and context.get("active") is not False else None,
-                include_subject_account=False,
-                distance_band=band,
-                preferred_position=preferred,
-            )
-            rec["formation_observation"] = context
+        preferred = _principal_guard_slot_anchor(principal_pos, ring=ring, slot=slot)
+        context, contact, target = advance_purposeful_actor_observation(
+            self.sim,
+            guard_eid,
+            rec.get("principal_eid"),
+            purpose="bodyguard_formation",
+            existing=context if context_is_formation else None,
+            include_subject_account=False,
+            distance_band=band,
+            preferred_position=preferred,
+            direct_los=True,
+        )
+        rec["formation_observation"] = context
+        if contact == "visible":
             rec["principal_known_position"] = (
                 int(principal_pos.x),
                 int(principal_pos.y),
                 int(principal_pos.z),
             )
             rec["principal_known_tick"] = tick
-            return rec["principal_known_position"], tuple(context.get("watch_position"))
-
-        if context_is_formation:
-            context = dict(context)
-            lost_since = _int_or_none(context.get("lost_contact_since_tick"))
-            if lost_since is None:
-                lost_since = tick
-                context["lost_contact_since_tick"] = tick
-            context["updated_tick"] = tick
-            grace = max(0, _safe_int(context.get("lost_contact_grace_ticks"), 0))
-            if context.get("active") is not False and tick - lost_since > grace:
-                context = finish_purposeful_observation(
-                    context,
-                    current_tick=tick,
-                    reason="lost_principal_contact",
-                )
-            rec["formation_observation"] = context
-            known_position = _position_xyz(context.get("last_seen_position"))
-            watch_position = _position_xyz(context.get("watch_position"))
-            if known_position is not None and watch_position is not None:
-                return known_position, watch_position
+            return rec["principal_known_position"], tuple(target) if target is not None else None
+        if target is not None:
+            known_position = _position_xyz((context or {}).get("last_seen_position"))
+            return known_position, tuple(target)
 
         known_position = _position_xyz(rec.get("principal_known_position"))
         if known_position is None:

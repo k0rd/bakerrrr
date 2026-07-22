@@ -53,10 +53,9 @@ from game.components import (
 )
 from game.quick_travel_ramps import map_mode_active
 from game.purposeful_observation import (
+    advance_purposeful_actor_observation,
     finish_purposeful_observation,
     is_purposeful_observation,
-    observation_watch_position,
-    refresh_purposeful_observation,
 )
 from game.service_runtime import (
     CASINO_GAME_SERVICE_IDS,
@@ -15562,54 +15561,23 @@ class NPCInteractionSystem(System):
                 )
             return current
 
-        if self._contractor_can_see(npc_pos, ally_pos):
-            follow_target = observation_watch_position(
-                self.sim,
-                npc_eid,
-                ally_pos,
-                purpose=purpose,
-            )
-            if follow_target is None:
-                follow_target = current
-            context = refresh_purposeful_observation(
-                self.sim,
-                npc_eid,
-                ally_eid,
-                purpose=purpose,
-                subject_pos=ally_pos,
-                watch_position=follow_target,
-                existing=context if context_matches and context.get("active") is not False else None,
-                include_subject_account=False,
-            )
-            rec["follow_observation"] = context
+        context, contact, follow_target = advance_purposeful_actor_observation(
+            self.sim,
+            npc_eid,
+            ally_eid,
+            purpose=purpose,
+            existing=context if context_matches else None,
+            include_subject_account=False,
+            direct_los=True,
+        )
+        rec["follow_observation"] = context
+        if contact == "visible":
             rec["ally_known_position"] = (int(ally_pos.x), int(ally_pos.y), int(ally_pos.z))
             rec["ally_known_tick"] = int(self.sim.tick)
-            return tuple(context.get("watch_position", current))
-
-        if context_matches:
-            context = dict(context)
-            lost_since = context.get("lost_contact_since_tick")
-            try:
-                lost_since = int(lost_since) if lost_since is not None else None
-            except (TypeError, ValueError):
-                lost_since = None
-            if lost_since is None:
-                lost_since = int(self.sim.tick)
-                context["lost_contact_since_tick"] = lost_since
-            context["updated_tick"] = int(self.sim.tick)
-            grace = max(0, int(context.get("lost_contact_grace_ticks", 0) or 0))
-            if context.get("active") is not False and int(self.sim.tick) - lost_since > grace:
-                context = finish_purposeful_observation(
-                    context,
-                    current_tick=self.sim.tick,
-                    reason="lost_ally_contact",
-                )
-            rec["follow_observation"] = context
-            last_seen = context.get("last_seen_position")
-            if isinstance(last_seen, (tuple, list)) and len(last_seen) >= 3:
-                target = (int(last_seen[0]), int(last_seen[1]), int(last_seen[2]))
-                blocker = _first_blocking_entity_at(self.sim, *target, exclude_eid=npc_eid)
-                return current if blocker is not None else target
+        if follow_target is not None:
+            target = (int(follow_target[0]), int(follow_target[1]), int(follow_target[2]))
+            blocker = _first_blocking_entity_at(self.sim, *target, exclude_eid=npc_eid)
+            return current if blocker is not None else target
 
         known = rec.get("ally_known_position")
         if isinstance(known, (tuple, list)) and len(known) >= 3:

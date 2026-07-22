@@ -7,7 +7,7 @@ instead of living only as inline player-action code.
 
 from engine.events import Event
 from engine.tilemap import Tile
-from game.components import NPCMemory, Position
+from game.components import AI, NPCMemory, PlayerModeState, Position
 from game.movement_runtime import try_move_entity
 from game.property_doors import _set_door_open_state
 from game.property_access import (
@@ -15,6 +15,7 @@ from game.property_access import (
     _boundary_tile as _property_boundary_tile,
     evaluate_property_access as _evaluate_property_access,
     property_claim_reason as _property_claim_reason,
+    property_access_transition_event_payload as _property_access_transition_event_payload,
     property_ingress_context as _property_ingress_context,
     room_access_event_payload as _room_access_event_payload,
     shared_property_interest_event_payload as _shared_property_interest_event_payload,
@@ -82,6 +83,11 @@ _HARD_TRESPASS_METHODS = frozenset({
     "alternate_entry",
 })
 _SCUFFLE_MEMORY_KINDS = frozenset({"threat", "conflict_side", "ally_threatened"})
+_SOFT_ROOM_BOUNDARY_LEVELS = frozenset({"staff_only", "private"})
+_COVERT_NPC_BOUNDARY_STATES = frozenset({
+    "casing_target",
+    "committing_property_crime",
+})
 _SCUFFLE_NOISE_TERMS = (
     "attack",
     "assault",
@@ -148,12 +154,17 @@ def _observer_eids_from_observation(observation, observer_eids=()):
     return tuple(normalized)
 
 
-def _active_ejection_covers(sim, property_id, target_eid):
+def _active_ejection_covers(sim, property_id, target_eid, *, transition=None):
     key = ejection_key(property_id, target_eid)
     if not key:
         return False
     row = active_ejection_state(sim).get(key)
     if not isinstance(row, dict):
+        return False
+    if bool(getattr(transition, "entered_more_restricted", False)):
+        # Grace to correct one boundary is not permission to continue through a
+        # deeper one.  In particular, a stockroom warning cannot immunize a
+        # subsequent vault entry.
         return False
     return not bool(row.get("refused", False))
 
@@ -192,6 +203,71 @@ def _soft_trespass_candidate_allowed(sim, eid, prop, access, ingress, *, ingress
     if method in _HARD_TRESPASS_METHODS:
         return False
     return True
+
+
+def _soft_room_boundary_candidate_allowed(sim, eid, prop, access, ingress, transition, *, ingress_method=""):
+    if not isinstance(prop, dict) or access is None or ingress is None or transition is None:
+        return False
+    if bool(getattr(access, "permitted", False)):
+        return False
+    if not bool(getattr(transition, "entered_unauthorized", False)):
+        return False
+    if _text(getattr(transition, "boundary_kind", "")).lower() != "room_transition":
+        return False
+    if _text(getattr(access, "room_access_level", "")).lower() not in _SOFT_ROOM_BOUNDARY_LEVELS:
+        return False
+    if bool(getattr(access, "organization_denied_entry", False)):
+        return False
+    if _safe_int(getattr(access, "severity_score", 0), default=0) > 28:
+        return False
+    if _text(getattr(access, "severity_label", "")).lower() == "serious_trespass":
+        return False
+    if _text(getattr(ingress, "ingress_kind", "")).lower() != "internal":
+        return False
+    if _safe_float(getattr(ingress, "breach_severity", 0.0), default=0.0) > 0.01:
+        return False
+    if _text(ingress_method).lower() in _HARD_TRESPASS_METHODS:
+        return False
+    return True
+
+
+def _actor_boundary_posture(sim, eid):
+    modes = sim.ecs.get(PlayerModeState).get(eid)
+    if modes is not None and bool(getattr(modes, "sneak", False)):
+        return "visible_sneak"
+    ai = sim.ecs.get(AI).get(eid)
+    if ai is not None and _text(getattr(ai, "state", "")).lower() in _COVERT_NPC_BOUNDARY_STATES:
+        return "covert_intent"
+    return "ordinary"
+
+
+def _prior_room_boundary_warning_count(sim, claimant_eid, target_eid, prop, access, *, max_age=900):
+    memory = sim.ecs.get(NPCMemory).get(claimant_eid)
+    if memory is None:
+        return 0
+    property_id = _property_id(prop)
+    room_kind = _text(getattr(access, "room_kind", "")).lower()
+    room_level = _text(getattr(access, "room_access_level", "")).lower()
+    now = _safe_int(getattr(sim, "tick", 0), default=0)
+    count = 0
+    for entry in tuple(getattr(memory, "entries", ()) or ()):
+        if _text(entry.get("kind") if isinstance(entry, dict) else "").lower() != "property_boundary_warning":
+            continue
+        tick = _safe_int(entry.get("tick") if isinstance(entry, dict) else None, default=-10_000)
+        if now - tick < 0 or now - tick > int(max_age):
+            continue
+        data = entry.get("data") if isinstance(entry, dict) else None
+        data = data if isinstance(data, dict) else {}
+        if _safe_int(data.get("target_eid"), default=0) != _safe_int(target_eid, default=0):
+            continue
+        if property_id and _text(data.get("property_id")) != property_id:
+            continue
+        remembered_room = _text(data.get("room_kind")).lower()
+        remembered_level = _text(data.get("room_access_level")).lower()
+        if room_kind and remembered_room and room_kind != remembered_room and room_level != remembered_level:
+            continue
+        count += 1
+    return count
 
 
 def _entry_position(entry):
@@ -295,22 +371,39 @@ def maybe_emit_accidental_trespass_boundary(
     ingress_method="",
     action="move",
     offense_score=None,
+    transition=None,
 ):
-    """Divert soft after-hours public-entry mistakes into social ejection."""
+    """Divert a perceived, correctable access mistake into social correction.
+
+    This covers both an ordinary after-hours public entry and the first plainly
+    witnessed step from authorized space into an ordinary staff/private room.
+    Covert movement, repeated entry after a warning, secure space, forced
+    ingress, and recent violence stay on the real trespass path.
+    """
 
     property_id = _property_id(prop)
-    if _active_ejection_covers(sim, property_id, eid):
+    if _active_ejection_covers(sim, property_id, eid, transition=transition):
         return True
     if not _boundary_violation_has_listener(sim):
         return False
-    if not _soft_trespass_candidate_allowed(
+    after_hours_candidate = _soft_trespass_candidate_allowed(
         sim,
         eid,
         prop,
         access,
         ingress,
         ingress_method=ingress_method,
-    ):
+    )
+    room_candidate = _soft_room_boundary_candidate_allowed(
+        sim,
+        eid,
+        prop,
+        access,
+        ingress,
+        transition,
+        ingress_method=ingress_method,
+    )
+    if not after_hours_candidate and not room_candidate:
         return False
 
     observers = _observer_eids_from_observation(observation, observer_eids)
@@ -324,10 +417,27 @@ def maybe_emit_accidental_trespass_boundary(
         return False
 
     _priority, _standing, claimant_eid, claim_reason = claimants[0]
+    boundary_posture = _actor_boundary_posture(sim, eid)
+    warning_count = 0
+    if room_candidate:
+        warning_count = _prior_room_boundary_warning_count(
+            sim,
+            claimant_eid,
+            eid,
+            prop,
+            access,
+        )
+        if boundary_posture != "ordinary" or warning_count > 0:
+            return False
+
     severity = _safe_int(getattr(access, "severity_score", 0), default=0)
     if offense_score is None:
         offense_score = max(14, min(28, severity + 4))
     self_reported_method = _text(ingress_method).lower() or _text(getattr(ingress, "ingress_kind", "")).lower()
+    transition_payload = _property_access_transition_event_payload(transition) if transition is not None else {}
+    boundary_scope = "room" if room_candidate else "property"
+    context = "restricted_room_entry" if room_candidate else "accidental_trespass"
+    source_kind = "room_boundary" if room_candidate else "accidental_trespass"
     sim.emit(Event(
         "npc_boundary_violation",
         npc_eid=claimant_eid,
@@ -336,13 +446,16 @@ def maybe_emit_accidental_trespass_boundary(
         offender_eid=eid,
         property_id=property_id,
         property_name=prop.get("name"),
-        context="accidental_trespass",
-        source_kind="accidental_trespass",
+        context=context,
+        source_kind=source_kind,
+        boundary_scope=boundary_scope,
+        boundary_response="correct_access",
+        boundary_posture=boundary_posture,
         claim_reason=claim_reason,
         action=action,
         offense_score=max(14, min(32, _safe_int(offense_score, default=severity + 4))),
         perceived=max(0.48, min(0.68, 0.44 + (severity / 100.0))),
-        violation_count=0,
+        violation_count=warning_count,
         violence_eligible=False,
         record_watchlist=False,
         x=x,
@@ -361,6 +474,7 @@ def maybe_emit_accidental_trespass_boundary(
         aperture_kind=getattr(ingress, "aperture_kind", ""),
         ingress_method=self_reported_method,
         accidental=True,
+        **transition_payload,
     ))
     return True
 

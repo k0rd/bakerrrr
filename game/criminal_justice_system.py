@@ -258,6 +258,7 @@ from game.justice_force_runtime import (
     mitigated_force_severity,
 )
 from game.purposeful_observation import (
+    advance_purposeful_actor_observation,
     begin_purposeful_anchor_observation,
     finish_purposeful_observation,
     is_purposeful_observation,
@@ -6479,81 +6480,16 @@ class CriminalJusticeSystem(System):
         notice_radius,
         capture_subject_account=False,
     ):
-        observer_pos = self._position_for(observer_eid)
-        subject_pos = self._position_for(subject_eid)
-        if observer_pos is None or subject_pos is None:
-            return existing, "invalid", None
-        tick = int(getattr(self.sim, "tick", 0))
-        distance = _manhattan(observer_pos.x, observer_pos.y, subject_pos.x, subject_pos.y)
-        visible = (
-            int(observer_pos.z) == int(subject_pos.z)
-            and distance <= max(1, int(notice_radius))
-            and _shared_observer_can_see_position(
-                self.sim,
-                observer_eid=observer_eid,
-                observer_x=observer_pos.x,
-                observer_y=observer_pos.y,
-                observer_z=observer_pos.z,
-                target_x=subject_pos.x,
-                target_y=subject_pos.y,
-                target_z=subject_pos.z,
-                radius=max(4, int(notice_radius) + 2),
-            )
+        return advance_purposeful_actor_observation(
+            self.sim,
+            observer_eid,
+            subject_eid,
+            purpose=purpose,
+            existing=existing,
+            sight_radius=max(1, int(notice_radius)),
+            capture_subject_account=bool(capture_subject_account),
+            include_subject_account=bool(capture_subject_account),
         )
-        context = existing if is_purposeful_observation(existing, purpose=purpose) else None
-        if visible:
-            watch_position = observation_watch_position(
-                self.sim,
-                observer_eid,
-                subject_pos,
-                purpose=purpose,
-            )
-            if watch_position is None and distance <= 1:
-                watch_position = (int(observer_pos.x), int(observer_pos.y), int(observer_pos.z))
-            if watch_position is None:
-                return context, "blocked", None
-            context = refresh_purposeful_observation(
-                self.sim,
-                observer_eid,
-                subject_eid,
-                purpose=purpose,
-                subject_pos=subject_pos,
-                watch_position=watch_position,
-                existing=context,
-                capture_subject_account=bool(capture_subject_account and context is None),
-                include_subject_account=bool(capture_subject_account),
-            )
-            context["lost_contact_since_tick"] = None
-            return context, "visible", tuple(watch_position)
-
-        if not is_purposeful_observation(context, purpose=purpose, active_only=True):
-            return context, "lost", None
-        context = dict(context)
-        lost_since = context.get("lost_contact_since_tick")
-        try:
-            lost_since = int(lost_since) if lost_since is not None else tick
-        except (TypeError, ValueError):
-            lost_since = tick
-        context["lost_contact_since_tick"] = lost_since
-        context["updated_tick"] = tick
-        grace = max(0, int(context.get("lost_contact_grace_ticks", 0) or 0))
-        if tick - lost_since > grace:
-            return (
-                finish_purposeful_observation(
-                    context,
-                    current_tick=tick,
-                    reason="lost_contact",
-                ),
-                "lost",
-                None,
-            )
-        last_seen = context.get("last_seen_position")
-        if isinstance(last_seen, (tuple, list)) and len(last_seen) >= 3:
-            try:
-                return context, "last_seen", (int(last_seen[0]), int(last_seen[1]), int(last_seen[2]))
-            except (TypeError, ValueError):
-                pass
-        return context, "lost", None
 
     def _start_identity_check_approach(self, enforcer_eid, match_row):
         incident_id = self._identity_check_case_id(match_row)

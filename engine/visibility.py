@@ -132,6 +132,11 @@ def observer_visible_positions(sim, observer_eid, x, y, z, radius):
     oy = _to_int(y)
     oz = _to_int(z)
     radius = max(1, _to_int(radius, default=8))
+    tilemap = getattr(sim, "tilemap", None)
+    topology_signature = int(getattr(tilemap, "visibility_revision", 0) or 0)
+    topology_for_region = getattr(tilemap, "visibility_signature_for_region", None)
+    if callable(topology_for_region):
+        topology_signature = topology_for_region(ox, oy, oz, radius)
 
     cached = state["observers"].get(observer_key)
     if isinstance(cached, dict):
@@ -140,6 +145,7 @@ def observer_visible_positions(sim, observer_eid, x, y, z, radius):
             and _to_int(cached.get("y"), default=10**9) == oy
             and _to_int(cached.get("z"), default=10**9) == oz
             and _to_int(cached.get("radius"), default=-1) == radius
+            and cached.get("topology_signature") == topology_signature
         ):
             visible = cached.get("visible")
             if isinstance(visible, set):
@@ -151,6 +157,7 @@ def observer_visible_positions(sim, observer_eid, x, y, z, radius):
         "y": oy,
         "z": oz,
         "radius": radius,
+        "topology_signature": topology_signature,
         "visible": visible,
     }
     return visible

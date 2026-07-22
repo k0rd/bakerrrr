@@ -10,8 +10,11 @@ world anchor such as the public-facing aperture of a property being cased.
 
 from __future__ import annotations
 
+from collections import deque
 from copy import deepcopy
 
+from engine.events import Event
+from engine.visibility import observer_can_see_position
 from engine.visibility import has_line_of_sight
 from game.components import AI, Collider, Position
 from game.identity_evidence import build_witness_subject_account
@@ -31,6 +34,10 @@ _PURPOSE_PROFILES = {
         "requires_los": True,
         "loss_policy": "search_last_seen",
         "lost_contact_grace_ticks": 4,
+        "search_radius": 5,
+        "search_waypoint_limit": 6,
+        "search_duration_ticks": 36,
+        "reacquisition_radius": 10,
     },
     "criminal_casing": {
         "posture": "casing",
@@ -50,6 +57,10 @@ _PURPOSE_PROFILES = {
         "requires_los": True,
         "loss_policy": "return_to_last_seen",
         "lost_contact_grace_ticks": 6,
+        "search_radius": 6,
+        "search_waypoint_limit": 6,
+        "search_duration_ticks": 42,
+        "reacquisition_radius": 14,
     },
     "bodyguard_threat_watch": {
         "posture": "screening",
@@ -68,6 +79,10 @@ _PURPOSE_PROFILES = {
         "requires_los": True,
         "loss_policy": "approach_last_seen",
         "lost_contact_grace_ticks": 6,
+        "search_radius": 6,
+        "search_waypoint_limit": 6,
+        "search_duration_ticks": 48,
+        "reacquisition_radius": 12,
     },
     "social_companion": {
         "posture": "accompanying",
@@ -77,6 +92,10 @@ _PURPOSE_PROFILES = {
         "requires_los": True,
         "loss_policy": "approach_last_seen",
         "lost_contact_grace_ticks": 8,
+        "search_radius": 5,
+        "search_waypoint_limit": 5,
+        "search_duration_ticks": 42,
+        "reacquisition_radius": 12,
     },
     "peaceful_follow": {
         "posture": "accompanying",
@@ -86,6 +105,10 @@ _PURPOSE_PROFILES = {
         "requires_los": True,
         "loss_policy": "approach_last_seen",
         "lost_contact_grace_ticks": 6,
+        "search_radius": 4,
+        "search_waypoint_limit": 4,
+        "search_duration_ticks": 32,
+        "reacquisition_radius": 10,
     },
     "justice_identity_check": {
         "posture": "approaching_for_questioning",
@@ -95,6 +118,10 @@ _PURPOSE_PROFILES = {
         "requires_los": True,
         "loss_policy": "approach_last_seen",
         "lost_contact_grace_ticks": 6,
+        "search_radius": 6,
+        "search_waypoint_limit": 6,
+        "search_duration_ticks": 48,
+        "reacquisition_radius": 10,
     },
     "justice_detention": {
         "posture": "approaching_for_custody",
@@ -104,6 +131,10 @@ _PURPOSE_PROFILES = {
         "requires_los": True,
         "loss_policy": "approach_last_seen",
         "lost_contact_grace_ticks": 6,
+        "search_radius": 7,
+        "search_waypoint_limit": 7,
+        "search_duration_ticks": 60,
+        "reacquisition_radius": 12,
     },
     "bounty_pickup": {
         "posture": "answering_pickup_call",
@@ -161,6 +192,145 @@ def _position_is_in_property(sim, property_id, position):
         return False
     prop = sim.property_covering(xyz[0], xyz[1], xyz[2])
     return isinstance(prop, dict) and str(prop.get("id", "") or "").strip() == property_key
+
+
+def _search_profile(context):
+    profile = observation_purpose_profile(observation_context_purpose(context))
+    radius = max(0, _int_or(context.get("search_radius"), profile.get("search_radius", 0)))
+    waypoint_limit = max(
+        0,
+        _int_or(context.get("search_waypoint_limit"), profile.get("search_waypoint_limit", 0)),
+    )
+    duration = max(
+        0,
+        _int_or(context.get("search_duration_ticks"), profile.get("search_duration_ticks", 0)),
+    )
+    return radius, waypoint_limit, duration
+
+
+def _search_tile_feature_score(sim, x, y, z):
+    tile = sim.tilemap.tile_at(int(x), int(y), int(z))
+    semantic = _clean_key(getattr(tile, "semantic_id", "")) if tile is not None else ""
+    glyph = str(getattr(tile, "glyph", "") or "") if tile is not None else ""
+    if any(token in semantic for token in ("door", "breach", "stair", "elevator", "ramp", "passage")):
+        return 18
+    if glyph in {"+", "'", "<", ">", "^", "v"}:
+        return 12
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        neighbor = sim.tilemap.tile_at(int(x) + dx, int(y) + dy, int(z))
+        neighbor_semantic = _clean_key(getattr(neighbor, "semantic_id", "")) if neighbor is not None else ""
+        neighbor_glyph = str(getattr(neighbor, "glyph", "") or "") if neighbor is not None else ""
+        if any(token in neighbor_semantic for token in ("door", "breach", "stair", "elevator", "ramp", "passage")):
+            return 14
+        if neighbor_glyph in {"+", "'", "<", ">", "^", "v"}:
+            return 9
+    return 0
+
+
+def _bounded_reachable_search_cells(sim, origin, *, radius):
+    """Return only locally reachable cells around an honestly seen origin."""
+
+    origin_xyz = _position_xyz(origin)
+    radius = max(0, int(radius))
+    if origin_xyz is None or radius <= 0:
+        return []
+    ox, oy, oz = origin_xyz
+    if not sim.tilemap.is_walkable(ox, oy, oz):
+        return []
+    queue = deque([(ox, oy)])
+    distances = {(ox, oy): 0}
+    while queue:
+        x, y = queue.popleft()
+        distance = distances[(x, y)]
+        if distance >= radius:
+            continue
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, ny = x + dx, y + dy
+            if (nx, ny) in distances:
+                continue
+            if abs(nx - ox) + abs(ny - oy) > radius:
+                continue
+            if not sim.tilemap.in_bounds(nx, ny) or not sim.tilemap.is_walkable(nx, ny, oz):
+                continue
+            distances[(nx, ny)] = distance + 1
+            queue.append((nx, ny))
+    return [(x, y, oz, distance) for (x, y), distance in distances.items()]
+
+
+def purposeful_search_waypoints(sim, context):
+    """Build a deterministic, bounded search of the last-seen local topology.
+
+    The route favors the subject's observed heading, apertures, intersections,
+    and spatially distinct checks.  It never consults the subject's current
+    position or scans actors for a match.
+    """
+
+    if not is_purposeful_observation(context, active_only=True):
+        return ()
+    origin = _position_xyz(context.get("last_seen_position"))
+    radius, waypoint_limit, _duration = _search_profile(context)
+    if origin is None or radius <= 0 or waypoint_limit <= 0:
+        return ()
+    cells = _bounded_reachable_search_cells(sim, origin, radius=radius)
+    if not cells:
+        return ()
+
+    previous = _position_xyz(context.get("previous_seen_position"))
+    heading_x = heading_y = 0
+    if previous is not None and previous[2] == origin[2]:
+        heading_x = 1 if origin[0] > previous[0] else -1 if origin[0] < previous[0] else 0
+        heading_y = 1 if origin[1] > previous[1] else -1 if origin[1] < previous[1] else 0
+
+    candidates = []
+    for x, y, z, distance in cells:
+        if (x, y, z) == origin:
+            continue
+        open_neighbors = sum(
+            1
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+            if sim.tilemap.is_walkable(x + dx, y + dy, z)
+        )
+        projection = ((x - origin[0]) * heading_x) + ((y - origin[1]) * heading_y)
+        base_score = (
+            _search_tile_feature_score(sim, x, y, z)
+            + max(-4, min(8, projection * 3))
+            + (6 if open_neighbors >= 3 else 0)
+            + min(radius, int(distance))
+        )
+        candidates.append((base_score, int(distance), int(x), int(y), int(z)))
+
+    selected = [origin]
+    while candidates and len(selected) < waypoint_limit:
+        ranked = []
+        for base_score, distance, x, y, z in candidates:
+            separation = min(abs(x - sx) + abs(y - sy) for sx, sy, _sz in selected)
+            ranked.append((base_score + (separation * 3), distance, -y, -x, x, y, z))
+        _score, _distance, _ny, _nx, x, y, z = max(ranked)
+        selected.append((x, y, z))
+        candidates = [row for row in candidates if (row[2], row[3], row[4]) != (x, y, z)]
+    return tuple(selected)
+
+
+def _emit_search_transition(sim, event_type, context, *, position=None, reason=None):
+    transition_xyz = _position_xyz(position) or _position_xyz(context.get("last_seen_position"))
+    observer_eid = _int_or_none(context.get("observer_eid"))
+    observer_xyz = _position_xyz(sim.ecs.get(Position).get(observer_eid)) if observer_eid is not None else None
+    xyz = observer_xyz or transition_xyz
+    data = {
+        "observer_eid": observer_eid,
+        "subject_eid": _int_or_none(context.get("subject_eid")),
+        "purpose": observation_context_purpose(context),
+        "reason": _clean_key(reason) or None,
+        "transition_position": transition_xyz,
+    }
+    if xyz is not None:
+        data.update({"x": xyz[0], "y": xyz[1], "z": xyz[2]})
+    search = context.get("search_state")
+    if isinstance(search, dict):
+        data["search_origin"] = _position_xyz(search.get("origin"))
+        data["waypoint_count"] = len(tuple(search.get("waypoints", ()) or ()))
+        data["visited_count"] = len(tuple(search.get("visited", ()) or ()))
+    sim.emit(Event(str(event_type), **data))
 
 
 def observation_purpose_profile(purpose):
@@ -537,6 +707,14 @@ def refresh_purposeful_observation(
     previous = dict(existing or {}) if is_purposeful_observation(existing, purpose=purpose_key) else {}
     started_tick = _int_or(previous.get("started_tick"), tick) if "started_tick" in previous else tick
     count = max(0, _int_or(previous.get("observation_count"), 0)) + 1
+    previous_last_seen = _position_xyz(previous.get("last_seen_position"))
+    new_last_seen = (int(subject_pos.x), int(subject_pos.y), int(subject_pos.z))
+    prior_motion_sample = _position_xyz(previous.get("previous_seen_position"))
+    previous_seen_position = (
+        previous_last_seen
+        if previous_last_seen is not None and previous_last_seen != new_last_seen
+        else prior_motion_sample
+    )
     subject_account = deepcopy(previous.get("subject_account")) if isinstance(previous.get("subject_account"), dict) else {}
     if include_subject_account and (capture_subject_account or not subject_account):
         subject_account = build_witness_subject_account(
@@ -546,7 +724,16 @@ def refresh_purposeful_observation(
             source_kind="deliberate_observation",
         )
 
-    return {
+    search_state = deepcopy(previous.get("search_state")) if isinstance(previous.get("search_state"), dict) else {}
+    search_reacquisition_count = max(0, _int_or(previous.get("search_reacquisition_count"), 0))
+    search_was_active = search_state.get("active") is True
+    if search_was_active:
+        search_state["active"] = False
+        search_state["ended_tick"] = tick
+        search_state["ended_reason"] = "reacquired"
+        search_reacquisition_count += 1
+
+    result = {
         "kind": PURPOSEFUL_OBSERVATION_KIND,
         "purpose": purpose_key,
         "posture": str(profile.get("posture", "watching") or "watching"),
@@ -558,7 +745,8 @@ def refresh_purposeful_observation(
         "last_seen_tick": tick,
         "updated_tick": tick,
         "observation_count": count,
-        "last_seen_position": (int(subject_pos.x), int(subject_pos.y), int(subject_pos.z)),
+        "last_seen_position": new_last_seen,
+        "previous_seen_position": previous_seen_position,
         "watch_position": (int(watch_position[0]), int(watch_position[1]), int(watch_position[2])),
         "preferred_position": _position_xyz(preferred_position),
         "min_distance": int(profile.get("min_distance", 0) or 0),
@@ -567,6 +755,13 @@ def refresh_purposeful_observation(
         "requires_los": bool(profile.get("requires_los", True)),
         "loss_policy": str(profile.get("loss_policy", "search_last_seen") or "search_last_seen"),
         "lost_contact_grace_ticks": max(0, int(profile.get("lost_contact_grace_ticks", 0) or 0)),
+        "lost_contact_since_tick": None,
+        "search_radius": max(0, int(profile.get("search_radius", 0) or 0)),
+        "search_waypoint_limit": max(0, int(profile.get("search_waypoint_limit", 0) or 0)),
+        "search_duration_ticks": max(0, int(profile.get("search_duration_ticks", 0) or 0)),
+        "reacquisition_radius": max(1, int(profile.get("reacquisition_radius", profile.get("max_distance", 8)) or 8)),
+        "search_state": search_state,
+        "search_reacquisition_count": search_reacquisition_count,
         "subject_account": subject_account,
         # Transitional aliases keep generic investigation/debug consumers useful
         # while the richer fields remain authoritative.
@@ -576,6 +771,196 @@ def refresh_purposeful_observation(
         "z": int(subject_pos.z),
         "seen_tick": tick,
     }
+    if search_was_active:
+        _emit_search_transition(
+            sim,
+            "purposeful_search_reacquired",
+            result,
+            position=new_last_seen,
+            reason="visual_contact",
+        )
+    return result
+
+
+def advance_purposeful_actor_observation(
+    sim,
+    observer_eid,
+    subject_eid,
+    *,
+    purpose,
+    existing=None,
+    sight_radius=None,
+    capture_subject_account=False,
+    include_subject_account=True,
+    distance_band=None,
+    preferred_position=None,
+    refresh_visible=True,
+    direct_los=False,
+):
+    """Advance honest sight, last-seen travel, local search, or abandonment.
+
+    The assigned subject is consulted only to ask the observer's ordinary FOV
+    whether that actor is presently visible.  A hidden live coordinate never
+    becomes a target or influences the generated search route.
+    """
+
+    purpose_key = _clean_key(purpose)
+    context = existing if is_purposeful_observation(existing, purpose=purpose_key) else None
+    observer_pos = sim.ecs.get(Position).get(observer_eid)
+    subject_pos = sim.ecs.get(Position).get(subject_eid)
+    tick = int(getattr(sim, "tick", 0) or 0)
+    if observer_pos is None or subject_pos is None:
+        if is_purposeful_observation(context, active_only=True):
+            result = finish_purposeful_observation(context, current_tick=tick, reason="invalid_subject")
+            _emit_search_transition(sim, "purposeful_search_abandoned", result, reason="invalid_subject")
+            return result, "invalid", None
+        return context, "invalid", None
+
+    profile = observation_purpose_profile(purpose_key)
+    radius = max(
+        1,
+        _int_or(
+            sight_radius,
+            context.get("reacquisition_radius", profile.get("reacquisition_radius", profile.get("max_distance", 8)))
+            if isinstance(context, dict)
+            else profile.get("reacquisition_radius", profile.get("max_distance", 8)),
+        ),
+    )
+    distance = abs(int(observer_pos.x) - int(subject_pos.x)) + abs(int(observer_pos.y) - int(subject_pos.y))
+    visible = (
+        int(observer_pos.z) == int(subject_pos.z)
+        and (
+            (
+                bool(direct_los)
+                and has_line_of_sight(
+                    sim,
+                    observer_pos.x,
+                    observer_pos.y,
+                    observer_pos.z,
+                    subject_pos.x,
+                    subject_pos.y,
+                    subject_pos.z,
+                )
+            )
+            or (
+                not bool(direct_los)
+                and distance <= radius
+                and observer_can_see_position(
+                    sim,
+                    observer_eid=observer_eid,
+                    observer_x=observer_pos.x,
+                    observer_y=observer_pos.y,
+                    observer_z=observer_pos.z,
+                    target_x=subject_pos.x,
+                    target_y=subject_pos.y,
+                    target_z=subject_pos.z,
+                    radius=radius,
+                )
+            )
+        )
+    )
+    if visible:
+        if not bool(refresh_visible):
+            retained_target = _position_xyz((context or {}).get("watch_position"))
+            return context, "visible_unrefreshed", retained_target
+        watch_position = observation_watch_position(
+            sim,
+            observer_eid,
+            subject_pos,
+            purpose=purpose_key,
+            distance_band=distance_band,
+            preferred_position=preferred_position,
+        )
+        if watch_position is None and distance <= 1:
+            watch_position = (int(observer_pos.x), int(observer_pos.y), int(observer_pos.z))
+        if watch_position is None:
+            return context, "blocked", None
+        result = refresh_purposeful_observation(
+            sim,
+            observer_eid,
+            subject_eid,
+            purpose=purpose_key,
+            subject_pos=subject_pos,
+            watch_position=watch_position,
+            existing=context,
+            capture_subject_account=bool(capture_subject_account and context is None),
+            include_subject_account=include_subject_account,
+            distance_band=distance_band,
+            preferred_position=preferred_position,
+        )
+        result["reacquisition_radius"] = radius
+        return result, "visible", tuple(watch_position)
+
+    if not is_purposeful_observation(context, purpose=purpose_key, active_only=True):
+        return context, "lost", None
+    result = dict(context)
+    result["updated_tick"] = tick
+    lost_since = _int_or_none(result.get("lost_contact_since_tick"))
+    if lost_since is None:
+        lost_since = tick
+        result["lost_contact_since_tick"] = tick
+    grace = max(0, _int_or(result.get("lost_contact_grace_ticks"), 0))
+    last_seen = _position_xyz(result.get("last_seen_position"))
+    if tick - lost_since <= grace:
+        return result, "last_seen", last_seen
+
+    search_radius, waypoint_limit, search_duration = _search_profile(result)
+    if last_seen is None or search_radius <= 0 or waypoint_limit <= 0 or search_duration <= 0:
+        ended = finish_purposeful_observation(result, current_tick=tick, reason="lost_contact")
+        _emit_search_transition(sim, "purposeful_search_abandoned", ended, reason="search_unavailable")
+        return ended, "abandoned", None
+
+    search = deepcopy(result.get("search_state")) if isinstance(result.get("search_state"), dict) else {}
+    if search.get("active") is not True:
+        waypoints = purposeful_search_waypoints(sim, result)
+        if not waypoints:
+            ended = finish_purposeful_observation(result, current_tick=tick, reason="search_unavailable")
+            _emit_search_transition(sim, "purposeful_search_abandoned", ended, reason="search_unavailable")
+            return ended, "abandoned", None
+        search = {
+            "active": True,
+            "origin": last_seen,
+            "started_tick": tick,
+            "deadline_tick": tick + search_duration,
+            "radius": search_radius,
+            "waypoint_limit": waypoint_limit,
+            "waypoints": tuple(waypoints),
+            "waypoint_index": 0,
+            "visited": (),
+        }
+        result["search_state"] = search
+        _emit_search_transition(sim, "purposeful_search_started", result, position=last_seen, reason="lost_contact")
+
+    deadline = _int_or(search.get("deadline_tick"), tick)
+    waypoints = tuple(_position_xyz(row) for row in tuple(search.get("waypoints", ()) or ()))
+    waypoints = tuple(row for row in waypoints if row is not None)
+    index = max(0, _int_or(search.get("waypoint_index"), 0))
+    current = (int(observer_pos.x), int(observer_pos.y), int(observer_pos.z))
+    visited = list(tuple(_position_xyz(row) for row in tuple(search.get("visited", ()) or ())))
+    visited = [row for row in visited if row is not None]
+    while index < len(waypoints) and current == waypoints[index]:
+        if waypoints[index] not in visited:
+            visited.append(waypoints[index])
+        index += 1
+    search["waypoint_index"] = index
+    search["visited"] = tuple(visited)
+    search["updated_tick"] = tick
+    result["search_state"] = search
+    if tick > deadline or index >= len(waypoints):
+        search["active"] = False
+        search["ended_tick"] = tick
+        search["ended_reason"] = "exhausted" if index >= len(waypoints) else "timed_out"
+        result["search_state"] = search
+        ended = finish_purposeful_observation(result, current_tick=tick, reason="search_abandoned")
+        _emit_search_transition(
+            sim,
+            "purposeful_search_abandoned",
+            ended,
+            position=current,
+            reason=search["ended_reason"],
+        )
+        return ended, "abandoned", None
+    return result, "searching", waypoints[index]
 
 
 def purposeful_observation_holds_at_target(context, *, current_tick):
@@ -600,6 +985,7 @@ def finish_purposeful_observation(context, *, current_tick, reason="lost_contact
 
 __all__ = [
     "PURPOSEFUL_OBSERVATION_KIND",
+    "advance_purposeful_actor_observation",
     "advance_purposeful_anchor_observation",
     "begin_purposeful_anchor_observation",
     "finish_purposeful_observation",
@@ -608,5 +994,6 @@ __all__ = [
     "observation_purpose_profile",
     "observation_watch_position",
     "purposeful_observation_holds_at_target",
+    "purposeful_search_waypoints",
     "refresh_purposeful_observation",
 ]
