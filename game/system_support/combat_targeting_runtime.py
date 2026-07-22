@@ -4,7 +4,8 @@ from dataclasses import replace
 
 from engine.events import Event
 from engine.visibility import has_line_of_sight as _has_line_of_sight
-from game.components import AI, Collider, NPCTraits, Position, SuppressionState, Vitality, WeaponLoadout
+from game.components import AI, Collider, DroneState, NPCTraits, Position, SuppressionState, Vitality, WeaponLoadout
+from game.physical_target_runtime import physical_property_profile, weapon_targetable_property_at
 from game.property_access import property_access_level as _property_access_level
 from game.property_runtime import property_aperture_at as _property_aperture_at
 from game.property_runtime import property_covering as _property_covering
@@ -155,6 +156,10 @@ def _entity_is_weapon_targetable(sim, eid, *, current_tick=None):
     if collider and collider.blocks:
         return True
 
+    drone = sim.ecs.get(DroneState).get(eid)
+    if drone and vitality and int(getattr(vitality, "hp", 0) or 0) > 0:
+        return True
+
     if vitality and bool(getattr(vitality, "downed", False)):
         return True
 
@@ -250,7 +255,12 @@ def _combat_relation_to_player(sim, eid, *, player_eid):
 
 
 def _first_targetable_entity_at(sim, x, y, z, exclude_eid=None, *, current_tick=None):
-    for other_eid in sorted(sim.tilemap.entities_at(x, y, z)):
+    drones = sim.ecs.get(DroneState)
+    candidates = sorted(
+        sim.tilemap.entities_at(x, y, z),
+        key=lambda other_eid: (1 if drones.get(other_eid) else 0, other_eid),
+    )
+    for other_eid in candidates:
         if other_eid == exclude_eid:
             continue
         if _entity_is_weapon_targetable(sim, other_eid, current_tick=current_tick):
@@ -328,6 +338,19 @@ def _trace_projectile_path(sim, source_eid, path, z, ignore_walls=False):
                 "block_x": px,
                 "block_y": py,
                 "block_eid": blocker_eid,
+                "block_property_id": None,
+            }
+
+        blocker_prop = weapon_targetable_property_at(sim, px, py, z)
+        if blocker_prop is not None:
+            return {
+                "path": traveled,
+                "blocked": True,
+                "block_kind": "property",
+                "block_x": px,
+                "block_y": py,
+                "block_eid": None,
+                "block_property_id": blocker_prop.get("id"),
             }
 
     return {
@@ -337,6 +360,7 @@ def _trace_projectile_path(sim, source_eid, path, z, ignore_walls=False):
         "block_x": None,
         "block_y": None,
         "block_eid": None,
+        "block_property_id": None,
     }
 
 
@@ -671,6 +695,7 @@ def _manual_fire_preview(sim, eid, x, y, z):
     trace = _trace_projectile_path(sim, eid, path, z, ignore_walls=ignore_walls)
     impact_label = "clear"
     impact_eid = None
+    impact_property_id = None
     if trace["blocked"]:
         if trace["block_kind"] == "tile":
             impact_label = f"blocked@{trace['block_x']},{trace['block_y']}"
@@ -678,6 +703,12 @@ def _manual_fire_preview(sim, eid, x, y, z):
             impact_eid = trace["block_eid"]
             blocker_name = _entity_display_name(sim, impact_eid, title_case=False)
             impact_label = f"hit:{blocker_name}#{impact_eid}"
+        elif trace["block_kind"] == "property" and trace.get("block_property_id"):
+            impact_property_id = trace.get("block_property_id")
+            blocker_prop = sim.properties.get(impact_property_id)
+            blocker_profile = physical_property_profile(blocker_prop)
+            blocker_name = str(blocker_profile.get("label", "hardware") or "hardware").strip()
+            impact_label = f"hit:{blocker_name}"
 
     target_eid = _first_targetable_entity_at(sim, x, y, z, exclude_eid=eid)
     target_label = ""
@@ -707,6 +738,7 @@ def _manual_fire_preview(sim, eid, x, y, z):
         "target_eid": target_eid,
         "target_label": target_label,
         "impact_eid": impact_eid,
+        "impact_property_id": impact_property_id,
         "impact_label": impact_label,
         "max_range": max_range,
         "distance": dist,

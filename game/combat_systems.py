@@ -50,6 +50,10 @@ from game.checks import (
 from game.dialogue_runtime import active_contractor_record
 from game.drone_runtime import drone_hull_damage_absorb
 from game.drone_system import destroy_deployed_drone
+from game.physical_target_runtime import (
+    apply_physical_property_damage,
+    weapon_targetable_property_at,
+)
 from game.npc_emergency_runtime import npc_emergency_active
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import (
@@ -139,7 +143,12 @@ class WeaponSystem(System):
         self.sim.events.subscribe("melee_attack_request", self.on_melee_attack_request)
 
     def _first_projectile_hit_entity_at(self, x, y, z, *, exclude_eid=None, skip_downed=False):
-        for other_eid in sorted(self.sim.tilemap.entities_at(x, y, z)):
+        drones = self.sim.ecs.get(DroneState)
+        candidates = sorted(
+            self.sim.tilemap.entities_at(x, y, z),
+            key=lambda other_eid: (1 if drones.get(other_eid) else 0, other_eid),
+        )
+        for other_eid in candidates:
             if other_eid == exclude_eid:
                 continue
             if skip_downed and _entity_is_downed(self.sim, other_eid):
@@ -498,6 +507,17 @@ class WeaponSystem(System):
 
         target_eid = _first_targetable_entity_at(self.sim, tx, ty, tz, exclude_eid=eid)
         if target_eid is None:
+            target_prop = weapon_targetable_property_at(self.sim, tx, ty, tz)
+            if target_prop is not None:
+                return {
+                    "target_eid": None,
+                    "physical_property": True,
+                    "property_id": target_prop.get("id"),
+                    "x": tx,
+                    "y": ty,
+                    "z": tz,
+                    "dist": dist,
+                }, None
             prop = self.sim.property_covering(tx, ty, tz) if hasattr(self.sim, "property_covering") else None
             kind = _structural_surface_kind(self.sim, prop, tx, ty, tz)
             if kind:
@@ -646,6 +666,75 @@ class WeaponSystem(System):
         ))
         return True
 
+    def _resolve_physical_property_melee_attack(
+        self,
+        *,
+        eid,
+        source_pos,
+        target,
+        melee_weapon_id,
+        melee_weapon_name,
+        raw_damage,
+        cooldown_ticks,
+        loadout,
+        manual_aim,
+    ):
+        prop = self.sim.properties.get(target.get("property_id"))
+        result = apply_physical_property_damage(
+            self.sim,
+            prop,
+            raw_damage,
+            damage_kind="melee",
+            weapon_id=melee_weapon_id,
+            source_eid=eid,
+            x=target.get("x"),
+            y=target.get("y"),
+            z=target.get("z"),
+        )
+        if not bool(result.get("damaged")):
+            self.sim.emit(Event("weapon_fire_blocked", eid=eid, reason=result.get("reason", "no_target")))
+            return True
+
+        if loadout:
+            loadout.last_fire_tick = int(self.sim.tick)
+            loadout.cooldown_until_tick = int(self.sim.tick) + int(max(1, cooldown_ticks))
+        self.sim.emit(Event(
+            "melee_attack",
+            eid=eid,
+            source_eid=eid,
+            weapon_id=melee_weapon_id,
+            weapon_name=melee_weapon_name,
+            target_eid=None,
+            property_id=result.get("property_id"),
+            property_name=result.get("property_name"),
+            physical_kind=result.get("physical_kind"),
+            x=target.get("x"),
+            y=target.get("y"),
+            z=target.get("z"),
+            target_x=target.get("x"),
+            target_y=target.get("y"),
+            target_z=target.get("z"),
+            target_dist=target.get("dist", 1),
+            damage=int(result.get("damage", 0) or 0),
+            target_downed=False,
+            manual_aim=manual_aim,
+            physical_property=True,
+        ))
+        self.sim.emit(Event(
+            "noise",
+            source_eid=eid,
+            x=source_pos.x,
+            y=source_pos.y,
+            z=source_pos.z,
+            radius=3,
+            cause="physical_object_melee",
+            property_id=result.get("property_id"),
+            target_x=target.get("x"),
+            target_y=target.get("y"),
+            target_z=target.get("z"),
+        ))
+        return True
+
     def _resolve_melee_attack(self, event, *, eid, source_pos, melee_weapon=None):
         if melee_weapon is None:
             melee_weapon = event.data.get("melee_weapon")
@@ -711,6 +800,19 @@ class WeaponSystem(System):
 
         if bool(target.get("structure", False)):
             return self._resolve_structure_melee_attack(
+                eid=eid,
+                source_pos=source_pos,
+                target=target,
+                melee_weapon_id=melee_weapon_id,
+                melee_weapon_name=melee_weapon_name,
+                raw_damage=raw_damage,
+                cooldown_ticks=cooldown_ticks,
+                loadout=loadout,
+                manual_aim=manual_aim,
+            )
+
+        if bool(target.get("physical_property", False)):
+            return self._resolve_physical_property_melee_attack(
                 eid=eid,
                 source_pos=source_pos,
                 target=target,
@@ -1493,7 +1595,17 @@ class WeaponSystem(System):
             self.sim.emit(Event("aerosol_cloud_released", **payload))
         return True
 
-    def _impact_projectile(self, projectile_id, projectile, x, y, z, hit_eid=None, reason="impact"):
+    def _impact_projectile(
+        self,
+        projectile_id,
+        projectile,
+        x,
+        y,
+        z,
+        hit_eid=None,
+        hit_property=None,
+        reason="impact",
+    ):
         hit_count = 0
         source_eid = projectile.get("source_eid")
         weapon_id = projectile.get("weapon_id")
@@ -1512,6 +1624,22 @@ class WeaponSystem(System):
             ):
                 hit_count += 1
 
+        property_result = None
+        if hit_property is not None and int(max(0, projectile.get("damage", 0) or 0)) > 0:
+            property_result = apply_physical_property_damage(
+                self.sim,
+                hit_property,
+                int(max(1, projectile.get("damage", 1))),
+                damage_kind="ballistic",
+                weapon_id=weapon_id,
+                source_eid=source_eid,
+                x=x,
+                y=y,
+                z=z,
+            )
+            if bool(property_result.get("damaged")):
+                hit_count += 1
+
         if int(projectile.get("explosion_radius", 0)) > 0:
             hit_count += self._explode(projectile, x=x, y=y, z=z)
         cloud_released = self._release_projectile_cloud(projectile, x, y, z)
@@ -1525,6 +1653,9 @@ class WeaponSystem(System):
             y=y,
             z=z,
             hit_eid=hit_eid,
+            hit_property_id=(property_result or {}).get("property_id"),
+            hit_property_name=(property_result or {}).get("property_name"),
+            hit_physical_kind=(property_result or {}).get("physical_kind"),
             reason=reason,
             hits=hit_count,
             shatter=bool(projectile.get("shatter", False)),
@@ -1872,6 +2003,18 @@ class WeaponSystem(System):
                         z=z,
                         hit_eid=hit_eid,
                         reason="entity_hit",
+                    )
+                    break
+                hit_property = weapon_targetable_property_at(self.sim, nx, ny, z)
+                if hit_property is not None:
+                    self._impact_projectile(
+                        projectile_id,
+                        projectile,
+                        x=nx,
+                        y=ny,
+                        z=z,
+                        hit_property=hit_property,
+                        reason="property_hit",
                     )
                     break
 

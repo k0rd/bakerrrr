@@ -1488,7 +1488,7 @@ def _actor_in_storefront_service_zone(sim, actor_eid, prop):
         return True, dist
 
     covered = _property_covering(sim, actor_pos.x, actor_pos.y, actor_pos.z)
-    if covered and covered.get("id") == prop.get("id") and dist <= 3:
+    if covered and covered.get("id") == prop.get("id"):
         return True, dist
     return False, dist
 

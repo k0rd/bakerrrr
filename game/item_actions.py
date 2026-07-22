@@ -1803,7 +1803,26 @@ class ItemActionRuntime:
             return bool(cultivation_result)
 
         effects = item_def.get("effects", [])
-        if not effects:
+        entry_metadata = dict(entry.get("metadata") or {}) if isinstance(entry.get("metadata"), dict) else {}
+        metadata_effect_keys = (
+            "herbal_hp_delta",
+            "herbal_wakefulness_delta",
+            "herbal_hunger_delta",
+            "herbal_thirst_delta",
+            "item_extra_energy_delta",
+            "item_extra_safety_delta",
+            "item_extra_social_delta",
+        )
+        has_metadata_effect = False
+        for key in metadata_effect_keys:
+            try:
+                value = float(entry_metadata.get(key, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                value = 0.0
+            if abs(value) > 1e-6:
+                has_metadata_effect = True
+                break
+        if not effects and not has_metadata_effect:
             self.sim.emit(Event(
                 "item_use_blocked",
                 eid=eid,
@@ -1813,7 +1832,6 @@ class ItemActionRuntime:
             ))
             return False
 
-        entry_metadata = dict(entry.get("metadata") or {}) if isinstance(entry.get("metadata"), dict) else {}
         applied = self._apply_item_effects(eid, item_def, item_metadata=entry_metadata)
         if not applied:
             self.sim.emit(Event(

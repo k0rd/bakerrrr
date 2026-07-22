@@ -379,6 +379,25 @@ def _apply_item_effects_to_entity(sim, eid, item_def, *, item_metadata=None):
             })
             continue
 
+    if vitality:
+        try:
+            herbal_hp_delta = float(metadata.get("herbal_hp_delta", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            herbal_hp_delta = 0.0
+        if abs(herbal_hp_delta) > 1e-6:
+            scalar = positive_effect_scalar if herbal_hp_delta > 0.0 else negative_effect_scalar
+            before = int(getattr(vitality, "hp", 0))
+            max_hp = int(getattr(vitality, "max_hp", before))
+            after = int(round(_clamp(before + (herbal_hp_delta * scalar), 0.0, float(max_hp))))
+            applied_delta = after - before
+            if applied_delta:
+                vitality.hp = int(after)
+                applied.append({
+                    "type": "restore_hp" if applied_delta > 0 else "damage_hp",
+                    "delta": int(applied_delta),
+                    "source": "herbal_class",
+                })
+
     if needs:
         for need in ("energy", "safety", "social", "hunger", "thirst"):
             try:

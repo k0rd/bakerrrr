@@ -72,6 +72,24 @@ def _vehicle_coord(prop):
         return 0, 0, 0
 
 
+def vehicle_explosion_radius_for_fuel(vehicle_prop):
+    """Return blast/fire reach from the fuel actually aboard at cook-off."""
+
+    metadata = property_metadata(vehicle_prop)
+    fuel = max(0, _safe_int(metadata.get("fuel"), 0))
+    if fuel <= 0:
+        return 1
+    if fuel < 15:
+        return 2
+    if fuel < 35:
+        return 3
+    if fuel < 70:
+        return 4
+    if fuel < 120:
+        return 5
+    return 6
+
+
 def _vehicle_chunk_loaded(sim, prop):
     if sim is None or not isinstance(prop, dict):
         return False
@@ -278,11 +296,13 @@ def arm_vehicle_explosion(
         metadata["vehicle_explosion_fuse_durability_offset"] = 0
         metadata["vehicle_explosion_fuse_roll"] = 0
     x, y, z = _vehicle_coord(vehicle_prop)
+    explosion_radius = vehicle_explosion_radius_for_fuel(vehicle_prop)
     metadata["vehicle_explosion_armed"] = True
     metadata["vehicle_explosion_armed_tick"] = now
     metadata["vehicle_explosion_due_tick"] = now + fuse
     metadata["vehicle_explosion_fuse_ticks"] = fuse
-    metadata["vehicle_explosion_radius"] = VEHICLE_EXPLOSION_FIRE_RADIUS
+    metadata["vehicle_explosion_radius"] = int(explosion_radius)
+    metadata["vehicle_explosion_fuel"] = max(0, _safe_int(metadata.get("fuel"), 0))
     metadata["vehicle_explosion_fire_intensity"] = VEHICLE_EXPLOSION_FIRE_INTENSITY
     metadata["vehicle_explosion_smoke_intensity"] = VEHICLE_EXPLOSION_SMOKE_INTENSITY
     metadata["vehicle_explosion_occupant_damage"] = VEHICLE_EXPLOSION_OCCUPANT_DAMAGE
@@ -296,7 +316,7 @@ def arm_vehicle_explosion(
         armed_tick=now,
         due_tick=now + fuse,
         fuse_ticks=fuse,
-        radius=VEHICLE_EXPLOSION_FIRE_RADIUS,
+        radius=int(explosion_radius),
         x=x,
         y=y,
         z=z,
@@ -436,4 +456,5 @@ __all__ = [
     "arm_vehicle_explosion",
     "detonate_vehicle_explosion",
     "disarm_vehicle_explosion",
+    "vehicle_explosion_radius_for_fuel",
 ]

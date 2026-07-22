@@ -254,16 +254,20 @@ def _property_target_record(prop, *, target_class):
 
 def _linked_target_status(sim, prop, target_class):
     linked_id = property_linked_property_id(prop)
+    metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), Mapping) else {}
+    fixture_live = not bool(metadata.get("fixture_broken")) and metadata.get("fixture_usable") is not False
     if target_class == "access_panel":
         linked = getattr(sim, "properties", {}).get(str(linked_id)) if linked_id else None
         return {
             "linked_property_id": linked_id,
-            "linked_live": bool(isinstance(linked, Mapping)),
+            "linked_live": bool(isinstance(linked, Mapping) and fixture_live),
+            "fixture_live": bool(fixture_live),
             "label": _clean_text((linked or {}).get("name"), "linked site") if linked else "linked site",
         }
     return {
         "linked_property_id": linked_id,
-        "linked_live": True,
+        "linked_live": bool(fixture_live),
+        "fixture_live": bool(fixture_live),
         "label": _clean_text(prop.get("name"), "service terminal"),
     }
 
@@ -383,7 +387,9 @@ def _wire_connection_preflight_target(sim, actor_eid, target, *, item_catalog=No
     if not selected:
         reasons.append("no_compatible_interface")
     if target_class == "access_panel" and not bool(target_status.get("linked_live")):
-        reasons.append("target_link_unclear")
+        reasons.append("target_offline" if not bool(target_status.get("fixture_live", True)) else "target_link_unclear")
+    if target_class == "service_terminal" and not bool(target_status.get("fixture_live", True)):
+        reasons.append("target_offline")
     if target.get("kind") == "drone" and not bool(target_status.get("radio_live")):
         reasons.append("target_radio_unavailable")
     for blocker in wire_connection_blockers(sim, actor_eid, network_ref):

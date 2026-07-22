@@ -118,6 +118,7 @@ DIRECT_CUT_TOOL_IDS = {"field_knife", "trail_machete", "pruning_shears", "shiv_k
 DIRECT_SCRAPE_TOOL_IDS = DIRECT_CUT_TOOL_IDS | {"pocket_multitool"}
 CUT_TOOL_TAGS = {"knife", "blade"}
 MORTAR_KIT_ITEM_ID = "mortar_kit"
+IMPROVISED_HERBAL_BLEND_ITEM_ID = "improvised_herbal_blend"
 EXPERIMENTAL_CONCOCTION_ITEM_ID = "experimental_herbal_concoction"
 WEAK_TOXIC_CONCOCTION_ITEM_ID = "weak_toxic_concoction"
 SPOILED_HERBAL_SLURRY_ITEM_ID = "spoiled_herbal_slurry"
@@ -136,6 +137,7 @@ HERBAL_STABILITY_BASE_SCORES = {
     "discovered_recipe": 68,
     "exact_recipe": 68,
     "diluted": 50,
+    "useful": 58,
     "odd": 36,
     "weak_toxic": 30,
 }
@@ -155,6 +157,8 @@ HERBAL_DECAY_METADATA_KEYS = {
     "herbal_decay",
     "herbal_result_read",
     "herbal_signed_effect_stacks",
+    "herbal_class_effects",
+    "herbal_hp_delta",
     "herbal_wakefulness_delta",
     "herbal_hunger_delta",
     "herbal_thirst_delta",
@@ -258,6 +262,43 @@ def _has_item(inventory, item_id):
     if not inventory or not item_id:
         return False
     return any(str(entry.get("item_id", "")).strip().lower() == item_id for entry in tuple(inventory.items or ()))
+
+
+def _herbal_preparation_profile(inventory, *, mode="self", ingredient_source_kind="inventory"):
+    mode_key = _key(mode or "self")
+    source_key = _key(ingredient_source_kind or "inventory")
+    has_mortar = _has_item(inventory, MORTAR_KIT_ITEM_ID)
+    if mode_key == "herbalist":
+        return {
+            "method": "herbalist",
+            "item_quality": "good",
+            "mortar_prepared": False,
+            "positive_effect_bonus": 0.10,
+            "negative_effect_reduction": 0.06,
+            "duration_bonus": 0.06,
+            "stability_bonus": 10,
+        }
+    if has_mortar:
+        return {
+            "method": "mortar_ground",
+            "item_quality": "good",
+            "mortar_prepared": True,
+            "positive_effect_bonus": 0.12,
+            "negative_effect_reduction": 0.06,
+            "duration_bonus": 0.08,
+            "stability_bonus": 12,
+        }
+    if source_key == CAMPFIRE_HERB_CACHE_KIND:
+        return {
+            "method": "campfire_hand_mixed",
+            "item_quality": "standard",
+            "mortar_prepared": False,
+            "positive_effect_bonus": 0.0,
+            "negative_effect_reduction": 0.0,
+            "duration_bonus": 0.0,
+            "stability_bonus": 0,
+        }
+    return None
 
 
 def _tool_for_method(inventory, method):
@@ -774,8 +815,17 @@ def _herbal_trait_result_read(trait_counts, band):
     return ", ".join(dict.fromkeys(reads))
 
 
-def _herbal_trait_effect_metadata(sim, trait_counts, *, experiment_result="", mode="self", output_item_id=""):
+def _herbal_trait_effect_metadata(
+    sim,
+    trait_counts,
+    *,
+    experiment_result="",
+    mode="self",
+    output_item_id="",
+    preparation=None,
+):
     counts = {trait: max(0, _safe_int((trait_counts or {}).get(trait), 0)) for trait in SECONDARY_TRAITS}
+    preparation = preparation if isinstance(preparation, Mapping) else {}
     result_key = _key(experiment_result) or "recipe"
     base_score = HERBAL_STABILITY_BASE_SCORES.get(result_key, HERBAL_STABILITY_BASE_SCORES["recipe"])
     stability_score = int(base_score)
@@ -783,8 +833,7 @@ def _herbal_trait_effect_metadata(sim, trait_counts, *, experiment_result="", mo
     stability_score -= 18 * counts["spoiler"]
     stability_score += 4 * counts["diluter"]
     stability_score -= 5 * counts["potentiator"]
-    if _key(mode) == "herbalist":
-        stability_score += 10
+    stability_score += _safe_int(preparation.get("stability_bonus"), 0)
     stability_score = int(max(0, min(100, stability_score)))
     band = _herbal_stability_band(stability_score)
 
@@ -793,7 +842,8 @@ def _herbal_trait_effect_metadata(sim, trait_counts, *, experiment_result="", mo
         + (0.14 * counts["potentiator"])
         - (0.12 * counts["diluter"])
         + (0.04 * counts["stabilizer"])
-        - (0.06 * counts["spoiler"]),
+        - (0.06 * counts["spoiler"])
+        + _safe_float(preparation.get("positive_effect_bonus"), 0.0),
         0.50,
         1.75,
     )
@@ -802,7 +852,8 @@ def _herbal_trait_effect_metadata(sim, trait_counts, *, experiment_result="", mo
         + (0.06 * counts["potentiator"])
         - (0.12 * counts["diluter"])
         - (0.08 * counts["stabilizer"])
-        + (0.16 * counts["spoiler"]),
+        + (0.16 * counts["spoiler"])
+        - _safe_float(preparation.get("negative_effect_reduction"), 0.0),
         0.50,
         2.00,
     )
@@ -811,7 +862,8 @@ def _herbal_trait_effect_metadata(sim, trait_counts, *, experiment_result="", mo
         + (0.06 * counts["potentiator"])
         - (0.04 * counts["diluter"])
         + (0.08 * counts["stabilizer"])
-        - (0.04 * counts["spoiler"]),
+        - (0.04 * counts["spoiler"])
+        + _safe_float(preparation.get("duration_bonus"), 0.0),
         0.50,
         1.75,
     )
@@ -943,6 +995,65 @@ def _plants_near_actor(sim, eid, radius=12):
     return tuple(row for row in rows if isinstance(row, dict))
 
 
+def _plants_in_property_chunk(sim, prop):
+    if not isinstance(prop, Mapping):
+        return ()
+    try:
+        x = int(prop.get("x", 0) or 0)
+        y = int(prop.get("y", 0) or 0)
+        z = int(prop.get("z", 0) or 0)
+    except (TypeError, ValueError):
+        return ()
+    chunk = sim.chunk_coords(x, y)
+    rows = []
+    for row in getattr(sim, "flora_patches", {}).values() if isinstance(getattr(sim, "flora_patches", None), dict) else ():
+        if not isinstance(row, Mapping):
+            continue
+        try:
+            row_z = int(row.get("z", 0) or 0)
+            raw_chunk = row.get("chunk")
+            row_chunk = (
+                (int(raw_chunk[0]), int(raw_chunk[1]))
+                if isinstance(raw_chunk, (tuple, list)) and len(raw_chunk) == 2
+                else sim.chunk_coords(int(row.get("x", 0) or 0), int(row.get("y", 0) or 0))
+            )
+        except (TypeError, ValueError):
+            continue
+        if row_z == z and tuple(row_chunk) == tuple(chunk):
+            rows.append(row)
+    return tuple(sorted(rows, key=lambda row: (str(row.get("plant_id", "")), str(row.get("id", "")))))
+
+
+def herbalist_local_recipe_ids(sim, prop, *, include_self_only=False):
+    recipes = load_herbal_recipe_catalog()
+    if not isinstance(prop, Mapping):
+        return tuple(
+            recipe_id
+            for recipe_id, recipe in recipes.items()
+            if include_self_only or _recipe_available_for_sale(recipe)
+        )
+    assignments = herbal_chemistry_profiles(sim)
+    local_classes = {
+        assignments.get(_key(row.get("plant_id")))
+        for row in _plants_in_property_chunk(sim, prop)
+        if _key(row.get("plant_id"))
+    }
+    local_classes.discard(None)
+    local_classes.discard("")
+    available = []
+    for recipe_id, recipe in recipes.items():
+        if not include_self_only and not _recipe_available_for_sale(recipe):
+            continue
+        required = {
+            _key(class_id)
+            for class_id in tuple(recipe.get("required_classes", ()) or ())
+            if _key(class_id)
+        }
+        if required and required.issubset(local_classes):
+            available.append(recipe_id)
+    return tuple(available)
+
+
 def _reveal_recipe_plants(sim, eid, recipe, *, prop=None, limit=2):
     required = tuple(dict.fromkeys(str(class_id or "").strip().lower() for class_id in tuple(recipe.get("required_classes", ()) or ()) if str(class_id or "").strip()))
     if not required:
@@ -950,7 +1061,8 @@ def _reveal_recipe_plants(sim, eid, recipe, *, prop=None, limit=2):
     catalog = _herbal_flora_catalog(sim)
     assignments = herbal_chemistry_profiles(sim)
     nearby_by_class = {class_id: [] for class_id in required}
-    for row in _plants_near_actor(sim, eid):
+    source_rows = _plants_in_property_chunk(sim, prop) if isinstance(prop, Mapping) else _plants_near_actor(sim, eid)
+    for row in source_rows:
         plant_id = _key(row.get("plant_id"))
         class_id = assignments.get(plant_id)
         if plant_id and class_id in nearby_by_class:
@@ -969,7 +1081,11 @@ def _reveal_recipe_plants(sim, eid, recipe, *, prop=None, limit=2):
         if len(revealed) >= max(1, int(limit)):
             break
         nearby = list(dict.fromkeys(nearby_by_class.get(class_id, ())))
-        fallback = [plant_id for plant_id in fallback_by_class.get(class_id, ()) if plant_id not in nearby]
+        fallback = (
+            []
+            if isinstance(prop, Mapping)
+            else [plant_id for plant_id in fallback_by_class.get(class_id, ()) if plant_id not in nearby]
+        )
         rng.shuffle(nearby)
         rng.shuffle(fallback)
         for plant_id in tuple(nearby + fallback):
@@ -981,7 +1097,7 @@ def _reveal_recipe_plants(sim, eid, recipe, *, prop=None, limit=2):
                 "secondary_traits": list(plant_secondary_traits(sim, plant_id)),
             })
             break
-    if len(revealed) < limit:
+    if len(revealed) < limit and not isinstance(prop, Mapping):
         already = {row.get("plant_id") for row in revealed if isinstance(row, dict)}
         fallback = [plant_id for plant_id in sorted(catalog) if assignments.get(plant_id) in required and plant_id not in already]
         rng.shuffle(fallback)
@@ -1394,9 +1510,112 @@ def _experimental_mix_roll(sim, eid, selected, class_ids):
     return random.Random(f"{getattr(sim, 'seed', 0)}:{getattr(sim, 'tick', 0)}:{eid}:herbal-experiment:{instance_bits}:{class_bits}")
 
 
-def _experimental_recipe_for_mix(sim, eid, selected, class_ids, trait_counts=None):
+def _free_mix_class_effect_profile(class_ids, trait_counts=None):
+    classes = tuple(_key(class_id) for class_id in tuple(class_ids or ()) if _key(class_id))
+    class_counts = {class_id: classes.count(class_id) for class_id in CHEMISTRY_CLASSES if class_id in classes}
+    trait_counts = trait_counts if isinstance(trait_counts, Mapping) else {}
+    hp_delta = 6.0 * class_counts.get("mending", 0)
+    thirst_delta = (
+        (10.0 * class_counts.get("hydrating", 0))
+        + (3.0 * class_counts.get("cooling", 0))
+    )
+    energy_delta = 9.0 * class_counts.get("energizing", 0)
+    safety_delta = (
+        (7.0 * class_counts.get("calming", 0))
+        + (4.0 * class_counts.get("cleansing", 0))
+        + (3.0 * class_counts.get("numbing", 0))
+        + (2.0 * class_counts.get("cooling", 0))
+    )
+    signed_positive = sum(
+        max(0, _safe_int(trait_counts.get(positive), 0) - _safe_int(trait_counts.get(negative), 0))
+        for positive, negative in (
+            ("+wake", "-wake"),
+            ("+nourish", "-nourish"),
+            ("+hydrate", "-hydrate"),
+        )
+    )
+    hazardous = sum(class_counts.get(class_id, 0) for class_id in ("irritant", "toxic", "deliriant", "volatile"))
+    helpful = bool(hp_delta or thirst_delta or energy_delta or safety_delta or signed_positive)
+    if hp_delta:
+        display_name = "Improvised Restorative Blend"
+    elif thirst_delta:
+        display_name = "Improvised Hydrating Blend"
+    elif energy_delta:
+        display_name = "Improvised Invigorating Blend"
+    elif safety_delta:
+        display_name = "Improvised Soothing Blend"
+    else:
+        display_name = "Improvised Herbal Blend"
+    metadata = {
+        "display_name": display_name,
+        "herbal_class_effects": {
+            "classes": dict(class_counts),
+            "hp": hp_delta,
+            "energy": energy_delta,
+            "safety": safety_delta,
+            "thirst": thirst_delta,
+        },
+    }
+    if hp_delta:
+        metadata["herbal_hp_delta"] = hp_delta
+    if energy_delta:
+        metadata["item_extra_energy_delta"] = energy_delta
+    if safety_delta:
+        metadata["item_extra_safety_delta"] = safety_delta
+    if thirst_delta:
+        metadata["herbal_thirst_delta"] = thirst_delta
+    return {
+        "helpful": helpful,
+        "hazardous": hazardous,
+        "metadata": metadata,
+    }
+
+
+def herbal_free_mix_success_chance(class_ids, trait_counts=None, *, mortar_prepared=False):
+    profile = _free_mix_class_effect_profile(class_ids, trait_counts)
+    if not profile.get("helpful") or int(profile.get("hazardous", 0) or 0) > 0:
+        return 0.0
+    counts = trait_counts if isinstance(trait_counts, Mapping) else {}
+    chance = 0.62
+    chance += 0.10 * _safe_int(counts.get("stabilizer"), 0)
+    chance += 0.05 * tuple(_key(value) for value in tuple(class_ids or ())).count("binding")
+    chance += 0.06 * tuple(_key(value) for value in tuple(class_ids or ())).count("catalyst")
+    chance -= 0.13 * _safe_int(counts.get("spoiler"), 0)
+    chance -= 0.05 * sum(
+        max(0, _safe_int(counts.get(negative), 0) - _safe_int(counts.get(positive), 0))
+        for positive, negative in (
+            ("+wake", "-wake"),
+            ("+nourish", "-nourish"),
+            ("+hydrate", "-hydrate"),
+        )
+    )
+    if mortar_prepared:
+        chance += 0.10
+    return _clamp_float(chance, 0.15, 0.92)
+
+
+def _experimental_recipe_for_mix(sim, eid, selected, class_ids, trait_counts=None, *, preparation=None):
     classes = tuple(_key(class_id) for class_id in tuple(class_ids or ()) if _key(class_id))
     rng = _experimental_mix_roll(sim, eid, selected, classes)
+    preparation = preparation if isinstance(preparation, Mapping) else {}
+    success_chance = herbal_free_mix_success_chance(
+        classes,
+        trait_counts,
+        mortar_prepared=bool(preparation.get("mortar_prepared")),
+    )
+    effect_profile = _free_mix_class_effect_profile(classes, trait_counts)
+    if success_chance > 0.0 and rng.random() < success_chance:
+        return {
+            "id": "improvised_mix",
+            "name": str((effect_profile.get("metadata") or {}).get("display_name") or "improvised herbal blend").lower(),
+            "output_item_id": IMPROVISED_HERBAL_BLEND_ITEM_ID,
+            "component_count": len(tuple(selected or ())),
+            "required_classes": classes,
+            "service_fee": 0,
+            "recipe_price": 0,
+            "tags": ("experimental", "useful", "improvised"),
+            "dynamic_effect_metadata": dict(effect_profile.get("metadata") or {}),
+        }
     toxic = "toxic" in classes
     weak_toxic_chance = herbal_weak_toxic_chance_for_traits(trait_counts)
     output_item_id = WEAK_TOXIC_CONCOCTION_ITEM_ID if toxic and rng.random() < weak_toxic_chance else EXPERIMENTAL_CONCOCTION_ITEM_ID
@@ -1413,17 +1632,26 @@ def _experimental_recipe_for_mix(sim, eid, selected, class_ids, trait_counts=Non
     }
 
 
-def _craftable_recipe_order(sim, eid):
+def _craftable_recipe_order(sim, eid, *, mode="self", prop=None):
     recipes = load_herbal_recipe_catalog()
     known = known_recipes_for_actor(sim, eid)
-    return tuple(recipe for recipe_id, recipe in recipes.items() if recipe_id in known)
+    local_recipe_ids = (
+        set(herbalist_local_recipe_ids(sim, prop, include_self_only=False))
+        if _key(mode) == "herbalist" and isinstance(prop, Mapping)
+        else None
+    )
+    return tuple(
+        recipe
+        for recipe_id, recipe in recipes.items()
+        if recipe_id in known and (local_recipe_ids is None or recipe_id in local_recipe_ids)
+    )
 
 
-def first_craftable_herbal_recipe(sim, eid, ingredient_source=None, *, mode="self"):
+def first_craftable_herbal_recipe(sim, eid, ingredient_source=None, *, mode="self", prop=None):
     source = ingredient_source if ingredient_source is not None else _inventory_for(sim, eid)
     if not source:
         return None
-    for recipe in _craftable_recipe_order(sim, eid):
+    for recipe in _craftable_recipe_order(sim, eid, mode=mode, prop=prop):
         if not _recipe_allowed_for_mode(recipe, mode):
             continue
         if _auto_select_ingredients(sim, eid, recipe, source):
@@ -1449,6 +1677,11 @@ def craft_herbal_medicine(
     if not inventory:
         return {"ok": False, "reason": "no_inventory"}
     mode = str(mode or "self").strip().lower()
+    preparation = _herbal_preparation_profile(
+        inventory,
+        mode=mode,
+        ingredient_source_kind=ingredient_source_kind,
+    )
     ingredient_source = tuple(ingredient_entries or ()) if ingredient_entries is not None else inventory
     recipes = load_herbal_recipe_catalog()
     requested_recipe_id = _key(recipe_id)
@@ -1459,8 +1692,17 @@ def craft_herbal_medicine(
     diluted_target_recipe = None
     selected_trait_counts = {trait: 0 for trait in SECONDARY_TRAITS}
 
+    if (
+        recipe is not None
+        and mode == "herbalist"
+        and isinstance(prop, Mapping)
+        and _recipe_allowed_for_mode(recipe, mode)
+    ):
+        if _key(recipe.get("id")) not in set(herbalist_local_recipe_ids(sim, prop, include_self_only=False)):
+            return {"ok": False, "reason": "no_local_recipe", "recipe_id": recipe["id"]}
+
     if recipe is None and ingredient_instance_ids and mode == "self":
-        if mode == "self" and not _has_item(inventory, MORTAR_KIT_ITEM_ID):
+        if preparation is None:
             return {"ok": False, "reason": "no_tool", "tool_item_id": MORTAR_KIT_ITEM_ID}
         selected = _selected_ingredient_entries(ingredient_source, ingredient_instance_ids, min_count=2)
         if selected is None:
@@ -1486,20 +1728,38 @@ def craft_herbal_medicine(
                 diluted_target_recipe = near_recipe
                 experiment_result = "diluted"
             else:
-                recipe = _experimental_recipe_for_mix(sim, eid, selected, selected_classes, selected_trait_counts)
-                experiment_result = "weak_toxic" if recipe["output_item_id"] == WEAK_TOXIC_CONCOCTION_ITEM_ID else "odd"
+                recipe = _experimental_recipe_for_mix(
+                    sim,
+                    eid,
+                    selected,
+                    selected_classes,
+                    selected_trait_counts,
+                    preparation=preparation,
+                )
+                if recipe["output_item_id"] == IMPROVISED_HERBAL_BLEND_ITEM_ID:
+                    experiment_result = "useful"
+                elif recipe["output_item_id"] == WEAK_TOXIC_CONCOCTION_ITEM_ID:
+                    experiment_result = "weak_toxic"
+                else:
+                    experiment_result = "odd"
 
     if recipe is None:
-        recipe = first_craftable_herbal_recipe(sim, eid, ingredient_source, mode=mode)
+        recipe = first_craftable_herbal_recipe(sim, eid, ingredient_source, mode=mode, prop=prop)
     if recipe is None:
         if not known_recipes_for_actor(sim, eid):
             return {"ok": False, "reason": "no_recipe"}
+        if mode == "herbalist" and isinstance(prop, Mapping):
+            local_known = set(known_recipes_for_actor(sim, eid)).intersection(
+                herbalist_local_recipe_ids(sim, prop, include_self_only=False)
+            )
+            if not local_known:
+                return {"ok": False, "reason": "no_local_recipe"}
         return {"ok": False, "reason": "no_ingredients"}
     if not _recipe_allowed_for_mode(recipe, mode):
         return {"ok": False, "reason": "no_recipe", "recipe_id": recipe["id"]}
     if not experiment_result and _key(recipe["id"]) not in known_recipes_for_actor(sim, eid):
         return {"ok": False, "reason": "no_recipe", "recipe_id": recipe["id"]}
-    if mode == "self" and not _has_item(inventory, MORTAR_KIT_ITEM_ID):
+    if mode == "self" and preparation is None:
         return {"ok": False, "reason": "no_tool", "tool_item_id": MORTAR_KIT_ITEM_ID}
 
     if selected is not None:
@@ -1559,6 +1819,9 @@ def craft_herbal_medicine(
         "component_classes": [row.get("chemistry_class") for row in component_payload if row.get("chemistry_class")],
         "component_secondary_traits": list(component_secondary_traits),
         "component_secondary_trait_counts": dict(component_secondary_trait_counts),
+        "item_quality": str((preparation or {}).get("item_quality", "standard") or "standard"),
+        "preparation_method": str((preparation or {}).get("method", mode) or mode),
+        "mortar_prepared": bool((preparation or {}).get("mortar_prepared", False)),
         "legal_status": str(ITEM_CATALOG.get(output_item_id, {}).get("legal_status", "legal") or "legal").strip().lower(),
     }
     if experiment_result:
@@ -1577,7 +1840,23 @@ def craft_herbal_medicine(
         experiment_result=experiment_result,
         mode=mode,
         output_item_id=output_item_id,
+        preparation=preparation,
     ))
+    dynamic_effect_metadata = recipe.get("dynamic_effect_metadata") if isinstance(recipe.get("dynamic_effect_metadata"), Mapping) else {}
+    additive_effect_keys = {
+        "herbal_hp_delta",
+        "herbal_wakefulness_delta",
+        "herbal_hunger_delta",
+        "herbal_thirst_delta",
+        "item_extra_energy_delta",
+        "item_extra_safety_delta",
+        "item_extra_social_delta",
+    }
+    for key, value in dynamic_effect_metadata.items():
+        if key in additive_effect_keys:
+            output_metadata[key] = _safe_float(output_metadata.get(key), 0.0) + _safe_float(value, 0.0)
+        else:
+            output_metadata[key] = copy.deepcopy(value)
     source_context = str(output_metadata.get("source_context", source_context) or source_context)
     output_metadata = stamp_item_provenance(
         sim,
@@ -1662,6 +1941,9 @@ def craft_herbal_medicine(
         "stability_band": output_metadata.get("stability_band"),
         "breakdown_tick": output_metadata.get("breakdown_tick"),
         "herbal_result_read": output_metadata.get("herbal_result_read"),
+        "item_quality": output_metadata.get("item_quality"),
+        "preparation_method": output_metadata.get("preparation_method"),
+        "mortar_prepared": bool(output_metadata.get("mortar_prepared", False)),
         "credits_spent": fee,
         "mode": mode,
         "ingredient_source": str(ingredient_source_kind or "inventory").strip().lower() or "inventory",
@@ -1952,11 +2234,24 @@ def purchase_herbal_recipe(sim, eid, recipe_id=None, *, prop=None, emit_event=Tr
     recipe = recipes.get(_key(recipe_id)) if recipe_id else None
     if recipe is not None and not _recipe_available_for_sale(recipe):
         return {"ok": False, "reason": "all_known"}
+    local_recipe_ids = (
+        set(herbalist_local_recipe_ids(sim, prop, include_self_only=False))
+        if isinstance(prop, Mapping)
+        else {
+            candidate_id
+            for candidate_id, candidate in recipes.items()
+            if _recipe_available_for_sale(candidate)
+        }
+    )
+    if recipe is not None and _key(recipe.get("id")) not in local_recipe_ids:
+        return {"ok": False, "reason": "no_local_recipe", "recipe_id": recipe["id"]}
     if recipe is None:
         candidates = [
             (index, candidate)
             for index, (candidate_id, candidate) in enumerate(recipes.items())
-            if candidate_id not in known and _recipe_available_for_sale(candidate)
+            if candidate_id not in known
+            and candidate_id in local_recipe_ids
+            and _recipe_available_for_sale(candidate)
         ]
         if candidates:
             index, recipe = max(
@@ -1966,6 +2261,8 @@ def purchase_herbal_recipe(sim, eid, recipe_id=None, *, prop=None, emit_event=Tr
                     -int(row[0]),
                 ),
             )
+    if recipe is None and not local_recipe_ids:
+        return {"ok": False, "reason": "no_local_recipe"}
     if recipe is None:
         return {"ok": False, "reason": "all_known"}
     assets = _assets_for(sim, eid)

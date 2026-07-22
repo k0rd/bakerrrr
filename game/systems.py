@@ -457,6 +457,11 @@ from game.system_support.combat_targeting_runtime import (
     COMBAT_RELATION_AMBIENT,
     COMBAT_RELATION_DIRECT,
     _combat_relation_to_player,
+    _entity_is_weapon_targetable as _shared_entity_is_weapon_targetable,
+    _first_targetable_entity_at as _shared_first_targetable_entity_at,
+    _manual_fire_preview as _shared_manual_fire_preview,
+    _trace_projectile_path as _shared_trace_projectile_path,
+    _weapon_target_viability as _shared_weapon_target_viability,
 )
 from game.system_support.cover_runtime import (
     _effective_cover_value,
@@ -1009,56 +1014,18 @@ def _first_blocking_entity_at(sim, x, y, z, exclude_eid=None):
 
 
 def _entity_is_weapon_targetable(sim, eid, *, current_tick=None):
-    if sim is None or eid is None:
-        return False
-
-    vitality = sim.ecs.get(Vitality).get(eid)
-    suppression = sim.ecs.get(SuppressionState).get(eid)
-    if suppression and bool(getattr(suppression, "surrendered", False)):
-        if vitality and bool(getattr(vitality, "downed", False)):
-            return True
-        if not vitality or int(getattr(vitality, "hp", 0) or 0) <= 0:
-            return False
-
-        try:
-            surrender_tick = int(getattr(suppression, "surrender_tick", -1))
-        except (TypeError, ValueError):
-            surrender_tick = -1
-
-        if current_tick is None:
-            try:
-                current_tick = int(getattr(sim, "tick", -1))
-            except (TypeError, ValueError):
-                current_tick = -1
-        else:
-            try:
-                current_tick = int(current_tick)
-            except (TypeError, ValueError):
-                current_tick = -1
-
-        # Let the surrender itself resolve before already-airborne shots in the
-        # same tick can connect.
-        if surrender_tick >= 0 and current_tick >= 0 and surrender_tick >= current_tick:
-            return False
-        return True
-
-    collider = sim.ecs.get(Collider).get(eid)
-    if collider and collider.blocks:
-        return True
-
-    if vitality and bool(getattr(vitality, "downed", False)):
-        return True
-
-    return False
+    return _shared_entity_is_weapon_targetable(sim, eid, current_tick=current_tick)
 
 
 def _first_targetable_entity_at(sim, x, y, z, exclude_eid=None, *, current_tick=None):
-    for other_eid in sorted(sim.tilemap.entities_at(x, y, z)):
-        if other_eid == exclude_eid:
-            continue
-        if _entity_is_weapon_targetable(sim, other_eid, current_tick=current_tick):
-            return other_eid
-    return None
+    return _shared_first_targetable_entity_at(
+        sim,
+        x,
+        y,
+        z,
+        exclude_eid=exclude_eid,
+        current_tick=current_tick,
+    )
 
 
 def _projectile_endpoint(sx, sy, tx, ty, max_steps):
@@ -4426,15 +4393,19 @@ class TradeSystem(_TradeSystemExtracted):
         super().__init__(sim, player_eid, trade_contact_terms=_trade_contact_terms)
 
 
+_trace_projectile_path = _shared_trace_projectile_path
+_manual_fire_preview = _shared_manual_fire_preview
+_weapon_target_viability = _shared_weapon_target_viability
+
 _combat_systems_module._float_or_default = _float_or_default
 _combat_systems_module._grid_distance = _grid_distance
 _combat_systems_module._clamp = _clamp
 _combat_systems_module._dir_label = _dir_label
 _combat_systems_module._first_targetable_entity_at = _first_targetable_entity_at
-_combat_systems_module._manual_fire_preview = _manual_fire_preview
+_combat_systems_module._manual_fire_preview = _shared_manual_fire_preview
 _combat_systems_module._projectile_path_points = _projectile_path_points
 _combat_systems_module._shatter_window_for_projectile = _shatter_window_for_projectile
-_combat_systems_module._weapon_target_viability = _weapon_target_viability
+_combat_systems_module._weapon_target_viability = _shared_weapon_target_viability
 _combat_systems_module._weapon_is_melee = _weapon_is_melee
 _combat_systems_module._npc_combat_metrics = _npc_combat_metrics
 _perception_systems_module.QUIET_NOISE_CAUSES = QUIET_NOISE_CAUSES

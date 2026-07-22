@@ -554,6 +554,25 @@
       }
     ]
   },
+  "improvised_herbal_blend": {
+    "name": "Improvised Herbal Blend",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "herbal_medicine",
+      "experimental",
+      "improvised",
+      "suspicious"
+    ],
+    "legal_status": "suspicious",
+    "identification_profile": {
+      "family": "medical",
+      "requires_identification": true,
+      "auto_identify_on_use": true
+    },
+    "effects": []
+  },
   "experimental_herbal_concoction": {
     "name": "Odd Herbal Concoction",
     "glyph": "!",
@@ -6386,6 +6405,7 @@
         "leaf_clippings",
         "moss_scrapings",
         "vine_cuttings",
+        "improvised_herbal_blend",
         "experimental_herbal_concoction",
         "weak_toxic_concoction",
         "spoiled_herbal_slurry"

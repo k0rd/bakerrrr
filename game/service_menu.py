@@ -71,6 +71,7 @@ from game.property_runtime import (
     property_covering as _property_covering,
     property_infrastructure_role as _property_infrastructure_role,
     property_is_storefront as _property_is_storefront,
+    property_metadata as _property_metadata,
     resolve_property_record as _resolve_property_record,
     site_services_for_property as _site_services_for_property,
 )
@@ -4869,6 +4870,8 @@ class ServiceMenuSystem(System):
             lines = [first, f"Recipe: {recipe_name}."]
             if credits_spent > 0:
                 lines.append(f"Fee {_credit_amount_label(credits_spent)}.")
+            if bool(event.data.get("mortar_prepared")):
+                lines.append("The mortar-ground preparation is good quality.")
             if experiment_result in {"diluted", "weak_toxic", "odd"}:
                 if experiment_result == "diluted":
                     lines.append("The result is weaker than the recipe you were reaching for.")
@@ -4876,6 +4879,8 @@ class ServiceMenuSystem(System):
                     lines.append("The result carries a weak toxic edge.")
                 else:
                     lines.append("The result is odd and not trusted stock.")
+            elif experiment_result == "useful":
+                lines.append("The traits held together into a useful, unfamiliar blend.")
             else:
                 if bool(event.data.get("discovered_recipe")):
                     lines.append("You worked out the recipe from the mix.")
@@ -5328,6 +5333,8 @@ class ServiceMenuSystem(System):
         herbal_craft_services = {"herbal_prepare", "herbal_compound", "campfire_herbal_recipe", "campfire_herbal_mix"}
         if reason == "no_recipe" and service in herbal_craft_services:
             return title, ["You need to learn an herbal recipe before this prep makes sense.", "Herbalists can sell recipes."]
+        if reason == "no_local_recipe" and service in {"herbal_prepare", "herbal_recipe_sales"}:
+            return f"Herbal Recipe: {prop_name}", [f"{prop_name} has no unfamiliar recipe supported by the plants growing in this chunk."]
         if reason == "no_ingredients" and service in herbal_craft_services:
             if service in {"campfire_herbal_recipe", "campfire_herbal_mix"}:
                 return title, ["The campfire herb cache needs 2-3 harvested plant materials.", "Open the herb cache and load the plants first."]
@@ -5336,8 +5343,8 @@ class ServiceMenuSystem(System):
             return title, ["Those cached herbs do not match any recipe you know.", "Use free-mix cached herbs if you want to experiment."]
         if reason == "invalid_mix" and service in herbal_craft_services:
             return title, ["Those plant materials do not satisfy the recipe.", "Nothing was consumed."]
-        if reason == "no_tool" and service in {"herbal_compound", "campfire_herbal_recipe", "campfire_herbal_mix"}:
-            return title, ["You need a mortar kit to compound herbs at a campfire ring."]
+        if reason == "no_tool" and service == "herbal_compound":
+            return title, ["You need a mortar kit to compound herbs away from a campfire ring."]
         if reason == "all_known" and service == "herbal_recipe_sales":
             return f"Herbal Recipe: {prop_name}", ["You already know the recipes this herbalist is selling."]
         if reason == "no_meat" and service == "campfire_cook":
@@ -5736,6 +5743,15 @@ class ServiceMenuSystem(System):
             if interaction_mode != "physical" or infrastructure_role != "service_terminal":
                 return
         if infrastructure_role in {"access_panel", "security_post"}:
+            return
+
+        metadata = _property_metadata(prop)
+        if infrastructure_role == "service_terminal" and (
+            bool(metadata.get("fixture_broken")) or metadata.get("fixture_usable") is False
+        ):
+            event.data["handled"] = True
+            name = str(prop.get("name", prop.get("id", "Terminal")) or "Terminal").strip()
+            self._present_service_result(name, ["The terminal is dark and unresponsive."], property_id=prop.get("id"))
             return
 
         pos = self._position_for(eid)

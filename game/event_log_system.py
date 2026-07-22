@@ -641,6 +641,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("melee_attack", self.on_melee_attack)
         self.sim.events.subscribe("weapon_fire_blocked", self.on_weapon_fire_blocked)
         self.sim.events.subscribe("projectile_impact", self.on_projectile_impact)
+        self.sim.events.subscribe("physical_object_damaged", self.on_physical_object_damaged)
+        self.sim.events.subscribe("physical_object_broken", self.on_physical_object_broken)
         self.sim.events.subscribe("smoke_cloud_released", self.on_smoke_cloud_released)
         self.sim.events.subscribe("aerosol_cloud_released", self.on_aerosol_cloud_released)
         self.sim.events.subscribe("aerosol_exposure_triggered", self.on_aerosol_exposure_triggered)
@@ -3496,7 +3498,7 @@ class EventLogSystem(System):
                 )
             else:
                 detail = ""
-                if experiment_result in {"diluted", "weak_toxic", "odd"}:
+                if experiment_result in {"diluted", "weak_toxic", "odd", "useful"}:
                     detail = f" ({experiment_result.replace('_', ' ')})"
                 source_word = "cached " if service in {"campfire_herbal_recipe", "campfire_herbal_mix"} else ""
                 _log_player_feedback(
@@ -3806,6 +3808,9 @@ class EventLogSystem(System):
         if reason == "no_recipe" and service in herbal_craft_services:
             self.sim.log.add(f"Herbal prep: learn a recipe before using {prop_name}.")
             return
+        if reason == "no_local_recipe" and service in {"herbal_prepare", "herbal_recipe_sales"}:
+            self.sim.log.add(f"Herbal recipe: {prop_name} has no unfamiliar recipe supported by this chunk's plants.")
+            return
         if reason == "no_ingredients" and service in herbal_craft_services:
             if service in {"campfire_herbal_recipe", "campfire_herbal_mix"}:
                 self.sim.log.add(f"Herbal prep: load 2-3 plant materials into {prop_name}'s herb cache first.")
@@ -3818,8 +3823,8 @@ class EventLogSystem(System):
         if reason == "invalid_mix" and service in herbal_craft_services:
             self.sim.log.add("Herbal prep: those plant materials do not satisfy the recipe. Nothing was consumed.")
             return
-        if reason == "no_tool" and service in {"herbal_compound", "campfire_herbal_recipe", "campfire_herbal_mix"}:
-            self.sim.log.add(f"Herbal prep: you need a mortar kit to compound herbs at {prop_name}.")
+        if reason == "no_tool" and service == "herbal_compound":
+            self.sim.log.add(f"Herbal prep: you need a mortar kit to compound herbs away from a campfire at {prop_name}.")
             return
         if reason == "all_known" and service == "herbal_recipe_sales":
             self.sim.log.add(f"Herbal recipe: you already know what {prop_name} is selling.")
@@ -6816,6 +6821,40 @@ class EventLogSystem(System):
             self._log(profile["miss"], channel="combat", priority="high", dedupe_window=2)
             return
 
+    def on_physical_object_damaged(self, event):
+        if event.data.get("source_eid") != self.player_eid:
+            return
+        if bool(event.data.get("broken", False)):
+            return
+        name = str(event.data.get("property_name", "hardware") or "hardware").strip()
+        damage = int(event.data.get("damage", 0) or 0)
+        if damage <= 0:
+            self._log(f"The hit barely marks {name}.", channel="combat", priority="high", dedupe_window=2)
+            return
+        integrity = int(event.data.get("integrity", 0) or 0)
+        maximum = max(1, int(event.data.get("max_integrity", 1) or 1))
+        self._log(
+            f"You damage {name}. Condition {integrity}/{maximum}.",
+            channel="combat",
+            priority="high",
+            dedupe_window=1,
+        )
+
+    def on_physical_object_broken(self, event):
+        if event.data.get("source_eid") != self.player_eid:
+            return
+        name = str(event.data.get("property_name", "hardware") or "hardware").strip()
+        physical_kind = str(event.data.get("physical_kind", "") or "").strip().lower()
+        if physical_kind == "vehicle":
+            self._log(
+                f"You disable {name}.",
+                channel="combat",
+                priority="high",
+                dedupe_window=2,
+            )
+            return
+        self._log(f"You wreck {name}.", channel="combat", priority="high", dedupe_window=2)
+
     def on_smoke_cloud_released(self, event):
         if event.data.get("source_eid") != self.player_eid:
             return
@@ -7984,10 +8023,8 @@ class EventLogSystem(System):
         if not self._player_active_vehicle_matches(vehicle_id) and not self._player_can_perceive_event_position(event):
             return
         vehicle_name = str(event.data.get("vehicle_name", "") or "").strip() or "The vehicle"
-        fuse_ticks = _int_or_default(event.data.get("fuse_ticks"), 0)
-        fuse_text = f" in about {fuse_ticks} ticks" if fuse_ticks > 0 else " soon"
         self.sim.log.add(
-            f"{vehicle_name} starts cooking off. Get clear; it may blow{fuse_text}.",
+            f"{vehicle_name} starts cooking off. Get clear; it may blow.",
             channel="general",
             priority="high",
         )

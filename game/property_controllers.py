@@ -55,6 +55,27 @@ property_lock_state = _systems.property_lock_state
 remove_actor_property_credentials = _systems.remove_actor_property_credentials
 _sync_property_access_controller = _systems._sync_property_access_controller
 
+_FIXTURE_CONDITION_KEYS = frozenset({
+    "fixture_integrity",
+    "fixture_integrity_max",
+    "fixture_armor",
+    "fixture_broken",
+    "fixture_broken_tick",
+    "fixture_usable",
+    "last_fixture_damage_tick",
+    "last_fixture_damage_kind",
+    "last_fixture_damage_weapon_id",
+    "last_fixture_damage_source_eid",
+})
+
+
+def _preserve_fixture_condition(existing_prop, refreshed_metadata):
+    existing = _property_metadata(existing_prop)
+    for key in _FIXTURE_CONDITION_KEYS:
+        if key in existing:
+            refreshed_metadata[key] = existing[key]
+    return refreshed_metadata
+
 
 class PropertySystem(System):
 
@@ -227,7 +248,7 @@ class PropertySystem(System):
             terminal["name"] = str(profile.get("name", terminal.get("name", "Service Terminal"))).strip() or "Service Terminal"
             terminal["owner_eid"] = owner_eid
             terminal["owner_tag"] = owner_tag
-            terminal["metadata"] = terminal_metadata
+            terminal["metadata"] = _preserve_fixture_condition(terminal, terminal_metadata)
         else:
             terminal_id = self.sim.register_property(
                 name=str(profile.get("name", "Service Terminal")).strip() or "Service Terminal",
@@ -322,7 +343,7 @@ class PropertySystem(System):
             panel["name"] = panel_name
             panel["owner_eid"] = owner_eid
             panel["owner_tag"] = owner_tag
-            panel["metadata"] = panel_metadata
+            panel["metadata"] = _preserve_fixture_condition(panel, panel_metadata)
         else:
             panel_id = self.sim.register_property(
                 name=panel_name,
@@ -550,6 +571,16 @@ class PropertySystem(System):
         }
 
     def _handle_access_panel_interaction(self, eid, panel_prop):
+        panel_metadata = _property_metadata(panel_prop)
+        if bool(panel_metadata.get("fixture_broken")) or panel_metadata.get("fixture_usable") is False:
+            self.sim.emit(Event(
+                "access_panel_blocked",
+                eid=eid,
+                property_id=panel_prop.get("id"),
+                property_name=str(panel_prop.get("name", panel_prop.get("id", "access panel"))).strip() or "access panel",
+                reason="offline",
+            ))
+            return
         target_prop = _systems._infrastructure_target_property(self.sim, panel_prop)
         if not target_prop or str(target_prop.get("kind", "")).strip().lower() != "building":
             self.sim.emit(Event(
