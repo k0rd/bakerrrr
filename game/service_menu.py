@@ -4118,6 +4118,14 @@ class ServiceMenuSystem(System):
         prop_name = str(prop.get("name", prop.get("id", "Jobs"))).strip() or "Jobs"
         offers = service_job_board_offers(self.sim, self.player_eid, prop, service, limit=5)
         topics = [{"id": "service_menu:root", "label": "Back"}]
+        bounty_license_active = True
+        if service == "bounty_jobs":
+            bounty_license_active = civic_license_is_active(self.sim, self.player_eid, "bounty")
+            if not bounty_license_active:
+                topics.append({
+                    "id": "bounty_jobs:license_buy",
+                    "label": f"File bounty credential - {int(LICENSE_FEES['bounty'])}c",
+                })
         for offer in offers:
             topics.append({
                 "id": f"{service}:accept|{offer.get('job_key')}",
@@ -4127,6 +4135,18 @@ class ServiceMenuSystem(System):
             })
         board_title = _service_menu_option_label(service)
         transcript = [f"{board_title} at {prop_name}."]
+        if service == "bounty_jobs":
+            if bounty_license_active:
+                transcript.extend([
+                    "Recovery credential: active.",
+                    "Filed scope: matching posted targets; pursuit, unarmed recovery force, and restraint after surrender or incapacitation.",
+                    "Excluded: lethal force, firearms against a non-threatening target, explosives, property search, and collateral harm.",
+                ])
+            else:
+                transcript.extend([
+                    "Recovery credential: not active.",
+                    "This desk will show public postings, but it will not assign one until a bounty credential is filed.",
+                ])
         if not offers:
             transcript.append("Nothing useful is posted right now.")
         self.sim.set_time_paused(True, reason="dialog")
@@ -4332,14 +4352,14 @@ class ServiceMenuSystem(System):
         transcript.extend(own_lines)
         self.sim.set_time_paused(True, reason="dialog")
         topics = [{"id": "civic_records:root", "label": "Back to civic records"}]
-        for license_kind in ("hunting", "cultivation"):
+        for license_kind in ("hunting", "cultivation", "bounty"):
             active = civic_license_is_active(self.sim, self.player_eid, license_kind)
             fee = int(LICENSE_FEES[license_kind])
             label = f"{license_kind.title()} license — active" if active else f"Buy {license_kind} license — {fee}c"
             topics.append({"id": f"civic_records:license_buy|{license_kind}", "label": label})
         state.update({
             "title": f"Permit Ledger: {authority['authority_name']}",
-            "subtitle": "Hunting, cultivation, and civic credentials",
+            "subtitle": "Ecology, recovery, and civic credentials",
             "transcript": transcript,
             "topics": topics,
             "selected_index": 0,
@@ -4349,7 +4369,7 @@ class ServiceMenuSystem(System):
             "civic_record_rows": [dict(row) for row in records],
         })
 
-    def _open_civic_license_action(self, prop, license_kind):
+    def _open_civic_license_action(self, prop, license_kind, *, return_option="civic_records:licenses"):
         state = self._dialog_ui_state()
         result = purchase_civic_license(self.sim, self.player_eid, license_kind, prop=prop)
         kind_label = str(license_kind or "license").replace("_", " ").title()
@@ -4366,13 +4386,19 @@ class ServiceMenuSystem(System):
                 f"The {kind_label.lower()} costs {int(result.get('fee', 0))}c.",
                 f"You currently have {int(result.get('credits', 0))}c.",
             ]
+        elif result.get("reason") == "justice_hold":
+            tier = str(result.get("wanted_tier", "active review") or "active review").replace("_", " ")
+            lines = [
+                f"The {kind_label.lower()} cannot be issued while your justice file reads {tier}.",
+                "The recovery desk has left the application unfiled and charged nothing.",
+            ]
         else:
             lines = ["That license cannot be issued at this counter."]
         state.update({
             "title": f"{kind_label} Counter",
             "subtitle": "Civic credential action",
             "transcript": lines,
-            "topics": [{"id": "civic_records:licenses", "label": "Back to licenses and permits"}],
+            "topics": [{"id": str(return_option or "civic_records:licenses"), "label": "Back"}],
             "selected_index": 0,
             "scroll": 0,
             "hint": "The public permit ledger updates immediately after issuance.",
@@ -4945,7 +4971,7 @@ class ServiceMenuSystem(System):
             if interrupted:
                 if interruption_reason == "woken_by_noise" and wake_cause:
                     lines.append(f"Nearby {wake_cause.replace('_', ' ')} wakes you.")
-                elif interruption_reason in {"justice_surrender", "justice_questioning", "justice_identity_check", "actor_detained", "justice_booking_completed"}:
+                elif interruption_reason in {"justice_surrender", "justice_questioning", "justice_identity_check", "justice_case_canvas", "actor_detained", "justice_booking_completed"}:
                     lines.append("Justice reaches you before you can finish laying low.")
                 else:
                     lines.append("Danger reaches you before you can finish laying low.")
@@ -4980,7 +5006,7 @@ class ServiceMenuSystem(System):
             if interrupted:
                 if interruption_reason == "woken_by_noise" and wake_cause:
                     lines.append(f"Nearby {wake_cause.replace('_', ' ')} wakes you.")
-                elif interruption_reason in {"justice_surrender", "justice_questioning", "justice_identity_check", "actor_detained", "justice_booking_completed"}:
+                elif interruption_reason in {"justice_surrender", "justice_questioning", "justice_identity_check", "justice_case_canvas", "actor_detained", "justice_booking_completed"}:
                     lines.append("Justice reaches you before you can finish the room stay.")
                 else:
                     lines.append("Danger reaches you before the room stay can finish.")
@@ -6472,6 +6498,10 @@ class ServiceMenuSystem(System):
             else:
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)
+            return
+        if option_id == "bounty_jobs:license_buy":
+            if isinstance(prop, dict):
+                self._open_civic_license_action(prop, "bounty", return_option="bounty_jobs")
             return
         job_board_service = next(
             (service for service in SERVICE_JOB_BOARD_SERVICES if option_id.startswith(f"{service}:accept|")),

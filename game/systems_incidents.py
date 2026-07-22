@@ -11,6 +11,7 @@ from engine.events import Event
 from engine.systems import System
 
 from game.components import AI, CreatureIdentity, IncidentKnowledge, Inventory, JusticeProfile, NPCTraits, Occupation, Position
+from game.bounty_authority import stamp_bounty_authority
 from game.drone_incident_reporting import drone_incident_report_rows
 from game.incident_runtime import (
     create_or_merge_incident,
@@ -19,6 +20,7 @@ from game.incident_runtime import (
     incident_propagation_allowed,
     incident_record,
     incident_registry,
+    mark_incident_registry_changed,
     prune_incidents,
     record_incident_scene_items,
     update_incident_propagation,
@@ -37,7 +39,21 @@ from game.vision_scene_runtime import event_is_vision_only
 
 
 CAMERA_OWNER_AI_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
-CAMERA_OWNER_CAREER_TOKENS = ("guard", "security", "patrol", "police", "deputy", "marshal", "surveillance", "monitor", "dispatch")
+CAMERA_OWNER_CAREER_TOKENS = (
+    "guard",
+    "security",
+    "patrol",
+    "police",
+    "deputy",
+    "marshal",
+    "bailiff",
+    "detective",
+    "investigator",
+    "inspector",
+    "surveillance",
+    "monitor",
+    "dispatch",
+)
 SCENE_RESIDUE_RADIUS = 2
 PRECOMBAT_TRANSFER_WINDOW = 12
 CONTAINER_CAPTURE_KINDS = {"container", "scene"}
@@ -933,6 +949,27 @@ class IncidentKnowledgeSystem(System):
             "target_eid",
             "target_name",
             "target_taxonomy",
+            "permit_verified",
+            "hunting_license_status",
+            "hunting_legality_reason",
+            "fauna_lineage_id",
+            "fauna_population_status",
+            "fauna_population_abundance",
+            "cull_active",
+            "bounty_authority_relevant",
+            "bounty_authority_authorized",
+            "bounty_authority_reason",
+            "bounty_action_kind",
+            "bounty_license_status",
+            "bounty_assignment_active",
+            "bounty_opportunity_id",
+            "bounty_issuer_name",
+            "bounty_credential_misuse",
+            "bounty_severity_mitigation",
+            "bounty_severity_adjustment",
+            "bounty_authority_scope",
+            "bounty_authority_exclusions",
+            "bounty_authority_evaluated_tick",
         ):
             value = event.data.get(field)
             if value not in (None, "", ()):
@@ -1167,6 +1204,13 @@ class IncidentKnowledgeSystem(System):
             return
         if context == "ordinary" and offense_score < self.MIN_ACTION_OFFENSE_SCORE:
             return
+        if context in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge", "homicide"}:
+            stamp_bounty_authority(
+                self.sim,
+                event.data,
+                offender_eid=event.data.get("offender_eid", event.data.get("eid")),
+                target_eid=event.data.get("target_eid", event.data.get("victim_eid")),
+            )
         observation = self._event_accountability(event, strict=True)
 
         official_reportable = (
@@ -1209,6 +1253,12 @@ class IncidentKnowledgeSystem(System):
         event.data.setdefault("target_eid", target_eid)
         event.data.setdefault("context", "homicide")
         event.data.setdefault("action", "homicide")
+        stamp_bounty_authority(
+            self.sim,
+            event.data,
+            offender_eid=offender_eid,
+            target_eid=target_eid,
+        )
         observation = event_observation_accountability(
             self.sim,
             event,
@@ -1457,6 +1507,41 @@ class IncidentKnowledgeSystem(System):
             note=note,
             tags=tuple(dict.fromkeys(tags)),
         )
+        if event.type == "fire_started":
+            origins = [
+                row
+                for row in tuple(incident.get("fire_origin_observations", ()) or ())
+                if isinstance(row, dict)
+            ]
+            origin_x = _safe_int(event.data.get("source_x"), _safe_int(x, 0))
+            origin_y = _safe_int(event.data.get("source_y"), _safe_int(y, 0))
+            origin_z = _safe_int(event.data.get("source_z"), z)
+            origin_key = (source_kind, origin_x, origin_y, origin_z)
+            existing_keys = {
+                (
+                    _text(row.get("source_kind")).lower(),
+                    _safe_int(row.get("origin_x"), _safe_int(row.get("x"), 0)),
+                    _safe_int(row.get("origin_y"), _safe_int(row.get("y"), 0)),
+                    _safe_int(row.get("origin_z"), _safe_int(row.get("z"), 0)),
+                )
+                for row in origins
+            }
+            if origin_key not in existing_keys:
+                origins.append({
+                    "source_kind": source_kind or "unknown",
+                    "origin_x": origin_x,
+                    "origin_y": origin_y,
+                    "origin_z": origin_z,
+                    "observed_x": _safe_int(x, 0),
+                    "observed_y": _safe_int(y, 0),
+                    "observed_z": z,
+                    "source_item_id": _text(event.data.get("source_item_id")).lower() or None,
+                    "source_item_name": _text(event.data.get("source_item_name")) or None,
+                    "recorded_tick": _safe_int(getattr(self.sim, "tick", 0), 0),
+                })
+                incident["fire_origin_observations"] = tuple(origins[-12:])
+                incident["fire_origin_count"] = len(origins)
+                mark_incident_registry_changed(self.sim)
         if suspect_payload and incident.get("primary_actor_eid") in (None, "", 0):
             incident["primary_actor_eid"] = int(suspect_payload["owner_eid"])
         if suspect_payload:

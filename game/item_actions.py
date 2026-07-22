@@ -4,6 +4,12 @@ import random
 
 from engine.events import Event
 from game.aerosol_trap_runtime import place_aerosol_floor_trap
+from game.mechanical_device_runtime import (
+    begin_mechanical_recipe_craft,
+    item_is_mechanical_device,
+    item_is_mechanical_plan,
+    use_mechanical_device_item,
+)
 from game.herbal_chemistry_runtime import decay_herbal_mixture_entry_if_due
 from game.components import (
     AI,
@@ -1680,6 +1686,76 @@ class ItemActionRuntime:
         )
         if lead_result is not None:
             return bool(lead_result)
+
+        if item_is_mechanical_plan(item_def, item_catalog=self.catalog):
+            result = begin_mechanical_recipe_craft(
+                self.sim,
+                eid,
+                entry,
+                item_catalog=self.catalog,
+            )
+            if result.get("ok"):
+                self.sim.emit(Event(
+                    "item_used",
+                    eid=eid,
+                    item_id=item_def["id"],
+                    item_name=item_name,
+                    reason="mechanical_craft",
+                    usage_kind="mechanical_craft",
+                    consumed=False,
+                    recipe_id=result.get("recipe_id"),
+                    output_item_id=result.get("output_item_id"),
+                    output_item_name=result.get("output_item_name"),
+                    quality=result.get("quality"),
+                ))
+                return True
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason=f"mechanical_{result.get('reason', 'craft_blocked')}",
+                item_id=item_def["id"],
+                item_name=item_name,
+                recipe_id=(result.get("recipe") or {}).get("id"),
+                components=(result.get("recipe") or {}).get("components", {}),
+            ))
+            return False
+
+        if item_is_mechanical_device(item_def, item_catalog=self.catalog):
+            result = use_mechanical_device_item(
+                self.sim,
+                eid,
+                inventory,
+                entry,
+                x,
+                y,
+                z,
+                item_catalog=self.catalog,
+            )
+            if result.get("ok"):
+                self.sim.emit(Event(
+                    "item_used",
+                    eid=eid,
+                    item_id=item_def["id"],
+                    item_name=item_name,
+                    reason=f"mechanical_{result.get('action', 'used')}",
+                    usage_kind="mechanical_device",
+                    consumed=result.get("action") == "placed" and item_def["id"] != "remote_release_rig",
+                    property_id=result.get("property_id"),
+                    x=x,
+                    y=y,
+                    z=z,
+                ))
+                return True
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason=f"mechanical_{result.get('reason', 'device_blocked')}",
+                item_id=item_def["id"],
+                item_name=item_name,
+                distance=result.get("distance"),
+                range=result.get("range"),
+            ))
+            return False
 
         if item_def.get("trap_profile"):
             result = place_aerosol_floor_trap(

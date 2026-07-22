@@ -2,7 +2,8 @@
 
 from engine.events import Event
 
-from game.components import AI, Occupation
+from game.components import AI, AppearanceLoadout, Inventory, Occupation
+from game.organizations import property_organization_eid
 from game.population import INDUSTRIAL_ARCHETYPES, SALVAGE_ARCHETYPES, SECURITY_ARCHETYPES
 from game.property_access import (
     _property_archetype,
@@ -61,12 +62,90 @@ def _observer_primary_role(sim, observer_eid):
     return role
 
 
+def _worn_employer_culture_rows(sim, actor_eid):
+    loadout = sim.ecs.get(AppearanceLoadout).get(actor_eid) if sim is not None else None
+    inventory = sim.ecs.get(Inventory).get(actor_eid) if sim is not None else None
+    if loadout is None or inventory is None:
+        return ()
+    rows = []
+    seen = set()
+    for slot, instance_id in dict(getattr(loadout, "slots", {}) or {}).items():
+        instance_id = str(instance_id or "").strip()
+        if not instance_id or instance_id in seen:
+            continue
+        seen.add(instance_id)
+        entry = inventory.find(instance_id=instance_id)
+        metadata = dict((entry or {}).get("metadata") or {})
+        nested = metadata.get("appearance") if isinstance(metadata.get("appearance"), dict) else {}
+        culture = metadata.get("employer_clothing_culture", nested.get("employer_clothing_culture"))
+        if not isinstance(culture, dict) or not str(culture.get("signature", "") or "").strip():
+            continue
+        try:
+            organization_eid = int(culture.get("organization_eid"))
+        except (TypeError, ValueError):
+            organization_eid = None
+        rows.append({
+            "slot": str(slot or "").strip().lower(),
+            "instance_id": instance_id,
+            "item_id": str((entry or {}).get("item_id", "") or "").strip().lower(),
+            "organization_eid": organization_eid,
+            "organization_name": str(culture.get("organization_name", "") or "").strip(),
+            "signature": str(culture.get("signature", "") or "").strip(),
+            "salience": max(0.0, min(1.0, float(culture.get("recognition_salience", 0.0) or 0.0))),
+        })
+    return tuple(rows)
+
+
+def contextual_cover_profile_for_actor(sim, actor_eid, prop):
+    """Combine explicit cover gear with visible employer clothing culture."""
+
+    if sim is None or actor_eid is None or not isinstance(prop, dict):
+        return None
+    explicit = getattr(sim, "disguise_state", None) if actor_eid == getattr(sim, "player_eid", None) else None
+    explicit = dict(explicit) if isinstance(explicit, dict) else {}
+    culture_rows = _worn_employer_culture_rows(sim, actor_eid)
+    if not explicit and not culture_rows:
+        return None
+
+    try:
+        site_org_eid = property_organization_eid(sim, prop, ensure=False)
+    except (TypeError, ValueError):
+        site_org_eid = None
+    if site_org_eid is None:
+        metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+        try:
+            site_org_eid = int(metadata.get("organization_eid"))
+        except (TypeError, ValueError):
+            site_org_eid = None
+
+    matching = [row for row in culture_rows if site_org_eid is not None and row.get("organization_eid") == int(site_org_eid)]
+    mismatching = [row for row in culture_rows if site_org_eid is not None and row.get("organization_eid") not in {None, int(site_org_eid)}]
+    strongest = max(matching or culture_rows, key=lambda row: float(row.get("salience", 0.0) or 0.0), default={})
+    culture_strength = float(strongest.get("salience", 0.0) or 0.0)
+    explicit_strength = max(0.0, min(1.0, float(explicit.get("strength", 0.0) or 0.0)))
+    role_id = str(explicit.get("role_id", "") or "").strip().lower()
+    if not role_id and culture_rows:
+        role_id = "worker"
+    return {
+        "role_id": role_id,
+        "strength": round(max(explicit_strength, culture_strength * 0.84), 3),
+        "source": "explicit_and_employer_clothing" if explicit and culture_rows else "explicit_item" if explicit else "employer_clothing",
+        "explicit_instance_id": explicit.get("instance_id"),
+        "employer_culture_signature": strongest.get("signature"),
+        "employer_organization_eid": strongest.get("organization_eid"),
+        "employer_organization_name": strongest.get("organization_name", ""),
+        "organization_fit": "match" if matching else "mismatch" if mismatching else "unknown",
+        "matching_culture_piece_count": len(matching),
+        "mismatching_culture_piece_count": len(mismatching),
+    }
+
+
 def _npc_disguise_scrutiny_profile(sim, observer_eid, prop, *, offender_eid=None):
     if sim is None or observer_eid is None or not isinstance(prop, dict):
         return None
     if offender_eid != getattr(sim, "player_eid", None):
         return None
-    disguise = getattr(sim, "disguise_state", None)
+    disguise = contextual_cover_profile_for_actor(sim, offender_eid, prop)
     if not isinstance(disguise, dict):
         return None
 
@@ -90,6 +169,7 @@ def _npc_disguise_scrutiny_profile(sim, observer_eid, prop, *, offender_eid=None
         min_standing=0.58,
     )
     embedded_observer = observer_claim in {"owner", "employee", "credential_holder", "resident"}
+    organization_fit = str(disguise.get("organization_fit", "unknown") or "unknown").strip().lower()
 
     fit_score = 0
     if role_id == "guard":
@@ -108,6 +188,11 @@ def _npc_disguise_scrutiny_profile(sim, observer_eid, prop, *, offender_eid=None
             fit_score -= 2
         if embedded_observer and worker_site:
             fit_score += 1
+
+    if organization_fit == "match":
+        fit_score += 3
+    elif organization_fit == "mismatch" and embedded_observer:
+        fit_score -= 3
 
     if fit_score >= 5:
         fit_label = "strong_fit"
@@ -141,6 +226,9 @@ def _npc_disguise_scrutiny_profile(sim, observer_eid, prop, *, offender_eid=None
         "observer_role": observer_role,
         "observer_claim": observer_claim,
         "observer_standing": round(float(observer_access.standing), 3) if observer_access else 0.0,
+        "source": str(disguise.get("source", "") or "").strip().lower(),
+        "organization_fit": organization_fit,
+        "employer_organization_eid": disguise.get("employer_organization_eid"),
         "fit_score": int(fit_score),
         "fit_label": fit_label,
         "suspicion_mult": round(float(suspicion_mult), 3),
@@ -196,7 +284,15 @@ def _security_fixture_is_online(sim, prop, *, tick=None):
 
 
 def _camera_disguise_scrutiny_profile(sim, prop):
-    disguise = getattr(sim, "disguise_state", None)
+    player_eid = getattr(sim, "player_eid", None)
+    disguise = contextual_cover_profile_for_actor(sim, player_eid, prop)
+    if not isinstance(disguise, dict) and player_eid is None:
+        # CameraSystem can be constructed directly in focused/headless scenes
+        # before the simulation receives its convenience player_eid alias. Keep
+        # the established explicit-cover behavior there; employer clothing
+        # necessarily requires a concrete actor and joins once that alias exists.
+        explicit = getattr(sim, "disguise_state", None)
+        disguise = dict(explicit) if isinstance(explicit, dict) else None
     if not isinstance(disguise, dict):
         return None
     role_id = str(disguise.get("role_id", "") or "").strip().lower()
@@ -208,6 +304,7 @@ def _camera_disguise_scrutiny_profile(sim, prop):
     protected_site = access_level != "public"
     security_site = archetype in SECURITY_ARCHETYPES or protected_site
     worker_site = archetype in INDUSTRIAL_ARCHETYPES or archetype in SALVAGE_ARCHETYPES
+    organization_fit = str(disguise.get("organization_fit", "unknown") or "unknown").strip().lower()
     if role_id == "guard":
         threshold = 1.12 if security_site else 0.78
         increment = 0.34 if security_site else 0.58
@@ -226,9 +323,18 @@ def _camera_disguise_scrutiny_profile(sim, prop):
 
     threshold *= max(0.75, min(1.1, 0.7 + (strength * 0.35)))
     increment *= max(0.72, min(1.08, 1.04 - (strength * 0.16)))
+    if organization_fit == "match":
+        threshold *= 1.24
+        increment *= 0.78
+    elif organization_fit == "mismatch":
+        threshold *= 0.72
+        increment *= 1.3
     return {
         "threshold": round(float(threshold), 3),
         "increment": round(float(increment), 3),
         "role_id": role_id,
         "strength": round(float(strength), 3),
+        "source": str(disguise.get("source", "") or "").strip().lower(),
+        "organization_fit": organization_fit,
+        "employer_organization_eid": disguise.get("employer_organization_eid"),
     }

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from engine.events import Event
 
-from game.components import Inventory, NPCWill, Position, Vitality
+from game.components import Inventory, Position, Vitality
 from game.drone_program_bindings import (
     default_program_bindings,
     describe_program_binding,
     resolve_program_binding,
 )
-from game.drone_procedures import cardinal_step_toward
 from game.drone_recon import apply_autonomous_mapping_knowledge, drone_has_mapping_sensor
 from game.drone_runtime import drone_state_has_capability
 from game.items import item_display_name, item_inventory_slot_cost
@@ -373,8 +372,8 @@ BUILT_IN_DRONE_PROGRAMS = {
         "slots": ("AREA",),
         "lines": (
             {"line": 10, "op": "WATCH", "slot": "AREA"},
-            {"line": 20, "op": "IF", "predicate": "SEES_HOSTILE", "goto": 50},
-            {"line": 30, "op": "REPORT"},
+            {"line": 20, "op": "REPORT"},
+            {"line": 30, "op": "IF", "predicate": "SEES_HOSTILE", "goto": 50},
             {"line": 40, "op": "GOTO", "goto": 10},
             {"line": 50, "op": "FIRE_IF_ALLOWED"},
             {"line": 60, "op": "GOTO", "goto": 10},
@@ -537,6 +536,7 @@ def activate_drone_program(state, program, *, bindings=None, controller_eid=None
     state.procedure_last_tick = None
     state.procedure_key = program.get("id")
     state.last_command = "program"
+    state.observation_context = None
     sync_drone_program_metadata(state)
     return {"ok": True, "reason": None, "program": dict(state.procedure_program)}
 
@@ -546,6 +546,7 @@ def stop_drone_program(state, *, reason="stopped"):
     state.procedure_last_result = "stopped"
     state.procedure_last_reason = _clean(reason, "stopped").lower()
     state.procedure_key = None
+    state.observation_context = None
     sync_drone_program_metadata(state)
     return {"ok": True, "reason": None}
 
@@ -634,10 +635,7 @@ def _move_toward(drone_system, controller_eid, drone_eid, state, target):
     if (int(pos.x), int(pos.y), int(pos.z)) == target:
         state.target = target
         return {"ok": True, "reason": None, "action": "arrived"}
-    step = cardinal_step_toward((int(pos.x), int(pos.y)), target)
-    if step is None:
-        return {"ok": False, "reason": "no_step"}
-    return drone_system.move_drone(controller_eid, drone_eid, step[0], step[1])
+    return drone_system.move_drone_toward(controller_eid, drone_eid, target)
 
 
 def _nearest_alarm_fixture(sim, pos, *, radius=1):
@@ -694,44 +692,6 @@ def _advance_route_if_arrived(state, resolved, pos):
     return _position_tuple(points[index])
 
 
-def _hostile_target_near(sim, controller_eid, drone_eid, state, *, target_eid=None, target_pos=None, radius=8):
-    positions = sim.ecs.get(Position)
-    drone_pos = positions.get(drone_eid)
-    if drone_pos is None:
-        return None
-    candidates = []
-    if target_eid is not None:
-        candidates.append(target_eid)
-    state_target = getattr(state, "target_eid", None)
-    if state_target is not None:
-        candidates.append(state_target)
-    for eid, will in sim.ecs.get(NPCWill).items():
-        if eid in {controller_eid, drone_eid}:
-            continue
-        if getattr(will, "target_eid", None) in {controller_eid, getattr(state, "owner_eid", None)}:
-            candidates.append(eid)
-    seen = set()
-    ranked = []
-    excluded = {controller_eid, drone_eid, getattr(state, "owner_eid", None), getattr(state, "controller_eid", None)}
-    for eid in candidates:
-        if eid is None or eid in seen or eid in excluded:
-            continue
-        seen.add(eid)
-        pos = positions.get(eid)
-        if pos is None or int(pos.z) != int(drone_pos.z):
-            continue
-        if target_pos is not None:
-            resolved_target = _position_tuple(target_pos)
-            if resolved_target is not None and int(pos.z) == int(resolved_target[2]):
-                if abs(int(pos.x) - int(resolved_target[0])) + abs(int(pos.y) - int(resolved_target[1])) > radius:
-                    continue
-        distance = abs(int(pos.x) - int(drone_pos.x)) + abs(int(pos.y) - int(drone_pos.y))
-        if distance <= int(max(1, radius)):
-            ranked.append((distance, eid))
-    ranked.sort(key=lambda row: (row[0], row[1]))
-    return ranked[0][1] if ranked else None
-
-
 def _run_verb(drone_system, controller_eid, drone_eid, state, line):
     sim = drone_system.sim
     op = _verb(line.get("op"))
@@ -744,13 +704,32 @@ def _run_verb(drone_system, controller_eid, drone_eid, state, line):
     if op in {"HOLD", "WAIT"}:
         return {"ok": True, "reason": None, "action": op.lower()}
     if op == "FOLLOW":
-        target_pos = sim.ecs.get(Position).get(getattr(state, "target_eid", None) or controller_eid)
+        resolved_person = resolve_program_binding(
+            sim,
+            controller_eid,
+            state,
+            "PERSON",
+            getattr(state, "procedure_bindings", None),
+        )
+        follow_eid = (
+            resolved_person.get("eid")
+            if resolved_person.get("ok") and resolved_person.get("kind") == "entity"
+            else getattr(state, "target_eid", None) or controller_eid
+        )
+        target_pos = sim.ecs.get(Position).get(follow_eid)
         if target_pos is None:
             return {"ok": False, "reason": "missing_target"}
         target = (int(target_pos.x), int(target_pos.y), int(target_pos.z))
+        if _clean(metadata.get("source_context")).lower() == "npc_faction_seed":
+            from game.drone_factions import npc_drone_follow_station
+
+            station = npc_drone_follow_station(sim, follow_eid, drone_eid)
+            if station is not None:
+                target = station
         state.target = target
-        state.target_eid = getattr(state, "target_eid", None) or controller_eid
-        if pos is not None and abs(int(pos.x) - target[0]) + abs(int(pos.y) - target[1]) <= 1 and int(pos.z) == target[2]:
+        state.target_eid = follow_eid
+        hold_distance = 0 if _clean(metadata.get("source_context")).lower() == "npc_faction_seed" else 1
+        if pos is not None and abs(int(pos.x) - target[0]) + abs(int(pos.y) - target[1]) <= hold_distance and int(pos.z) == target[2]:
             return {"ok": True, "reason": None, "action": "follow_hold"}
         return _move_toward(drone_system, controller_eid, drone_eid, state, target)
     if op == "RETURN_HOME":
@@ -781,25 +760,21 @@ def _run_verb(drone_system, controller_eid, drone_eid, state, line):
         metadata["autonomous_mapping_last_learned"] = int(max(0, _int(result.get("learned_count"), 0)))
         return {"ok": True, "reason": None, "action": "map", "learned_count": metadata["autonomous_mapping_last_learned"]}
     if op == "WATCH":
+        from game.drone_observation import advance_drone_watch
+
         slot_key = _slot(line.get("slot") or "TARGET")
         resolved = resolve_program_binding(sim, controller_eid, state, slot_key, getattr(state, "procedure_bindings", None))
-        target_eid = resolved.get("eid") if resolved.get("ok") and resolved.get("kind") == "entity" else getattr(state, "target_eid", None)
-        target_pos = resolved.get("target") if resolved.get("ok") else None
-        hostile = _hostile_target_near(
-            sim,
+        # Once contact exists, a stale binding must not erase the drone's
+        # factual last-seen/search state.  The watch consumer reads only the
+        # binding identity plus current onboard sensor output.
+        return advance_drone_watch(
+            drone_system,
             controller_eid,
             drone_eid,
             state,
-            target_eid=target_eid,
-            target_pos=target_pos,
-            radius=int(max(6, getattr(state, "range_limit", 0) or 0)),
+            slot_key=slot_key,
+            resolved=resolved,
         )
-        if hostile is not None:
-            metadata["program_seen_hostile_eid"] = hostile
-            state.target_eid = hostile
-        else:
-            metadata.pop("program_seen_hostile_eid", None)
-        return {"ok": True, "reason": None, "action": "watch"}
     if op == "SEEK_ITEM":
         if not _has_cargo_module(state):
             return {"ok": False, "reason": "no_cargo_module"}
@@ -873,6 +848,10 @@ def _run_verb(drone_system, controller_eid, drone_eid, state, line):
         metadata["cargo"] = list(state.cargo)
         return {"ok": True, "reason": None, "action": "drop"}
     if op == "REPORT":
+        from game.drone_observation import report_drone_watch
+
+        if getattr(state, "observation_context", None) is not None:
+            return report_drone_watch(sim, controller_eid, drone_eid, state)
         from game.drone_runtime import drone_link_disruption_status
 
         if drone_link_disruption_status(state, tick=int(getattr(sim, "tick", 0) or 0)).get("active"):
@@ -931,7 +910,7 @@ def _run_verb(drone_system, controller_eid, drone_eid, state, line):
         ))
         return {"ok": True, "reason": None, "action": "disable_alarm"}
     if op == "FIRE_IF_ALLOWED":
-        target_eid = getattr(state, "target_eid", None) or metadata.get("program_seen_hostile_eid")
+        target_eid = metadata.get("program_seen_hostile_eid") or getattr(state, "target_eid", None)
         if target_eid is None:
             return {"ok": False, "reason": "missing_target"}
         return drone_system.fire_drone_weapon(

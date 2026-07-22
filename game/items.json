@@ -7107,5 +7107,97 @@
       "noise_radius": 5,
       "homemade": true
     }
+  },
+  "wire_spool": {
+    "name": "Wire Spool",
+    "glyph": ")",
+    "stack_max": 3,
+    "tags": ["component", "mechanical_component", "tool", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "salvaged_hardware": {
+    "name": "Salvaged Hardware",
+    "glyph": ")",
+    "stack_max": 4,
+    "tags": ["component", "mechanical_component", "salvage", "junk", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "spring_clamp": {
+    "name": "Spring Clamp",
+    "glyph": ")",
+    "stack_max": 3,
+    "tags": ["component", "mechanical_component", "tool", "restricted"],
+    "legal_status": "restricted",
+    "effects": []
+  },
+  "tripline_alarm_plan": {
+    "name": "Tripline Alarm Plan",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["plan", "mechanical_plan", "knowledge", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "restraint_snare_plan": {
+    "name": "Restraint Snare Plan",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["plan", "mechanical_plan", "knowledge", "restricted"],
+    "legal_status": "restricted",
+    "effects": []
+  },
+  "remote_release_rig_plan": {
+    "name": "Remote Release Rig Plan",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["plan", "mechanical_plan", "knowledge", "restricted"],
+    "legal_status": "restricted",
+    "effects": []
+  },
+  "decoy_beacon_plan": {
+    "name": "Decoy Beacon Plan",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["plan", "mechanical_plan", "knowledge", "restricted"],
+    "legal_status": "restricted",
+    "effects": []
+  },
+  "tripline_alarm": {
+    "name": "Tripline Alarm",
+    "glyph": "^",
+    "stack_max": 1,
+    "tags": ["device", "mechanical_device", "trap", "placeable", "reusable", "restricted"],
+    "legal_status": "restricted",
+    "condition_profile": {"supports_quality": true, "supports_durability": true, "max_durability": 6},
+    "effects": []
+  },
+  "restraint_snare": {
+    "name": "Restraint Snare",
+    "glyph": "^",
+    "stack_max": 1,
+    "tags": ["device", "mechanical_device", "trap", "placeable", "contraband", "illegal"],
+    "legal_status": "illegal",
+    "condition_profile": {"supports_quality": true, "supports_durability": true, "max_durability": 5},
+    "effects": []
+  },
+  "remote_release_rig": {
+    "name": "Remote Release Rig",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["device", "mechanical_device", "controller", "placeable", "electronics", "restricted"],
+    "legal_status": "restricted",
+    "condition_profile": {"supports_quality": true, "supports_durability": true, "max_durability": 7},
+    "effects": []
+  },
+  "decoy_beacon": {
+    "name": "Decoy Beacon",
+    "glyph": "*",
+    "stack_max": 1,
+    "tags": ["device", "mechanical_device", "decoy", "placeable", "electronics", "restricted"],
+    "legal_status": "restricted",
+    "condition_profile": {"supports_quality": true, "supports_durability": true, "max_durability": 5},
+    "effects": []
   }
 }

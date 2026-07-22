@@ -33,6 +33,7 @@ from game.property_runtime import (
     property_enclosing_structure as _property_enclosing_structure,
 )
 from game.purposeful_observation import (
+    advance_purposeful_actor_observation as _advance_purposeful_actor_observation,
     is_purposeful_observation as _is_purposeful_observation,
     observation_watch_position as _observation_watch_position,
     refresh_purposeful_observation as _refresh_purposeful_observation,
@@ -750,6 +751,26 @@ class StealthSystem(System):
             "downed",
         }:
             return False
+        existing_context = getattr(ai, "investigation_context", None)
+        if _is_purposeful_observation(existing_context, purpose="visible_sneak", active_only=True):
+            updated, status, target = _advance_purposeful_actor_observation(
+                self.sim,
+                observer_eid,
+                self.player_eid,
+                purpose="visible_sneak",
+                existing=existing_context,
+                include_subject_account=True,
+            )
+            ai.investigation_context = updated
+            if target is not None:
+                ai.state = "investigating"
+                ai.target = tuple(target)
+                ai.target_eid = None
+            # Merely seeing the player simulation entity again is not enough to
+            # overwrite a stale account or a fallible decoy lead. The shared
+            # record decides which legitimately observed subject is being tailed.
+            return status == "visible"
+
         target = _observation_watch_position(
             self.sim,
             observer_eid,
@@ -758,7 +779,6 @@ class StealthSystem(System):
         )
         if target is None:
             return False
-        existing_context = getattr(ai, "investigation_context", None)
         ai.state = "investigating"
         ai.target = target
         ai.target_eid = None

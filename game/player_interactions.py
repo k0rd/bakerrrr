@@ -11,6 +11,7 @@ from game.herbal_chemistry_runtime import harvest_flora_patch, nearest_harvestab
 from game.hunting_runtime import field_dress_carcass, nearest_hunting_carcass
 from game.meaningful_objects_runtime import nearest_item_backed_object_fixture, pickup_meaningful_object_fixture
 from game.opportunities import _item_label, mark_bounty_target_restrained, resolve_opportunities
+from game.bounty_authority import bounty_action_authority
 from game.property_access import (
     property_access_controller as _property_access_controller,
     property_access_level as _property_access_level,
@@ -451,6 +452,21 @@ class PlayerInteractionRuntime:
             return False
         if max(abs(int(target_pos.x) - int(pos.x)), abs(int(target_pos.y) - int(pos.y))) > 1:
             return False
+        authority = bounty_action_authority(
+            self.sim,
+            eid,
+            target_eid,
+            action="restrain",
+        )
+        if not bool(authority.get("bounty_authority_authorized")):
+            _log_player_feedback(
+                self.sim,
+                "The recovery desk will not recognize this restraint without a live credential and matching posting.",
+                kind="interaction",
+                dedupe_window=3,
+                dedupe_key=f"bounty_authority_denied:{target_eid}",
+            )
+            return True
         entry = self._field_restraint_entry(eid)
         if entry is None:
             _log_player_feedback(

@@ -90,6 +90,13 @@ from game.player_interactions import (
 from game.character_sheet import (
     build_character_sheet_pages as _build_character_sheet_pages,
 )
+from game.mechanical_device_runtime import (
+    item_is_mechanical_device,
+    item_is_mechanical_plan,
+    load_mechanical_recipe_catalog,
+    mechanical_recipe_for_output,
+    mechanical_recipe_for_plan,
+)
 import game.report_debug_ui as _report_debug_ui
 from game.action_bindings import (
     ACTION_MENU_KEY,
@@ -5070,10 +5077,13 @@ class InputSystem(System):
             self._help_state()["open"] = True
             return True
 
-        if dialog_kind in {"justice_surrender", "justice_questioning", "justice_identity_check"}:
+        if dialog_kind in {"justice_surrender", "justice_questioning", "justice_identity_check", "justice_case_canvas"}:
             if key in (27, ord("q"), ord("Q")):
                 if dialog_kind == "justice_identity_check":
                     event_type = "justice_identity_check_choice"
+                    choice_id = "decline"
+                elif dialog_kind == "justice_case_canvas":
+                    event_type = "justice_case_canvas_choice"
                     choice_id = "decline"
                 else:
                     event_type = "justice_questioning_choice" if dialog_kind == "justice_questioning" else "justice_surrender_choice"
@@ -5197,6 +5207,14 @@ class InputSystem(System):
                 if dialog_kind == "justice_identity_check":
                     self.sim.emit(Event(
                         "justice_identity_check_choice",
+                        eid=self.player_eid,
+                        npc_eid=state.get("npc_eid"),
+                        choice_id=topic.get("id"),
+                    ))
+                    return True
+                if dialog_kind == "justice_case_canvas":
+                    self.sim.emit(Event(
+                        "justice_case_canvas_choice",
                         eid=self.player_eid,
                         npc_eid=state.get("npc_eid"),
                         choice_id=topic.get("id"),
@@ -7117,6 +7135,56 @@ class InputSystem(System):
                         limit=3,
                     )
                 )
+
+        mechanical_catalog = load_mechanical_recipe_catalog()
+        if item_is_mechanical_plan(item_def, item_catalog=self.catalog):
+            recipe = mechanical_recipe_for_plan(entry.get("item_id"), recipe_catalog=mechanical_catalog) or {}
+            components = ", ".join(
+                f"{quantity} {item_display_name(item_id, item_catalog=self.catalog)}"
+                for item_id, quantity in dict(recipe.get("components", {}) or {}).items()
+            )
+            if components:
+                effect_labels.append(f"builds {item_display_name(recipe.get('output_item_id'), item_catalog=self.catalog)} from {components}")
+            effect_labels.append("U build")
+        elif item_is_mechanical_device(item_def, item_catalog=self.catalog):
+            recipe = mechanical_recipe_for_output(entry.get("item_id"), recipe_catalog=mechanical_catalog) or {}
+            profile = recipe.get("device_profile") if isinstance(recipe.get("device_profile"), dict) else {}
+            device_bits = [
+                str(profile.get("body", "field device")).replace("_", " "),
+                str(profile.get("trigger", "manual")).replace("_", " "),
+                str(profile.get("payload", "utility")).replace("_", " "),
+            ]
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            reliability = metadata.get("device_reliability")
+            if reliability is not None:
+                try:
+                    device_bits.append(f"reliability {int(round(float(reliability) * 100.0))}%")
+                except (TypeError, ValueError):
+                    pass
+            if metadata.get("linked_device_property_id"):
+                device_bits.append("receiver linked")
+            effect_labels.append("device " + ", ".join(device_bits))
+            maker = str(metadata.get("crafted_by_name", "") or "").strip()
+            quality = str(metadata.get("item_quality", "") or "").strip().lower()
+            if maker:
+                craft_read = f"made by {maker}"
+                if quality:
+                    craft_read += f", {quality} work"
+                effect_labels.append(craft_read)
+            component_rows = tuple(metadata.get("component_items", ()) or ())
+            component_names = []
+            for component in component_rows:
+                if not isinstance(component, dict):
+                    continue
+                component_name = item_display_name(
+                    component.get("item_id"),
+                    metadata=component.get("metadata"),
+                    item_catalog=self.catalog,
+                )
+                quantity = max(1, _int_or_default(component.get("quantity"), 1))
+                component_names.append(f"{quantity} {component_name}")
+            if component_names:
+                effect_labels.append("built from " + ", ".join(component_names[:4]))
 
         substance_profile = item_def.get("substance_profile", {}) if isinstance(item_def.get("substance_profile"), dict) else {}
         if substance_profile.get("substance_id"):

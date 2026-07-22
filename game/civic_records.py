@@ -44,10 +44,16 @@ LICENSE_STATUSES = {"active", "expired", "revoked", "suspended"}
 LICENSE_FEES = {
     "hunting": 45,
     "cultivation": 40,
+    "bounty": 125,
 }
 LICENSE_RESTRICTIONS = {
     "hunting": ("eligible game only", "declared seasons and culls only for protected lines"),
     "cultivation": ("registered cultivation and plant commerce",),
+    "bounty": (
+        "matching posted alive-recovery assignments only",
+        "limited pursuit, unarmed force, and custodial restraint",
+        "no lethal force, explosives, property search, or collateral authority",
+    ),
 }
 
 
@@ -306,6 +312,66 @@ def civic_license_is_active(sim, subject_eid, license_kind):
     return bool(record and _text(record.get("status")).lower() == "active")
 
 
+def record_civic_license_misuse(
+    sim,
+    subject_eid,
+    license_kind,
+    *,
+    reason,
+    action="",
+    target_eid=None,
+    incident_id=None,
+):
+    """Attach one deduplicated official review flag to a civic credential."""
+
+    subject_eid = _int(subject_eid, -1)
+    license_kind = _text(license_kind).lower().replace(" ", "_")
+    key = f"{subject_eid}:{license_kind}"
+    record = civic_records_state(sim)["licenses"].get(key)
+    if subject_eid <= 0 or not isinstance(record, dict):
+        return None
+    now = _int(getattr(sim, "tick", 0), 0)
+    reference = {
+        "tick": now,
+        "reason": _text(reason),
+        "action": _text(action).lower(),
+        "target_eid": _int(target_eid, -1) if target_eid is not None else None,
+        "incident_id": _int(incident_id, -1) if incident_id is not None else None,
+    }
+    dedupe_key = (
+        reference["incident_id"],
+        reference["action"],
+        reference["target_eid"],
+        reference["reason"],
+    )
+    existing = [row for row in tuple(record.get("misuse_refs", ()) or ()) if isinstance(row, dict)]
+    for row in existing:
+        row_key = (
+            row.get("incident_id"),
+            _text(row.get("action")).lower(),
+            row.get("target_eid"),
+            _text(row.get("reason")),
+        )
+        if row_key == dedupe_key:
+            return dict(record)
+    existing.append(reference)
+    record["misuse_refs"] = tuple(existing[-16:])
+    record["misuse_count"] = len(existing)
+    record["last_misuse_tick"] = now
+    record["updated_tick"] = now
+    sim.emit(Event(
+        "civic_license_misuse_noted",
+        subject_eid=subject_eid,
+        license_kind=license_kind,
+        reason=reference["reason"],
+        action=reference["action"],
+        target_eid=reference["target_eid"],
+        incident_id=reference["incident_id"],
+        misuse_count=int(record["misuse_count"]),
+    ))
+    return dict(record)
+
+
 def purchase_civic_license(sim, subject_eid, license_kind, *, prop=None):
     """Buy or renew one ordinary civic credential at an issuing office."""
 
@@ -320,6 +386,16 @@ def purchase_civic_license(sim, subject_eid, license_kind, *, prop=None):
             "license_kind": license_kind,
             "record": existing,
         }
+    if license_kind == "bounty":
+        legal = justice_snapshot(sim, subject_eid)
+        tier = _text(legal.get("wanted_tier", "clear")).lower() or "clear"
+        if tier != "clear":
+            return {
+                "ok": False,
+                "reason": "justice_hold",
+                "license_kind": license_kind,
+                "wanted_tier": tier,
+            }
     assets = sim.ecs.get(PlayerAssets).get(subject_eid)
     credits = max(0, _int(getattr(assets, "credits", 0), 0)) if assets is not None else 0
     fee = int(LICENSE_FEES[license_kind])
@@ -523,7 +599,7 @@ def civic_census_lines(sim, prop=None, records=None):
         f"Census scope: {scope} under {authority['authority_name']}.",
         f"Registered people {len(living)} | housed {housed} | employed {employed} | in custody {custody}.",
         f"Households {households} | civic workers {civic_workers} | deceased records {deceased}.",
-        f"Active licenses and permits {active_licenses}; hunting and cultivation credentials file through this ledger.",
+        f"Active licenses and permits {active_licenses}; ecology and recovery credentials file through this ledger.",
     )
 
 
@@ -537,6 +613,9 @@ def _license_line(record):
         line += f"; issued by {issuer}"
     if restrictions:
         line += f"; restrictions {', '.join(str(value) for value in restrictions)}"
+    misuse_count = max(0, _int(record.get("misuse_count"), 0))
+    if misuse_count:
+        line += f"; official review flags {misuse_count}"
     return line + "."
 
 
@@ -546,14 +625,14 @@ def civic_license_ledger_lines(sim, prop=None, subject_eid=None, records=None):
     if subject_eid is not None:
         if licenses:
             return tuple(_license_line(row) for row in licenses)
-        return ("No hunting, cultivation, or other civic credentials are currently filed for this person.",)
+        return ("No civic credentials are currently filed for this person.",)
     counts = Counter(_text(row.get("license_kind")).replace("_", " ") for row in licenses if row.get("status") == "active")
     lines = [f"Permit ledger: {sum(counts.values())} active credential(s) across {len(records)} registered file(s)."]
     if counts:
         lines.extend(f"{kind.title()}: {count} active." for kind, count in sorted(counts.items()))
     else:
         lines.append("No active permits are filed yet.")
-    lines.append("Hunting and cultivation systems can issue, suspend, revoke, and verify credentials through this ledger.")
+    lines.append("Ecology and posted-recovery systems can issue, suspend, revoke, and verify credentials through this ledger.")
     return tuple(lines)
 
 
@@ -670,5 +749,6 @@ __all__ = [
     "civic_records_authority",
     "civic_records_state",
     "record_civic_license",
+    "record_civic_license_misuse",
     "remember_civic_record_inspection",
 ]

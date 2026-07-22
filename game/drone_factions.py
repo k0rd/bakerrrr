@@ -28,8 +28,9 @@ from game.drone_programs import (
 )
 from game.drone_runtime import (
     deployed_drone_render_spec,
+    drone_deploy_tile_is_threshold,
+    drone_deploy_tile_open,
     drone_profile_for_item,
-    first_open_drone_deploy_tile,
 )
 from game.items import ITEM_CATALOG
 from game.organization_production import (
@@ -40,8 +41,9 @@ from game.organization_supply import drone_supply_agreement_for_actor
 from game.system_support.combat_targeting_runtime import _entity_is_weapon_targetable
 
 
-DRONE_FACTION_MAX_PER_CHUNK = 1
+DRONE_FACTION_MAX_PER_CHUNK = 2
 DRONE_FACTION_SOURCE_CONTEXT = "npc_faction_seed"
+NPC_DRONE_BEHAVIOR_POLICY_VERSION = 2
 NPC_DRONE_RETASK_COOLDOWN = 12
 NPC_DRONE_REPEAT_ACTION_COOLDOWN = 24
 ARMED_SECURITY_KINDS = frozenset({"justice", "security", "corporate", "gang", "cult", "bodyguard", "enforcer"})
@@ -58,18 +60,21 @@ NPC_DRONE_WITHDRAWAL_INTENTS = frozenset({
 NPC_DRONE_COVERT_INTENTS = frozenset({"casing_target", "committing_property_crime", "rendezvousing_crew"})
 NPC_DRONE_WATCH_INTENTS = frozenset({"helping_victim", "reporting_incident", "warning"})
 DRONE_FACTION_SEED_CHANCE_BY_KIND = {
-    "justice": 0.45,
-    "security": 0.35,
-    "corporate": 0.35,
-    "gang": 0.25,
-    "cult": 0.20,
-    "bodyguard": 0.30,
-    "enforcer": 0.25,
-    "scout": 0.16,
-    "rural": 0.10,
-    "civic": 0.14,
-    "utility": 0.12,
+    "justice": 0.65,
+    "security": 0.55,
+    "corporate": 0.55,
+    "gang": 0.42,
+    "cult": 0.38,
+    "bodyguard": 0.60,
+    "enforcer": 0.55,
+    "scout": 0.30,
+    "rural": 0.20,
+    "civic": 0.30,
+    "utility": 0.28,
 }
+
+_TRANSITORY_ROOM_TOKENS = frozenset({"access", "corridor", "entry", "hall", "lobby", "passage", "stair"})
+_CARDINAL_OFFSETS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 
 
 def _int(value, default=0):
@@ -229,9 +234,9 @@ def _observer_loadout(chassis="a", *, procedure="hold"):
         "battery_item_id": "drone_battery_light",
         "modules": [
             "drone_camera_module",
-            "drone_remote_receiver_module",
+            "drone_follow_procedure_module",
         ],
-        "procedure_key": "hold",
+        "procedure_key": "follow",
     }
 
 
@@ -365,14 +370,14 @@ def _loadout_for_kind(kind, rng):
         return _observer_loadout("b", procedure=procedure)
     modules = [
         "drone_sonar_module",
-        "drone_remote_receiver_module",
+        "drone_mapping_procedure_module",
     ]
     return {
         "chassis_item_id": chassis,
         "power_center_item_id": core,
         "battery_item_id": battery,
         "modules": modules,
-        "procedure_key": "hold",
+        "procedure_key": "mapping",
     }
 
 
@@ -443,15 +448,180 @@ def _seeded_task_for_loadout(kind, metadata, rng):
     if procedure_key == "logistics" and has_cargo and has_follow_procedure:
         return "seek_item_and_return"
     if procedure_key in {"mapping", "scout"} and has_mapping_procedure:
-        return _roll_weighted_choice(rng, ((68, "map_area_loop"), (32, "patrol_route")))
+        return _roll_weighted_choice(rng, ((35, "map_area_loop"), (65, "patrol_route")))
     if procedure_key == "follow" and has_follow_procedure:
-        if kind in {"scout", "rural", "civic", "utility"} and rng.randrange(4) == 0:
+        if kind in {"justice", "security", "corporate"}:
+            choices = [(30, "follow_operator"), (30, "guard_zone")]
+            if has_mapping_procedure:
+                choices.append((40, "patrol_route"))
+            return _roll_weighted_choice(rng, choices)
+        if kind in {"gang", "cult"}:
+            choices = [(40, "follow_operator"), (25, "guard_zone")]
+            if has_mapping_procedure:
+                choices.append((35, "patrol_route"))
+            return _roll_weighted_choice(rng, choices)
+        if kind in {"scout", "rural", "civic", "utility"} and rng.randrange(3) == 0:
             return "watch_person"
         return "follow_operator"
     return None
 
 
-def _seeded_task_bindings(sim, owner_eid, drone_eid, state, task_id):
+def _property_covering(sim, x, y, z):
+    covering = getattr(sim, "property_covering", None)
+    if callable(covering):
+        prop = covering(int(x), int(y), int(z))
+        if isinstance(prop, dict):
+            return prop
+    direct = getattr(sim, "property_at", None)
+    prop = direct(int(x), int(y), int(z)) if callable(direct) else None
+    return prop if isinstance(prop, dict) else None
+
+
+def _structure_identity(sim, x, y, z):
+    structure_at = getattr(sim, "structure_at", None)
+    structure = structure_at(int(x), int(y), int(z)) if callable(structure_at) else None
+    if not isinstance(structure, dict):
+        return None, ""
+    building_id = str(structure.get("building_id", "") or "").strip()
+    room_kind = _clean(structure.get("room_kind") or structure.get("kind"))
+    return building_id or None, room_kind
+
+
+def _same_drone_operating_space(sim, origin, candidate):
+    ox, oy, oz = origin
+    cx, cy, cz = candidate
+    origin_prop = _property_covering(sim, ox, oy, oz)
+    candidate_prop = _property_covering(sim, cx, cy, cz)
+    origin_prop_id = str((origin_prop or {}).get("id", "") or "")
+    candidate_prop_id = str((candidate_prop or {}).get("id", "") or "")
+    if origin_prop_id or candidate_prop_id:
+        return bool(origin_prop_id and origin_prop_id == candidate_prop_id)
+    origin_building, _room = _structure_identity(sim, ox, oy, oz)
+    candidate_building, _room = _structure_identity(sim, cx, cy, cz)
+    if origin_building or candidate_building:
+        return bool(origin_building and origin_building == candidate_building)
+    return True
+
+
+def _open_cardinal_shape(sim, x, y, z):
+    open_directions = []
+    tilemap = getattr(sim, "tilemap", None)
+    for dx, dy in _CARDINAL_OFFSETS:
+        if tilemap is not None and bool(tilemap.is_walkable(int(x) + dx, int(y) + dy, int(z))):
+            open_directions.append((dx, dy))
+    straight_choke = (
+        len(open_directions) == 2
+        and open_directions[0][0] == -open_directions[1][0]
+        and open_directions[0][1] == -open_directions[1][1]
+    )
+    return len(open_directions), straight_choke
+
+
+def _npc_drone_tile_score(sim, origin, candidate, *, owner_eid):
+    x, y, z = candidate
+    distance = abs(int(x) - int(origin[0])) + abs(int(y) - int(origin[1]))
+    _building_id, room_kind = _structure_identity(sim, x, y, z)
+    transitory_room = any(token in room_kind for token in _TRANSITORY_ROOM_TOKENS)
+    open_neighbors, straight_choke = _open_cardinal_shape(sim, x, y, z)
+    stable_tie = random.Random(
+        f"{getattr(sim, 'seed', 0)}:npc-drone-station:{owner_eid}:{int(x)}:{int(y)}:{int(z)}"
+    ).random()
+    return (
+        0 if _same_drone_operating_space(sim, origin, candidate) else 1,
+        1 if drone_deploy_tile_is_threshold(sim, x, y, z) else 0,
+        1 if transitory_room else 0,
+        1 if straight_choke else 0,
+        abs(distance - 2),
+        abs(open_neighbors - 3),
+        stable_tie,
+    )
+
+
+def _npc_drone_deploy_tile(sim, owner_eid, x, y, z):
+    """Choose a nearby station without treating a doorway or hall axis as a pad."""
+
+    origin = (int(x), int(y), int(z))
+    origin_chunk = sim.chunk_coords(origin[0], origin[1])
+    candidates = []
+    for distance in (1, 2, 3):
+        for dx in range(-distance, distance + 1):
+            dy_abs = distance - abs(dx)
+            for dy in ({dy_abs, -dy_abs} if dy_abs else {0}):
+                candidate = (origin[0] + dx, origin[1] + dy, origin[2])
+                if sim.chunk_coords(candidate[0], candidate[1]) != origin_chunk:
+                    continue
+                if not drone_deploy_tile_open(sim, *candidate):
+                    continue
+                candidates.append((_npc_drone_tile_score(sim, origin, candidate, owner_eid=owner_eid), candidate))
+    candidates.sort(key=lambda row: row[0])
+    return candidates[0][1] if candidates else None
+
+
+def npc_drone_follow_station(sim, owner_eid, drone_eid):
+    """Return a clear formation station instead of the operator's doorway."""
+
+    owner_pos = sim.ecs.get(Position).get(owner_eid)
+    drone_pos = sim.ecs.get(Position).get(drone_eid)
+    if owner_pos is None or drone_pos is None or int(owner_pos.z) != int(drone_pos.z):
+        return None
+    owner_xyz = (int(owner_pos.x), int(owner_pos.y), int(owner_pos.z))
+    current = (int(drone_pos.x), int(drone_pos.y), int(drone_pos.z))
+    distance = abs(current[0] - owner_xyz[0]) + abs(current[1] - owner_xyz[1])
+    _building_id, room_kind = _structure_identity(sim, *current)
+    transitory_room = any(token in room_kind for token in _TRANSITORY_ROOM_TOKENS)
+    _open_neighbors, straight_choke = _open_cardinal_shape(sim, *current)
+    if (
+        2 <= distance <= 3
+        and _same_drone_operating_space(sim, owner_xyz, current)
+        and not drone_deploy_tile_is_threshold(sim, *current)
+        and not transitory_room
+        and not straight_choke
+    ):
+        return current
+    return _npc_drone_deploy_tile(sim, owner_eid, *owner_xyz)
+
+
+def _seeded_patrol_points(sim, owner_eid, drone_eid, *, limit=5):
+    """Build a short, connected local route instead of a wall-blind square."""
+
+    pos = sim.ecs.get(Position).get(drone_eid)
+    owner_pos = sim.ecs.get(Position).get(owner_eid)
+    if pos is None:
+        return ()
+    origin = (int(pos.x), int(pos.y), int(pos.z))
+    operating_origin = (
+        (int(owner_pos.x), int(owner_pos.y), int(owner_pos.z))
+        if owner_pos is not None and int(owner_pos.z) == int(pos.z)
+        else origin
+    )
+    points = [origin]
+    visited = {origin}
+    current = origin
+    for step_index in range(max(0, int(limit) - 1)):
+        candidates = []
+        for dx, dy in _CARDINAL_OFFSETS:
+            candidate = (current[0] + dx, current[1] + dy, current[2])
+            if candidate in visited or not drone_deploy_tile_open(sim, *candidate):
+                continue
+            if not _same_drone_operating_space(sim, operating_origin, candidate):
+                continue
+            if drone_deploy_tile_is_threshold(sim, *candidate):
+                continue
+            score = _npc_drone_tile_score(sim, operating_origin, candidate, owner_eid=owner_eid)
+            tie = random.Random(
+                f"{getattr(sim, 'seed', 0)}:npc-drone-route:{drone_eid}:{step_index}:{candidate}"
+            ).random()
+            candidates.append((score[:-1] + (tie,), candidate))
+        if not candidates:
+            break
+        candidates.sort(key=lambda row: row[0])
+        current = candidates[0][1]
+        visited.add(current)
+        points.append(current)
+    return tuple(points)
+
+
+def _seeded_task_bindings(sim, owner_eid, drone_eid, state, task_id, *, target_eid=None):
     positions = sim.ecs.get(Position)
     owner_pos = positions.get(owner_eid)
     drone_pos = positions.get(drone_eid)
@@ -467,20 +637,20 @@ def _seeded_task_bindings(sim, owner_eid, drone_eid, state, task_id):
 
     bindings = {}
     if task_id in {"follow_operator", "protect_operator", "watch_person"}:
-        bindings["PERSON"] = {"kind": "person", "eid": owner_eid, "label": "operator"}
+        person_eid = target_eid if task_id == "watch_person" and target_eid is not None else owner_eid
+        bindings["PERSON"] = {
+            "kind": "person",
+            "eid": person_eid,
+            "label": "watched person" if task_id == "watch_person" and person_eid != owner_eid else "operator",
+        }
     if task_id in {"guard_zone", "map_area_loop"} and home_pos is not None:
         bindings["AREA"] = {"kind": "area", "target": home_pos, "label": "operator area"}
     if task_id == "patrol_route":
-        origin = None
-        if drone_pos is not None:
-            origin = (int(drone_pos.x), int(drone_pos.y), int(drone_pos.z))
-        elif home_pos is not None:
-            origin = home_pos
-        if origin is not None:
-            x, y, z = origin
+        points = _seeded_patrol_points(sim, owner_eid, drone_eid)
+        if points:
             bindings["ROUTE"] = {
                 "kind": "route",
-                "points": ((x, y, z), (x + 1, y, z), (x + 1, y + 1, z), (x, y + 1, z)),
+                "points": points,
                 "label": "seeded patrol loop",
             }
     if task_id == "seek_item_and_return" and home_pos is not None:
@@ -489,7 +659,7 @@ def _seeded_task_bindings(sim, owner_eid, drone_eid, state, task_id):
     return bindings
 
 
-def _activate_seeded_task(sim, owner_eid, drone_eid, state, task_id):
+def _activate_seeded_task(sim, owner_eid, drone_eid, state, task_id, *, target_eid=None):
     task_id = _clean(task_id)
     if not task_id:
         return None
@@ -511,10 +681,17 @@ def _activate_seeded_task(sim, owner_eid, drone_eid, state, task_id):
     if not isinstance(program, dict):
         return None
     if task_id in {"follow_operator", "protect_operator", "watch_person"}:
-        state.target_eid = owner_eid
+        state.target_eid = target_eid if task_id == "watch_person" and target_eid is not None else owner_eid
     else:
         state.target_eid = None
-    bindings = _seeded_task_bindings(sim, owner_eid, drone_eid, state, task_id)
+    bindings = _seeded_task_bindings(
+        sim,
+        owner_eid,
+        drone_eid,
+        state,
+        task_id,
+        target_eid=target_eid,
+    )
     result = activate_drone_program(
         state,
         program,
@@ -643,7 +820,14 @@ def retask_npc_drones_from_owner_will(sim):
     retasked = 0
     for drone_eid, state in list(sim.ecs.get(DroneState).items()):
         metadata = getattr(state, "source_metadata", None)
-        if not isinstance(metadata, dict) or not bool(metadata.get("npc_will_driven")):
+        if not isinstance(metadata, dict):
+            continue
+        if _clean(metadata.get("source_context")) == DRONE_FACTION_SOURCE_CONTEXT:
+            collider = sim.ecs.get(Collider).get(drone_eid)
+            if collider is not None:
+                collider.blocks = False
+            metadata["npc_drone_yields_foot_traffic"] = True
+        if not bool(metadata.get("npc_will_driven")):
             continue
         owner_eid = getattr(state, "owner_eid", None) or getattr(state, "controller_eid", None)
         if owner_eid is None or owner_eid == getattr(sim, "player_eid", None):
@@ -688,7 +872,14 @@ def retask_npc_drones_from_owner_will(sim):
             continue
 
         previous = current or None
-        result = _activate_seeded_task(sim, owner_eid, drone_eid, state, desired)
+        result = _activate_seeded_task(
+            sim,
+            owner_eid,
+            drone_eid,
+            state,
+            desired,
+            target_eid=active_target,
+        )
         metadata["npc_drone_last_retask_tick"] = now
         if not result or not result.get("ok"):
             continue
@@ -746,7 +937,7 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
     pos = sim.ecs.get(Position).get(owner_eid)
     if pos is None:
         return None
-    deploy_tile = first_open_drone_deploy_tile(sim, pos.x, pos.y, pos.z)
+    deploy_tile = _npc_drone_deploy_tile(sim, owner_eid, pos.x, pos.y, pos.z)
     if deploy_tile is None:
         return None
     kind = _owner_kind(sim, owner_eid)
@@ -794,6 +985,8 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
         "npc_drone_task": seeded_task,
         "npc_drone_base_task": seeded_task,
         "npc_will_driven": True,
+        "npc_drone_behavior_policy_version": NPC_DRONE_BEHAVIOR_POLICY_VERSION,
+        "npc_drone_yields_foot_traffic": True,
         "operator_organization_eid": operator_org_eid,
         "manufacturer_organization_eid": manufacturer_org_eid,
         "manufacturer_organization_key": manufacturing_identity.get("organization_key"),
@@ -857,7 +1050,9 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
             common_name=f"{state.chassis_class}-class drone",
         ),
     )
-    sim.ecs.add(drone_eid, Collider(blocks=True))
+    # These are mobile machines, not player-built barricades.  They remain
+    # targetable physical entities while yielding the foot-traffic plane.
+    sim.ecs.add(drone_eid, Collider(blocks=False))
     sim.ecs.add(drone_eid, Vitality(max_hp=state.hull_hp_max, hp=state.hull_hp))
     sim.ecs.add(drone_eid, state)
     sim.tilemap.add_entity(drone_eid, x, y, z)
@@ -881,6 +1076,21 @@ def _spawn_seeded_drone(sim, owner_eid, chunk, ordinal):
 
 def seed_loaded_faction_drones(sim):
     state = _runtime(sim)
+    policy_version = _int(state.get("behavior_policy_version"), 0)
+    if policy_version < NPC_DRONE_BEHAVIOR_POLICY_VERSION:
+        # Reconsider already visited chunks once when density/activity policy
+        # improves. Existing owner drones prevent duplication below.
+        state["seeded_chunks"] = set()
+        state["catchup_done_chunks"] = set()
+        state["behavior_policy_version"] = NPC_DRONE_BEHAVIOR_POLICY_VERSION
+        for drone_eid, drone_state in tuple(sim.ecs.get(DroneState).items()):
+            metadata = getattr(drone_state, "source_metadata", None)
+            if not isinstance(metadata, dict) or _clean(metadata.get("source_context")) != DRONE_FACTION_SOURCE_CONTEXT:
+                continue
+            collider = sim.ecs.get(Collider).get(drone_eid)
+            if collider is not None:
+                collider.blocks = False
+            metadata["npc_drone_yields_foot_traffic"] = True
     seeded = state["seeded_chunks"]
     for chunk in _loaded_chunks(sim):
         if chunk in seeded:
@@ -985,7 +1195,9 @@ def catch_up_faction_drones_for_chunk(sim, drone_system, chunk):
 __all__ = [
     "DRONE_FACTION_MAX_PER_CHUNK",
     "DRONE_FACTION_SOURCE_CONTEXT",
+    "NPC_DRONE_BEHAVIOR_POLICY_VERSION",
     "catch_up_faction_drones_for_chunk",
+    "npc_drone_follow_station",
     "owner_drone_seed_eligible",
     "retask_npc_drones_from_owner_will",
     "seed_loaded_faction_drones",

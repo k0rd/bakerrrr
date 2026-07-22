@@ -1,6 +1,7 @@
 """Lawful-force classification helpers for justice accounting."""
 
 from game.components import AI, Position, SuppressionState, Vitality
+from game.bounty_authority import bounty_action_authority, bounty_authority_from_stamped_data
 from game.system_support.offense_runtime import VIOLENT_OFFENSE_CONTEXTS
 
 
@@ -10,6 +11,7 @@ DEFENSE_OF_PROPERTY = "defense_of_property"
 DEFENSE_OF_OTHER = "defense_of_other"
 MUTUAL_FIGHT = "mutual_fight"
 UNCLEAR = "unclear"
+BOUNTY_RECOVERY = "bounty_recovery"
 
 _HOSTILE_STATES = {"attacking", "chasing", "protecting", "hostile", "combat"}
 _PROPERTY_DEFENSE_STATES = {"protecting", "warning", "chasing"}
@@ -128,31 +130,51 @@ def classify_lawful_force(sim, data, *, offender_eid=None):
         }
     offender_eid = offender_eid if offender_eid is not None else data.get("offender_eid")
     target_eid = _target_eid_from_data(data)
+    bounty_read = bounty_authority_from_stamped_data(data)
+    if not isinstance(bounty_read, dict):
+        bounty_read = bounty_action_authority(
+            sim,
+            offender_eid,
+            target_eid,
+            action=data.get("action"),
+            context=context,
+        )
+
+    def _with_bounty(payload):
+        merged = dict(payload)
+        if isinstance(bounty_read, dict):
+            merged.update(bounty_read)
+        return merged
 
     if context == "explosive_discharge":
-        return {
+        return _with_bounty({
             "force_context": CRIMINAL_ATTACK,
             "force_reason": "explosive force stays criminally serious",
             "severity_mitigation": 0,
+            "severity_adjustment": int((bounty_read or {}).get("bounty_severity_adjustment", 0) or 0),
             "recordable": True,
             "suppressed": False,
-        }
+        })
     if target_eid is None:
-        return {
+        return _with_bounty({
             "force_context": UNCLEAR,
             "force_reason": "no clear target for the violent force",
             "severity_mitigation": 0,
             "recordable": True,
             "suppressed": False,
-        }
+        })
     if _is_downed_or_surrendered(sim, target_eid):
-        return {
+        reason = "target was downed or surrendered"
+        if bool((bounty_read or {}).get("bounty_authority_relevant")):
+            reason += "; posted recovery authority ended at restraint"
+        return _with_bounty({
             "force_context": CRIMINAL_ATTACK,
-            "force_reason": "target was downed or surrendered",
+            "force_reason": reason,
             "severity_mitigation": 0,
+            "severity_adjustment": int((bounty_read or {}).get("bounty_severity_adjustment", 0) or 0),
             "recordable": True,
             "suppressed": False,
-        }
+        })
     if _offender_defending_property(sim, offender_eid, target_eid, data):
         return {
             "force_context": DEFENSE_OF_PROPERTY,
@@ -188,13 +210,30 @@ def classify_lawful_force(sim, data, *, offender_eid=None):
             "recordable": False,
             "suppressed": True,
         }
-    return {
+    if bool((bounty_read or {}).get("bounty_authority_authorized")):
+        return _with_bounty({
+            "force_context": BOUNTY_RECOVERY,
+            "force_reason": str(
+                (bounty_read or {}).get("bounty_authority_reason", "matching posted recovery authority")
+                or "matching posted recovery authority"
+            ).strip(),
+            "severity_mitigation": 1.0,
+            "severity_adjustment": 0,
+            "recordable": False,
+            "suppressed": True,
+        })
+    return _with_bounty({
         "force_context": CRIMINAL_ATTACK,
-        "force_reason": "no concrete defensive threat was present",
+        "force_reason": str(
+            (bounty_read or {}).get("bounty_authority_reason", "")
+            if bool((bounty_read or {}).get("bounty_authority_relevant"))
+            else "no concrete defensive threat was present"
+        ).strip() or "no concrete defensive threat was present",
         "severity_mitigation": 0,
+        "severity_adjustment": int((bounty_read or {}).get("bounty_severity_adjustment", 0) or 0),
         "recordable": True,
         "suppressed": False,
-    }
+    })
 
 
 def mitigated_force_severity(severity, force_read):
@@ -213,13 +252,36 @@ def mitigated_force_severity(severity, force_read):
     except (TypeError, ValueError):
         mitigation = 0.0
     mitigation = max(0.0, min(0.9, mitigation))
-    return max(1, int(round(float(severity) * (1.0 - mitigation))))
+    adjusted = max(1, int(round(float(severity) * (1.0 - mitigation))))
+    try:
+        adjustment = int(force_read.get("severity_adjustment", 0) or 0)
+    except (TypeError, ValueError):
+        adjustment = 0
+    return max(1, min(100, adjusted + adjustment))
 
 
 def force_payload(force_read):
     force_read = force_read if isinstance(force_read, dict) else {}
-    return {
+    payload = {
         "force_context": str(force_read.get("force_context", UNCLEAR) or UNCLEAR).strip().lower(),
         "force_reason": str(force_read.get("force_reason", "") or "").strip(),
         "severity_mitigation": force_read.get("severity_mitigation", 0),
+        "severity_adjustment": force_read.get("severity_adjustment", 0),
     }
+    for field in (
+        "bounty_authority_relevant",
+        "bounty_authority_authorized",
+        "bounty_authority_reason",
+        "bounty_action_kind",
+        "bounty_license_status",
+        "bounty_assignment_active",
+        "bounty_opportunity_id",
+        "bounty_issuer_name",
+        "bounty_credential_misuse",
+        "bounty_authority_scope",
+        "bounty_authority_exclusions",
+        "bounty_authority_evaluated_tick",
+    ):
+        if field in force_read:
+            payload[field] = force_read.get(field)
+    return payload

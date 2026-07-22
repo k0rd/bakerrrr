@@ -10,7 +10,7 @@ from __future__ import annotations
 import random
 from collections.abc import Mapping
 
-from game.components import BehaviorProfile, CreatureIdentity, Inventory, Occupation, OrganizationAffiliations, Position
+from game.components import BehaviorProfile, Inventory, Occupation, OrganizationAffiliations, Position
 from game.drone_distribution import drone_distribution_metadata, drone_street_vendor_item_pool
 from game.wire_distribution import wire_distribution_metadata, wire_street_vendor_item_pool
 from game.wire_data_market import wire_data_street_sell_rows
@@ -29,6 +29,7 @@ from game.system_support.npc_behavior_runtime import (
     _street_buy_terms,
     _street_item_price,
 )
+from game.system_support.entity_naming import _entity_viewer_display_name
 
 
 STREET_TRADE_SOURCE_KIND = "street_vendor"
@@ -195,15 +196,6 @@ def _pusher_pressure_gate(vendor_kind, prefs, context):
         "heat_tolerance": "medium" if tolerance >= 1 or trusted else "low",
         "pressure_attention": attention,
     }
-
-
-def _entity_label(sim, eid, fallback="street contact") -> str:
-    identity = sim.ecs.get(CreatureIdentity).get(eid) if sim is not None else None
-    for attr in ("personal_name", "common_name", "creature_type"):
-        text = str(getattr(identity, attr, "") or "").strip() if identity else ""
-        if text:
-            return text
-    return str(fallback)
 
 
 def _career(sim, eid) -> str:
@@ -585,7 +577,12 @@ def street_vendor_contact_profile(sim, contact_eid, player_eid, *, context=None)
     else:
         default_mode = "sell"
 
-    contact_label = _entity_label(sim, contact_eid)
+    contact_label = _entity_viewer_display_name(
+        sim,
+        contact_eid,
+        viewer_eid=player_eid,
+        title_case=True,
+    )
     notes = []
     if "sell" in available:
         notes.append(_sell_note_for_kind(vendor_kind))

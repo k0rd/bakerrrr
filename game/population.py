@@ -2237,8 +2237,16 @@ def _traits_for_role(rng, role):
     )
 
 
-def _justice_for_role(rng, role, workplace_prop=None):
+def _justice_for_role(rng, role, workplace_prop=None, career=None):
     archetype = _property_archetype(workplace_prop)
+    career_text = str(career or "").strip().lower()
+    if any(token in career_text for token in ("wildlife_ranger", "wildlife_enforcement", "game_warden", "conservation_officer", "arson_investigator", "fire_investigator", "fire_inspector")):
+        return JusticeProfile(
+            enforce_all=True,
+            justice=rng.uniform(0.68, 0.96),
+            corruption=rng.uniform(0.01, 0.14),
+            crime_sensitivity=rng.uniform(0.74, 0.98),
+        )
     if role == "guard" or archetype in SECURITY_ARCHETYPES:
         return JusticeProfile(
             enforce_all=bool(archetype in SECURITY_ARCHETYPES),
@@ -2363,6 +2371,8 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
             "electrolyte_drink",
             "pocket_light_rounds",
             "battery_pack",
+            "tripline_alarm",
+            "restraint_snare",
         )
     if role == "thief":
         return (
@@ -2379,6 +2389,7 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
             "cocaine_bindle",
             "caff_shot",
             "cheap_whiskey",
+            "decoy_beacon",
         )
     if role == "drunk":
         return (
@@ -2396,7 +2407,7 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
     if archetype in MEDICAL_ARCHETYPES:
         return ("med_gel", "micro_medkit", "hydration_salts", "calm_patch", "trauma_foam", "field_dressing", "bandage_roll", "pain_blocker", "bottled_water", "electrolyte_drink", "water_purifier_tabs", "glucose_gel", "antiseptic_wipes", "suture_kit")
     if archetype in SALVAGE_ARCHETYPES or archetype in INDUSTRIAL_ARCHETYPES:
-        return ("street_ration", "protein_wrap", "rice_bowl", "caff_shot", "city_pass_token", "prybar", "glass_cutter", "energy_bar", "canteen_coffee", "sealed_juice", "battery_pack", "scrap_circuit", "pocket_multitool", "bolt_cutters", "inspection_mirror", "glass_bottle", "brick", "water_purifier_tabs")
+        return ("street_ration", "protein_wrap", "rice_bowl", "caff_shot", "city_pass_token", "prybar", "glass_cutter", "energy_bar", "canteen_coffee", "sealed_juice", "battery_pack", "scrap_circuit", "pocket_multitool", "wire_spool", "salvaged_hardware", "spring_clamp", "tripline_alarm", "decoy_beacon", "bolt_cutters", "inspection_mirror", "glass_bottle", "brick", "water_purifier_tabs")
     if archetype in NIGHTLIFE_ARCHETYPES:
         return ("spark_brew", "cheap_whiskey", "caff_shot", "smoke_tab", "city_pass_token", "street_ration", "fruit_cup", "mint_strip", "deck_of_cards", "lucky_charm", "glass_bottle", "electrolyte_drink")
     if archetype in STOREFRONT_ARCHETYPES or archetype in TRANSIT_ARCHETYPES:
@@ -2624,6 +2635,11 @@ def _seed_npc_inventory(sim, eid, rng, role, workplace_prop=None, home_prop=None
         _give_item(sim, eid, rng.choice(pool), quantity=1)
     if role in {"thief", "drunk"} and rng.random() < 0.42:
         _give_item(sim, eid, rng.choice(pool), quantity=1)
+    if role == "thief" and rng.random() < 0.07:
+        # A rare coherent electronic getaway kit.  Seeding both halves keeps
+        # remote-device use from depending on two unrelated loot rolls.
+        _give_item(sim, eid, "remote_release_rig", quantity=1)
+        _give_item(sim, eid, "smoke_grenade", quantity=1)
 
 
 def _chaotic_role_for_resident(rng, area_type, home_prop=None, workplace_prop=None, current_role="civilian"):
@@ -2771,7 +2787,7 @@ def _spawn_human(
         NPCRoutine(home=home, work=work),
         PropertyKnowledge(),
         PropertyPortfolio(),
-        _justice_for_role(rng, role, workplace_prop=workplace_prop),
+        _justice_for_role(rng, role, workplace_prop=workplace_prop, career=career),
         seed_skill_profile(
             random.Random(
                 f"{sim.seed}:chunk_human_skill:{position[0]}:{position[1]}:{position[2]}:{role}:{career or 'resident'}:{personal_name}"

@@ -34,6 +34,7 @@ NPC_NAMES_PATH = GAME_DIR / "npc_names.json"
 RENDER_SEMANTICS_PATH = GAME_DIR / "render_semantics.json"
 FLORA_PATH = GAME_DIR / "flora.json"
 HERBAL_RECIPES_PATH = GAME_DIR / "herbal_recipes.json"
+MECHANICAL_RECIPES_PATH = GAME_DIR / "mechanical_recipes.json"
 
 ALLOWED_ITEM_EFFECTS = {"modify_need", "extend_wakefulness", "restore_hp", "status", "credits", "add_ammo"}
 ALLOWED_ITEM_NEEDS = {"energy", "safety", "social", "hunger", "thirst"}
@@ -62,6 +63,9 @@ ALLOWED_HERBAL_CHEMISTRY_CLASSES = {
     "deliriant",
     "volatile",
 }
+ALLOWED_MECHANICAL_DEVICE_BODIES = {"floor_fixture", "tripline", "receiver"}
+ALLOWED_MECHANICAL_DEVICE_TRIGGERS = {"step", "timer", "remote_signal"}
+ALLOWED_MECHANICAL_DEVICE_PAYLOADS = {"alarm", "restraint", "carried_payload", "decoy_noise"}
 IDENTIFIER_RE = re.compile(r"^[a-z0-9_]+$")
 RESERVED_GLYPH_POLICIES = {
     "+": {
@@ -1590,6 +1594,60 @@ def _validate_herbal_recipes(path, item_ids, report):
         report.error(source, [], "herbal recipe catalog must contain at least the six V1 recipes")
 
 
+def _validate_mechanical_recipes(path, item_ids, report):
+    data, source = _load_object_document(path, report, "an object keyed by mechanical recipe id")
+    if data is None:
+        return
+    item_ids = set(item_ids or ())
+    seen_outputs = set()
+    for recipe_id, row in data.items():
+        if str(recipe_id).startswith("_"):
+            continue
+        recipe_path = [recipe_id]
+        if not _validate_identifier(report, source, recipe_path, recipe_id, field_name="mechanical recipe id"):
+            continue
+        if not _expect_type(report, source, recipe_path, row, dict, "a mechanical recipe object"):
+            continue
+        _validate_non_empty_string(report, source, recipe_path + ["name"], row.get("name"), field_name="name")
+        for field_name in ("plan_item_id", "output_item_id"):
+            item_id = row.get(field_name)
+            if _validate_non_empty_string(report, source, recipe_path + [field_name], item_id, field_name=field_name):
+                item_id = str(item_id).strip().lower()
+                if item_id not in item_ids:
+                    report.error(source, recipe_path + [field_name], f"{field_name} {item_id!r} is not in items.json")
+                if field_name == "output_item_id":
+                    if item_id in seen_outputs:
+                        report.error(source, recipe_path + [field_name], f"duplicate mechanical output {item_id!r}")
+                    seen_outputs.add(item_id)
+        _validate_int(report, source, recipe_path + ["construction_ticks"], row.get("construction_ticks"), minimum=1, maximum=60, field_name="construction_ticks")
+        difficulty = row.get("difficulty")
+        if not isinstance(difficulty, (int, float)) or isinstance(difficulty, bool) or not 1.0 <= float(difficulty) <= 12.0:
+            report.error(source, recipe_path + ["difficulty"], "difficulty must be a number from 1 through 12")
+        components = row.get("components")
+        if not isinstance(components, dict) or not components:
+            report.error(source, recipe_path + ["components"], "components must be a non-empty item-id object")
+        else:
+            for component_id, quantity in components.items():
+                component_path = recipe_path + ["components", component_id]
+                if str(component_id).strip().lower() not in item_ids:
+                    report.error(source, component_path, f"component {component_id!r} is not in items.json")
+                _validate_int(report, source, component_path, quantity, minimum=1, maximum=20, field_name="component quantity")
+        profile = row.get("device_profile")
+        if not isinstance(profile, dict):
+            report.error(source, recipe_path + ["device_profile"], "device_profile must be an object")
+            continue
+        for field_name, allowed in (
+            ("body", ALLOWED_MECHANICAL_DEVICE_BODIES),
+            ("trigger", ALLOWED_MECHANICAL_DEVICE_TRIGGERS),
+            ("payload", ALLOWED_MECHANICAL_DEVICE_PAYLOADS),
+        ):
+            value = str(profile.get(field_name, "") or "").strip().lower()
+            if value not in allowed:
+                report.error(source, recipe_path + ["device_profile", field_name], f"unknown mechanical {field_name} {value!r}")
+    if len(seen_outputs) != 4:
+        report.error(source, [], "mechanical recipe catalog must define the complete four-device V1")
+
+
 def _validate_vehicles(path, report):
     data, source = _load_object_document(path, report, "a vehicle catalog object")
     if data is None:
@@ -1757,6 +1815,7 @@ def validate_repo_content():
     _validate_fixtures(FIXTURES_PATH, report)
     _validate_flora(FLORA_PATH, report)
     _validate_herbal_recipes(HERBAL_RECIPES_PATH, item_ids, report)
+    _validate_mechanical_recipes(MECHANICAL_RECIPES_PATH, item_ids, report)
     _validate_vehicles(VEHICLES_PATH, report)
     _validate_npc_names(NPC_NAMES_PATH, report)
     _validate_render_semantics(RENDER_SEMANTICS_PATH, report)

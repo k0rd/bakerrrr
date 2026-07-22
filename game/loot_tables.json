@@ -3702,6 +3702,26 @@
   ],
   "archetype:salvage_camp": [
     {
+      "item_id": "salvaged_hardware",
+      "weight": 18
+    },
+    {
+      "item_id": "wire_spool",
+      "weight": 14
+    },
+    {
+      "item_id": "spring_clamp",
+      "weight": 10
+    },
+    {
+      "item_id": "tripline_alarm_plan",
+      "weight": 4
+    },
+    {
+      "item_id": "restraint_snare_plan",
+      "weight": 2
+    },
+    {
       "item_id": "street_ration",
       "weight": 16
     },
@@ -3927,6 +3947,22 @@
     }
   ],
   "archetype:electronics_shop": [
+    {
+      "item_id": "wire_spool",
+      "weight": 12
+    },
+    {
+      "item_id": "salvaged_hardware",
+      "weight": 10
+    },
+    {
+      "item_id": "remote_release_rig_plan",
+      "weight": 3
+    },
+    {
+      "item_id": "decoy_beacon_plan",
+      "weight": 4
+    },
     {
       "item_id": "phone",
       "weight": 18

@@ -35,6 +35,8 @@ class SkillProgressionSystem(System):
         self.sim.events.subscribe("trade_sold", self.on_trade_sold)
         self.sim.events.subscribe("insurance_policy_purchased", self.on_insurance_policy_purchased)
         self.sim.events.subscribe("site_service_used", self.on_site_service_used)
+        self.sim.events.subscribe("mechanical_device_crafted", self.on_mechanical_device_crafted)
+        self.sim.events.subscribe("mechanical_device_recovered", self.on_mechanical_device_recovered)
         self.sim.events.subscribe("melee_attack", self.on_melee_attack)
         self.sim.events.subscribe("entity_moved", self.on_entity_moved)
         self.sim.events.subscribe("cursor_examined", self.on_cursor_examined)
@@ -324,6 +326,35 @@ class SkillProgressionSystem(System):
         if service in {"vehicle_fetch", "vehicle_sales_new", "vehicle_sales_used"}:
             self._apply_practice(eid, "conversation", 0.08, reason="site_service", cooldown_key=key, cooldown=self.SITE_SERVICE_COOLDOWN)
             self._apply_practice(eid, "streetwise", 0.12, reason="site_service", cooldown_key=key, cooldown=self.SITE_SERVICE_COOLDOWN)
+
+    def on_mechanical_device_crafted(self, event):
+        eid = event.data.get("eid")
+        recipe_id = str(event.data.get("recipe_id", "device") or "device").strip().lower()
+        try:
+            requirement = float(event.data.get("requirement", 5.0) or 5.0)
+        except (TypeError, ValueError):
+            requirement = 5.0
+        amount = 0.20 + (max(1.0, min(12.0, requirement)) * 0.018)
+        self._apply_practice(
+            eid,
+            "mechanics",
+            amount,
+            reason="mechanical_crafting",
+            cooldown_key=f"{recipe_id}:{event.data.get('output_instance_id', '')}",
+            cooldown=0,
+        )
+
+    def on_mechanical_device_recovered(self, event):
+        if not bool(event.data.get("disarmed")):
+            return
+        self._apply_practice(
+            event.data.get("eid"),
+            "mechanics",
+            0.16,
+            reason="device_disarm",
+            cooldown_key=str(event.data.get("property_id", "") or "device"),
+            cooldown=0,
+        )
 
     def on_melee_attack(self, event):
         eid = event.data.get("eid")

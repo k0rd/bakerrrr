@@ -110,6 +110,7 @@ def _empty_stats():
         "social_warmth_protected_chunks": 0,
         "area_warmth_protected_chunks": 0,
         "opportunity_protected_chunks": 0,
+        "pursuit_protected_chunks": 0,
     }
 
 
@@ -1236,6 +1237,25 @@ def _collect_attention_sources(sim, state):
         pass
 
     try:
+        from game.pursuit_streaming_runtime import pursuit_streaming_state
+
+        pursuit_state = pursuit_streaming_state(sim)
+        pursuit_reasons = pursuit_state.get("protected_reasons", {})
+        for chunk in tuple(pursuit_state.get("protected_chunks", set()) or ()):
+            chunk = _normalize_chunk(chunk)
+            if chunk is None:
+                continue
+            warm_chunks.add(chunk)
+            reasons = pursuit_reasons.get(chunk, ()) if isinstance(pursuit_reasons, dict) else ()
+            if reasons:
+                for reason in tuple(reasons):
+                    _add_chunk_reason(chunk_reasons, chunk, f"pursuit:{reason}")
+            else:
+                _add_chunk_reason(chunk_reasons, chunk, "pursuit")
+    except Exception:
+        pass
+
+    try:
         from game.incident_runtime import incident_registry
 
         now = _safe_int(getattr(sim, "tick", 0), 0)
@@ -1549,6 +1569,13 @@ def refresh_actor_attention(sim, *, player_eid=None):
     stats["area_warmth_protected_chunks"] = len(protected if isinstance(protected, set) else set(protected or ()))
     protected = state.get("opportunity_protected_chunks", set())
     stats["opportunity_protected_chunks"] = len(protected if isinstance(protected, set) else set(protected or ()))
+    try:
+        from game.pursuit_streaming_runtime import pursuit_streaming_state
+
+        protected = pursuit_streaming_state(sim).get("protected_chunks", set())
+        stats["pursuit_protected_chunks"] = len(protected if isinstance(protected, set) else set(protected or ()))
+    except Exception:
+        stats["pursuit_protected_chunks"] = 0
     state["stats"] = stats
     state["last_refresh_tick"] = tick
     return state

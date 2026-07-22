@@ -286,6 +286,8 @@ class FireSystem(System):
                     vehicle_owner_eid=event.data.get("vehicle_owner_eid"),
                     vehicle_owner_tag=event.data.get("vehicle_owner_tag"),
                     vehicle_scene_radius=max(2, radius),
+                    source_item_id=event.data.get("thrown_item_id"),
+                    source_item_name=event.data.get("thrown_item_name"),
                 )
 
     def on_smoke_cloud_released(self, event):
@@ -364,6 +366,8 @@ class FireSystem(System):
         vehicle_owner_eid=None,
         vehicle_owner_tag=None,
         vehicle_scene_radius=None,
+        source_item_id=None,
+        source_item_name=None,
         spread_from=None,
         intensity=2,
         sync_protected=True,
@@ -422,6 +426,8 @@ class FireSystem(System):
                 vehicle_owner_eid=vehicle_owner_eid,
                 vehicle_owner_tag=vehicle_owner_tag,
                 vehicle_scene_radius=vehicle_scene_radius,
+                source_item_id=_text(source_item_id).lower() or None,
+                source_item_name=_text(source_item_name) or None,
                 fire_intensity=_safe_int(record.get("fire_intensity"), intensity),
                 smoke_intensity=_safe_int(record.get("smoke_intensity"), smoke_intensity),
                 severity=min(100, 18 + (_safe_int(record.get("fire_intensity"), intensity) * 18)),
@@ -1268,7 +1274,7 @@ class FireSystem(System):
                     "actor_specs": [
                         {
                             "role": "worker",
-                            "career": "response_worker",
+                            "career": "firefighter",
                             "linger_ticks": 8,
                             "fixed_position": False,
                             "work_authority": "emergency_response",

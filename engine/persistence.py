@@ -43,12 +43,14 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "mutators",
     "appearance",
     "npc_social_dynamics_system",
+    "mechanical_device_system",
     "social_knowledge_influence_system",
     "run_epilogue_ledger",
     "ecology_registry_runtime",
     "property_anchor_index",
     "property_cover_index",
     "actor_attention_state",
+    "pursuit_streaming_state",
     "wildlife_damage_reactions",
     "vision_scene",
     "dream_residue",
@@ -61,6 +63,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "property_order",
     "next_property_order",
     "_properties_in_radius_cache",
+    "_mechanical_device_ids",
     "_derived_fact_state",
     "_organization_runtime_cache",
     "_property_access_controller_cache",
@@ -498,6 +501,9 @@ def unload_chunk_state(sim, key, *, rebuild_indexes=True):
     if key is None:
         return None
 
+    from game.pursuit_streaming_runtime import prepare_pursuit_chunk_unload
+
+    prepare_pursuit_chunk_unload(sim, key)
     snapshot = snapshot_chunk_state(sim, key)
     if snapshot is None:
         sim.chunk_saved_states.pop(key, None)
@@ -554,6 +560,9 @@ def _remove_snapshot_live_state(sim, snapshot):
         if can_update_indexes:
             sim._unindex_property_record(property_id, prop)
             sim.property_order.pop(property_id, None)
+        mechanical_ids = getattr(sim, "_mechanical_device_ids", None)
+        if isinstance(mechanical_ids, set):
+            mechanical_ids.discard(str(property_id))
     for eid in tuple(snapshot.get("entities", {}).keys()):
         sim.remove_entity(int(eid))
 
@@ -590,6 +599,9 @@ def merge_unload_chunk_state(sim, key, *, rebuild_indexes=True):
     if not isinstance(existing, dict):
         return unload_chunk_state(sim, key, rebuild_indexes=rebuild_indexes)
 
+    from game.pursuit_streaming_runtime import prepare_pursuit_chunk_unload
+
+    prepare_pursuit_chunk_unload(sim, key)
     snapshot = snapshot_chunk_state(sim, key)
     if snapshot is None:
         sim.chunk_property_records.pop(key, None)
@@ -629,6 +641,11 @@ def restore_chunk_state(sim, key):
 
     for property_id, prop in snapshot.get("properties", {}).items():
         sim.properties[property_id] = copy.deepcopy(prop)
+        metadata = prop.get("metadata") if isinstance(prop, dict) and isinstance(prop.get("metadata"), dict) else {}
+        if bool(metadata.get("mechanical_device")):
+            mechanical_ids = getattr(sim, "_mechanical_device_ids", None)
+            if isinstance(mechanical_ids, set):
+                mechanical_ids.add(str(property_id))
     for ground_item_id, ground in snapshot.get("ground_items", {}).items():
         sim.ground_items[ground_item_id] = copy.deepcopy(ground)
     for property_id, state in snapshot.get("stores", {}).items():
@@ -684,6 +701,9 @@ def restore_chunk_state(sim, key):
         sim.rebuild_spatial_indexes()
     if hasattr(sim, "reapply_door_states"):
         sim.reapply_door_states(chunk=key)
+    from game.pursuit_streaming_runtime import settle_pursuit_chunk_restore
+
+    settle_pursuit_chunk_restore(sim, key, tuple(snapshot.get("entities", {}).keys()))
     refresh_loaded_organization_branch_briefings(
         sim,
         property_ids=tuple(snapshot.get("properties", {}).keys()),

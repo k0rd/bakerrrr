@@ -214,6 +214,71 @@ def ensure_organization_production_profile(sim, organization_eid):
     return stored
 
 
+def ensure_organization_clothing_culture(sim, organization_eid):
+    """Return/create the organization's durable public work-clothing grammar.
+
+    This is a lazy extension of the existing production profile rather than a
+    schema reroll.  Older installations therefore keep every established
+    product color and hidden manufacturing trait; their clothing culture is
+    derived deterministically from that already-durable identity.
+    """
+
+    profile = ensure_organization_production_profile(sim, organization_eid)
+    if not profile:
+        return {}
+    stored = profile.get("clothing_culture")
+    if isinstance(stored, dict) and stored.get("signature"):
+        return stored
+
+    organization_eid = _safe_int(organization_eid, 0)
+    visual = dict(profile.get("visual") or {})
+    family = _text(profile.get("family")) or "other"
+    rng = random.Random(_seed_int(profile.get("seed"), "organization-clothing-culture"))
+    primary = _text(visual.get("primary_color_word")) or "steel"
+    secondary = _text(visual.get("secondary_color_word")) or "charcoal"
+    accent = _text(visual.get("accent_color_word")) or "gold"
+    motif = _text(visual.get("motif")) or "work mark"
+    slot_sets = {
+        "corporation": (("outer", "top"), ("top", "hat"), ("outer", "accessory")),
+        "civic": (("outer", "top"), ("top", "accessory"), ("outer", "hat")),
+        "gang": (("outer", "accessory"), ("top", "hat"), ("outer", "hat")),
+        "cult": (("top", "accessory"), ("full_body", "accessory"), ("outer", "accessory")),
+        "business": (("top", "accessory"), ("outer", "top"), ("top", "hat")),
+        "other": (("top", "accessory"), ("outer", "top"), ("top", "hat")),
+    }
+    cohesion_ranges = {
+        "corporation": (0.7, 0.94),
+        "civic": (0.72, 0.96),
+        "cult": (0.76, 0.98),
+        "gang": (0.48, 0.86),
+        "business": (0.42, 0.8),
+        "other": (0.34, 0.7),
+    }
+    lo, hi = cohesion_ranges.get(family, cohesion_ranges["other"])
+    cohesion = round(rng.uniform(lo, hi), 3)
+    signature_slots = tuple(rng.choice(slot_sets.get(family, slot_sets["other"])))
+    signature = f"org-clothing:{organization_eid}:{int(profile.get('seed', 0) or 0):x}"
+    stored = {
+        "signature": signature,
+        "organization_eid": organization_eid,
+        "organization_name": _text(profile.get("organization_name")) or "Organization",
+        "family": family,
+        "primary_color_word": primary,
+        "secondary_color_word": secondary,
+        "accent_color_word": accent,
+        "motif": motif,
+        "signature_slots": signature_slots,
+        "cohesion": cohesion,
+        "recognition_salience": round(0.4 + (cohesion * 0.42), 3),
+    }
+    profile["clothing_culture"] = stored
+    return stored
+
+
+def organization_clothing_culture(sim, organization_eid):
+    return dict(ensure_organization_clothing_culture(sim, organization_eid) or {})
+
+
 def organization_production_profile(sim, organization_eid, *, include_hidden=False):
     profile = ensure_organization_production_profile(sim, organization_eid)
     if not profile:
@@ -223,6 +288,8 @@ def organization_production_profile(sim, organization_eid, *, include_hidden=Fal
     result["visual"] = dict(profile.get("visual") or {})
     result["manufacturing"] = dict(profile.get("manufacturing") or {})
     result["discoveries"] = dict(profile.get("discoveries") or {})
+    if isinstance(profile.get("clothing_culture"), dict):
+        result["clothing_culture"] = dict(profile.get("clothing_culture") or {})
     if include_hidden:
         result["hidden_manufacturing"] = dict(profile.get("hidden_manufacturing") or {})
     else:
@@ -284,8 +351,10 @@ def manufacturing_quality_label(score):
 __all__ = [
     "ORGANIZATION_PRODUCTION_SCHEMA_VERSION",
     "ensure_organization_production_profile",
+    "ensure_organization_clothing_culture",
     "manufacturing_quality_label",
     "organization_manufacturing_identity",
     "organization_manufacturing_modifiers",
+    "organization_clothing_culture",
     "organization_production_profile",
 ]

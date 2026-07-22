@@ -10,6 +10,7 @@ from engine.systems import System
 
 from game.components import CreatureIdentity, NPCMemory
 from game.items import ITEM_CATALOG, item_display_name
+from game.mechanical_device_runtime import place_deployed_device
 from game.system_support.awareness_runtime import observation_payload_for_position
 
 
@@ -146,59 +147,64 @@ def place_aerosol_floor_trap(sim, eid, inventory, item_entry, x, y, z=0, *, item
     throw_profile = payload_def.get("throw_profile") if isinstance(payload_def.get("throw_profile"), Mapping) else {}
     if not throw_profile:
         return {"ok": False, "reason": "missing_payload"}
-    tile = sim.tilemap.tile_at(int(x), int(y), int(z)) if hasattr(sim, "tilemap") else None
-    if tile is None:
-        return {"ok": False, "reason": "no_tile"}
-    if not bool(getattr(tile, "walkable", False)):
-        return {"ok": False, "reason": "blocked_tile"}
-    if armed_aerosol_traps_at(sim, x, y, z):
-        return {"ok": False, "reason": "trap_present"}
-    if hasattr(sim, "ground_items_at") and sim.ground_items_at(int(x), int(y), z=int(z)):
-        return {"ok": False, "reason": "ground_item_present"}
-
-    removed = inventory.remove_item(instance_id=item_entry.get("instance_id"), quantity=1) if inventory else None
-    if not removed:
-        return {"ok": False, "reason": "remove_failed"}
-    owner_tag = "player" if eid == getattr(sim, "player_eid", None) else "npc"
-    item_name = item_display_name(item_id, metadata=removed.get("metadata"), item_catalog=item_catalog)
+    item_name = item_display_name(item_id, metadata=item_entry.get("metadata"), item_catalog=item_catalog)
     payload_name = item_display_name(payload_item_id, item_catalog=item_catalog)
-    metadata = {
-        "archetype": AEROSOL_TRAP_FIXTURE_TYPE,
-        "fixture_type": AEROSOL_TRAP_FIXTURE_TYPE,
+    result = place_deployed_device(
+        sim,
+        eid,
+        inventory,
+        item_entry,
+        x,
+        y,
+        z,
+        profile={
+            "body": "floor_fixture",
+            "trigger": "step",
+            "payload": "aerosol",
+            "glyph": str(trap_profile.get("armed_glyph", "^") or "^")[:1] or "^",
+            "color": str(trap_profile.get("armed_color", "item_illegal") or "item_illegal").strip() or "item_illegal",
+            "noise_radius": max(0, _int(trap_profile.get("noise_radius"), 4)),
+            "concealment": 4.8,
+            "disarm_difficulty": 6.0,
+            "single_use": True,
+            "legal_status": str(item_def.get("legal_status", "restricted") or "restricted").strip().lower(),
+        },
+        item_catalog=item_catalog,
+        metadata_extra={
+            "archetype": AEROSOL_TRAP_FIXTURE_TYPE,
+            "fixture_type": AEROSOL_TRAP_FIXTURE_TYPE,
+            "device_id": item_id,
+            "aerosol_floor_trap": True,
+            "homemade": bool(trap_profile.get("homemade", True)),
+            "payload_item_id": payload_item_id,
+            "payload_item_name": payload_name,
+            "payload_throw_profile": copy.deepcopy(dict(throw_profile)),
+        },
+    )
+    if not result.get("ok"):
+        reason = "trap_present" if result.get("reason") == "device_present" else result.get("reason")
+        return {**result, "reason": reason}
+    property_id = result["property_id"]
+    removed = result["item"]
+    metadata = result["metadata"]
+    metadata.update({
         "aerosol_floor_trap": True,
-        "armed": True,
-        "armed_by_eid": eid,
-        "armed_by_name": _entity_name(sim, eid, default="the placer"),
-        "armed_tick": _int(getattr(sim, "tick", 0)),
-        "ignored_until_vacated_eids": [eid],
-        "source_item_id": item_id,
-        "source_item_name": item_name,
-        "source_item_metadata": copy.deepcopy(removed.get("metadata") if isinstance(removed.get("metadata"), Mapping) else {}),
         "payload_item_id": payload_item_id,
         "payload_item_name": payload_name,
         "payload_throw_profile": copy.deepcopy(dict(throw_profile)),
-        "display_glyph": str(trap_profile.get("armed_glyph", "^") or "^")[:1] or "^",
-        "display_color": str(trap_profile.get("armed_color", "item_illegal") or "item_illegal").strip() or "item_illegal",
-        "pickup_allowed": False,
         "homemade": bool(trap_profile.get("homemade", True)),
-        "legal_status": str(item_def.get("legal_status", "restricted") or "restricted").strip().lower(),
+    })
+    observation = {
+        key: result.get(key)
+        for key in ("observer_eids", "accountable_observer_eids", "observation_channels", "witnessed", "witnesses")
+        if key in result
     }
-    property_id = sim.register_property(
-        name=item_name,
-        kind="fixture",
-        x=int(x),
-        y=int(y),
-        z=int(z),
-        owner_eid=eid,
-        owner_tag=owner_tag,
-        metadata=metadata,
-    )
-    observation = _trap_observation(sim, eid, x, y, z)
-    observer_ids = set()
-    for key in ("observer_eids", "accountable_observer_eids"):
-        for observer_eid in tuple(observation.get(key, ()) or ()):
-            if observer_eid != eid:
-                observer_ids.add(observer_eid)
+    observer_ids = {
+        observer_eid
+        for key in ("observer_eids", "accountable_observer_eids")
+        for observer_eid in tuple(observation.get(key, ()) or ())
+        if observer_eid != eid
+    }
     remembered = []
     for observer_eid in sorted(observer_ids):
         if _remember_trap_placement(

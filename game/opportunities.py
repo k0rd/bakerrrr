@@ -26,6 +26,7 @@ from game.components import (
     PropertyKnowledge,
     Vitality,
 )
+from game.civic_records import civic_license_is_active
 from game.economy import chunk_economy_profile
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
 from game.organization_reputation import apply_organization_reputation_delta
@@ -5662,6 +5663,14 @@ def accept_service_job_offer(sim, player_eid, prop, service, job_key, *, return_
                 "message": "That job posting is no longer available.",
             }
         return None
+    service = str(service or "").strip().lower()
+    if service == "bounty_jobs" and not civic_license_is_active(sim, player_eid, "bounty"):
+        blocked = {
+            "blocked": True,
+            "reason": "bounty_license_required",
+            "message": "The recovery desk cannot assign a posted target without an active bounty credential.",
+        }
+        return blocked if return_blocked else None
     claim, blocked = _claim_service_job_offer(
         sim,
         offer,
@@ -5670,7 +5679,6 @@ def accept_service_job_offer(sim, player_eid, prop, service, job_key, *, return_
     )
     if isinstance(blocked, dict):
         return blocked if return_blocked else None
-    service = str(service or "").strip().lower()
     prop_id = str((prop or {}).get("id", "") or "").strip()
     prop_name = str((prop or {}).get("name", prop_id) or prop_id).strip()
     now = int(getattr(sim, "tick", 0))
@@ -5779,6 +5787,7 @@ def accept_service_job_offer(sim, player_eid, prop, service, job_key, *, return_
             "expire_tick": expire_tick,
             "requirements": {
                 "player_accepted": True,
+                "assigned_actor_eid": int(player_eid),
                 "strict_deadline": True,
                 "bounty_target_eid": target_eid,
                 "bounty_target_name": str(offer.get("target_name", "target") or "target").strip(),
@@ -5787,6 +5796,21 @@ def accept_service_job_offer(sim, player_eid, prop, service, job_key, *, return_
                 "job_action": "bounty_capture",
                 "job_board_service": service,
                 "job_key": str(offer.get("job_key", "") or "").strip(),
+                "bounty_warrant_verified": True,
+                "bounty_warrant_tier": str(offer.get("target_wanted_tier", "clear") or "clear").strip().lower(),
+                "bounty_authority_scope": (
+                    "locate posted target",
+                    "pursue posted target",
+                    "apply unarmed recovery force",
+                    "restrain downed or surrendered target",
+                ),
+                "bounty_authority_exclusions": (
+                    "lethal force",
+                    "firearms against a non-threatening target",
+                    "explosives",
+                    "property entry or search",
+                    "force after surrender or incapacitation",
+                ),
             },
             "reward": reward,
             "issuer": issuer,
@@ -5832,6 +5856,9 @@ def mark_bounty_target_restrained(sim, player_eid, target_eid):
         if _safe_int(requirements.get("bounty_target_eid"), default=0) != target_eid:
             continue
         if not bool(requirements.get("player_accepted")):
+            continue
+        assigned_eid = _safe_int(requirements.get("assigned_actor_eid"), default=_safe_int(getattr(sim, "player_eid", 0), default=0))
+        if assigned_eid != _safe_int(player_eid, default=0):
             continue
         requirements["bounty_restrained"] = True
         requirements["bounty_restrained_tick"] = int(getattr(sim, "tick", 0))

@@ -11,6 +11,7 @@ from engine.events import Event
 from engine.systems import System
 from engine.visibility import has_line_of_sight
 from game.civic_records import civic_license_is_active
+from game.incident_runtime import incident_record, incident_records
 from game.location_presentation_runtime import _location_building_category
 from game.meaningful_objects_runtime import materialize_place_object_near
 from game.opportunities import tracked_target_scene_rows
@@ -58,6 +59,7 @@ from game.system_support.fire_runtime import (
     property_fire_cells,
     suppress_fire_cell,
 )
+from game.specialist_casework import assess_fire_response_scene
 from game.quiet_maintenance_runtime import (
     quiet_maintenance_actor_line,
     quiet_maintenance_detail_line,
@@ -5400,7 +5402,7 @@ def _business_event_seed_scene_actor_note(sim, scene, prop, actor_spec, *, rng):
         org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
         org_label = org_name or prop_name
         if event_phase == "fire_response":
-            if career in {"response_worker", "traffic_guard"} or role == "worker":
+            if career in {"firefighter", "response_worker", "traffic_guard"} or role == "worker":
                 local_line = f"We are keeping people back from {prop_name} until the fire settles and the smoke stops owning the doorway."
                 detail_line = (
                     f"The frontage at {prop_name} is still live with flame or smoke, so the block is being held around it"
@@ -7779,7 +7781,7 @@ class BusinessSceneWorkSystem(System):
         if not cells:
             scene["response_status"] = "contained"
             return
-        workers = self._worker_ids(scene, ("response_worker",))
+        workers = self._worker_ids(scene, ("firefighter", "response_worker"))
         worker_eid = next((eid for eid in workers if self._actor_can_work(eid)), None)
         if worker_eid is None or not self._actor_work_authorized(scene, worker_eid):
             scene["response_status"] = "interrupted" if workers else "uncrewed"
@@ -7809,9 +7811,37 @@ class BusinessSceneWorkSystem(System):
         if (int(pos.x), int(pos.y), int(pos.z)) != work_tile:
             scene["response_status"] = "approaching"
             return
+        response_incident = incident_record(self.sim, scene.get("response_incident_id"))
+        if not isinstance(response_incident, dict):
+            candidates = [
+                incident
+                for incident in incident_records(self.sim)
+                if str(incident.get("kind", "") or "").strip().lower() == "structure_fire"
+                and str(incident.get("property_id", "") or "").strip() == property_id
+            ]
+            candidates.sort(
+                key=lambda row: (
+                    int(row.get("last_observed_tick", 0) or 0),
+                    int(row.get("id", 0) or 0),
+                ),
+                reverse=True,
+            )
+            if candidates:
+                response_incident = candidates[0]
+                scene["response_incident_id"] = response_incident.get("id")
         if int(self.sim.tick) < int(scene.get("response_next_work_tick", 0) or 0):
             scene["response_status"] = "suppressing"
             return
+        if isinstance(response_incident, dict):
+            assessment = assess_fire_response_scene(
+                self.sim,
+                response_incident.get("id"),
+                worker_eid,
+                x=pos.x,
+                y=pos.y,
+                z=pos.z,
+            )
+            scene["response_scene_assessed"] = bool(isinstance(assessment, dict))
 
         result = suppress_fire_cell(
             self.sim,

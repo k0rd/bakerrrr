@@ -2884,6 +2884,8 @@ class DroneState:
         procedure_last_result=None,
         procedure_last_reason=None,
         procedure_last_tick=None,
+        observation_context=None,
+        last_watch_report=None,
         source_item_id="packed_drone",
         source_item_instance_id=None,
         source_metadata=None,
@@ -2926,6 +2928,12 @@ class DroneState:
         self.procedure_last_result = str(procedure_last_result or "").strip().lower() or None
         self.procedure_last_reason = str(procedure_last_reason or "").strip().lower() or None
         self.procedure_last_tick = None if procedure_last_tick is None else int(procedure_last_tick)
+        # Live watch/search state belongs to the deployed actor.  Chunk and
+        # whole-simulation persistence pickle it normally, while repacking a
+        # drone deliberately ends the physical pursuit instead of hiding one
+        # inside an inventory item.
+        self.observation_context = dict(observation_context or {}) if isinstance(observation_context, dict) else None
+        self.last_watch_report = dict(last_watch_report or {}) if isinstance(last_watch_report, dict) else None
         self.source_item_id = str(source_item_id or "packed_drone").strip().lower() or "packed_drone"
         self.source_item_instance_id = str(source_item_instance_id or "").strip() or None
         self.source_metadata = dict(source_metadata or {})

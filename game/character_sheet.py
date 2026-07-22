@@ -25,6 +25,7 @@ from game.herbal_chemistry_runtime import (
     secondary_trait_labels,
 )
 from game.items import item_display_name
+from game.mechanical_device_runtime import known_mechanical_recipes_for_actor, load_mechanical_recipe_catalog
 from game.property_runtime import property_is_vehicle, vehicle_fuel_values, vehicle_label, vehicle_profile_from_property
 from game.run_pressure import pressure_snapshot
 from game.skill_ui import skill_birth_debug_line, skill_change_reason_label
@@ -168,13 +169,14 @@ def _sheet_source_label(value):
 
 def _known_recipe_lines(sim, player_eid):
     known_recipes = known_recipes_for_actor(sim, player_eid)
+    known_mechanical = known_mechanical_recipes_for_actor(sim, player_eid)
     known_traits = known_plant_traits_for_actor(sim, player_eid)
     catalog = load_herbal_recipe_catalog()
     flora_catalog = load_flora_catalog()
 
     lines = [
         "RECIPES",
-        f"Known recipes {len(known_recipes)} | Plant affinities {len(known_traits)}",
+        f"Known recipes {len(known_recipes) + len(known_mechanical)} | Plant affinities {len(known_traits)}",
         "",
         "HERBAL MEDICINE",
     ]
@@ -203,6 +205,22 @@ def _known_recipe_lines(sim, player_eid):
                 lines.append(f"{_sheet_title_label(recipe_id)}: recipe data missing | {source_kind}")
     else:
         lines.append("No herbal recipes learned yet.")
+
+    lines.extend(["", "MECHANICAL DEVICES"])
+    mechanical_catalog = load_mechanical_recipe_catalog()
+    if known_mechanical:
+        for recipe_id, knowledge in sorted(known_mechanical.items()):
+            recipe = mechanical_catalog.get(str(recipe_id or "").strip().lower(), {})
+            source_kind = _sheet_source_label((knowledge or {}).get("source_kind") if isinstance(knowledge, dict) else "learned")
+            name = _sheet_title_label(recipe.get("name") or recipe_id)
+            components = " + ".join(
+                f"{quantity} {item_display_name(item_id)}"
+                for item_id, quantity in dict(recipe.get("components", {}) or {}).items()
+            )
+            output = item_display_name(str(recipe.get("output_item_id") or recipe_id).strip().lower())
+            lines.append(f"{name}: {components} -> {output} | {source_kind}")
+    else:
+        lines.append("No mechanical plans studied yet.")
 
     lines.extend(["", "PLANT AFFINITIES"])
     if known_traits:

@@ -99,9 +99,11 @@ from game.system_support.player_feedback import _log_player_feedback
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
     ACTION_OFFENSE_CONTEXT_BONUS,
+    VIOLENT_OFFENSE_CONTEXTS,
     _offense_notice_radius,
     _offense_tier,
 )
+from game.bounty_authority import stamp_bounty_authority
 from game.system_support.status_runtime import (
     _npc_status_metric_args,
     _status_int_offset,
@@ -170,6 +172,13 @@ class WeaponSystem(System):
         }
         if isinstance(extra, dict):
             payload.update(extra)
+        if str(context or "").strip().lower() in VIOLENT_OFFENSE_CONTEXTS:
+            stamp_bounty_authority(
+                self.sim,
+                payload,
+                offender_eid=eid,
+                target_eid=payload.get("target_eid", payload.get("victim_eid")),
+            )
         if not any(
             key in payload
             for key in ("observer_eids", "accountable_observer_eids", "observation_channels", "witnessed", "witnesses")

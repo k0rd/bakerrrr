@@ -235,7 +235,11 @@ class NPCMemorySystem(System):
                 # recognize them faster and read their actions more harshly.
                 # Matching cover suppresses this longer; bad cover lets it cut through faster.
                 disguise = getattr(self.sim, "disguise_state", None)
-                disguise_strength = float(disguise.get("strength", 0.0)) if isinstance(disguise, dict) else 0.0
+                disguise_strength = (
+                    float(disguise_profile.get("strength", 0.0) or 0.0)
+                    if isinstance(disguise_profile, dict)
+                    else float(disguise.get("strength", 0.0)) if isinstance(disguise, dict) else 0.0
+                )
                 recognition = _npc_recognizes_player(memory, offender_eid)
                 recognition_floor = float(disguise_profile.get("recognition_floor", 0.35)) if disguise_profile else 0.35
                 if recognition > 0.0 and disguise_strength < recognition_floor:

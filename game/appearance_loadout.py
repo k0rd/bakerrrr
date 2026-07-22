@@ -29,6 +29,8 @@ from game.human_description import (
 from game.human_identity import pronoun_format_slots
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG, item_display_name, item_inventory_slot_cost
+from game.organization_production import organization_clothing_culture
+from game.organizations import primary_actor_membership
 
 
 APPEARANCE_METADATA_KEY = "appearance"
@@ -557,6 +559,13 @@ TATTOO_LOCATION_ROWS = (
 )
 NPC_DESCRIBED_OUTFIT_METADATA_KEY = "npc_described_outfit"
 NPC_DESCRIBED_OUTFIT_SOURCE = "seeded_description_outfit"
+EMPLOYER_CLOTHING_CULTURE_METADATA_KEY = "employer_clothing_culture"
+PERSONAL_CLOTHING_TOKEN_METADATA_KEY = "personal_clothing_token"
+PERSONAL_TOKEN_ITEMS = ("cap", "scarf", "bracelet", "ring", "necklace", "earrings")
+PERSONAL_TOKEN_MOTIFS = (
+    "bee", "broken chevron", "little eye", "little star", "moth",
+    "painted hand", "threaded ring", "tiny lightning bolt",
+)
 NPC_DESCRIPTION_ATTIRE_ITEMS = {
     "dark fitted coat": ("coat", "tee", "trousers", "boots"),
     "tailored jacket": ("blazer", "button_up", "trousers", "boots"),
@@ -1477,6 +1486,99 @@ def _description_color_for(profile, slot, rng, item_id="", role="", career=""):
     return color
 
 
+def employer_clothing_culture_for_actor(sim, eid):
+    """Return an actor's durable employer dress grammar and adoption read."""
+
+    if sim is None or eid is None:
+        return {}
+    occupation = sim.ecs.get(Occupation).get(eid)
+    workplace = getattr(occupation, "workplace", None) if occupation is not None else None
+    raw_org_eid = workplace.get("organization_eid") if isinstance(workplace, dict) else None
+    try:
+        organization_eid = int(raw_org_eid) if raw_org_eid is not None else None
+    except (TypeError, ValueError):
+        organization_eid = None
+    if organization_eid is None:
+        membership = primary_actor_membership(sim, eid)
+        if isinstance(membership, dict) and _key(membership.get("kind")) in {"employment", "ownership"}:
+            try:
+                organization_eid = int(membership.get("organization_eid"))
+            except (TypeError, ValueError):
+                organization_eid = None
+    if organization_eid is None:
+        return {}
+    culture = organization_clothing_culture(sim, organization_eid)
+    if not culture:
+        return {}
+    cohesion = max(0.0, min(1.0, float(culture.get("cohesion", 0.0) or 0.0)))
+    adoption_rng = random.Random(
+        f"employer-clothing-adoption:{getattr(sim, 'seed', 0)}:{eid}:{culture.get('signature', '')}"
+    )
+    result = dict(culture)
+    result["adopted"] = adoption_rng.random() <= cohesion
+    return result
+
+
+def _metadata_with_employer_clothing_culture(metadata, culture, *, slot, show_motif=False):
+    culture = dict(culture or {})
+    signature = _text(culture.get("signature"))
+    if not signature:
+        return dict(metadata or {})
+    row = {
+        "signature": signature,
+        "organization_eid": culture.get("organization_eid"),
+        "organization_name": _text(culture.get("organization_name")),
+        "family": _key(culture.get("family")),
+        "motif": _text(culture.get("motif")),
+        "slot": _key(slot),
+        "recognition_salience": round(max(0.0, min(1.0, float(culture.get("recognition_salience", 0.0) or 0.0))), 3),
+        "primary_color_word": _key(culture.get("primary_color_word")),
+        "secondary_color_word": _key(culture.get("secondary_color_word")),
+        "accent_color_word": _key(culture.get("accent_color_word")),
+    }
+    updated = dict(metadata or {})
+    nested = dict(updated.get(APPEARANCE_METADATA_KEY) or {})
+    updated[EMPLOYER_CLOTHING_CULTURE_METADATA_KEY] = row
+    nested[EMPLOYER_CLOTHING_CULTURE_METADATA_KEY] = row
+    if show_motif and row["motif"]:
+        # One actual garment carries the house mark.  Keeping it in the normal
+        # emblem channel makes the culture visible in item prose and pygame's
+        # existing clothing-detail pixels instead of only storing a matcher tag.
+        updated["emblem"] = row["motif"]
+        nested["emblem"] = row["motif"]
+    updated[APPEARANCE_METADATA_KEY] = nested
+    return updated
+
+
+def _metadata_with_personal_clothing_token(metadata, *, sim, eid, slot, item_id, motif, salience):
+    identity = sim.ecs.get(CreatureIdentity).get(eid) if sim is not None else None
+    owner_name = _text(getattr(identity, "personal_name", ""))
+    signature_rng = random.Random(
+        f"personal-clothing-token:{getattr(sim, 'seed', 0)}:{eid}:{slot}:{item_id}:{owner_name}"
+    )
+    row = {
+        "signature": f"personal-token:{eid}:{signature_rng.getrandbits(56):014x}",
+        "owner_eid": int(eid),
+        "owner_name": owner_name,
+        "usual": True,
+        "slot": _key(slot),
+        "item_id": _key(item_id),
+        "motif": _text(motif),
+        "salience": round(max(0.0, min(1.0, float(salience or 0.0))), 3),
+    }
+    updated = dict(metadata or {})
+    nested = dict(updated.get(APPEARANCE_METADATA_KEY) or {})
+    updated[PERSONAL_CLOTHING_TOKEN_METADATA_KEY] = row
+    updated["personal_token_owner_eid"] = int(eid)
+    nested[PERSONAL_CLOTHING_TOKEN_METADATA_KEY] = row
+    nested["personal_token_owner_eid"] = int(eid)
+    if motif:
+        updated["emblem"] = _text(motif)
+        nested["emblem"] = _text(motif)
+    updated[APPEARANCE_METADATA_KEY] = nested
+    return updated
+
+
 def _appearance_slot_for_item(item_id, loadout):
     slots = tuple(COSMETIC_ITEM_IDS.get(_key(item_id), {}).get("slots", ()) or ())
     if set(slots) == {"ring_left", "ring_right"}:
@@ -1543,7 +1645,26 @@ def seed_npc_described_outfit(sim, eid, *, seed_token=""):
     occupation = sim.ecs.get(Occupation).get(eid) if sim is not None else None
     role = _key(getattr(ai, "role", ""))
     career = _key(getattr(occupation, "career", ""))
+    employer_culture = employer_clothing_culture_for_actor(sim, eid)
+    culture_adopted = bool(employer_culture.get("adopted", False))
+    signature_slots = tuple(_key(slot) for slot in tuple(employer_culture.get("signature_slots", ()) or ()))
+
+    token_rng = random.Random(
+        f"npc-personal-clothing-token:{getattr(sim, 'seed', 0)}:{eid}:{seed_token}:{profile.get('seed_token')}"
+    )
+    personal_token_item_id = ""
+    personal_token_motif = ""
+    personal_token_salience = 0.0
+    if token_rng.random() < 0.38:
+        existing_tokens = [item_id for item_id in item_ids if _key(item_id) in PERSONAL_TOKEN_ITEMS]
+        personal_token_item_id = _key(token_rng.choice(existing_tokens or PERSONAL_TOKEN_ITEMS))
+        if personal_token_item_id not in item_ids:
+            item_ids.append(personal_token_item_id)
+        personal_token_motif = token_rng.choice(PERSONAL_TOKEN_MOTIFS)
+        personal_token_salience = round(token_rng.uniform(0.72, 0.98), 3)
+
     seeded = []
+    culture_piece_index = 0
     for item_id in item_ids:
         item_id = _key(item_id)
         item_def = ITEM_CATALOG.get(item_id)
@@ -1556,7 +1677,20 @@ def seed_npc_described_outfit(sim, eid, *, seed_token=""):
             continue
         if any(loadout.slots.get(conflict) for conflict in _slot_conflicts(slot)):
             continue
+        culture_slot = "accessory" if slot in {"hat", "earrings", "necklace", "bracelet", "ring_left", "ring_right"} else slot
+        carries_culture = bool(culture_adopted and culture_slot in signature_slots)
+        is_personal_token = bool(personal_token_item_id and item_id == personal_token_item_id)
         color = _description_color_for(profile, slot, rng, item_id=item_id, role=role, career=career)
+        if carries_culture:
+            culture_colors = (
+                _key(employer_culture.get("primary_color_word")),
+                _key(employer_culture.get("secondary_color_word")),
+                _key(employer_culture.get("accent_color_word")),
+            )
+            color = culture_colors[min(culture_piece_index, len(culture_colors) - 1)] or color
+            culture_piece_index += 1
+        elif is_personal_token and employer_culture:
+            color = _key(employer_culture.get("accent_color_word")) or color
         metadata = _description_item_metadata(
             item_id,
             color=color,
@@ -1565,6 +1699,23 @@ def seed_npc_described_outfit(sim, eid, *, seed_token=""):
             seed_token=f"{seed_token}:{eid}:{item_id}:{slot}",
             sim=sim,
         )
+        if carries_culture:
+            metadata = _metadata_with_employer_clothing_culture(
+                metadata,
+                employer_culture,
+                slot=slot,
+                show_motif=culture_piece_index == 1,
+            )
+        if is_personal_token:
+            metadata = _metadata_with_personal_clothing_token(
+                metadata,
+                sim=sim,
+                eid=eid,
+                slot=slot,
+                item_id=item_id,
+                motif=personal_token_motif,
+                salience=personal_token_salience,
+            )
         added, instance_id = inventory.add_item(
             item_id=item_id,
             quantity=1,
@@ -1591,6 +1742,8 @@ def seed_npc_described_outfit(sim, eid, *, seed_token=""):
             "item_name": item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG),
             "attire_compact": attire_key,
             "accessory_compact": accessory_key,
+            "employer_clothing_culture": bool(carries_culture),
+            "personal_clothing_token": bool(is_personal_token),
         })
     return tuple(seeded)
 

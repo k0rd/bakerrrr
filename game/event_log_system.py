@@ -504,6 +504,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("purposeful_search_started", self.on_purposeful_search_started)
         self.sim.events.subscribe("purposeful_search_reacquired", self.on_purposeful_search_reacquired)
         self.sim.events.subscribe("purposeful_search_abandoned", self.on_purposeful_search_abandoned)
+        self.sim.events.subscribe("justice_report_candidate_released", self.on_justice_report_candidate_released)
+        self.sim.events.subscribe("justice_report_candidate_questioned", self.on_justice_report_candidate_questioned)
+        self.sim.events.subscribe("justice_case_canvas_interviewed", self.on_justice_case_canvas_interviewed)
         self.sim.events.subscribe("npc_warn_property", self.on_npc_warn_property)
         self.sim.events.subscribe("npc_protect_ally", self.on_npc_protect_ally)
         self.sim.events.subscribe("npc_defend_property", self.on_npc_defend_property)
@@ -525,6 +528,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("item_drop_blocked", self.on_item_drop_blocked)
         self.sim.events.subscribe("item_used", self.on_item_used)
         self.sim.events.subscribe("item_use_blocked", self.on_item_use_blocked)
+        self.sim.events.subscribe("mechanical_device_discovered", self.on_mechanical_device_discovered)
+        self.sim.events.subscribe("mechanical_device_disarmed", self.on_mechanical_device_disarmed)
+        self.sim.events.subscribe("mechanical_device_misfired", self.on_mechanical_device_misfired)
         self.sim.events.subscribe("drone_deployed", self.on_drone_deployed)
         self.sim.events.subscribe("drone_picked_up", self.on_drone_picked_up)
         self.sim.events.subscribe("drone_moved", self.on_drone_moved)
@@ -537,6 +543,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("drone_weapon_blocked", self.on_drone_weapon_blocked)
         self.sim.events.subscribe("drone_procedure_ran", self.on_drone_procedure_ran)
         self.sim.events.subscribe("drone_procedure_blocked", self.on_drone_procedure_blocked)
+        self.sim.events.subscribe("drone_watch_acquired", self.on_drone_watch_acquired)
+        self.sim.events.subscribe("drone_watch_lost_contact", self.on_drone_watch_lost_contact)
+        self.sim.events.subscribe("drone_watch_abandoned", self.on_drone_watch_abandoned)
         self.sim.events.subscribe("drone_wire_link_disrupted", self.on_drone_wire_link_disrupted)
         self.sim.events.subscribe("drone_wire_link_restored", self.on_drone_wire_link_restored)
         self.sim.events.subscribe("drone_sheet_opened", self.on_drone_sheet_opened)
@@ -4017,7 +4026,19 @@ class EventLogSystem(System):
         observer_eid = event.data.get("observer_eid")
         subject_eid = event.data.get("subject_eid")
         observer = self._npc_label(observer_eid)
-        if subject_eid == self.player_eid:
+        purpose = str(event.data.get("purpose", "") or "").strip().lower()
+        anonymous_drone_contact = purpose.startswith("drone_") and not bool(event.data.get("identity_resolved", False))
+        if anonymous_drone_contact:
+            text = f"{observer} starts checking around its last sensor contact."
+        elif bool(event.data.get("received_report", False)):
+            casework_kind = str(event.data.get("casework_kind", "") or "").strip().lower()
+            if casework_kind == "wildlife_enforcement_canvas":
+                text = f"{observer} begins checking the area around the reported hunt."
+            elif casework_kind == "arson_investigation_canvas":
+                text = f"{observer} begins checking the area around the fire scene."
+            else:
+                text = f"{observer} begins checking the area around a reported sighting."
+        elif subject_eid == self.player_eid:
             text = f"{observer} starts checking the places around where they lost sight of you."
         else:
             subject = self._npc_label(subject_eid)
@@ -4035,8 +4056,25 @@ class EventLogSystem(System):
             return
         observer_eid = event.data.get("observer_eid")
         subject_eid = event.data.get("subject_eid")
+        original_subject_eid = event.data.get("original_subject_eid")
+        candidate_changed = bool(event.data.get("candidate_changed", False))
+        basis = str(event.data.get("reacquisition_basis", "") or "").strip().lower()
         observer = self._npc_label(observer_eid)
-        if subject_eid == self.player_eid:
+        purpose = str(event.data.get("purpose", "") or "").strip().lower()
+        anonymous_drone_contact = purpose.startswith("drone_") and not bool(event.data.get("identity_resolved", False))
+        if anonymous_drone_contact:
+            text = f"{observer} reacquires a sensor contact."
+        elif bool(event.data.get("received_report", False)) and subject_eid == self.player_eid:
+            text = f"{observer} turns toward you and closes the distance."
+        elif bool(event.data.get("received_report", False)):
+            text = f"{observer} turns toward {self._npc_label(subject_eid)} and closes the distance."
+        elif candidate_changed and original_subject_eid == self.player_eid:
+            text = f"{observer} picks someone matching your old look out of the crowd and follows them."
+        elif subject_eid == self.player_eid and basis == "appearance_match":
+            text = f"{observer} picks you out by your appearance and resumes the pursuit."
+        elif candidate_changed:
+            text = f"{observer} picks out someone matching the description and follows them."
+        elif subject_eid == self.player_eid:
             text = f"{observer} spots you again."
         else:
             text = f"{observer} catches sight of {self._npc_label(subject_eid)} again."
@@ -4054,7 +4092,13 @@ class EventLogSystem(System):
         observer_eid = event.data.get("observer_eid")
         subject_eid = event.data.get("subject_eid")
         observer = self._npc_label(observer_eid)
-        if subject_eid == self.player_eid:
+        purpose = str(event.data.get("purpose", "") or "").strip().lower()
+        anonymous_drone_contact = purpose.startswith("drone_") and not bool(event.data.get("identity_resolved", False))
+        if anonymous_drone_contact:
+            text = f"{observer} ends its local sensor search."
+        elif bool(event.data.get("received_report", False)):
+            text = f"{observer} stops searching and moves on."
+        elif subject_eid == self.player_eid:
             text = f"{observer} gives up the search."
         else:
             text = f"{observer} gives up searching for {self._npc_label(subject_eid)}."
@@ -4064,6 +4108,49 @@ class EventLogSystem(System):
             priority="normal",
             dedupe_window=10,
             dedupe_key=f"purposeful_search_abandoned:{observer_eid}:{subject_eid}",
+        )
+
+    def on_justice_report_candidate_released(self, event):
+        officer_eid = event.data.get("officer_eid")
+        candidate_eid = event.data.get("candidate_eid")
+        if candidate_eid != self.player_eid and not (
+            self._player_can_perceive_entity(officer_eid)
+            or self._player_can_perceive_entity(candidate_eid)
+        ):
+            return
+        officer = self._npc_label(officer_eid)
+        text = (
+            f"{officer} gives you another look, then turns back to the search."
+            if candidate_eid == self.player_eid
+            else f"{officer} gives {self._npc_label(candidate_eid)} another look, then turns away."
+        )
+        self._log(text, channel="alerts", priority="normal", dedupe_window=8, dedupe_key=f"justice_candidate_released:{officer_eid}:{candidate_eid}")
+
+    def on_justice_report_candidate_questioned(self, event):
+        officer_eid = event.data.get("officer_eid")
+        candidate_eid = event.data.get("candidate_eid")
+        if not (self._player_can_perceive_entity(officer_eid) or self._player_can_perceive_entity(candidate_eid)):
+            return
+        officer = self._npc_label(officer_eid)
+        subject = self._npc_label(candidate_eid)
+        text = f"{officer} questions {subject}."
+        if bool(event.data.get("detained", False)):
+            text = f"{officer} questions {subject}, then takes them into custody."
+        self._log(text, channel="alerts", priority="high" if event.data.get("detained") else "normal", dedupe_window=8, dedupe_key=f"justice_candidate_questioned:{officer_eid}:{candidate_eid}")
+
+    def on_justice_case_canvas_interviewed(self, event):
+        investigator_eid = event.data.get("investigator_eid")
+        actor_eid = event.data.get("actor_eid")
+        if actor_eid == self.player_eid:
+            return
+        if not (self._player_can_perceive_entity(investigator_eid) or self._player_can_perceive_entity(actor_eid)):
+            return
+        self._log(
+            f"{self._npc_label(investigator_eid)} stops to question {self._npc_label(actor_eid)}.",
+            channel="alerts",
+            priority="normal",
+            dedupe_window=8,
+            dedupe_key=f"justice_canvas:{investigator_eid}:{actor_eid}",
         )
 
     def on_npc_protect_ally(self, event):
@@ -4911,6 +4998,26 @@ class EventLogSystem(System):
         if procedure == "hold" and action == "hold":
             return
 
+    def on_drone_watch_acquired(self, event):
+        if (event.data.get("eid") or event.data.get("controller_eid")) != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        sensor = str(event.data.get("sensor_kind", "sensor") or "sensor").strip().upper()
+        contact = "the watched person" if bool(event.data.get("identity_resolved")) else "an unidentified contact"
+        _log_player_feedback(self.sim, f"{drone_label} acquires {contact} on {sensor}.", kind="interaction")
+
+    def on_drone_watch_lost_contact(self, event):
+        if (event.data.get("eid") or event.data.get("controller_eid")) != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        _log_player_feedback(self.sim, f"{drone_label} loses contact and moves on the last seen position.", kind="interaction")
+
+    def on_drone_watch_abandoned(self, event):
+        if (event.data.get("eid") or event.data.get("controller_eid")) != self.player_eid:
+            return
+        drone_label = self._event_drone_label(event)
+        _log_player_feedback(self.sim, f"{drone_label} exhausts its local search.", kind="interaction")
+
     def on_drone_procedure_blocked(self, event):
         eid = event.data.get("eid") or event.data.get("controller_eid")
         if eid != self.player_eid:
@@ -4930,6 +5037,9 @@ class EventLogSystem(System):
             "missing_mapping": f"{drone_label} needs a mapping procedure module.",
             "no_mapping_procedure": f"{drone_label} needs a mapping procedure module.",
             "no_camera": f"{drone_label} needs a camera or sensor for {procedure_label}.",
+            "no_identity_sensor": f"{drone_label} needs a camera to identify the person assigned to {procedure_label}.",
+            "no_watch_sensor": f"{drone_label} needs a camera, radar, or IR sensor for {procedure_label}.",
+            "sensor_suppressed": f"{drone_label}'s sensors are suppressed.",
             "no_radio": f"{drone_label} needs radio/comms to send autonomous mapping.",
             "battery_depleted": f"{drone_label}'s battery is depleted.",
             "no_range_anchor": f"{drone_label} has no range anchor.",
@@ -5378,6 +5488,33 @@ class EventLogSystem(System):
         else:
             _log_player_feedback(self.sim, f"You cannot drop {item_name} right now.", kind="interaction")
 
+    def on_mechanical_device_discovered(self, event):
+        item_name = str(event.data.get("item_name", "field device") or "field device").strip()
+        x = _int_or_default(event.data.get("x"), 0)
+        y = _int_or_default(event.data.get("y"), 0)
+        if event.data.get("npc_eid") == self.player_eid:
+            _log_player_feedback(self.sim, f"You spot {item_name} at {x},{y}.", kind="interaction")
+            return
+        if event.data.get("controller_eid") == self.player_eid:
+            sensor = str(event.data.get("sensor_kind", "sensor") or "sensor").strip().upper()
+            _log_player_feedback(self.sim, f"{sensor} marks {item_name} at {x},{y}.", kind="drone")
+
+    def on_mechanical_device_disarmed(self, event):
+        owner_eid = event.data.get("owner_eid")
+        if owner_eid != self.player_eid or not self._player_can_perceive_event_position(event):
+            return
+        actor = self._npc_label(event.data.get("npc_eid"))
+        item_name = str(event.data.get("item_name", "your field device") or "your field device").strip()
+        self._log_npc_message(event.data.get("npc_eid"), f"{actor} disarms {item_name}.", channel="general")
+
+    def on_mechanical_device_misfired(self, event):
+        prop = self.sim.properties.get(event.data.get("property_id"))
+        metadata = prop.get("metadata") if isinstance(prop, dict) and isinstance(prop.get("metadata"), dict) else {}
+        if metadata.get("armed_by_eid") != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", "Your field device") or "Your field device").strip()
+        _log_player_feedback(self.sim, f"{item_name} misfires and goes inert.", kind="interaction")
+
     def on_item_used(self, event):
         eid = event.data.get("eid")
         item_name = event.data.get("item_name", event.data.get("item_id", "item"))
@@ -5387,6 +5524,17 @@ class EventLogSystem(System):
             if reason == "place_trap":
                 return
             usage_kind = str(event.data.get("usage_kind", "") or "").strip().lower()
+            if usage_kind == "mechanical_craft":
+                return
+            if usage_kind == "mechanical_device":
+                action = str(event.data.get("reason", "") or "").strip().lower()
+                if action == "mechanical_placed":
+                    x = _int_or_default(event.data.get("x"), 0)
+                    y = _int_or_default(event.data.get("y"), 0)
+                    _log_player_feedback(self.sim, f"You set {item_name} at {x},{y}.", kind="craft")
+                elif action == "mechanical_triggered":
+                    _log_player_feedback(self.sim, f"You trigger {item_name}.", kind="interaction")
+                return
             if usage_kind == "throw":
                 target_x = event.data.get("target_x")
                 target_y = event.data.get("target_y")
@@ -5721,6 +5869,27 @@ class EventLogSystem(System):
                 _log_player_feedback(self.sim, "Clear the loose item here before setting a trap.", kind="interaction")
             else:
                 _log_player_feedback(self.sim, f"{item_name} will not arm here.", kind="interaction")
+        elif str(reason or "").startswith("mechanical_"):
+            device_reason = str(reason or "").removeprefix("mechanical_")
+            messages = {
+                "no_mechanical_tool": f"{item_name} needs a usable pocket multitool or prybar.",
+                "missing_components": f"You do not have all of the parts listed by {item_name}.",
+                "craft_in_progress": "Finish the work already occupying your hands first.",
+                "missing_position": "You cannot settle into the work here.",
+                "plan_missing": "The plan is no longer at hand.",
+                "work_surface_required": f"{item_name} needs an authorized repair bench or service bay.",
+                "component_remove_failed": "Those components shifted before you could finish the build.",
+                "inventory_full": "Your backpack needs room for the finished device.",
+                "blocked_tile": f"{item_name} needs open floor.",
+                "device_present": "There is already an armed field device here.",
+                "ground_item_present": "Clear the loose item here before setting the device.",
+                "remote_payload_missing": f"{item_name} needs a carried smoke, aerosol, or incendiary payload.",
+                "remote_payload_remove_failed": "The selected payload shifted before the receiver could be armed.",
+                "remote_link_lost": f"{item_name} no longer has a live receiver.",
+                "remote_out_of_range": f"{item_name}'s receiver is out of range.",
+                "remote_payload_failed": f"{item_name}'s receiver does not answer cleanly.",
+            }
+            _log_player_feedback(self.sim, messages.get(device_reason, f"{item_name} will not work here."), kind="interaction")
         elif reason == "appearance_pack_full":
             _log_player_feedback(self.sim, f"Your pack is too full to stow {item_name}.", kind="interaction")
         elif reason == "appearance_armor_outer_active":

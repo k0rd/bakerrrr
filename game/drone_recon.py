@@ -26,6 +26,7 @@ DRONE_SENSOR_DEFAULT_RANGES = {
 }
 DRONE_LINKED_SENSOR_PRIORITY = ("camera", "radar", "lidar", "sonar", "ir")
 DRONE_MAPPING_SENSOR_PRIORITY = ("radar", "lidar", "sonar", "camera")
+DRONE_THREAT_SENSOR_PRIORITY = ("radar", "ir", "camera")
 
 
 def _int(value, default=0):
@@ -169,6 +170,9 @@ def _select_sensor_mode(state, *, item_catalog=None, preferred=None, purpose="li
     if purpose == "mapping":
         priority = DRONE_MAPPING_SENSOR_PRIORITY
         candidates = [mode for mode in modes if bool(mode.get("mapping"))]
+    elif purpose == "threat":
+        priority = DRONE_THREAT_SENSOR_PRIORITY
+        candidates = [mode for mode in modes if bool(mode.get("threat")) or bool(mode.get("visual_identity"))]
     elif purpose == "visual":
         priority = ("camera",)
         candidates = [mode for mode in modes if bool(mode.get("visual_identity"))]
@@ -432,6 +436,73 @@ def linked_camera_status(sim, controller_eid, drone_eid, *, radius=DRONE_LINKED_
     if status.get("reason") == "no_linked_sensor":
         status["reason"] = "no_camera"
     return status
+
+
+def autonomous_sensor_status(sim, drone_eid, *, purpose="threat", preferred_sensor=None, item_catalog=None):
+    """Read one onboard sensor without pretending an external link is required.
+
+    Sensor suppression, power, deployment, and the physical operating range
+    remain real gates.  Link disruption is deliberately absent: an autonomous
+    routine may keep watching while its owner is unable to command it or
+    receive a report.
+    """
+
+    state = _deployed_drone_state(sim, drone_eid)
+    if state is None:
+        return {"ok": False, "reason": "not_deployed", "visible": set(), "radius": 0}
+    pos = sim.ecs.get(Position).get(drone_eid)
+    if pos is None:
+        return {"ok": False, "reason": "missing_position", "state": state, "visible": set(), "radius": 0}
+    suppression = drone_sensor_suppression_status(state, tick=int(getattr(sim, "tick", 0) or 0))
+    if suppression.get("active"):
+        return {
+            "ok": False,
+            "reason": "sensor_suppressed",
+            "state": state,
+            "position": pos,
+            "visible": set(),
+            "radius": 0,
+            "remaining": int(suppression.get("remaining", 0)),
+        }
+    purpose_key = str(purpose or "threat").strip().lower() or "threat"
+    if purpose_key not in {"threat", "visual", "mapping", "linked"}:
+        purpose_key = "threat"
+    mode = _select_sensor_mode(
+        state,
+        item_catalog=item_catalog,
+        preferred=preferred_sensor,
+        purpose=purpose_key,
+    )
+    if mode is None:
+        reason = "no_identity_sensor" if purpose_key == "visual" else "no_watch_sensor"
+        return {"ok": False, "reason": reason, "state": state, "position": pos, "visible": set(), "radius": 0}
+    if int(getattr(state, "battery_charge", 0) or 0) <= 0:
+        return {"ok": False, "reason": "battery_depleted", "state": state, "position": pos, "visible": set(), "radius": int(mode.get("range", 0) or 0), "sensor_mode": mode}
+    anchor = _range_anchor(sim, state)
+    if anchor is None:
+        return {"ok": False, "reason": "no_range_anchor", "state": state, "position": pos, "visible": set(), "radius": int(mode.get("range", 0) or 0), "sensor_mode": mode}
+    range_limit = int(max(0, getattr(state, "range_limit", 0) or 0))
+    if range_limit <= 0:
+        return {"ok": False, "reason": "no_range", "state": state, "position": pos, "visible": set(), "radius": int(mode.get("range", 0) or 0), "sensor_mode": mode}
+    if int(anchor[2]) != int(pos.z) or abs(int(pos.x) - int(anchor[0])) + abs(int(pos.y) - int(anchor[1])) > range_limit:
+        return {"ok": False, "reason": "out_of_range", "state": state, "position": pos, "visible": set(), "radius": int(mode.get("range", 0) or 0), "sensor_mode": mode}
+
+    visible = _sensor_visible_positions(sim, drone_eid, pos, mode)
+    return {
+        "ok": True,
+        "reason": None,
+        "state": state,
+        "position": pos,
+        "visible": visible,
+        "radius": int(max(1, _int(mode.get("range"), DRONE_LINKED_CAMERA_RADIUS))),
+        "sensor_kind": str(mode.get("sensor_kind", "") or "").strip().lower(),
+        "sensor_label": str(mode.get("label", "") or mode.get("sensor_kind", "") or "sensor").strip().lower(),
+        "sensor_mode": dict(mode),
+        "contacts": _ir_contacts(sim, drone_eid, pos, mode, visible),
+        "capabilities": drone_state_capabilities(state, item_catalog=item_catalog),
+        "visual_identity": bool(mode.get("visual_identity")),
+        "threat": bool(mode.get("threat")),
+    }
 
 
 def clear_linked_camera_view(sim):

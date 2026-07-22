@@ -498,6 +498,38 @@ def drone_sheet_status_lines(record, *, item_catalog=None):
         supply = str(source_metadata.get("supply_agreement_id", "") or "").strip()
         supply_suffix = f" | supply mark {supply}" if supply else ""
         lines.append(f"Maker: {manufacturer} | {design}{supply_suffix}")
+    observation = getattr(state, "observation_context", None)
+    if isinstance(observation, dict):
+        position = observation.get("last_seen_position")
+        position_text = (
+            f"{int(position[0])},{int(position[1])},{int(position[2])}"
+            if isinstance(position, (tuple, list)) and len(position) >= 3
+            else "unknown"
+        )
+        search = observation.get("search_state") if isinstance(observation.get("search_state"), dict) else {}
+        if observation.get("active") is False:
+            phase = "ended"
+        elif search.get("active") is True:
+            phase = "searching"
+        elif observation.get("lost_contact_since_tick") is not None:
+            phase = "last seen"
+        else:
+            phase = "tracking"
+        sensor = str(observation.get("sensor_label") or observation.get("sensor_kind") or "sensor").strip()
+        contact = "identified person" if bool(observation.get("identity_resolved")) else "unidentified contact"
+        lines.append(f"Watch: {phase} {contact} via {sensor} | last contact {position_text}")
+    report = getattr(state, "last_watch_report", None)
+    if isinstance(report, dict):
+        report_position = report.get("position")
+        position_text = (
+            f"{int(report_position[0])},{int(report_position[1])},{int(report_position[2])}"
+            if isinstance(report_position, (tuple, list)) and len(report_position) >= 3
+            else "unknown"
+        )
+        lines.append(
+            f"Radio: last {str(report.get('phase', 'contact')).replace('_', ' ')} report at {position_text} "
+            f"({str(report.get('sensor_kind', 'sensor'))})"
+        )
     if errors:
         lines.append(f"Loadout errors: {errors}")
     return lines

@@ -102,8 +102,10 @@ from game.npc_emergency_runtime import (
     npc_emergency_active,
     npc_emergency_state,
 )
+from game.justice_identity_runtime import justice_case_for_incident
 from game.place_mood_runtime import strongest_rumor_weather_anchor
 from game.purposeful_observation import (
+    activate_purposeful_report_search,
     advance_purposeful_actor_observation,
     advance_purposeful_anchor_observation,
     begin_purposeful_anchor_observation,
@@ -6356,6 +6358,178 @@ class NPCInvestigateSystem(System):
         ))
         return True
 
+    def _report_search_canvas_candidate(self, eid, pos, context):
+        if not bool((context or {}).get("canvas_enabled", False)):
+            return None
+        limit = max(0, int((context or {}).get("canvas_limit", 0) or 0))
+        canvassed = {
+            int(value)
+            for value in tuple((context or {}).get("canvassed_eids", ()) or ())
+            if str(value).lstrip("-").isdigit()
+        }
+        if limit <= 0 or len(canvassed) >= limit:
+            return None
+        identities = self.sim.ecs.get(CreatureIdentity)
+        positions = self.sim.ecs.get(Position)
+        vitalities = self.sim.ecs.get(Vitality)
+        ranked = []
+        for actor_eid in self.sim.entity_ids_in_radius(pos.x, pos.y, pos.z, 2):
+            if actor_eid == eid or actor_eid in canvassed:
+                continue
+            actor_pos = positions.get(actor_eid)
+            identity = identities.get(actor_eid)
+            vitality = vitalities.get(actor_eid)
+            if actor_pos is None or int(actor_pos.z) != int(pos.z):
+                continue
+            if identity is not None and str(getattr(identity, "creature_type", "") or "").strip().lower() != "human":
+                continue
+            if identity is None and actor_eid != getattr(self.sim, "player_eid", None):
+                continue
+            if vitality is not None and (bool(getattr(vitality, "downed", False)) or int(getattr(vitality, "hp", 1) or 0) <= 0):
+                continue
+            distance = _manhattan(pos.x, pos.y, actor_pos.x, actor_pos.y)
+            if distance <= 0 or distance > 1:
+                continue
+            if not _has_line_of_sight(self.sim, pos.x, pos.y, pos.z, actor_pos.x, actor_pos.y, actor_pos.z):
+                continue
+            ranked.append((0 if actor_eid == getattr(self.sim, "player_eid", None) else 1, distance, int(actor_eid)))
+        return min(ranked)[2] if ranked else None
+
+    def _finish_received_report_search(self, eid, ai, pos, context, *, will=None, reason):
+        ai.investigation_context = finish_purposeful_observation(
+            context,
+            current_tick=self.sim.tick,
+            reason=reason,
+        )
+        ai.state = "idle"
+        ai.target = None
+        ai.target_eid = None
+        if will is not None:
+            will.intent = "idle"
+            will.target = None
+            will.target_eid = None
+            will.last_tick = int(self.sim.tick)
+        self.sim.emit(Event(
+            "npc_investigation_complete",
+            npc_eid=eid,
+            incident_id=context.get("incident_id") if isinstance(context, dict) else None,
+            purpose="justice_report_search",
+            reason=reason,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        ))
+        return True
+
+    def _advance_received_report_search(self, eid, ai, pos, *, will=None):
+        context = getattr(ai, "investigation_context", None)
+        if not is_purposeful_observation(context, purpose="justice_report_search", active_only=True):
+            return False
+        case = justice_case_for_incident(self.sim, context.get("incident_id"))
+        if not isinstance(case, dict):
+            return self._finish_received_report_search(
+                eid,
+                ai,
+                pos,
+                context,
+                will=will,
+                reason="invalid_report",
+            )
+        if str(case.get("status", "") or "").strip().lower() != "unresolved":
+            return self._finish_received_report_search(
+                eid,
+                ai,
+                pos,
+                context,
+                will=will,
+                reason="case_resolved",
+            )
+        search = context.get("search_state") if isinstance(context, dict) else {}
+        phase = str(search.get("phase", "") or "").strip().lower()
+        current = (int(pos.x), int(pos.y), int(pos.z))
+        if phase == "approach_report":
+            approach = tuple(context.get("approach_position", ()) or ())
+            if len(approach) != 3 or current != tuple(int(value) for value in approach):
+                return False
+            context, status, target = activate_purposeful_report_search(
+                self.sim,
+                context,
+                current_tick=self.sim.tick,
+            )
+        elif bool(context.get("contact_pending", False)) or bool(context.get("canvas_contact_pending", False)):
+            return True
+        else:
+            subject_eid = context.get("subject_eid")
+            context, status, target = advance_purposeful_actor_observation(
+                self.sim,
+                eid,
+                subject_eid,
+                purpose="justice_report_search",
+                existing=context,
+                include_subject_account=False,
+            )
+        ai.investigation_context = context
+
+        candidate_eid = context.get("subject_eid") if isinstance(context, dict) else None
+        try:
+            candidate_eid = int(candidate_eid) if candidate_eid is not None else None
+        except (TypeError, ValueError):
+            candidate_eid = None
+        candidate_pos = self.sim.ecs.get(Position).get(candidate_eid) if candidate_eid is not None else None
+        if status in {"visible", "visible_unrefreshed"} and candidate_pos is not None:
+            distance = _manhattan(pos.x, pos.y, candidate_pos.x, candidate_pos.y)
+            if int(candidate_pos.z) == int(pos.z) and distance <= 1:
+                updated = dict(context)
+                updated["contact_pending"] = True
+                ai.investigation_context = updated
+                self.sim.emit(Event(
+                    "justice_report_candidate_contact",
+                    incident_id=updated.get("incident_id"),
+                    officer_eid=eid,
+                    candidate_eid=candidate_eid,
+                    x=int(pos.x),
+                    y=int(pos.y),
+                    z=int(pos.z),
+                ))
+                return True
+
+        if status == "searching":
+            canvas_eid = self._report_search_canvas_candidate(eid, pos, context)
+            if canvas_eid is not None:
+                updated = dict(context)
+                updated["canvas_contact_pending"] = True
+                ai.investigation_context = updated
+                self.sim.emit(Event(
+                    "justice_case_canvas_contact",
+                    incident_id=updated.get("incident_id"),
+                    investigator_eid=eid,
+                    actor_eid=canvas_eid,
+                    x=int(pos.x),
+                    y=int(pos.y),
+                    z=int(pos.z),
+                ))
+                return True
+
+        if target is not None:
+            ai.target = tuple(target)
+            ai.target_eid = None
+            if will is not None:
+                will.intent = "investigating"
+                will.target = tuple(target)
+                will.target_eid = None
+                will.last_tick = int(self.sim.tick)
+        if status not in {"abandoned", "invalid"}:
+            return False
+
+        return self._finish_received_report_search(
+            eid,
+            ai,
+            pos,
+            context,
+            will=will,
+            reason="search_abandoned" if status == "abandoned" else "invalid_report",
+        )
+
     def update(self):
         ais = self.sim.ecs.get(AI)
         positions = self.sim.ecs.get(Position)
@@ -6474,6 +6648,14 @@ class NPCInvestigateSystem(System):
                 getattr(ai, "investigation_context", None)
             ) == "visible_sneak":
                 if self._advance_visible_sneak_search(eid, ai, pos, will=wills.get(eid)):
+                    if live_timeskip_active:
+                        self._unschedule_move_due(eid)
+                    continue
+
+            if ai.state == "investigating" and observation_context_purpose(
+                getattr(ai, "investigation_context", None)
+            ) == "justice_report_search":
+                if self._advance_received_report_search(eid, ai, pos, will=wills.get(eid)):
                     if live_timeskip_active:
                         self._unschedule_move_due(eid)
                     continue

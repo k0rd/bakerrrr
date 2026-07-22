@@ -219,6 +219,12 @@ def _worn_appearance_rows(sim, eid):
         if not profile:
             continue
         seen.add(instance_id)
+        metadata = dict(entry.get("metadata") or {})
+        nested = metadata.get("appearance") if isinstance(metadata.get("appearance"), dict) else {}
+        culture = metadata.get("employer_clothing_culture", nested.get("employer_clothing_culture"))
+        token = metadata.get("personal_clothing_token", nested.get("personal_clothing_token"))
+        culture = culture if isinstance(culture, dict) else {}
+        token = token if isinstance(token, dict) else {}
         rows.append({
             "slot": slot,
             "item_id": _text(entry.get("item_id")),
@@ -228,6 +234,12 @@ def _worn_appearance_rows(sim, eid):
             "style": _text(profile.get("style")).lower(),
             "pattern": _text(profile.get("pattern")).lower(),
             "emblem": _text(profile.get("emblem")).lower(),
+            "employer_culture_signature": _text(culture.get("signature")),
+            "employer_culture_motif": _text(culture.get("motif")).lower(),
+            "employer_culture_salience": round(max(0.0, min(1.0, float(culture.get("recognition_salience", 0.0) or 0.0))), 3),
+            "personal_token_signature": _text(token.get("signature")),
+            "personal_token_motif": _text(token.get("motif")).lower(),
+            "personal_token_salience": round(max(0.0, min(1.0, float(token.get("salience", 0.0) or 0.0))), 3),
         })
 
     occupied = {str(row.get("slot", "")) for row in rows}
@@ -312,6 +324,15 @@ def _perceived_color_fields(value, *, quality=1.0):
 def _perceived_worn_row(row, *, quality=1.0):
     perceived = dict(row or {})
     perceived.update(_perceived_color_fields(perceived.get("color"), quality=quality))
+    quality = max(0.0, min(1.0, float(quality or 0.0)))
+    token_salience = max(0.0, min(1.0, float(perceived.get("personal_token_salience", 0.0) or 0.0)))
+    culture_salience = max(0.0, min(1.0, float(perceived.get("employer_culture_salience", 0.0) or 0.0)))
+    if quality < max(0.34, 0.67 - (token_salience * 0.38)):
+        perceived["personal_token_signature"] = ""
+        perceived["personal_token_motif"] = ""
+    if quality < max(0.42, 0.72 - (culture_salience * 0.34)):
+        perceived["employer_culture_signature"] = ""
+        perceived["employer_culture_motif"] = ""
     return perceived
 
 
@@ -360,6 +381,9 @@ def visible_actor_description(sim, eid, *, quality=1.0):
                 "color_precision": row.get("color_precision", ""),
                 "color_family": row.get("color_family", ""),
                 "color_tone": row.get("color_tone", ""),
+                "personal_token_signature": row.get("personal_token_signature", ""),
+                "personal_token_motif": row.get("personal_token_motif", ""),
+                "personal_token_salience": row.get("personal_token_salience", 0.0),
             }
             for row in worn_rows[:2]
         ]
@@ -373,6 +397,14 @@ def visible_actor_description(sim, eid, *, quality=1.0):
                 "color_family": row.get("color_family", ""),
                 "color_tone": row.get("color_tone", ""),
                 "style": row.get("style", ""),
+                "emblem": row.get("emblem", ""),
+                "pattern": row.get("pattern", ""),
+                "employer_culture_signature": row.get("employer_culture_signature", ""),
+                "employer_culture_motif": row.get("employer_culture_motif", ""),
+                "employer_culture_salience": row.get("employer_culture_salience", 0.0),
+                "personal_token_signature": row.get("personal_token_signature", ""),
+                "personal_token_motif": row.get("personal_token_motif", ""),
+                "personal_token_salience": row.get("personal_token_salience", 0.0),
             }
             for row in worn_rows[:4]
         ]
@@ -704,6 +736,22 @@ def description_match_score(description, current_description):
             compare(f"{slot} color", row.get("color"), actual.get("color"), 0.045)
         compare(f"{slot} garment", row.get("label"), actual.get("label"), 0.035)
         compare(f"{slot} style", row.get("style"), actual.get("style"), 0.02)
+        compare(f"{slot} pattern", row.get("pattern"), actual.get("pattern"), 0.025)
+        compare(f"{slot} emblem", row.get("emblem"), actual.get("emblem"), 0.035)
+        token_weight = 0.12 + (0.1 * max(0.0, min(1.0, float(row.get("personal_token_salience", 0.0) or 0.0))))
+        culture_weight = 0.055 + (0.055 * max(0.0, min(1.0, float(row.get("employer_culture_salience", 0.0) or 0.0))))
+        compare(
+            f"{slot} personal token",
+            row.get("personal_token_signature"),
+            actual.get("personal_token_signature"),
+            token_weight,
+        )
+        compare(
+            f"{slot} employer colors",
+            row.get("employer_culture_signature"),
+            actual.get("employer_culture_signature"),
+            culture_weight,
+        )
 
     wanted_marks = {
         (_description_value(row.get("slot")), _description_value(row.get("kind")), _description_value(row.get("description")))
@@ -739,6 +787,55 @@ def description_match_score(description, current_description):
         "plausible": plausible,
         "matched_cues": tuple(dict.fromkeys(matched)),
         "conflicting_cues": tuple(dict.fromkeys(conflicted)),
+    }
+
+
+def subject_account_conflict_read(left, right):
+    """Describe material disagreement between two independently sourced accounts.
+
+    This deliberately does not merge the accounts or decide which witness is
+    right.  It gives casework a durable reason to keep an identification open
+    when named identities or sufficiently detailed appearances disagree.
+    """
+
+    first = left if isinstance(left, dict) else {}
+    second = right if isinstance(right, dict) else {}
+    first_identification = _text(first.get("identification")).lower()
+    second_identification = _text(second.get("identification")).lower()
+    identity_kinds = {"reported", "recognized", "verified"}
+    first_subject = first.get("suspect_eid")
+    second_subject = second.get("suspect_eid")
+    try:
+        first_subject = int(first_subject) if first_subject is not None else None
+    except (TypeError, ValueError):
+        first_subject = None
+    try:
+        second_subject = int(second_subject) if second_subject is not None else None
+    except (TypeError, ValueError):
+        second_subject = None
+
+    identity_conflict = bool(
+        first_identification in identity_kinds
+        and second_identification in identity_kinds
+        and first_subject is not None
+        and second_subject is not None
+        and first_subject != second_subject
+    )
+    match = description_match_score(first.get("description"), second.get("description"))
+    evidence_weight = float(match.get("evidence_weight", 0.0) or 0.0)
+    score = float(match.get("score", 0.0) or 0.0)
+    appearance_conflict = bool(evidence_weight >= 0.32 and score < 0.48)
+    conflicting_cues = list(tuple(match.get("conflicting_cues", ()) or ()))
+    if identity_conflict:
+        conflicting_cues.insert(0, "named identity")
+    return {
+        "conflicted": bool(identity_conflict or appearance_conflict),
+        "identity_conflict": identity_conflict,
+        "appearance_conflict": appearance_conflict,
+        "score": round(score, 3),
+        "evidence_weight": round(evidence_weight, 3),
+        "matched_cues": tuple(match.get("matched_cues", ()) or ()),
+        "conflicting_cues": tuple(dict.fromkeys(conflicting_cues)),
     }
 
 
@@ -800,6 +897,7 @@ __all__ = [
     "preferred_subject_account",
     "remember_presented_identity",
     "subject_account_rank",
+    "subject_account_conflict_read",
     "subject_description_summary",
     "transmitted_subject_account",
     "viewer_personally_knows_identity",

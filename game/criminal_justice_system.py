@@ -118,7 +118,7 @@ from game.criminal_justice_runtime import (
     _justice_wanted_tier_for,
 )
 from game.justice_identity_runtime import (
-    PROVISIONAL_MAX_SCENE_DISTANCE,
+    independent_supporting_reporter_eids,
     justice_case_for_incident,
     justice_case_recently_checked,
     justice_case_event_payload,
@@ -132,10 +132,11 @@ from game.justice_identity_runtime import (
 from game.identity_evidence import (
     actor_identity_snapshot,
     build_witness_subject_account,
-    description_match_for_actor,
+    description_match_score,
     preferred_subject_account,
     remember_presented_identity,
     subject_description_summary,
+    transmitted_subject_account,
 )
 from game.justice_runtime import jurisdiction_for_position
 from game.system_support.entity_naming import _entity_display_name
@@ -257,6 +258,8 @@ from game.justice_force_runtime import (
     force_payload,
     mitigated_force_severity,
 )
+from game.bounty_authority import bounty_action_authority, bounty_authority_from_stamped_data
+from game.civic_records import record_civic_license_misuse
 from game.purposeful_observation import (
     advance_purposeful_actor_observation,
     begin_purposeful_anchor_observation,
@@ -264,6 +267,8 @@ from game.purposeful_observation import (
     is_purposeful_observation,
     observation_purpose_profile,
     observation_watch_position,
+    record_purposeful_canvas_contact,
+    reject_purposeful_candidate,
     refresh_purposeful_observation,
 )
 from game.vision_scene_runtime import event_is_vision_only
@@ -293,6 +298,7 @@ class CriminalJusticeSystem(System):
     SURRENDER_DIALOG_KIND = "justice_surrender"
     QUESTIONING_DIALOG_KIND = "justice_questioning"
     IDENTITY_CHECK_DIALOG_KIND = "justice_identity_check"
+    CASE_CANVAS_DIALOG_KIND = "justice_case_canvas"
     BOOKING_ARCHETYPES = ("jail", "courthouse")
     JUSTICE_DEBT_KEY = "justice_fines"
     EVIDENCE_SURCHARGE_PER_ITEM = 35
@@ -361,6 +367,9 @@ class CriminalJusticeSystem(System):
         self.sim.events.subscribe("justice_surrender_choice", self.on_justice_surrender_choice)
         self.sim.events.subscribe("justice_questioning_choice", self.on_justice_questioning_choice)
         self.sim.events.subscribe("justice_identity_check_choice", self.on_justice_identity_check_choice)
+        self.sim.events.subscribe("justice_case_canvas_choice", self.on_justice_case_canvas_choice)
+        self.sim.events.subscribe("justice_report_candidate_contact", self.on_justice_report_candidate_contact)
+        self.sim.events.subscribe("justice_case_canvas_contact", self.on_justice_case_canvas_contact)
 
     def _emit_change_events(self, change, *, source_event="", reason=""):
         if not isinstance(change, dict):
@@ -854,6 +863,26 @@ class CriminalJusticeSystem(System):
         payload["tick"] = int(getattr(self.sim, "tick", 0))
         force_state[str(offender_eid)] = payload
 
+    def _record_bounty_misuse_review(self, offender_eid, force_read, *, data=None, factual_offender_eid=None):
+        if offender_eid is None or not isinstance(force_read, dict):
+            return None
+        if not bool(force_read.get("bounty_credential_misuse")):
+            return None
+        if factual_offender_eid is not None and not self._same_eid_value(offender_eid, factual_offender_eid):
+            # A mistaken identity case can carry the assault allegation, but it
+            # must not silently edit another person's identity-bound license.
+            return None
+        data = data if isinstance(data, dict) else {}
+        return record_civic_license_misuse(
+            self.sim,
+            offender_eid,
+            "bounty",
+            reason=str(force_read.get("bounty_authority_reason", force_read.get("force_reason", "outside posted authority")) or "outside posted authority").strip(),
+            action=str(data.get("action", force_read.get("bounty_action_kind", "force")) or "force").strip().lower(),
+            target_eid=data.get("target_eid", data.get("victim_eid")),
+            incident_id=data.get("knowledge_incident_id", data.get("incident_id")),
+        )
+
     def _latest_force_context_row(self, offender_eid=None):
         offender_eid = self.player_eid if offender_eid is None else offender_eid
         state = getattr(self.sim, "world_traits", None)
@@ -878,6 +907,10 @@ class CriminalJusticeSystem(System):
         payload = self._latest_force_context(self.player_eid if offender_eid is None else offender_eid)
         context = str(payload.get("force_context", "unclear") or "unclear").strip().lower()
         reason = str(payload.get("force_reason", "") or "").strip()
+        if bool(payload.get("bounty_credential_misuse")):
+            return f"Credential read: the posted recovery did not cover that force ({reason})." if reason else "Credential read: the posted recovery did not cover that force."
+        if context == "bounty_recovery":
+            return f"Recovery read: the force stayed inside a matching posted pickup ({reason})." if reason else "Recovery read: the force stayed inside a matching posted pickup."
         if context == "lawful_defense":
             return f"Force read: they read the violence as self-defense ({reason})." if reason else "Force read: they read the violence as self-defense."
         if context == "defense_of_property":
@@ -1518,62 +1551,6 @@ class CriminalJusticeSystem(System):
             case["updated_tick"] = tick
         return tuple(outcomes)
 
-    def _consider_provisional_npc_attribution(self, case, *, reporter_eid=None):
-        """Choose at most one nearby NPC lead when an immediate report arrives."""
-
-        if not isinstance(case, dict) or not isinstance(case.get("provisional_crime_profile"), dict):
-            return None
-        account = case.get("best_subject_account") if isinstance(case.get("best_subject_account"), dict) else {}
-        description = account.get("description") if isinstance(account.get("description"), dict) else {}
-        if not description:
-            return None
-        try:
-            scene_x = int(case.get("x"))
-            scene_y = int(case.get("y"))
-            scene_z = int(case.get("z", 0) or 0)
-        except (TypeError, ValueError):
-            return None
-        candidates = []
-        identities = self.sim.ecs.get(CreatureIdentity)
-        positions = self.sim.ecs.get(Position)
-        for actor_eid in self.sim.entity_ids_in_radius(
-            scene_x,
-            scene_y,
-            scene_z,
-            PROVISIONAL_MAX_SCENE_DISTANCE,
-        ):
-            pos = positions.get(actor_eid)
-            if pos is None:
-                continue
-            if actor_eid == self.player_eid or actor_eid == reporter_eid:
-                continue
-            identity = identities.get(actor_eid)
-            if identity is None or str(getattr(identity, "creature_type", "") or "").strip().lower() != "human":
-                continue
-            match = description_match_for_actor(self.sim, description, actor_eid)
-            read = provisional_attribution_read(self.sim, case, actor_eid, match=match)
-            if not bool(read.get("eligible", False)):
-                continue
-            rank = (
-                -float(match.get("score", 0.0) or 0.0),
-                -float(match.get("evidence_weight", 0.0) or 0.0),
-                int(read.get("scene_distance")) if read.get("scene_distance") is not None else 10_000,
-                int(actor_eid),
-            )
-            candidates.append((rank, actor_eid, match, read))
-        if not candidates:
-            return None
-        _rank, actor_eid, match, read = min(candidates, key=lambda row: row[0])
-        officer_eid = reporter_eid if reporter_eid is not None and self._actor_is_enforcer(reporter_eid)[0] else None
-        return self._record_provisional_attribution_consequence(
-            case,
-            actor_eid,
-            officer_eid=officer_eid,
-            match=match,
-            read=read,
-            disposition="near_scene_npc_match",
-        )
-
     def _same_eid_value(self, left, right):
         if left is None or right is None:
             return False
@@ -1586,12 +1563,23 @@ class CriminalJusticeSystem(System):
         data = data if isinstance(data, dict) else {}
         reason = str(data.get("reason", "") or "").strip().lower()
         if "executed" in reason or "downed" in reason:
+            bounty_read = bounty_authority_from_stamped_data(data)
+            if not isinstance(bounty_read, dict):
+                bounty_read = bounty_action_authority(
+                    self.sim,
+                    offender_eid,
+                    data.get("target_eid", data.get("victim_eid")),
+                    action="homicide",
+                    context="homicide",
+                )
             return {
                 "force_context": "criminal_attack",
-                "force_reason": "the victim was already downed",
+                "force_reason": "the victim was already downed; a recovery credential never authorizes execution" if bool((bounty_read or {}).get("bounty_authority_relevant")) else "the victim was already downed",
                 "severity_mitigation": 0,
+                "severity_adjustment": int((bounty_read or {}).get("bounty_severity_adjustment", 0) or 0),
                 "recordable": True,
                 "suppressed": False,
+                **dict(bounty_read or {}),
             }
 
         target_eid = data.get("target_eid", data.get("victim_eid"))
@@ -1764,7 +1752,14 @@ class CriminalJusticeSystem(System):
         explicit_enforcer = bool(
             (profile and profile.enforce_all)
             or role == "guard"
-            or any(token in career for token in ("guard", "corrections", "deputy", "bailiff", "sergeant"))
+            or any(
+                token in career
+                for token in (
+                    "guard", "corrections", "deputy", "bailiff", "sergeant",
+                    "detective", "investigator", "inspector", "ranger", "warden",
+                    "conservation", "wildlife_enforcement",
+                )
+            )
         )
         if not explicit_enforcer and law_drive < 0.78:
             return False, law_drive, 0
@@ -1774,7 +1769,7 @@ class CriminalJusticeSystem(System):
             priority += 3
         if role == "guard":
             priority += 2
-        if any(token in career for token in ("corrections", "deputy", "bailiff", "sergeant")):
+        if any(token in career for token in ("corrections", "deputy", "bailiff", "sergeant", "detective", "investigator", "inspector", "ranger", "warden", "conservation", "wildlife_enforcement")):
             priority += 2
         return True, law_drive, priority
 
@@ -1836,6 +1831,7 @@ class CriminalJusticeSystem(System):
             self.SURRENDER_DIALOG_KIND,
             self.QUESTIONING_DIALOG_KIND,
             self.IDENTITY_CHECK_DIALOG_KIND,
+            self.CASE_CANVAS_DIALOG_KIND,
         }
 
     def _player_cash_on_hand(self):
@@ -1973,7 +1969,7 @@ class CriminalJusticeSystem(System):
             "topics": [],
             "selected_index": 0,
             "scroll": 0,
-            "hint": "Space closes. O opens your report.",
+            "hint": "? help",
             "new_topic_ids": [],
             "close_pending": True,
             "machine_action": None,
@@ -2884,6 +2880,12 @@ class CriminalJusticeSystem(System):
                 f"{str(protective.get('summary', '')).strip() or 'the area is already on alert'}."
             )
         mutual_fight_lines = self._mutual_fight_questioning_lines(self.player_eid)
+        latest_force = self._latest_force_context_row(self.player_eid)
+        credential_review_line = (
+            self._force_context_line(self.player_eid)
+            if bool(latest_force.get("bounty_credential_misuse"))
+            else ""
+        )
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
         self._rehydrate_local_opportunity_knowledge(
@@ -2901,6 +2903,7 @@ class CriminalJusticeSystem(System):
                 f"{jurisdiction_name} wants to question you about {cause}.",
                 *([posture_line] if posture_line else []),
                 *mutual_fight_lines,
+                *([credential_review_line] if credential_review_line else []),
                 "Cooperate and they will search what you are carrying before deciding what happens next.",
                 "Refusal will escalate to custody.",
             ],
@@ -2949,6 +2952,398 @@ class CriminalJusticeSystem(System):
             return row
         return None
 
+    def _investigative_contact_match(self, case, report_account, close_account):
+        report_description = report_account.get("description") if isinstance((report_account or {}).get("description"), dict) else {}
+        close_description = close_account.get("description") if isinstance((close_account or {}).get("description"), dict) else {}
+        match = dict(description_match_score(report_description, close_description))
+        if float(match.get("score", 0.0) or 0.0) < 0.74:
+            return match
+
+        context_text = " ".join(
+            str((case or {}).get(key, "") or "").strip().lower()
+            for key in ("kind", "action", "context", "merge_subject")
+        )
+        weapon = close_description.get("weapon") if isinstance(close_description.get("weapon"), dict) else {}
+        weapon_id = str(weapon.get("item_id", "") or "").strip().lower()
+        weapon_label = str(weapon.get("label", "") or "").strip().lower()
+        item_def = ITEM_CATALOG.get(weapon_id, {})
+        weapon_tags = _item_tags(item_def)
+        firearm = bool(
+            {"handgun", "shotgun", "rifle", "smg", "firearm", "gun"} & weapon_tags
+            or any(token in weapon_label for token in ("pistol", "revolver", "rifle", "shotgun", "smg", "firearm", " gun"))
+        )
+        armed = bool(weapon_id or weapon_label)
+        gunfire_case = any(token in context_text for token in ("fire_weapon", "gunfire", "gunshot", "shooting", "firearm"))
+        armed_case = any(token in context_text for token in ("armed_assault", "melee_assault", "homicide"))
+        contextual = list(tuple(match.get("contextual_cues", ()) or ()))
+        if firearm and gunfire_case:
+            contextual.append("equipped firearm after nearby gunfire")
+            match["score"] = round(min(1.0, float(match.get("score", 0.0) or 0.0) + 0.04), 3)
+            match["evidence_weight"] = round(min(1.0, float(match.get("evidence_weight", 0.0) or 0.0) + 0.14), 3)
+        elif armed and armed_case:
+            contextual.append("equipped weapon near the reported violence")
+            match["score"] = round(min(1.0, float(match.get("score", 0.0) or 0.0) + 0.025), 3)
+            match["evidence_weight"] = round(min(1.0, float(match.get("evidence_weight", 0.0) or 0.0) + 0.08), 3)
+
+        if len(independent_supporting_reporter_eids(case)) >= 2 and int((case or {}).get("report_conflict_count", 0) or 0) <= 0:
+            contextual.append("independent witness descriptions agree")
+            match["evidence_weight"] = round(min(1.0, float(match.get("evidence_weight", 0.0) or 0.0) + 0.08), 3)
+        matched = list(tuple(match.get("matched_cues", ()) or ()))
+        matched.extend(contextual)
+        match["matched_cues"] = tuple(dict.fromkeys(matched))
+        match["contextual_cues"] = tuple(dict.fromkeys(contextual))
+        match["plausible"] = bool(
+            float(match.get("score", 0.0) or 0.0) >= 0.62
+            and float(match.get("evidence_weight", 0.0) or 0.0) >= 0.28
+        )
+        return match
+
+    def _received_report_context(self, officer_eid, incident_id):
+        ai = self.sim.ecs.get(AI).get(officer_eid)
+        context = getattr(ai, "investigation_context", None) if ai is not None else None
+        if not is_purposeful_observation(context, purpose="justice_report_search", active_only=True):
+            return ai, None
+        try:
+            same_incident = int(context.get("incident_id")) == int(incident_id)
+        except (TypeError, ValueError):
+            same_incident = False
+        return (ai, context) if same_incident else (ai, None)
+
+    def _resume_received_report_route(self, officer_eid, context):
+        ai = self.sim.ecs.get(AI).get(officer_eid)
+        will = self.sim.ecs.get(NPCWill).get(officer_eid)
+        if ai is None or not isinstance(context, dict):
+            return False
+        search = context.get("search_state") if isinstance(context.get("search_state"), dict) else {}
+        waypoints = tuple(tuple(row) for row in tuple(search.get("waypoints", ()) or ()) if isinstance(row, (tuple, list)) and len(row) >= 3)
+        index = max(0, int(search.get("waypoint_index", 0) or 0))
+        target = waypoints[index] if index < len(waypoints) else context.get("last_seen_position")
+        ai.investigation_context = context
+        ai.target = tuple(target) if target is not None else None
+        ai.target_eid = None
+        if will is not None:
+            will.intent = "investigating"
+            will.target = ai.target
+            will.target_eid = None
+            will.last_tick = int(self.sim.tick)
+        return True
+
+    def _finish_received_report_search(self, officer_eid, context, *, reason, subject_eid=None):
+        ai = self.sim.ecs.get(AI).get(officer_eid)
+        will = self.sim.ecs.get(NPCWill).get(officer_eid)
+        if ai is None:
+            return False
+        ai.investigation_context = finish_purposeful_observation(
+            context,
+            current_tick=self.sim.tick,
+            reason=reason,
+        )
+        ai.state = "idle"
+        ai.target = None
+        ai.target_eid = None
+        if will is not None:
+            will.intent = "idle"
+            will.target = None
+            will.target_eid = None
+            will.last_tick = int(self.sim.tick)
+        pos = self._position_for(officer_eid)
+        self.sim.emit(Event(
+            "npc_investigation_complete",
+            npc_eid=officer_eid,
+            subject_eid=subject_eid,
+            incident_id=(context or {}).get("incident_id"),
+            purpose="justice_report_search",
+            reason=reason,
+            x=getattr(pos, "x", None),
+            y=getattr(pos, "y", None),
+            z=getattr(pos, "z", None),
+        ))
+        return True
+
+    def on_justice_report_candidate_contact(self, event):
+        officer_eid = event.data.get("officer_eid")
+        candidate_eid = event.data.get("candidate_eid")
+        incident_id = event.data.get("incident_id")
+        if officer_eid is None or candidate_eid is None:
+            return
+        ai, context = self._received_report_context(officer_eid, incident_id)
+        case = justice_case_for_incident(self.sim, incident_id)
+        if ai is None or context is None or not isinstance(case, dict):
+            return
+        if str(case.get("status", "") or "").strip().lower() != "unresolved":
+            self._finish_received_report_search(officer_eid, context, reason="case_resolved")
+            return
+        report_account = context.get("subject_account") if isinstance(context.get("subject_account"), dict) else {}
+        close_account = build_witness_subject_account(
+            self.sim,
+            officer_eid,
+            candidate_eid,
+            source_kind="authority_contact",
+            confidence=1.0,
+        )
+        match = self._investigative_contact_match(case, report_account, close_account)
+        alleged_eid = report_account.get("suspect_eid")
+        recognized_eid = close_account.get("suspect_eid")
+        try:
+            identity_conflict = bool(
+                alleged_eid is not None
+                and recognized_eid is not None
+                and int(alleged_eid) != int(recognized_eid)
+            )
+        except (TypeError, ValueError):
+            identity_conflict = False
+        plausible = bool(
+            not identity_conflict
+            and match.get("plausible", False)
+            and float(match.get("score", 0.0) or 0.0) >= float(context.get("candidate_min_score", 0.64) or 0.64)
+            and float(match.get("evidence_weight", 0.0) or 0.0) >= float(context.get("candidate_min_evidence", 0.28) or 0.28)
+        )
+        if not plausible:
+            reason = "recognized_identity_contradiction" if identity_conflict else "close_contact_contradiction"
+            updated = reject_purposeful_candidate(
+                self.sim,
+                context,
+                candidate_eid=candidate_eid,
+                reason=reason,
+                match=match,
+            )
+            self._resume_received_report_route(officer_eid, updated)
+            self.sim.emit(Event(
+                "justice_report_candidate_released",
+                officer_eid=officer_eid,
+                candidate_eid=candidate_eid,
+                incident_id=incident_id,
+                reason=reason,
+            ))
+            return
+
+        read = provisional_attribution_read(self.sim, case, candidate_eid, match=match)
+        record_justice_case_encounter(
+            self.sim,
+            incident_id,
+            actor_eid=candidate_eid,
+            officer_eid=officer_eid,
+            choice_id="contact",
+            outcome="questioned_from_reported_description",
+            match=match,
+        )
+        if int(candidate_eid) == int(self.player_eid):
+            opened = self._open_player_identity_check_prompt(
+                officer_eid,
+                {"case": case, "match": match},
+            )
+            if not opened:
+                updated = dict(context)
+                updated["contact_pending"] = False
+                self._resume_received_report_route(officer_eid, updated)
+                return
+            self._finish_received_report_search(
+                officer_eid,
+                context,
+                reason="candidate_questioned",
+                subject_eid=candidate_eid,
+            )
+            return
+
+        change = None
+        if bool(read.get("eligible", False)):
+            disposition = "evidence_supported_conviction" if bool(read.get("convictable", False)) else "investigator_scene_attribution"
+            change = self._record_provisional_attribution_consequence(
+                case,
+                candidate_eid,
+                officer_eid=officer_eid,
+                match=match,
+                read=read,
+                disposition=disposition,
+            )
+        self.sim.emit(Event(
+            "justice_report_candidate_questioned",
+            officer_eid=officer_eid,
+            candidate_eid=candidate_eid,
+            incident_id=incident_id,
+            evidence_strength=float(read.get("evidence_strength", 0.0) or 0.0),
+            detained=isinstance(change, dict),
+        ))
+        self._finish_received_report_search(
+            officer_eid,
+            context,
+            reason="candidate_questioned",
+            subject_eid=candidate_eid,
+        )
+
+    def _record_investigator_canvas_contact(self, investigator_eid, actor_eid, incident_id, *, outcome, supplied_account=False):
+        ai, context = self._received_report_context(investigator_eid, incident_id)
+        if ai is None or context is None:
+            return None
+        updated = record_purposeful_canvas_contact(
+            self.sim,
+            context,
+            actor_eid=actor_eid,
+            outcome=outcome,
+            supplied_account=supplied_account,
+        )
+        self.sim.emit(Event(
+            "justice_case_canvas_interviewed",
+            investigator_eid=investigator_eid,
+            actor_eid=actor_eid,
+            incident_id=incident_id,
+            outcome=outcome,
+            supplied_account=bool(supplied_account),
+        ))
+        case = justice_case_for_incident(self.sim, incident_id)
+        if isinstance(case, dict) and str(case.get("status", "") or "").strip().lower() != "unresolved":
+            self._finish_received_report_search(investigator_eid, updated, reason="case_resolved")
+        else:
+            self._resume_received_report_route(investigator_eid, updated)
+        return updated
+
+    def _formalize_canvas_account(self, investigator_eid, actor_eid, incident_id, record):
+        account = record.get("subject_account") if isinstance((record or {}).get("subject_account"), dict) else None
+        if not isinstance(account, dict):
+            return False
+        carried = transmitted_subject_account(
+            account,
+            channel="investigator_interview",
+            source_eid=actor_eid,
+            confidence=float((record or {}).get("confidence", 1.0) or 1.0),
+            propagation_depth=int((record or {}).get("propagation_depth", 0) or 0),
+            preserve_reporter_account=True,
+        )
+        self.sim.emit(Event(
+            "incident_authority_reported",
+            incident_id=incident_id,
+            npc_eid=actor_eid,
+            reporter_eid=actor_eid,
+            received_by_eid=investigator_eid,
+            method="investigator_interview",
+            subject_account=carried,
+        ))
+        return True
+
+    def on_justice_case_canvas_contact(self, event):
+        investigator_eid = event.data.get("investigator_eid")
+        actor_eid = event.data.get("actor_eid")
+        incident_id = event.data.get("incident_id")
+        if investigator_eid is None or actor_eid is None:
+            return
+        _ai, context = self._received_report_context(investigator_eid, incident_id)
+        if context is None:
+            return
+        if int(actor_eid) == int(self.player_eid):
+            if self._player_surrender_prompt_open() or bool(self._dialog_ui_state().get("open", False)):
+                updated = dict(context)
+                updated["canvas_contact_pending"] = False
+                self._resume_received_report_route(investigator_eid, updated)
+                return
+            case = justice_case_for_incident(self.sim, incident_id) or {}
+            kind = str(case.get("kind", "incident") or "incident").strip().replace("_", " ")
+            casework_kind = str(context.get("casework_kind", "investigator_canvas") or "investigator_canvas").strip().lower()
+            investigator_name = _entity_display_name(self.sim, investigator_eid, title_case=True) or "Investigator"
+            if casework_kind == "wildlife_enforcement_canvas":
+                opening_lines = [
+                    f'The wildlife officer stops beside you. "I am following up on a reported hunt near here."',
+                    '"Did you see a hunter, an animal, or a carcass?"',
+                ]
+                subtitle = "Wildlife Enforcement"
+            elif casework_kind == "arson_investigation_canvas":
+                opening_lines = [
+                    f'The fire investigator stops beside you. "I am checking how the fire near here began."',
+                    '"Did you see anyone enter, leave, or handle anything near the first smoke?"',
+                ]
+                subtitle = "Fire Investigation"
+            else:
+                opening_lines = [
+                    f'The investigator stops beside you. "I am asking around about a reported {kind} near here."',
+                    '"Did you see or hear anything?"',
+                ]
+                subtitle = str(case.get("jurisdiction_name", "Justice Office") or "Justice Office")
+            state = self._dialog_ui_state()
+            self.sim.set_time_paused(True, reason="dialog")
+            state.update({
+                "open": True,
+                "kind": self.CASE_CANVAS_DIALOG_KIND,
+                "npc_eid": investigator_eid,
+                "property_id": case.get("property_id") or None,
+                "title": f"Questions: {investigator_name}",
+                "subtitle": subtitle,
+                "transcript": opening_lines,
+                "topics": [
+                    {"id": "share", "label": "Tell them what you saw"},
+                    {"id": "nothing", "label": "Say you saw nothing"},
+                    {"id": "decline", "label": "Decline to answer"},
+                ],
+                "selected_index": 0,
+                "scroll": 0,
+                "hint": "? help",
+                "new_topic_ids": [],
+                "close_pending": False,
+                "machine_action": None,
+            })
+            self.player_surrender_prompt = {
+                "kind": self.CASE_CANVAS_DIALOG_KIND,
+                "npc_eid": investigator_eid,
+                "incident_id": int(incident_id),
+                "casework_kind": casework_kind,
+                "property_id": case.get("property_id") or None,
+                "jurisdiction_name": subtitle,
+            }
+            return
+
+        knowledge = self.sim.ecs.get(IncidentKnowledge).get(actor_eid)
+        record = knowledge.records.get(int(incident_id)) if knowledge is not None else None
+        supplied = self._formalize_canvas_account(investigator_eid, actor_eid, incident_id, record) if isinstance(record, dict) else False
+        self._record_investigator_canvas_contact(
+            investigator_eid,
+            actor_eid,
+            incident_id,
+            outcome="statement_supplied" if supplied else "nothing_known",
+            supplied_account=supplied,
+        )
+
+    def on_justice_case_canvas_choice(self, event):
+        if event.data.get("eid") != self.player_eid or not self._player_surrender_prompt_open():
+            return
+        prompt = self.player_surrender_prompt if isinstance(self.player_surrender_prompt, dict) else {}
+        if str(prompt.get("kind", "") or "").strip().lower() != self.CASE_CANVAS_DIALOG_KIND:
+            return
+        choice = str(event.data.get("choice_id", "") or "").strip().lower() or "decline"
+        investigator_eid = prompt.get("npc_eid")
+        incident_id = prompt.get("incident_id")
+        casework_kind = str(prompt.get("casework_kind", "investigator_canvas") or "investigator_canvas").strip().lower()
+        supplied = False
+        if choice == "share":
+            knowledge = self.sim.ecs.get(IncidentKnowledge).get(self.player_eid)
+            record = knowledge.records.get(int(incident_id)) if knowledge is not None else None
+            supplied = self._formalize_canvas_account(
+                investigator_eid,
+                self.player_eid,
+                incident_id,
+                record,
+            ) if isinstance(record, dict) else False
+        self._close_player_surrender_prompt()
+        self._record_investigator_canvas_contact(
+            investigator_eid,
+            self.player_eid,
+            incident_id,
+            outcome="statement_supplied" if supplied else "nothing_known" if choice == "nothing" or choice == "share" else "declined",
+            supplied_account=supplied,
+        )
+        role_label = "wildlife officer" if casework_kind == "wildlife_enforcement_canvas" else "fire investigator" if casework_kind == "arson_investigation_canvas" else "investigator"
+        lines = {
+            "share": [
+                f"You tell the {role_label} what you remember." if supplied else "You have nothing useful to add.",
+                f"The {role_label} makes a note and moves on.",
+            ],
+            "nothing": [f"You say you saw nothing. The {role_label} makes a note and moves on."],
+            "decline": [f"You decline to answer. The {role_label} moves on."],
+        }.get(choice, [f"You decline to answer. The {role_label} moves on."])
+        self._present_justice_result(
+            f"{role_label.title()} Moves On",
+            lines,
+            property_id=prompt.get("property_id"),
+            subtitle=prompt.get("jurisdiction_name", "Justice Office"),
+        )
+
     def _open_player_identity_check_prompt(self, npc_eid, match_row):
         if npc_eid is None or not isinstance(match_row, dict):
             return False
@@ -2962,28 +3357,33 @@ class CriminalJusticeSystem(System):
         kind = str(case.get("kind", "incident") or "incident").strip().replace("_", " ")
         summary = subject_description_summary(description)
         cues = [str(cue).strip() for cue in tuple(match.get("matched_cues", ()) or ()) if str(cue).strip()]
-        cue_line = f"The resemblance is based on {', '.join(cues[:4])}." if cues else "Only a few broad details line up."
         provisional_read = provisional_attribution_read(self.sim, case, self.player_eid, match=match)
-        provisional_eligible = bool(provisional_read.get("eligible", False))
         jurisdiction_name = str(case.get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office"
-        if provisional_eligible:
-            distance = int(provisional_read.get("scene_distance", 0) or 0)
-            scene_line = (
-                "You are still at the reported scene."
-                if distance <= 0
-                else "You are only a few steps from the reported scene."
-                if distance <= 2
-                else "You are still close to the reported scene."
-            )
-            boundary_lines = [
-                f"The report is extremely fresh. {scene_line}",
-                "That combination is strong enough for a fallible provisional attribution. The officer may book you even though resemblance is not proof.",
-            ]
+        npc_ai = self.sim.ecs.get(AI).get(npc_eid)
+        investigation_context = getattr(npc_ai, "investigation_context", None) if npc_ai is not None else None
+        casework_kind = str((investigation_context or {}).get("casework_kind", "") or "").strip().lower()
+        weapon_line = (
+            "The officer's attention lingers on the weapon in your hand."
+            if any("weapon" in cue or "firearm" in cue for cue in cues)
+            else ""
+        )
+        if casework_kind == "wildlife_enforcement_canvas":
+            authority_label = "wildlife officer"
+            jurisdiction_name = "Wildlife Enforcement"
+            opening = '"I am following up on a reported hunt near here."'
+        elif casework_kind == "arson_investigation_canvas":
+            authority_label = "fire investigator"
+            jurisdiction_name = "Fire Investigation"
+            opening = '"I am looking into how the fire near here began."'
         else:
-            boundary_lines = [
-                "The officer says this is a resemblance check, not an identification or a charge.",
-                "You may answer, explain, or decline. Resemblance alone does not create a justice record.",
-            ]
+            authority_label = "officer"
+            opening = f'"I am looking into a reported {kind} near here."'
+        transcript = [
+            f"The {authority_label} steps into your path. {opening}",
+            f'"A witness described {summary}. You match enough of it that I need your name and where you have been."',
+        ]
+        if weapon_line:
+            transcript.insert(1, weapon_line)
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
         state.update({
@@ -2991,13 +3391,9 @@ class CriminalJusticeSystem(System):
             "kind": self.IDENTITY_CHECK_DIALOG_KIND,
             "npc_eid": npc_eid,
             "property_id": case.get("property_id") or None,
-            "title": f"Identity Check: {_entity_display_name(self.sim, npc_eid, title_case=True) or 'Officer'}",
+            "title": f"Identity Check: {_entity_display_name(self.sim, npc_eid, title_case=True) or authority_label.title()}",
             "subtitle": jurisdiction_name,
-            "transcript": [
-                f"An unresolved {kind} report describes {summary}.",
-                cue_line,
-                *boundary_lines,
-            ],
+            "transcript": transcript,
             "topics": [
                 {"id": "identify", "label": "Give your presented name"},
                 {"id": "explain", "label": "Explain where you were"},
@@ -3005,7 +3401,7 @@ class CriminalJusticeSystem(System):
             ],
             "selected_index": 0,
             "scroll": 0,
-            "hint": "E choose | Esc decline | ? help",
+            "hint": "? help",
             "new_topic_ids": [],
             "close_pending": False,
             "machine_action": None,
@@ -3021,6 +3417,7 @@ class CriminalJusticeSystem(System):
             "opened_tick": int(getattr(self.sim, "tick", 0)),
             "jurisdiction_key": str(case.get("jurisdiction_key", "") or "").strip().lower(),
             "jurisdiction_name": jurisdiction_name,
+            "casework_kind": casework_kind,
         }
         return True
 
@@ -3124,28 +3521,23 @@ class CriminalJusticeSystem(System):
                         row["punishment_status"] = "booked" if booked else "justice_record_active"
                         break
                 return bool(booked or provisional_change)
+        casework_kind = str(prompt.get("casework_kind", "") or "").strip().lower()
+        authority_label = "wildlife officer" if casework_kind == "wildlife_enforcement_canvas" else "fire investigator" if casework_kind == "arson_investigation_canvas" else "officer"
         lines = {
             "identify": [
-                f"You give the name {presented_name or 'you use'}. The officer records it as a candidate lead.",
-                "A volunteered name and a resemblance are not proof that you committed the reported act.",
+                f"You give the name {presented_name or 'you use'}. The {authority_label} writes it down.",
+                f"After another look, the {authority_label} steps aside.",
             ],
             "explain": [
-                "The officer records your explanation with the unresolved case.",
-                (
-                    "Your explanation breaks the otherwise strong provisional inference; no charge is created."
-                    if explanation_succeeded
-                    else "No charge or wanted status is created from the visual resemblance."
-                ),
+                f"You explain where you have been. The {authority_label} listens and makes a note.",
+                f"The {authority_label} steps aside." if explanation_succeeded else f"After another look, the {authority_label} steps aside.",
             ],
             "decline": [
-                "You decline the questions. The officer records the encounter and lets the identification remain unresolved.",
-                "Declining this resemblance check does not itself create an offense.",
+                f"You decline to answer. The {authority_label} watches you for a moment, makes a note, and steps aside.",
             ],
         }[choice]
-        if not isinstance(encounter, dict):
-            lines.append("The case record could not be updated, but no consequence was assigned.")
         self._present_justice_result(
-            "Identity Check Complete",
+            f"{authority_label.title()} Steps Aside",
             lines,
             subtitle=str(prompt.get("jurisdiction_name", "Justice Office") or "Justice Office"),
         )
@@ -3559,6 +3951,7 @@ class CriminalJusticeSystem(System):
             self.SURRENDER_DIALOG_KIND,
             self.QUESTIONING_DIALOG_KIND,
             self.IDENTITY_CHECK_DIALOG_KIND,
+            self.CASE_CANVAS_DIALOG_KIND,
         }:
             self.sim.set_time_paused(False, reason="dialog")
             self._reset_dialog_ui(state)
@@ -5384,6 +5777,7 @@ class CriminalJusticeSystem(System):
         offender_eid = event.data.get("offender_eid")
         if offender_eid is None:
             return
+        factual_offender_eid = offender_eid
         context = str(event.data.get("context", "ordinary") or "").strip().lower() or "ordinary"
         if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS, *CIVIC_WILDLIFE_OFFENSE_CONTEXTS}:
             return
@@ -5413,6 +5807,13 @@ class CriminalJusticeSystem(System):
         if resolved_eid is None:
             return
         offender_eid = resolved_eid
+        if force_read is not None:
+            self._record_bounty_misuse_review(
+                offender_eid,
+                force_read,
+                data=event.data,
+                factual_offender_eid=factual_offender_eid,
+            )
         incident_type = self._incident_type_from_context(context)
         change = self._record_incident(
             offender_eid,
@@ -5516,6 +5917,7 @@ class CriminalJusticeSystem(System):
         offender_eid = event.data.get("offender_eid", event.data.get("source_eid"))
         if offender_eid is None:
             return
+        factual_offender_eid = offender_eid
         event.data.setdefault("offender_eid", offender_eid)
         event.data.setdefault("victim_eid", event.data.get("target_eid"))
         event.data.setdefault("context", "homicide")
@@ -5552,6 +5954,12 @@ class CriminalJusticeSystem(System):
         if resolved_eid is None:
             return
         offender_eid = resolved_eid
+        self._record_bounty_misuse_review(
+            offender_eid,
+            force_read,
+            data=event.data,
+            factual_offender_eid=factual_offender_eid,
+        )
         change = self._record_incident(
             offender_eid,
             incident_type="homicide",
@@ -5594,11 +6002,6 @@ class CriminalJusticeSystem(System):
         if offender_eid is None:
             incident["justice_identity_unresolved"] = True
             incident["justice_identity_case_id"] = case_payload.get("case_id")
-            if isinstance(crime_profile, dict):
-                self._consider_provisional_npc_attribution(
-                    case,
-                    reporter_eid=event.data.get("reporter_eid", event.data.get("npc_eid")),
-                )
             return
         incident["justice_identity_unresolved"] = False
         incident["justice_identity_case_id"] = case_payload.get("case_id")
@@ -5702,6 +6105,12 @@ class CriminalJusticeSystem(System):
             if effective_severity <= 0:
                 self._mark_incident_accounted(incident.get("id"), field="justice_force_reviewed")
                 return
+            self._record_bounty_misuse_review(
+                offender_eid,
+                force_read,
+                data=incident,
+                factual_offender_eid=incident.get("primary_actor_eid"),
+            )
             change = self._record_incident(
                 offender_eid,
                 incident_type="homicide",
@@ -5734,6 +6143,12 @@ class CriminalJusticeSystem(System):
                 if effective_severity <= 0:
                     self._mark_incident_accounted(incident.get("id"), field="justice_force_reviewed")
                     return
+                self._record_bounty_misuse_review(
+                    offender_eid,
+                    force_read,
+                    data=incident,
+                    factual_offender_eid=incident.get("primary_actor_eid"),
+                )
             change = self._record_incident(
                 offender_eid,
                 incident_type=self._incident_type_from_context(context),

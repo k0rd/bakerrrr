@@ -706,6 +706,10 @@ class SiteServiceSystem(System):
             ))
             self._reset_live_timeskip_state()
             return True
+        if owner == "mechanical_crafting" or kind == "mechanical_crafting":
+            # MechanicalDeviceSystem resolves the real inventory construction
+            # after the shared live-timeskip has kept the world moving.
+            return False
         effects = self.sim.ecs.get(StatusEffects).get(self.player_eid)
         well_rested_ticks = int(state.get("well_rested_ticks", 0) or 0)
         if bool(state.get("completed")) and str(state.get("service", "")).strip().lower() == "rest" and effects and well_rested_ticks > 0:

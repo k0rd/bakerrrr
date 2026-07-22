@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from engine.events import Event
 
 from game.aerosol_trap_runtime import actor_known_armed_aerosol_trap_positions, actor_knows_armed_aerosol_trap_at
+from game.mechanical_device_runtime import (
+    actor_known_armed_mechanical_device_positions,
+    actor_knows_armed_mechanical_device_at,
+)
 from game.components import AI, Collider, CreatureIdentity, Position
 from game.property_access import (
     evaluate_property_access as _evaluate_property_access,
@@ -76,6 +80,7 @@ def _movement_planning_context(sim, moving_eid):
         is_nonplayer_ai=bool(is_nonplayer_ai),
         known_armed_trap_positions=(
             actor_known_armed_aerosol_trap_positions(sim, moving_eid)
+            | actor_known_armed_mechanical_device_positions(sim, moving_eid)
             if is_nonplayer_ai
             else frozenset()
         ),
@@ -346,7 +351,10 @@ def _is_traversable_for(sim, moving_eid, x, y, z, *, planning_context=None):
         elif isinstance(planning_context, dict):
             known_trap = (int(x), int(y), int(z)) in planning_context.get("known_armed_trap_positions", ())
         else:
-            known_trap = actor_knows_armed_aerosol_trap_at(sim, moving_eid, x, y, z)
+            known_trap = (
+                actor_knows_armed_aerosol_trap_at(sim, moving_eid, x, y, z)
+                or actor_knows_armed_mechanical_device_at(sim, moving_eid, x, y, z)
+            )
         if known_trap:
             return False, "known_trap"
     colliders = planning_context.colliders if isinstance(planning_context, MovementPlanningContext) else None

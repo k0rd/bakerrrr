@@ -62,6 +62,8 @@ class Simulation:
         self.property_order = {}
         self.next_property_order = 0
         self._properties_in_radius_cache = {}
+        self._mechanical_device_ids = set()
+        self.mechanical_known_recipes = {}
         self._derived_fact_state = {}
         self._organization_runtime_cache = {}
         self._herbal_decay_next_tick = None
@@ -181,6 +183,10 @@ class Simulation:
             self.entity_identity_records = {}
         if not isinstance(getattr(self, "_properties_in_radius_cache", None), dict):
             self._properties_in_radius_cache = {}
+        if not isinstance(getattr(self, "_mechanical_device_ids", None), set):
+            self._mechanical_device_ids = set()
+        if not isinstance(getattr(self, "mechanical_known_recipes", None), dict):
+            self.mechanical_known_recipes = {}
         # Derived query state is never canonical.  Rebinding happens after a
         # restore as well as construction, so discard any legacy-saved caches.
         self._derived_fact_state = {}
@@ -838,9 +844,14 @@ class Simulation:
 
         if isinstance(report, dict):
             from game.npc_emergency_runtime import emergency_protected_chunks
+            from game.pursuit_streaming_runtime import pursuit_protected_chunks
 
-            emergency_protected = set(emergency_protected_chunks(self, report.get("unloaded", ())))
-            warmth_protected = set(warmth_protected_chunks(self, report.get("unloaded", ()))) | emergency_protected
+            unload_candidates = set(report.get("unloaded", ()) or ())
+            emergency_protected = set(emergency_protected_chunks(self, unload_candidates))
+            pursuit_protected = set(pursuit_protected_chunks(self, unload_candidates - emergency_protected))
+            ordinary_candidates = unload_candidates - emergency_protected - pursuit_protected
+            ordinary_warmth_protected = set(warmth_protected_chunks(self, ordinary_candidates))
+            warmth_protected = ordinary_warmth_protected | pursuit_protected | emergency_protected
             attention_state = actor_attention_state(self)
             social_warmth_protected = set(attention_state.get("social_warmth_protected_chunks", set()) or ())
             area_warmth_protected = set(attention_state.get("area_warmth_protected_chunks", set()) or ())
@@ -875,6 +886,7 @@ class Simulation:
             report["area_warmth_protected"] = tuple(sorted(area_warmth_protected))
             report["opportunity_protected"] = tuple(sorted(opportunity_protected))
             report["emergency_protected"] = tuple(sorted(emergency_protected))
+            report["pursuit_protected"] = tuple(sorted(pursuit_protected))
             report["loaded_count"] = len(self.world.loaded_chunks)
             report["active_count"] = sum(1 for data in self.world.loaded_chunks.values() if data.get("detail") == "active")
             report["changed"] = bool(report.get("changed")) or bool(warmth_protected)

@@ -1,3 +1,4 @@
+skipphase.sh
 __pycache__/
 *.py[cod]
 saves/
@@ -10,3 +11,4 @@ assets/tiles/old
 update.sh
 blurb.md
 regressions.log
+bakerrrr-source.tar

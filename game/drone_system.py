@@ -1,10 +1,16 @@
 """Runtime systems for deployed drones."""
 
+from collections import deque
+
 from engine.events import Event
 from engine.systems import System
 
-from game.aerosol_trap_runtime import armed_aerosol_traps_at
-from game.components import DroneState, Position, Vitality
+from game.components import Collider, DroneState, Position, Vitality
+from game.mechanical_device_runtime import (
+    drone_detect_mechanical_devices_at,
+    drone_knows_armed_mechanical_device_at,
+    mechanical_devices_at,
+)
 from game.drone_runtime import (
     drone_deploy_tile_is_threshold,
     drone_deploy_tile_open,
@@ -34,6 +40,7 @@ DRONE_HOLD_CLEAR_OFFSETS = (
     (0, 1),
     (-1, 0),
 )
+DRONE_LOCAL_PATH_NODE_LIMIT = 128
 
 
 def _int(value, default=0):
@@ -69,6 +76,71 @@ def _range_anchor(sim, state):
     if isinstance(home, (list, tuple)) and len(home) >= 3:
         return (_int(home[0]), _int(home[1]), _int(home[2]))
     return None
+
+
+def _drone_path_cell_open(sim, drone_eid, state, x, y, z):
+    if sim.detail_for_xy(int(x), int(y)) == "unloaded":
+        return False
+    if not sim.tilemap.in_bounds(int(x), int(y)) or not sim.tilemap.is_walkable(int(x), int(y), int(z)):
+        return False
+    anchor = _range_anchor(sim, state)
+    range_limit = int(max(0, getattr(state, "range_limit", 0) or 0))
+    if anchor is None or range_limit <= 0 or int(anchor[2]) != int(z):
+        return False
+    if abs(int(x) - int(anchor[0])) + abs(int(y) - int(anchor[1])) > range_limit:
+        return False
+    fire_cell = fire_cell_state(sim, int(x), int(y), int(z))
+    if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
+        return False
+    if drone_knows_armed_mechanical_device_at(sim, drone_eid, int(x), int(y), int(z)):
+        return False
+    for other_eid in tuple(sim.tilemap.entities_at(int(x), int(y), int(z)) or ()):
+        if other_eid == drone_eid:
+            continue
+        collider = sim.ecs.get(Collider).get(other_eid)
+        if collider is not None and bool(getattr(collider, "blocks", False)):
+            return False
+    return True
+
+
+def _bounded_drone_path_step(sim, drone_eid, state, start, target, *, max_nodes=DRONE_LOCAL_PATH_NODE_LIMIT):
+    """Find one local step only when the cheap direct step is obstructed."""
+
+    if start == target:
+        return None
+    frontier = deque([start])
+    previous = {start: None}
+    found = False
+    while frontier and len(previous) <= int(max_nodes):
+        current = frontier.popleft()
+        neighbors = [
+            (current[0] + dx, current[1] + dy, current[2])
+            for dx, dy in DRONE_HOLD_CLEAR_OFFSETS
+        ]
+        neighbors.sort(
+            key=lambda point: (
+                abs(point[0] - target[0]) + abs(point[1] - target[1]),
+                point[1],
+                point[0],
+            )
+        )
+        for candidate in neighbors:
+            if candidate in previous or not _drone_path_cell_open(sim, drone_eid, state, *candidate):
+                continue
+            previous[candidate] = current
+            if candidate == target:
+                found = True
+                frontier.clear()
+                break
+            frontier.append(candidate)
+    if not found:
+        return None
+    cursor = target
+    while previous.get(cursor) is not None and previous[cursor] != start:
+        cursor = previous[cursor]
+    if previous.get(cursor) != start:
+        return None
+    return (int(cursor[0]) - int(start[0]), int(cursor[1]) - int(start[1]))
 
 
 def _sync_state_hull_from_vitality(state, vitality):
@@ -256,7 +328,7 @@ class DroneSystem(System):
         payload.update(extra)
         return payload
 
-    def _hold_threshold_clear_step(self, state, pos):
+    def _hold_threshold_clear_step(self, drone_eid, state, pos):
         if pos is None:
             return None
         if int(getattr(state, "battery_charge", 0) or 0) < DRONE_MOVE_BATTERY_COST:
@@ -280,13 +352,16 @@ class DroneSystem(System):
             fire_cell = fire_cell_state(self.sim, nx, ny, nz)
             if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
                 continue
-            if armed_aerosol_traps_at(self.sim, nx, ny, nz):
+            if (
+                drone_knows_armed_mechanical_device_at(self.sim, drone_eid, nx, ny, nz)
+                or drone_detect_mechanical_devices_at(self.sim, drone_eid, nx, ny, nz)
+            ):
                 continue
             return dx, dy
         return None
 
     def _run_hold_procedure(self, controller_eid, drone_eid, state, pos, procedure_key):
-        clear_step = self._hold_threshold_clear_step(state, pos)
+        clear_step = self._hold_threshold_clear_step(drone_eid, state, pos)
         if clear_step is not None:
             result = self.move_drone(controller_eid, drone_eid, clear_step[0], clear_step[1])
             if result.get("ok"):
@@ -496,8 +571,15 @@ class DroneSystem(System):
         fire_cell = fire_cell_state(self.sim, target_x, target_y, target_z)
         if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
             return self._movement_blocked(controller_eid, drone_eid, "active_fire", x=target_x, y=target_y, z=target_z, dx=dx, dy=dy)
-        if armed_aerosol_traps_at(self.sim, target_x, target_y, target_z):
-            return self._movement_blocked(controller_eid, drone_eid, "armed_trap", x=target_x, y=target_y, z=target_z, dx=dx, dy=dy)
+        if (
+            drone_knows_armed_mechanical_device_at(self.sim, drone_eid, target_x, target_y, target_z)
+            or drone_detect_mechanical_devices_at(self.sim, drone_eid, target_x, target_y, target_z)
+        ):
+            reason = "armed_trap" if any(
+                bool((prop.get("metadata") or {}).get("aerosol_floor_trap"))
+                for prop in mechanical_devices_at(self.sim, target_x, target_y, target_z)
+            ) else "known_trap"
+            return self._movement_blocked(controller_eid, drone_eid, reason, x=target_x, y=target_y, z=target_z, dx=dx, dy=dy)
 
         old_x = int(pos.x)
         old_y = int(pos.y)
@@ -528,6 +610,36 @@ class DroneSystem(System):
             battery_charge_max=int(getattr(state, "battery_charge_max", 0) or 0),
         ))
         return {"ok": True, "reason": None, "x": int(pos.x), "y": int(pos.y), "z": int(pos.z)}
+
+    def move_drone_toward(self, controller_eid, drone_eid, target):
+        """Take one ordinary drone step toward a factual world coordinate."""
+
+        pos = self.sim.ecs.get(Position).get(drone_eid)
+        if pos is None:
+            return self._movement_blocked(controller_eid, drone_eid, "missing_position")
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            return self._movement_blocked(controller_eid, drone_eid, "missing_target")
+        try:
+            target = (int(target[0]), int(target[1]), int(target[2]))
+        except (TypeError, ValueError):
+            return self._movement_blocked(controller_eid, drone_eid, "missing_target")
+        if int(pos.z) != target[2]:
+            return self._movement_blocked(controller_eid, drone_eid, "wrong_floor", x=target[0], y=target[1], z=target[2])
+        if (int(pos.x), int(pos.y), int(pos.z)) == target:
+            return {"ok": True, "reason": None, "action": "arrived", "x": int(pos.x), "y": int(pos.y), "z": int(pos.z)}
+        state = _deployed_drone_state(self.sim, drone_eid)
+        if state is None:
+            return self._movement_blocked(controller_eid, drone_eid, "not_deployed")
+        start = (int(pos.x), int(pos.y), int(pos.z))
+        step = cardinal_step_toward(start, target)
+        if step is None:
+            return self._movement_blocked(controller_eid, drone_eid, "no_step", x=target[0], y=target[1], z=target[2])
+        direct = (start[0] + int(step[0]), start[1] + int(step[1]), start[2])
+        if not _drone_path_cell_open(self.sim, drone_eid, state, *direct):
+            alternate = _bounded_drone_path_step(self.sim, drone_eid, state, start, target)
+            if alternate is not None:
+                step = alternate
+        return self.move_drone(controller_eid, drone_eid, step[0], step[1])
 
     def _command_blocked(self, controller_eid, drone_eid, reason, *, command=None, x=None, y=None, z=None):
         self.sim.emit(Event(
@@ -569,6 +681,7 @@ class DroneSystem(System):
             "procedure_last_tick",
         ):
             setattr(state, attr, None)
+        state.observation_context = None
         sync_drone_program_metadata(state)
 
     def command_drone(self, controller_eid, drone_eid, command, *, dx=0, dy=0, consume_turn=False):

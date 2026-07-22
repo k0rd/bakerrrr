@@ -166,6 +166,7 @@ from game.npc_emergency_runtime import NPCEmergencyActionSystem
 from game.environment_hazard_system import EnvironmentalHazardSystem
 from game.fire_system import FireSystem
 from game.aerosol_trap_runtime import AerosolTrapSystem
+from game.mechanical_device_runtime import MechanicalDeviceSystem
 from game.vehicle_explosion_runtime import VehicleExplosionSystem
 from game.herbal_chemistry_runtime import HerbalMixtureDecaySystem
 from game.human_identity import normalize_gender_identity, seed_player_identity_profile
@@ -636,6 +637,7 @@ def _register_runtime_systems(sim, view, player):
     fire_system = FireSystem(sim)
     vehicle_explosion_system = VehicleExplosionSystem(sim)
     aerosol_trap_system = AerosolTrapSystem(sim)
+    mechanical_device_system = MechanicalDeviceSystem(sim)
     herbal_decay_system = HerbalMixtureDecaySystem(sim)
     hunting_carcass_system = HuntingCarcassSystem(sim)
     cultivation_system = CultivationSystem(sim)
@@ -719,6 +721,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(observed_incident_dispatch_system, 10)
     _live_timeskip_stride(lighting_system, 0)
     _live_timeskip_stride(vehicle_explosion_system, 1)
+    _live_timeskip_stride(mechanical_device_system, 1)
     _live_timeskip_stride(property_system, 20)
     _live_timeskip_stride(player_business_system, 60)
     _live_timeskip_stride(npc_income_system, 60)
@@ -801,6 +804,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(fire_system)
     sim.register_system(vehicle_explosion_system)
     sim.register_system(aerosol_trap_system)
+    sim.register_system(mechanical_device_system)
     sim.register_system(hunting_carcass_system)
     sim.register_system(cultivation_system)
     sim.register_system(fauna_breeding_system)

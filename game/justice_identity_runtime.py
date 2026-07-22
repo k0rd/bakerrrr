@@ -11,12 +11,18 @@ from __future__ import annotations
 from copy import deepcopy
 
 from game.components import IncidentKnowledge, Position
-from game.identity_evidence import description_match_for_actor, preferred_subject_account
+from game.identity_evidence import (
+    description_match_score,
+    description_match_for_actor,
+    preferred_subject_account,
+    subject_account_conflict_read,
+)
 from game.justice_runtime import jurisdiction_for_position
 
 
 MAX_REPORTS_PER_CASE = 12
 MAX_PROVISIONAL_ATTRIBUTIONS_PER_CASE = 12
+MAX_CONTRADICTORY_REPORTS_PER_CASE = 12
 PROVISIONAL_MAX_AGE_TICKS = 24
 PROVISIONAL_MAX_SCENE_DISTANCE = 6
 PROVISIONAL_MIN_SEVERITY = 35
@@ -88,6 +94,34 @@ def subject_account_resolves_identity(account):
     return suspect_eid
 
 
+def independent_supporting_reporter_eids(case):
+    """Return unique reporters who supplied materially matching subject detail."""
+
+    if not isinstance(case, dict):
+        return ()
+    best = case.get("best_subject_account") if isinstance(case.get("best_subject_account"), dict) else {}
+    best_description = best.get("description") if isinstance(best.get("description"), dict) else {}
+    if not best_description:
+        return ()
+    reporters = set()
+    for row in tuple(case.get("reports", ()) or ()):
+        if not isinstance(row, dict):
+            continue
+        reporter_eid = _int(row.get("reporter_eid"), -1)
+        account = row.get("subject_account") if isinstance(row.get("subject_account"), dict) else {}
+        description = account.get("description") if isinstance(account.get("description"), dict) else {}
+        if reporter_eid < 0 or not description:
+            continue
+        match = description_match_score(best_description, description)
+        if (
+            float(match.get("score", 0.0) or 0.0) >= 0.62
+            and float(match.get("evidence_weight", 0.0) or 0.0) >= 0.20
+            and not subject_account_conflict_read(best, account).get("conflicted", False)
+        ):
+            reporters.add(reporter_eid)
+    return tuple(sorted(reporters))
+
+
 def _report_signature(reporter_eid, method, account):
     transmission = account.get("transmission") if isinstance(account.get("transmission"), dict) else {}
     observation = account.get("observation") if isinstance(account.get("observation"), dict) else {}
@@ -147,6 +181,9 @@ def record_justice_identity_report(sim, incident, report_data):
             "resolution_basis": "",
             "resolved_tick": None,
             "provisional_attributions": [],
+            "contradictory_reports": [],
+            "report_conflict_count": 0,
+            "evidence_posture": "open",
         }
         state["cases"][key] = case
 
@@ -168,6 +205,21 @@ def record_justice_identity_report(sim, incident, report_data):
     }
     changed = signature not in existing_signatures
     if changed:
+        conflicts = []
+        for previous in tuple(case.get("reports", ()) or ()):
+            if not isinstance(previous, dict):
+                continue
+            previous_account = previous.get("subject_account")
+            conflict = subject_account_conflict_read(previous_account, account)
+            if conflict.get("conflicted"):
+                conflicts.append({
+                    "tick": tick,
+                    "earlier_reporter_eid": _int(previous.get("reporter_eid"), -1),
+                    "incoming_reporter_eid": _int(reporter_eid, -1),
+                    "earlier_signature": tuple(previous.get("signature", ()) or ()),
+                    "incoming_signature": signature,
+                    **conflict,
+                })
         report = {
             "reported_tick": tick,
             "reporter_eid": _int(reporter_eid, -1),
@@ -183,6 +235,27 @@ def record_justice_identity_report(sim, incident, report_data):
             case.get("best_subject_account"),
             account,
         )
+        if conflicts:
+            contradictory = list(case.get("contradictory_reports", ()) or ())
+            known_pairs = {
+                (tuple(row.get("earlier_signature", ()) or ()), tuple(row.get("incoming_signature", ()) or ()))
+                for row in contradictory
+                if isinstance(row, dict)
+            }
+            for row in conflicts:
+                pair = (tuple(row.get("earlier_signature", ()) or ()), tuple(row.get("incoming_signature", ()) or ()))
+                if pair not in known_pairs:
+                    contradictory.append(row)
+                    known_pairs.add(pair)
+            case["contradictory_reports"] = contradictory[-MAX_CONTRADICTORY_REPORTS_PER_CASE:]
+            case["report_conflict_count"] = len(case["contradictory_reports"])
+            case["evidence_posture"] = "contested"
+        elif max(0, _int(case.get("report_conflict_count"), 0)) <= 0:
+            case["evidence_posture"] = (
+                "corroborated"
+                if len(independent_supporting_reporter_eids(case)) >= 2
+                else "open"
+            )
 
     newly_resolved = False
     resolved_eid = subject_account_resolves_identity(account)
@@ -203,16 +276,26 @@ def record_justice_identity_report(sim, incident, report_data):
             row["canonical_identity_resolved"] = True
             if _int(row.get("actor_eid"), -1) == int(resolved_eid):
                 row["status"] = "confirmed"
+                if _text(row.get("adjudication_status")).lower() == "convicted_on_evidence":
+                    row["adjudication_status"] = "conviction_confirmed"
                 row["resolved_tick"] = tick
                 case["provisional_confirmation"] = True
                 provisional_confirmed = True
             else:
                 row["status"] = "misidentified"
+                if _text(row.get("adjudication_status")).lower() == "convicted_on_evidence":
+                    row["adjudication_status"] = "conviction_overturned"
                 row["resolved_tick"] = tick
                 case["misidentification_confirmed"] = True
                 case["misidentified_actor_eid"] = _int(row.get("actor_eid"), -1)
                 case["misidentification_confirmed_tick"] = tick
                 misidentified_actor_eids.append(_int(row.get("actor_eid"), -1))
+        for row in tuple(case.get("evidentiary_convictions", ()) or ()):
+            if not isinstance(row, dict) or _text(row.get("status") or "active").lower() != "active":
+                continue
+            row["status"] = "confirmed" if _int(row.get("actor_eid"), -1) == int(resolved_eid) else "overturned"
+            row["resolved_tick"] = tick
+            row["resolved_subject_eid"] = int(resolved_eid)
         if misidentified_actor_eids:
             case["misidentified_actor_eids"] = tuple(dict.fromkeys(misidentified_actor_eids))
             case["provisional_status"] = "misidentified"
@@ -322,6 +405,9 @@ def provisional_attribution_read(sim, case, actor_eid, *, match=None):
         "evidence_weight": 0.0,
         "matched_cues": (),
         "conflicting_cues": (),
+        "contextual_cues": (),
+        "evidence_strength": 0.0,
+        "convictable": False,
         "reasons": (),
     }
     if not isinstance(case, dict) or _text(case.get("status")).lower() != "unresolved":
@@ -364,6 +450,7 @@ def provisional_attribution_read(sim, case, actor_eid, *, match=None):
     evidence_weight = _float(match.get("evidence_weight"), 0.0)
     matched_cues = tuple(match.get("matched_cues", ()) or ())
     conflicting_cues = tuple(match.get("conflicting_cues", ()) or ())
+    contextual_cues = tuple(match.get("contextual_cues", ()) or ())
     crime_profile = case.get("provisional_crime_profile") if isinstance(case.get("provisional_crime_profile"), dict) else {}
     severity = max(0, _int(crime_profile.get("severity", case.get("severity")), 0))
     result.update({
@@ -372,9 +459,12 @@ def provisional_attribution_read(sim, case, actor_eid, *, match=None):
         "evidence_weight": evidence_weight,
         "matched_cues": matched_cues,
         "conflicting_cues": conflicting_cues,
+        "contextual_cues": contextual_cues,
     })
 
     reasons = []
+    if max(0, _int(case.get("report_conflict_count"), 0)) > 0:
+        reasons.append("contradictory_reports")
     if severity < PROVISIONAL_MIN_SEVERITY:
         reasons.append("crime_not_serious_enough")
     if age_ticks > PROVISIONAL_MAX_AGE_TICKS:
@@ -389,8 +479,28 @@ def provisional_attribution_read(sim, case, actor_eid, *, match=None):
         reasons.append("too_few_matching_cues")
     if conflicting_cues:
         reasons.append("description_contradiction")
+    freshness = max(0.0, 1.0 - (float(age_ticks) / float(max(1, PROVISIONAL_MAX_AGE_TICKS))))
+    proximity = max(0.0, 1.0 - (float(distance) / float(max(1, PROVISIONAL_MAX_SCENE_DISTANCE)))) if same_level else 0.0
+    independent_report_count = len(independent_supporting_reporter_eids(case))
+    report_support = min(1.0, float(independent_report_count) / 3.0)
+    context_support = min(1.0, float(len(contextual_cues)) / 2.0)
+    evidence_strength = (
+        (score * 0.44)
+        + (evidence_weight * 0.18)
+        + (freshness * 0.14)
+        + (proximity * 0.12)
+        + (report_support * 0.06)
+        + (context_support * 0.06)
+    )
     result["reasons"] = tuple(reasons)
     result["eligible"] = not reasons
+    result["evidence_strength"] = round(max(0.0, min(1.0, evidence_strength)), 3)
+    result["convictable"] = bool(
+        not reasons
+        and evidence_strength >= 0.88
+        and (independent_report_count >= 2 or bool(contextual_cues))
+    )
+    result["independent_report_count"] = independent_report_count
     return result
 
 
@@ -430,6 +540,8 @@ def record_provisional_justice_attribution(
         "read": deepcopy(read),
         "canonical_identity_resolved": False,
         "wrongful_risk": True,
+        "evidence_strength": _float(read.get("evidence_strength"), 0.0),
+        "adjudication_status": "convicted_on_evidence" if bool(read.get("convictable", False)) else "actionable_suspicion",
     }
     rows = list(case.get("provisional_attributions", ()) or ())
     rows.append(row)
@@ -437,6 +549,17 @@ def record_provisional_justice_attribution(
     case["provisional_subject_eid"] = actor_id
     case["provisional_tick"] = tick
     case["provisional_status"] = "active"
+    if bool(read.get("convictable", False)):
+        convictions = list(case.get("evidentiary_convictions", ()) or ())
+        convictions.append({
+            "tick": tick,
+            "actor_eid": actor_id,
+            "officer_eid": _int(officer_eid, -1),
+            "evidence_strength": _float(read.get("evidence_strength"), 0.0),
+            "wrongful_risk": True,
+            "status": "active",
+        })
+        case["evidentiary_convictions"] = convictions[-MAX_PROVISIONAL_ATTRIBUTIONS_PER_CASE:]
     case["updated_tick"] = tick
     return row
 
@@ -520,10 +643,13 @@ def justice_case_event_payload(case):
         "subject_identification": best.get("identification", "unknown"),
         "subject_account": deepcopy(best),
         "report_count": len(tuple(case.get("reports", ()) or ())),
+        "report_conflict_count": max(0, _int(case.get("report_conflict_count"), 0)),
+        "evidence_posture": _text(case.get("evidence_posture")) or "open",
     }
 
 
 __all__ = [
+    "independent_supporting_reporter_eids",
     "justice_case_event_payload",
     "justice_case_for_incident",
     "justice_identity_state",

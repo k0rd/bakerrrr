@@ -1,0 +1,108 @@
+{
+  "_meta": {
+    "schema_version": 1
+  },
+  "_comment": "Named first-slice field devices built through the shared mechanical grammar.",
+  "tripline_alarm": {
+    "name": "Tripline Alarm",
+    "plan_item_id": "tripline_alarm_plan",
+    "output_item_id": "tripline_alarm",
+    "components": {
+      "wire_spool": 1,
+      "salvaged_hardware": 1
+    },
+    "difficulty": 4.8,
+    "construction_ticks": 2,
+    "field_craftable": true,
+    "device_profile": {
+      "body": "tripline",
+      "trigger": "step",
+      "payload": "alarm",
+      "noise_radius": 10,
+      "reset_count": 3,
+      "concealment": 4.2,
+      "disarm_difficulty": 4.6,
+      "glyph": "^",
+      "color": "item_restricted",
+      "legal_status": "restricted"
+    }
+  },
+  "restraint_snare": {
+    "name": "Restraint Snare",
+    "plan_item_id": "restraint_snare_plan",
+    "output_item_id": "restraint_snare",
+    "components": {
+      "wire_spool": 1,
+      "spring_clamp": 1,
+      "salvaged_hardware": 1
+    },
+    "difficulty": 6.0,
+    "construction_ticks": 3,
+    "field_craftable": true,
+    "device_profile": {
+      "body": "floor_fixture",
+      "trigger": "step",
+      "payload": "restraint",
+      "status": "snared",
+      "status_duration": 6,
+      "concealment": 5.0,
+      "disarm_difficulty": 6.0,
+      "glyph": "^",
+      "color": "item_illegal",
+      "legal_status": "illegal",
+      "single_use": true
+    }
+  },
+  "remote_release_rig": {
+    "name": "Remote Release Rig",
+    "plan_item_id": "remote_release_rig_plan",
+    "output_item_id": "remote_release_rig",
+    "components": {
+      "scrap_circuit": 1,
+      "battery_pack": 1,
+      "wire_spool": 1
+    },
+    "difficulty": 6.8,
+    "construction_ticks": 4,
+    "field_craftable": true,
+    "device_profile": {
+      "body": "receiver",
+      "trigger": "remote_signal",
+      "payload": "carried_payload",
+      "range": 18,
+      "concealment": 5.4,
+      "disarm_difficulty": 6.8,
+      "glyph": "*",
+      "color": "item_illegal",
+      "legal_status": "restricted",
+      "controller_retained": true
+    }
+  },
+  "decoy_beacon": {
+    "name": "Decoy Beacon",
+    "plan_item_id": "decoy_beacon_plan",
+    "output_item_id": "decoy_beacon",
+    "components": {
+      "scrap_circuit": 1,
+      "battery_pack": 1,
+      "salvaged_hardware": 1
+    },
+    "difficulty": 5.7,
+    "construction_ticks": 3,
+    "field_craftable": true,
+    "device_profile": {
+      "body": "floor_fixture",
+      "trigger": "timer",
+      "payload": "decoy_noise",
+      "noise_radius": 12,
+      "pulse_interval": 4,
+      "pulse_count": 4,
+      "concealment": 3.8,
+      "disarm_difficulty": 5.2,
+      "glyph": "*",
+      "color": "item_tool",
+      "legal_status": "restricted",
+      "single_use": true
+    }
+  }
+}

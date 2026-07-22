@@ -66,6 +66,29 @@ Drone parts are ordinary items until you stow them. Pick up or buy loose chassis
 
 Drone features depend on installed modules. Cameras enable linked looking, cargo modules enable cargo transfer, procedure modules enable autonomy, and weapon modules need their matching ammo or fuel support.
 
+## Tinkering And Field Devices
+
+Mechanical plans are real inventory items. Inspect a plan with `E` to see its
+parts and output. With the plan, its components, and a usable pocket multitool
+in your inventory, press `U` on the plan to begin construction. Time passes in
+the living world while you work; interruption leaves parts that were not yet
+consumed in your inventory.
+
+The first field-device family contains four different tools:
+
+- tripline alarms make noise and can survive enough use to be reset or
+  recovered;
+- restraint snares interrupt movement and are spent when they catch something;
+- remote release rigs place a receiver loaded with a carried smoke, aerosol,
+  or fire payload while leaving the linked controller in your inventory;
+- decoy beacons make a short, bounded series of noises.
+
+Select a completed device and press `U` to place or operate it. A remote release
+controller uses `U` again to fire its linked receiver while it remains in range.
+Physically interact with your own deployed device to recover it when its design
+and condition allow. Other people can notice placement, remember or discover a
+device, avoid it, disarm it, report it, or use devices for their own purposes.
+
 ## Map And Vehicle Basics
 
 - On foot, `X` opens the map for browsing.
