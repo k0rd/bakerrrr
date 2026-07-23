@@ -9,6 +9,7 @@ from engine.events import Event
 from game.components import Collider, Position, Render, VehicleState, Vitality
 from game.movement_runtime import _entity_blocks, try_move_entity
 from game.property_runtime import (
+    property_aperture_at as _property_aperture_at,
     property_enclosing_structure as _property_enclosing_structure,
     property_is_vehicle as _property_is_vehicle,
     property_metadata as _property_metadata,
@@ -22,6 +23,12 @@ from game.system_support.entity_naming import _entity_display_name
 from game.system_support.building_repair_runtime import record_building_damage as _record_building_damage
 from game.system_support.fire_runtime import fire_cell_state
 from game.system_support.offense_runtime import _emit_action_offense_event
+from game.system_support.structure_damage_runtime import (
+    STRUCTURE_MAX_HP,
+    apply_structural_damage as _apply_structural_damage,
+    structural_surface_kind as _structural_surface_kind,
+    structure_is_broken as _structure_is_broken,
+)
 from game.vehicle_explosion_runtime import arm_vehicle_explosion
 
 
@@ -295,6 +302,30 @@ def _ensure_loaded_vehicle_target_terrain(sim, x, y):
     return True
 
 
+def _vehicle_structural_surface(sim, x, y, z=0):
+    prop = _property_enclosing_structure(sim, int(x), int(y), int(z))
+    if not isinstance(prop, dict):
+        return None, None, "", False
+    aperture = _property_aperture_at(prop, int(x), int(y), int(z))
+    kind = _structural_surface_kind(
+        sim,
+        prop,
+        int(x),
+        int(y),
+        int(z),
+        aperture=aperture,
+    )
+    broken = bool(kind) and _structure_is_broken(
+        sim,
+        prop,
+        int(x),
+        int(y),
+        int(z),
+        kind=kind,
+    )
+    return prop, aperture, str(kind or ""), bool(broken)
+
+
 def vehicle_local_block_reason(sim, eid, vehicle_prop, x, y, z=0, *, medium=None):
     x = int(x)
     y = int(y)
@@ -310,10 +341,13 @@ def vehicle_local_block_reason(sim, eid, vehicle_prop, x, y, z=0, *, medium=None
     glyph = str(getattr(tile, "glyph", "") or "")[:1]
     if not tile:
         return "chunk_unready"
+    structure_prop, _aperture, structure_kind, structure_broken = _vehicle_structural_surface(sim, x, y, z)
     if medium == "water":
         if glyph not in WATER_TILE_GLYPHS:
             return "blocked_tile"
     elif not bool(getattr(tile, "walkable", False)):
+        if structure_kind in {"window", "door", "wall"} and not structure_broken:
+            return structure_kind
         return "blocked_tile"
 
     fire_cell = fire_cell_state(sim, x, y, z)
@@ -322,13 +356,20 @@ def vehicle_local_block_reason(sim, eid, vehicle_prop, x, y, z=0, *, medium=None
 
     active_vehicle_id = str((vehicle_prop or {}).get("id", "")).strip()
     covering = sim.property_covering(x, y, z)
+    broken_surface_owns_covering = bool(
+        structure_broken
+        and isinstance(structure_prop, dict)
+        and isinstance(covering, dict)
+        and str(structure_prop.get("id", "")).strip() == str(covering.get("id", "")).strip()
+    )
     if (
         isinstance(covering, dict)
         and str(covering.get("id", "")).strip() != active_vehicle_id
         and not property_allows_vehicle_route_access(covering)
+        and not broken_surface_owns_covering
     ):
         return "property_tile"
-    if sim.structure_at(x, y, z) is not None:
+    if sim.structure_at(x, y, z) is not None and not structure_broken:
         return "property_tile"
 
     blocked, blocker_eid = _entity_blocks(sim, eid, x, y, z)
@@ -623,7 +664,144 @@ def _vehicle_crash_durability_loss(speed, surface_kind):
     return max(1, min(10, int(math.ceil(float(base) * float(multiplier)))))
 
 
-def apply_vehicle_crash(sim, driver_eid, vehicle_prop, speed, x, y, z, *, block_reason="blocked"):
+def _vehicle_structure_impact_damage(vehicle_prop, speed, surface_kind):
+    profile = _vehicle_profile_from_property(vehicle_prop) or {}
+    power = max(1, min(10, _int_or_default(profile.get("power"), 5)))
+    durability = max(0, min(10, _int_or_default(profile.get("durability"), 5)))
+    vehicle_class = str(profile.get("vehicle_class", "sedan") or "sedan").strip().lower()
+    class_bonus = {
+        "micro": -2,
+        "compact": -1,
+        "hatchback": -1,
+        "coupe": -1,
+        "sedan": 0,
+        "wagon": 1,
+        "suv": 2,
+        "van": 2,
+        "utility": 3,
+        "pickup": 3,
+        "truck": 4,
+        "bus": 5,
+        "armored": 6,
+        "military": 7,
+    }.get(vehicle_class, 0)
+    impact_speed = max(1, min(vehicle_top_speed(vehicle_prop), int(speed or 1)))
+    damage = (impact_speed * 8) + (power * 2) + (durability // 2) + class_bonus
+    if str(surface_kind or "").strip().lower() == "window":
+        damage = max(damage, STRUCTURE_MAX_HP["window"] + 1)
+    return max(1, int(damage))
+
+
+def _apply_vehicle_structural_impact(sim, driver_eid, vehicle_prop, speed, x, y, z):
+    prop, aperture, surface_kind, already_broken = _vehicle_structural_surface(sim, x, y, z)
+    if not isinstance(prop, dict) or not surface_kind or already_broken:
+        return None
+    damage = _vehicle_structure_impact_damage(vehicle_prop, speed, surface_kind)
+    result = _apply_structural_damage(
+        sim,
+        prop,
+        int(x),
+        int(y),
+        int(z),
+        amount=damage,
+        kind=surface_kind,
+        aperture_kind=(aperture or {}).get("kind", surface_kind),
+        cause="vehicle_impact",
+        damage_kind="vehicle_collision",
+        weapon_id="vehicle",
+        offender_eid=driver_eid,
+    )
+    result["property_id"] = result.get("property_id") or prop.get("id")
+    result["property_name"] = result.get("property_name") or prop.get("name")
+    result["surface_kind"] = str(result.get("surface_kind") or surface_kind)
+    owns_property = prop.get("owner_eid") == driver_eid or (
+        driver_eid == getattr(sim, "player_eid", None)
+        and str(prop.get("owner_tag", "") or "").strip().lower() == "player"
+    )
+    if bool(result.get("damaged")) and not owns_property:
+        severity = {"window": 46, "door": 54, "wall": 62}.get(surface_kind, 48)
+        _emit_action_offense_event(
+            sim,
+            driver_eid,
+            "vehicle_structure_impact",
+            int(x),
+            int(y),
+            int(z),
+            context="tamper",
+            score=severity,
+            property_id=prop.get("id"),
+            property_name=prop.get("name"),
+            structure_kind=surface_kind,
+            vehicle_id=(vehicle_prop or {}).get("id"),
+            vehicle_name=_vehicle_label(vehicle_prop),
+        )
+    return result
+
+
+def _apply_vehicle_structure_breakthrough(sim, driver_eid, vehicle_prop, speed, result, x, y, z):
+    surface_kind = str((result or {}).get("surface_kind", "") or "").strip().lower()
+    if surface_kind not in {"window", "door"} or not bool((result or {}).get("broken")):
+        return False
+    wear = 1 if surface_kind == "window" else max(1, int(math.ceil(max(1, int(speed or 1)) / 2.0)))
+    before, after, lost = apply_vehicle_durability_loss(
+        sim,
+        vehicle_prop,
+        wear,
+        cause=f"vehicle_{surface_kind}_breakthrough",
+    )
+    state = vehicle_state_for(sim, driver_eid)
+    if state is not None:
+        set_vehicle_speed(
+            state,
+            max(0, int(getattr(state, "speed", speed) or speed) - 1),
+            tick=getattr(sim, "tick", 0),
+            vehicle_prop=vehicle_prop,
+        )
+    sim.emit(Event(
+        "vehicle_structure_breached",
+        eid=driver_eid,
+        driver_eid=driver_eid,
+        vehicle_id=(vehicle_prop or {}).get("id"),
+        vehicle_name=_vehicle_label(vehicle_prop),
+        property_id=(result or {}).get("property_id"),
+        property_name=(result or {}).get("property_name"),
+        surface_kind=surface_kind,
+        speed=max(1, int(speed or 1)),
+        structure_damage=int((result or {}).get("damage", 0) or 0),
+        durability_before=int(before),
+        durability_after=int(after),
+        durability_lost=int(lost),
+        vehicle_broken=bool(after <= 0),
+        x=int(x),
+        y=int(y),
+        z=int(z),
+    ))
+    sim.emit(Event(
+        "noise",
+        source_eid=driver_eid,
+        x=int(x),
+        y=int(y),
+        z=int(z),
+        radius=7 + (2 * max(1, int(speed or 1))),
+        cause=f"vehicle_{surface_kind}_breakthrough",
+        property_id=(result or {}).get("property_id"),
+        vehicle_id=(vehicle_prop or {}).get("id"),
+    ))
+    return after > 0
+
+
+def apply_vehicle_crash(
+    sim,
+    driver_eid,
+    vehicle_prop,
+    speed,
+    x,
+    y,
+    z,
+    *,
+    block_reason="blocked",
+    structural_result=None,
+):
     if not _property_is_vehicle(vehicle_prop):
         return None
     impact_speed = max(1, min(vehicle_top_speed(vehicle_prop), int(speed or 1)))
@@ -648,14 +826,20 @@ def apply_vehicle_crash(sim, driver_eid, vehicle_prop, speed, x, y, z, *, block_
         durability_after=after,
         durability_lost=lost,
     )
-    damaged_prop = _record_vehicle_infrastructure_damage(
-        sim,
-        driver_eid,
-        x,
-        y,
-        z,
-        block_reason,
-    )
+    if not isinstance(structural_result, dict):
+        structural_result = _apply_vehicle_structural_impact(sim, driver_eid, vehicle_prop, speed, x, y, z)
+    damaged_prop = None
+    if isinstance(structural_result, dict):
+        damaged_prop = getattr(sim, "properties", {}).get(str(structural_result.get("property_id") or ""))
+    if not isinstance(damaged_prop, dict):
+        damaged_prop = _record_vehicle_infrastructure_damage(
+            sim,
+            driver_eid,
+            x,
+            y,
+            z,
+            block_reason,
+        )
     sim.emit(Event(
         "vehicle_crash",
         eid=driver_eid,
@@ -673,6 +857,9 @@ def apply_vehicle_crash(sim, driver_eid, vehicle_prop, speed, x, y, z, *, block_
         driver_damage=int(driver_damage),
         driver_downed=bool(driver_downed),
         damaged_property_id=(damaged_prop or {}).get("id") if isinstance(damaged_prop, dict) else None,
+        structure_kind=(structural_result or {}).get("surface_kind") if isinstance(structural_result, dict) else None,
+        structure_damage=int((structural_result or {}).get("damage", 0) or 0) if isinstance(structural_result, dict) else 0,
+        structure_broken=bool((structural_result or {}).get("broken", False)) if isinstance(structural_result, dict) else False,
         x=int(x),
         y=int(y),
         z=int(z),
@@ -779,6 +966,36 @@ def try_vehicle_step(sim, eid, vehicle_prop, target_x, target_y, target_z=0, *, 
         target_z,
         medium=medium,
     )
+    structural_result = None
+    if block_reason in {"window", "door", "wall"} and medium != "water":
+        structural_result = _apply_vehicle_structural_impact(
+            sim,
+            eid,
+            vehicle_prop,
+            speed,
+            target_x,
+            target_y,
+            target_z,
+        )
+        if block_reason in {"window", "door"} and _apply_vehicle_structure_breakthrough(
+            sim,
+            eid,
+            vehicle_prop,
+            speed,
+            structural_result,
+            target_x,
+            target_y,
+            target_z,
+        ):
+            block_reason = vehicle_local_block_reason(
+                sim,
+                eid,
+                vehicle_prop,
+                target_x,
+                target_y,
+                target_z,
+                medium=medium,
+            )
     if block_reason:
         if block_reason.startswith("blocked_entity:"):
             try:
@@ -807,6 +1024,7 @@ def try_vehicle_step(sim, eid, vehicle_prop, target_x, target_y, target_z=0, *, 
                 target_y,
                 target_z,
                 block_reason=block_reason,
+                structural_result=structural_result,
             )
             return False, "crash"
         return False, block_reason

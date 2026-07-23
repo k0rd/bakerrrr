@@ -6,7 +6,7 @@ import random
 
 from engine.sites import site_entry_front_cell
 from engine.events import Event
-from game.components import AI, ArmorLoadout, BehaviorProfile, CriminalDriveState, FinancialProfile, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Occupation, Position, PropertyKnowledge, StatusEffects, Vitality, WeaponLoadout
+from game.components import AI, ArmorLoadout, BehaviorProfile, CriminalDriveState, FinancialProfile, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, NPCTraits, Occupation, Position, PropertyKnowledge, StatusEffects, Vitality, WeaponLoadout
 from game.item_semantics import (
     appraise_item_for_actor,
     identify_item_for_actor,
@@ -19,6 +19,7 @@ from game.item_semantics import (
 )
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name, item_instance_condition
 from game.item_valuation import item_fair_value
+from game.skills import actor_skill as _actor_skill
 from game.property_access import evaluate_property_access as _evaluate_property_access, world_hour as _world_hour
 from game.property_doors import _actor_is_animal_or_wildlife
 from game.property_runtime import (
@@ -40,7 +41,17 @@ from game.system_support.opportunity_knowledge_runtime import (
     note_opportunity_success as _note_opportunity_success,
     remember_opportunity_lead as _remember_opportunity_lead,
 )
-from game.system_support.item_provenance_runtime import item_entitlement_for_actor, stamp_item_provenance
+from game.system_support.awareness_runtime import observation_payload_for_position
+from game.system_support.item_provenance_runtime import (
+    CLAIM_MERCHANDISE,
+    CLAIM_PRIVATE_EFFECT,
+    CLAIM_PUBLIC_FREE,
+    CLAIM_SCENE_SALVAGE,
+    CLAIM_STAFF_SUPPLY,
+    item_entitlement_for_actor,
+    stamp_item_provenance,
+)
+from game.system_support.offense_runtime import _emit_action_offense_event
 from game.system_support.npc_income_runtime import (
     inventory_liquid_credits as _shared_inventory_liquid_credits,
     spend_npc_wallet_credits as _shared_spend_npc_wallet_credits,
@@ -154,12 +165,17 @@ _DRUG_IDENTIFICATION_CAREERS = frozenset({
 })
 _SCAVENGEABLE_ITEM_CATEGORIES = frozenset({
     "consumable",
+    "drone_part",
     "medical",
+    "misc",
     "weapon",
     "armor",
     "tool",
     "token",
     "device",
+    "wireware",
+    "wire_interface",
+    "wire_data",
 })
 _SCAVENGEABLE_ITEM_TAGS = frozenset({
     "food",
@@ -174,6 +190,15 @@ _SCAVENGEABLE_ITEM_TAGS = frozenset({
     "device",
     "ammo",
     "communication",
+    "clothing",
+    "cosmetic",
+    "jewelry",
+    "salvage",
+    "junk",
+    "component",
+    "electronics",
+    "drone",
+    "wire",
 })
 _STREET_BUY_CAREER_TOKENS = (
     "dealer",
@@ -1315,6 +1340,74 @@ def _effective_behavior_value(sim, eid, behavior, *, traits=None, needs=None, ju
         return _clamp_behavior_value((base * 0.74) + (situational * 0.26))
 
     if token in {
+        BEHAVIOR_COLLECT_GROUND_CREDITS,
+        BEHAVIOR_SCAVENGE_LOOSE_ITEMS,
+        BEHAVIOR_SELL_SCAVENGED_ITEMS,
+    }:
+        # Explicit profiles remain authoritative.  The derived floor below is
+        # what lets an otherwise ordinary resident notice a genuinely tempting
+        # piece of fallout without turning the population into scavengers.
+        if base is not None:
+            return base
+
+        inventory = sim.ecs.get(Inventory).get(eid)
+        financial = sim.ecs.get(FinancialProfile).get(eid)
+        carried = _inventory_liquid_credits(inventory)
+        banked = max(0, int(getattr(financial, "bank_balance", 0) or 0)) if financial else 0
+        buffer = max(30, int(getattr(financial, "wallet_buffer", 90) or 90)) if financial else 90
+        available = carried + min(buffer, banked)
+        money_pressure = _clamp_behavior_value(1.0 - (float(available) / float(max(1, buffer))))
+
+        hunger_gap = _clamp_behavior_value(
+            (100.0 - float(getattr(needs, "hunger", 86.0) or 86.0)) / 100.0,
+            default=0.14,
+        )
+        thirst_gap = _clamp_behavior_value(
+            (100.0 - float(getattr(needs, "thirst", 90.0) or 90.0)) / 100.0,
+            default=0.1,
+        )
+        safety_gap = _clamp_behavior_value(
+            (100.0 - float(getattr(needs, "safety", 75.0) or 75.0)) / 100.0,
+            default=0.25,
+        )
+        discipline = _clamp_behavior_value(getattr(traits, "discipline", 0.5), default=0.5)
+        opportunism = _actor_behavior_value(sim, eid, BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME, 0.04)
+        desperation = max(hunger_gap, thirst_gap, safety_gap * 0.55)
+
+        if token == BEHAVIOR_COLLECT_GROUND_CREDITS:
+            return _clamp_behavior_value(
+                0.045
+                + (money_pressure * 0.075)
+                + (desperation * 0.045)
+                + ((1.0 - discipline) * 0.025)
+                + (opportunism * 0.055)
+            )
+        if token == BEHAVIOR_SCAVENGE_LOOSE_ITEMS:
+            return _clamp_behavior_value(
+                0.035
+                + (money_pressure * 0.045)
+                + (desperation * 0.055)
+                + ((1.0 - discipline) * 0.025)
+                + (opportunism * 0.06)
+            )
+
+        has_scavenged_goods = False
+        if inventory is not None:
+            has_scavenged_goods = any(
+                bool((entry.get("metadata") or {}).get("npc_scavenged"))
+                for entry in tuple(getattr(inventory, "items", ()) or ())
+                if isinstance(entry, dict) and isinstance(entry.get("metadata"), dict)
+            )
+        if not has_scavenged_goods:
+            return 0.0
+        return _clamp_behavior_value(
+            0.2
+            + (money_pressure * 0.16)
+            + (opportunism * 0.05)
+            + ((1.0 - discipline) * 0.04)
+        )
+
+    if token in {
         BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME,
         BEHAVIOR_COMMIT_PLANNED_CRIME,
         BEHAVIOR_SEEK_CRIMINAL_AFFILIATION,
@@ -1825,9 +1918,286 @@ def _resolve_street_appraise_between_actors(sim, appraiser_eid, subject_eid):
     }
 
 
-def _ground_item_pickup_is_safe(sim, actor_eid, ground):
+_COMBAT_FALLOUT_CONTEXTS = frozenset({
+    "corpse_drop",
+    "corpse_loot",
+    "corpse_clothing_salvage",
+    "combat_drop",
+})
+
+
+def _ground_item_observation_appraisal(sim, actor_eid, ground):
+    """Return actual and actor-perceived witnesses for one pickup position.
+
+    Actual observation remains the justice system's truth.  The perceived
+    estimate is deliberately incomplete and noisy: an actor can miss a watcher
+    or read a bystander's willingness to report incorrectly.
+    """
+    try:
+        x = int((ground or {}).get("x"))
+        y = int((ground or {}).get("y"))
+        z = int((ground or {}).get("z", 0))
+    except (TypeError, ValueError):
+        return {
+            "actual": {},
+            "actual_observer_count": 0,
+            "actual_accountable_count": 0,
+            "perceived_observer_count": 0,
+            "perceived_report_risk": 0.0,
+        }
+
+    cache = _npc_behavior_runtime_cache(sim).setdefault("ground_observations", {})
+    cache_key = (int(actor_eid), x, y, z)
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
+    actual = observation_payload_for_position(
+        sim,
+        x,
+        y,
+        z,
+        exclude_eid=actor_eid,
+        offender_eid=actor_eid,
+        observation_channels=("actor_witness",),
+    )
+    actor_perception = float(_actor_skill(sim, actor_eid, "perception", default=5.0))
+    actor_streetwise = float(_actor_skill(sim, actor_eid, "streetwise", default=5.0))
+    positions = sim.ecs.get(Position)
+    ais = sim.ecs.get(AI)
+    justices = sim.ecs.get(JusticeProfile)
+    actor_pos = positions.get(actor_eid)
+    perceived = []
+    report_risk = 0.0
+
+    for observer_eid in tuple(actual.get("observer_eids", ()) or ()):
+        observer_pos = positions.get(observer_eid)
+        if observer_pos is None:
+            continue
+        distance = _manhattan(x, y, observer_pos.x, observer_pos.y)
+        notice_chance = max(
+            0.1,
+            min(
+                0.96,
+                0.24
+                + (actor_perception * 0.052)
+                + (actor_streetwise * 0.026)
+                - (max(0, distance - 1) * 0.032),
+            ),
+        )
+        # A person beside the actor is harder to overlook, but still not
+        # magically legible as someone who will report what they see.
+        if actor_pos is not None:
+            actor_distance = _manhattan(actor_pos.x, actor_pos.y, observer_pos.x, observer_pos.y)
+            if actor_distance <= 2:
+                notice_chance = min(0.98, notice_chance + 0.18)
+        rng = random.Random(
+            f"{getattr(sim, 'seed', 0)}:ground-witness-read:{int(actor_eid)}:{int(observer_eid)}:{x}:{y}:{z}"
+        )
+        if rng.random() > notice_chance:
+            continue
+        perceived.append(int(observer_eid))
+
+        observer_ai = ais.get(observer_eid)
+        observer_role = _behavior_token(getattr(observer_ai, "role", ""))
+        observer_justice = justices.get(observer_eid)
+        justice_level = _clamp_behavior_value(
+            getattr(observer_justice, "justice", 0.46),
+            default=0.46,
+        )
+        sensitivity = _clamp_behavior_value(
+            getattr(observer_justice, "crime_sensitivity", justice_level),
+            default=justice_level,
+        )
+        corruption = _clamp_behavior_value(
+            getattr(observer_justice, "corruption", 0.08),
+            default=0.08,
+        )
+        authority = bool(
+            observer_role in _AUTHORITY_ROLES
+            or getattr(observer_justice, "enforce_all", False)
+        )
+        social_uncertainty = max(0.04, (10.0 - actor_streetwise) / 10.0) * 0.32
+        social_misread = rng.uniform(-social_uncertainty, social_uncertainty)
+        estimated_report = (
+            0.08
+            + (justice_level * 0.34)
+            + (sensitivity * 0.34)
+            - (corruption * 0.28)
+            + (0.42 if authority else 0.0)
+            + social_misread
+        )
+        report_risk += max(0.0, min(1.0, estimated_report))
+
+    result = {
+        "actual": actual,
+        "actual_observer_count": len(tuple(actual.get("observer_eids", ()) or ())),
+        "actual_accountable_count": len(tuple(actual.get("accountable_observer_eids", ()) or ())),
+        "perceived_observer_eids": tuple(perceived),
+        "perceived_observer_count": len(perceived),
+        "perceived_report_risk": min(1.6, float(report_risk)),
+    }
+    cache[cache_key] = result
+    return result
+
+
+def _ground_item_need_pressure(sim, actor_eid, ground):
+    needs = sim.ecs.get(NPCNeeds).get(actor_eid)
+    vitality = sim.ecs.get(Vitality).get(actor_eid)
+    tags = _item_tags(ground, item_catalog=ITEM_CATALOG)
+    pressure = 0.0
+    if "food" in tags:
+        pressure = max(pressure, (100.0 - float(getattr(needs, "hunger", 86.0) or 86.0)) / 100.0)
+    if "drink" in tags:
+        pressure = max(pressure, (100.0 - float(getattr(needs, "thirst", 90.0) or 90.0)) / 100.0)
+    if "medical" in tags and vitality is not None:
+        max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1))
+        hp = max(0, int(getattr(vitality, "hp", max_hp) or max_hp))
+        pressure = max(pressure, 1.0 - (float(hp) / float(max_hp)))
+    if "weapon" in tags:
+        loadout = sim.ecs.get(WeaponLoadout).get(actor_eid)
+        if loadout is None or not loadout.current_weapon():
+            pressure = max(pressure, 0.24)
+    return _clamp_behavior_value(pressure, default=0.0)
+
+
+def _ground_item_pickup_appraisal(sim, actor_eid, ground, *, distance=0):
     entitlement = item_entitlement_for_actor(sim, actor_eid, ground)
-    return bool(entitlement and entitlement.get("lawful_take"))
+    if not isinstance(entitlement, dict):
+        return {"allowed": False, "reason": "unknown_claim", "entitlement": {}}
+
+    value = max(0.0, float(_scavengeable_ground_item_value(ground)))
+    if value <= 0.0:
+        return {"allowed": False, "reason": "no_useful_value", "entitlement": entitlement, "value": 0.0}
+
+    lawful = bool(entitlement.get("lawful_take"))
+    claim_class = str(entitlement.get("claim_class", "") or "").strip().lower()
+    metadata = ground.get("metadata") if isinstance((ground or {}).get("metadata"), dict) else {}
+    source_context = str(entitlement.get("source_context") or metadata.get("source_context") or "").strip().lower()
+    fallout = bool(
+        source_context in _COMBAT_FALLOUT_CONTEXTS
+        or metadata.get("source_incident_id") is not None
+        or metadata.get("source_victim_eid") is not None
+    )
+
+    # Floor merchandise and staff supplies belong to the existing burglary and
+    # employee-authority systems.  Ordinary scavenging is for loose public
+    # debris and ambiguous fallout, not a second store-robbery implementation.
+    if not lawful and claim_class in {CLAIM_MERCHANDISE, CLAIM_STAFF_SUPPLY}:
+        return {
+            "allowed": False,
+            "reason": "site_stock",
+            "entitlement": entitlement,
+            "value": value,
+            "fallout": fallout,
+        }
+
+    if lawful or claim_class in {CLAIM_PUBLIC_FREE, CLAIM_SCENE_SALVAGE}:
+        return {
+            "allowed": True,
+            "reason": "lawful_salvage",
+            "entitlement": entitlement,
+            "value": value,
+            "fallout": fallout,
+            "risk": 0.0,
+            "temptation": 1.0,
+            "margin": 1.0,
+            "observation": {
+                "actual": {},
+                "actual_observer_count": 0,
+                "actual_accountable_count": 0,
+                "perceived_observer_count": 0,
+                "perceived_report_risk": 0.0,
+            },
+        }
+
+    traits = sim.ecs.get(NPCTraits).get(actor_eid)
+    justice = sim.ecs.get(JusticeProfile).get(actor_eid)
+    discipline = _clamp_behavior_value(getattr(traits, "discipline", 0.5), default=0.5)
+    empathy = _clamp_behavior_value(getattr(traits, "empathy", 0.5), default=0.5)
+    bravery = _clamp_behavior_value(getattr(traits, "bravery", 0.5), default=0.5)
+    justice_level = _clamp_behavior_value(getattr(justice, "justice", 0.46), default=0.46)
+    sensitivity = _clamp_behavior_value(
+        getattr(justice, "crime_sensitivity", justice_level),
+        default=justice_level,
+    )
+    corruption = _clamp_behavior_value(getattr(justice, "corruption", 0.08), default=0.08)
+    opportunism = _actor_behavior_value(sim, actor_eid, BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME, 0.04)
+    collect_drive = max(
+        _actor_behavior_value(sim, actor_eid, BEHAVIOR_COLLECT_GROUND_CREDITS, 0.0),
+        _actor_behavior_value(sim, actor_eid, BEHAVIOR_SCAVENGE_LOOSE_ITEMS, 0.0),
+    )
+
+    claim_pressure = {
+        CLAIM_PRIVATE_EFFECT: 0.78,
+        CLAIM_MERCHANDISE: 1.22,
+        CLAIM_STAFF_SUPPLY: 1.12,
+    }.get(claim_class, 0.68)
+    if fallout:
+        claim_pressure *= 0.48
+    if source_context in {"actor_drop", "personal_drop"}:
+        claim_pressure = max(claim_pressure, 0.88)
+    source_actor_eid = entitlement.get("source_actor_eid")
+    if source_actor_eid is not None and sim.ecs.get(Position).get(source_actor_eid) is not None:
+        claim_pressure += 0.18
+
+    observation = _ground_item_observation_appraisal(sim, actor_eid, ground)
+    perceived_report_risk = float(observation.get("perceived_report_risk", 0.0) or 0.0)
+    restraint = _clamp_behavior_value(
+        (discipline * 0.34)
+        + (justice_level * 0.24)
+        + (sensitivity * 0.18)
+        + (empathy * 0.08)
+        + ((1.0 - corruption) * 0.08)
+        + ((1.0 - bravery) * 0.04)
+        - (opportunism * 0.26)
+        - (collect_drive * 0.16)
+    )
+    prop = _property_covering(
+        sim,
+        int((ground or {}).get("x", 0) or 0),
+        int((ground or {}).get("y", 0) or 0),
+        int((ground or {}).get("z", 0) or 0),
+    )
+    property_pressure = 0.0
+    if isinstance(prop, dict) and not fallout:
+        property_pressure = 0.16 if _property_is_public(prop) else 0.28
+    risk = (
+        claim_pressure * (0.5 + (restraint * 0.64))
+        + perceived_report_risk * (0.34 + (restraint * 0.5))
+        + property_pressure
+    )
+
+    value_pressure = min(1.55, (value / 70.0) ** 0.62)
+    need_pressure = _ground_item_need_pressure(sim, actor_eid, ground)
+    unobserved_bonus = 0.08 if int(observation.get("perceived_observer_count", 0) or 0) <= 0 else 0.0
+    temptation = (
+        (value_pressure * 0.62)
+        + (need_pressure * 0.38)
+        + (opportunism * 0.34)
+        + (collect_drive * 0.25)
+        + (0.1 if fallout else 0.0)
+        + unobserved_bonus
+        - (max(0, int(distance or 0)) * 0.018)
+    )
+    margin = float(temptation - risk)
+    return {
+        "allowed": bool(margin >= 0.0),
+        "reason": "worth_the_risk" if margin >= 0.0 else "too_risky",
+        "entitlement": entitlement,
+        "value": value,
+        "fallout": fallout,
+        "risk": float(risk),
+        "temptation": float(temptation),
+        "margin": margin,
+        "observation": observation,
+    }
+
+
+def _ground_item_pickup_is_safe(sim, actor_eid, ground):
+    # Kept as the compatibility predicate used by older callers.  "Safe" now
+    # means the actor judges the opportunity acceptable, not omnisciently legal.
+    return bool(_ground_item_pickup_appraisal(sim, actor_eid, ground).get("allowed"))
 
 
 def _ground_item_target_is_reachable(sim, actor_eid, pos, ground):
@@ -3995,7 +4365,12 @@ def _scavengeable_ground_item_value(ground):
     elif legal_status in {"restricted", "suspicious"}:
         base += 3.0
     quantity = max(1, int(ground.get("quantity", 1) or 1))
-    return float(base * min(3.0, 0.9 + (0.38 * quantity)))
+    semantic_value = float(base * min(3.0, 0.9 + (0.38 * quantity)))
+    # Catalogue valuation now covers cosmetics, scraps, drone components, and
+    # wire gear too.  Keep the semantic floor above for necessities and danger,
+    # but let actual usefulness/rarity make unfamiliar combat fallout tempting.
+    fair_value = float(item_fair_value(item_id, ground.get("metadata"), item_catalog=ITEM_CATALOG))
+    return float(max(semantic_value, fair_value * quantity))
 
 
 def _scavenge_item_matches_preferences(sim, actor_eid, ground):
@@ -4042,7 +4417,10 @@ def _find_ground_credit_target(sim, actor_eid, pos, *, radius=None):
 
     search_radius = radius
     if search_radius is None:
-        search_radius = _behavior_preference(sim, actor_eid, "ground_credit_search_radius", 6)
+        if _actor_behavior_override_value(sim, actor_eid, BEHAVIOR_COLLECT_GROUND_CREDITS) is None:
+            search_radius = 4
+        else:
+            search_radius = _behavior_preference(sim, actor_eid, "ground_credit_search_radius", 6)
     try:
         search_radius = max(1, int(search_radius))
     except (TypeError, ValueError):
@@ -4052,22 +4430,34 @@ def _find_ground_credit_target(sim, actor_eid, pos, *, radius=None):
     for ground in sim.ground_items_in_radius(pos.x, pos.y, pos.z, r=search_radius):
         if not is_credstick_item(ground.get("item_id")):
             continue
-        if not _ground_item_pickup_is_safe(sim, actor_eid, ground):
-            continue
         if not _ground_item_target_is_reachable(sim, actor_eid, pos, ground):
             continue
         distance = _manhattan(pos.x, pos.y, ground.get("x"), ground.get("y"))
+        appraisal = _ground_item_pickup_appraisal(
+            sim,
+            actor_eid,
+            ground,
+            distance=distance,
+        )
+        if not appraisal.get("allowed"):
+            continue
         credits = credstick_total_credits(
             quantity=ground.get("quantity", 1),
             metadata=ground.get("metadata"),
         )
-        score = _ground_credit_interest_score(credits, distance)
+        score = _ground_credit_interest_score(credits, distance) + max(
+            -12.0,
+            min(18.0, float(appraisal.get("margin", 0.0) or 0.0) * 18.0),
+        )
         candidate = {
             "target": (int(ground.get("x", pos.x)), int(ground.get("y", pos.y)), int(ground.get("z", pos.z))),
             "ground_item_id": str(ground.get("ground_item_id", "")).strip() or None,
             "credits": int(credits),
             "distance": int(distance),
             "score": float(score),
+            "risk": float(appraisal.get("risk", 0.0) or 0.0),
+            "temptation": float(appraisal.get("temptation", 0.0) or 0.0),
+            "fallout": bool(appraisal.get("fallout", False)),
         }
         if best is None or candidate["score"] > best["score"]:
             best = candidate
@@ -4083,12 +4473,15 @@ def _find_scavenge_ground_item_target(sim, actor_eid, pos, *, radius=None):
 
     search_radius = radius
     if search_radius is None:
-        search_radius = _behavior_preference(
-            sim,
-            actor_eid,
-            "ground_item_search_radius",
-            _behavior_preference(sim, actor_eid, "ground_credit_search_radius", 6),
-        )
+        if _actor_behavior_override_value(sim, actor_eid, BEHAVIOR_SCAVENGE_LOOSE_ITEMS) is None:
+            search_radius = 4
+        else:
+            search_radius = _behavior_preference(
+                sim,
+                actor_eid,
+                "ground_item_search_radius",
+                _behavior_preference(sim, actor_eid, "ground_credit_search_radius", 6),
+            )
     try:
         search_radius = max(1, int(search_radius))
     except (TypeError, ValueError):
@@ -4099,8 +4492,6 @@ def _find_scavenge_ground_item_target(sim, actor_eid, pos, *, radius=None):
         item_id = str(ground.get("item_id", "") or "").strip().lower()
         if not item_id or is_credstick_item(item_id):
             continue
-        if not _ground_item_pickup_is_safe(sim, actor_eid, ground):
-            continue
         if not _ground_item_target_is_reachable(sim, actor_eid, pos, ground):
             continue
         if not _scavenge_item_matches_preferences(sim, actor_eid, ground):
@@ -4108,8 +4499,19 @@ def _find_scavenge_ground_item_target(sim, actor_eid, pos, *, radius=None):
         if not _inventory_can_accept_item(inventory, item_id, owner_eid=actor_eid):
             continue
         distance = _manhattan(pos.x, pos.y, ground.get("x"), ground.get("y"))
+        appraisal = _ground_item_pickup_appraisal(
+            sim,
+            actor_eid,
+            ground,
+            distance=distance,
+        )
+        if not appraisal.get("allowed"):
+            continue
         value = _scavengeable_ground_item_value(ground)
-        score = _ground_item_interest_score(ground, distance=distance)
+        score = _ground_item_interest_score(ground, distance=distance) + max(
+            -12.0,
+            min(18.0, float(appraisal.get("margin", 0.0) or 0.0) * 18.0),
+        )
         if score <= 0.0:
             continue
         candidate = {
@@ -4120,13 +4522,16 @@ def _find_scavenge_ground_item_target(sim, actor_eid, pos, *, radius=None):
             "value": float(value),
             "distance": int(distance),
             "score": float(score),
+            "risk": float(appraisal.get("risk", 0.0) or 0.0),
+            "temptation": float(appraisal.get("temptation", 0.0) or 0.0),
+            "fallout": bool(appraisal.get("fallout", False)),
         }
         if best is None or candidate["score"] > best["score"]:
             best = candidate
     return best
 
 
-def _inventory_scavenge_sale_rows(sim, actor_eid):
+def _inventory_scavenge_sale_rows(sim, actor_eid, *, scavenged_only=False):
     inventory = sim.ecs.get(Inventory).get(actor_eid)
     if not inventory:
         return []
@@ -4139,6 +4544,9 @@ def _inventory_scavenge_sale_rows(sim, actor_eid):
         category = _item_category(entry, item_catalog=ITEM_CATALOG)
         if category == "credential":
             continue
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        if scavenged_only and not bool(metadata.get("npc_scavenged")):
+            continue
         value = _scavengeable_ground_item_value(entry)
         if value <= 0.0:
             continue
@@ -4146,25 +4554,41 @@ def _inventory_scavenge_sale_rows(sim, actor_eid):
             "instance_id": str(entry.get("instance_id", "")).strip() or None,
             "item_id": item_id,
             "quantity": int(max(1, entry.get("quantity", 1) or 1)),
-            "metadata": entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {},
+            "metadata": metadata,
             "value": float(value),
         })
     return rows
 
 
+def _scavenged_sale_is_marked_only(sim, actor_eid, *, preferred_property_id=None):
+    if preferred_property_id:
+        return False
+    explicit = _actor_behavior_override_value(sim, actor_eid, BEHAVIOR_SELL_SCAVENGED_ITEMS)
+    return not bool(explicit is not None and explicit >= 0.2)
+
+
 def _find_scavenged_sale_target(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
+    marked_only = _scavenged_sale_is_marked_only(
+        sim,
+        actor_eid,
+        preferred_property_id=preferred_property_id,
+    )
     lead = _best_opportunity_lead(sim, actor_eid, "scavenged_sale")
     if isinstance(lead, dict):
         if preferred_property_id and str(preferred_property_id).strip() and str(lead.get("property_id", "")).strip() == str(preferred_property_id).strip():
             lead["score"] = float(lead.get("score", 0.0) or 0.0) + float(max(0.0, preferred_score_bonus or 0.0))
-        lead["sale_rows"] = _inventory_scavenge_sale_rows(sim, actor_eid)
+        lead["sale_rows"] = _inventory_scavenge_sale_rows(
+            sim,
+            actor_eid,
+            scavenged_only=marked_only,
+        )
         if not lead["sale_rows"]:
             return None
         return lead
     if not pos:
         return None
 
-    sale_rows = _inventory_scavenge_sale_rows(sim, actor_eid)
+    sale_rows = _inventory_scavenge_sale_rows(sim, actor_eid, scavenged_only=marked_only)
     if not sale_rows:
         return None
 
@@ -4233,7 +4657,15 @@ def _find_scavenged_sale_target_exact(sim, actor_eid, pos, *, radius=None, prefe
     if not pos:
         return None
 
-    sale_rows = _inventory_scavenge_sale_rows(sim, actor_eid)
+    sale_rows = _inventory_scavenge_sale_rows(
+        sim,
+        actor_eid,
+        scavenged_only=_scavenged_sale_is_marked_only(
+            sim,
+            actor_eid,
+            preferred_property_id=preferred_property_id,
+        ),
+    )
     if not sale_rows:
         return None
 
@@ -4355,7 +4787,15 @@ def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None, *, preferred_pr
         hidden_kind="backroom_market",
     )
     payout_mult = float(_SCAVENGE_SALE_PAYOUT_MULTS.get(archetype, 0.46))
-    sale_rows = _inventory_scavenge_sale_rows(sim, actor_eid)
+    sale_rows = _inventory_scavenge_sale_rows(
+        sim,
+        actor_eid,
+        scavenged_only=_scavenged_sale_is_marked_only(
+            sim,
+            actor_eid,
+            preferred_property_id=preferred_property_id,
+        ),
+    )
     if not sale_rows:
         return None
 
@@ -4446,6 +4886,93 @@ def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None, *, preferred_pr
     }
 
 
+def _npc_scavenged_item_metadata(sim, actor_eid, ground, appraisal):
+    metadata = ground.get("metadata") if isinstance((ground or {}).get("metadata"), dict) else {}
+    entitlement = appraisal.get("entitlement") if isinstance(appraisal, dict) else {}
+    entitlement = entitlement if isinstance(entitlement, dict) else {}
+    stamped = stamp_item_provenance(
+        sim,
+        {
+            **ground,
+            "metadata": metadata,
+        },
+        source_context=metadata.get("source_context", "ground_pickup"),
+        latent_claim_violation=bool(entitlement.get("latent_claim_violation", False)),
+        source_owner_eid=entitlement.get("source_owner_eid", ground.get("owner_eid")),
+        source_owner_tag=entitlement.get("source_owner_tag", ground.get("owner_tag")),
+        source_property_id=entitlement.get("source_property_id"),
+        last_transfer_tick=int(getattr(sim, "tick", 0)),
+        last_transfer_kind="ground_pickup",
+        last_holder_eid=actor_eid,
+    )
+    stamped.update({
+        "npc_scavenged": True,
+        "npc_scavenged_tick": int(getattr(sim, "tick", 0)),
+        "npc_scavenged_by_eid": int(actor_eid),
+        "npc_scavenged_fallout": bool(appraisal.get("fallout", False)),
+        "npc_scavenged_risky": not bool(entitlement.get("lawful_take", False)),
+        "origin_ground_id": str(ground.get("ground_item_id", "") or "").strip() or None,
+    })
+    if not bool(entitlement.get("lawful_take", False)):
+        stamped["stolen_tick"] = int(getattr(sim, "tick", 0))
+        stamped["stolen_owner_eid"] = ground.get("owner_eid")
+        stamped["stolen_owner_tag"] = ground.get("owner_tag")
+        stamped["stolen_property_id"] = str(entitlement.get("source_property_id") or "").strip()
+        stamped["justice_stolen"] = True
+    return stamped
+
+
+def _emit_npc_ground_item_take_consequences(sim, actor_eid, ground, appraisal, *, item_name):
+    entitlement = appraisal.get("entitlement") if isinstance(appraisal, dict) else {}
+    entitlement = entitlement if isinstance(entitlement, dict) else {}
+    if bool(entitlement.get("lawful_take", False)):
+        return None
+
+    observation = appraisal.get("observation") if isinstance(appraisal, dict) else {}
+    observation = observation.get("actual") if isinstance(observation, dict) else {}
+    if not isinstance(observation, dict) or not observation:
+        observation = observation_payload_for_position(
+            sim,
+            ground.get("x"),
+            ground.get("y"),
+            ground.get("z", 0),
+            exclude_eid=actor_eid,
+            offender_eid=actor_eid,
+            observation_channels=("actor_witness",),
+        )
+    property_id = str(entitlement.get("source_property_id") or "").strip() or None
+    payload = {
+        "offender_eid": int(actor_eid),
+        "item_id": str(ground.get("item_id", "") or "").strip().lower(),
+        "item_name": str(item_name or ground.get("item_id", "item")),
+        "owner_eid": ground.get("owner_eid"),
+        "owner_tag": ground.get("owner_tag"),
+        "property_id": property_id,
+        "source_context": entitlement.get("source_context"),
+        "source_victim_eid": entitlement.get("source_victim_eid"),
+        "x": int(ground.get("x", 0) or 0),
+        "y": int(ground.get("y", 0) or 0),
+        "z": int(ground.get("z", 0) or 0),
+        **observation,
+    }
+    sim.emit(Event("item_stolen", **payload))
+    _emit_action_offense_event(
+        sim,
+        actor_eid,
+        "pickup_item",
+        payload["x"],
+        payload["y"],
+        payload["z"],
+        context="item_theft",
+        property_id=property_id,
+        item_id=payload["item_id"],
+        source_context=payload["source_context"],
+        source_victim_eid=payload["source_victim_eid"],
+        **observation,
+    )
+    return payload
+
+
 def _collect_ground_credits_at_actor(sim, actor_eid, pos=None):
     if pos is None:
         pos = sim.ecs.get(Position).get(actor_eid)
@@ -4460,17 +4987,21 @@ def _collect_ground_credits_at_actor(sim, actor_eid, pos=None):
     for ground in sim.ground_items_at(pos.x, pos.y, pos.z):
         if not is_credstick_item(ground.get("item_id")):
             continue
-        if not _ground_item_pickup_is_safe(sim, actor_eid, ground):
+        appraisal = _ground_item_pickup_appraisal(sim, actor_eid, ground, distance=0)
+        if not appraisal.get("allowed"):
             continue
-        candidates.append(ground)
+        candidates.append((ground, appraisal))
     if not candidates:
         return None
 
-    ground = max(
+    ground, appraisal = max(
         candidates,
-        key=lambda entry: credstick_total_credits(
-            quantity=entry.get("quantity", 1),
-            metadata=entry.get("metadata"),
+        key=lambda row: (
+            credstick_total_credits(
+                quantity=row[0].get("quantity", 1),
+                metadata=row[0].get("metadata"),
+            ),
+            float(row[1].get("margin", 0.0) or 0.0),
         ),
     )
     metadata = ground.get("metadata") if isinstance(ground.get("metadata"), dict) else {}
@@ -4483,18 +5014,7 @@ def _collect_ground_credits_at_actor(sim, actor_eid, pos=None):
         instance_factory=sim.new_item_instance_id,
         owner_eid=actor_eid,
         owner_tag="npc",
-        metadata=stamp_item_provenance(
-            sim,
-            {
-                **ground,
-                "metadata": metadata,
-            },
-            source_context=metadata.get("source_context", "ground_pickup"),
-            latent_claim_violation=bool((metadata or {}).get("latent_claim_violation", False)),
-            last_transfer_tick=int(getattr(sim, "tick", 0)),
-            last_transfer_kind="ground_pickup",
-            last_holder_eid=actor_eid,
-        ),
+        metadata=_npc_scavenged_item_metadata(sim, actor_eid, ground, appraisal),
     )
     if not added:
         return None
@@ -4509,11 +5029,20 @@ def _collect_ground_credits_at_actor(sim, actor_eid, pos=None):
     if ground_item_id:
         sim.remove_ground_item(ground_item_id)
 
+    item_name = item_def.get("name", "Credstick")
+    _emit_npc_ground_item_take_consequences(
+        sim,
+        actor_eid,
+        ground,
+        appraisal,
+        item_name=item_name,
+    )
+
     sim.emit(Event(
         "item_picked_up",
         eid=actor_eid,
         item_id=CREDSTICK_ITEM_ID,
-        item_name=item_def.get("name", "Credstick"),
+        item_name=item_name,
         quantity=int(max(1, ground.get("quantity", 1) or 1)),
         instance_id=instance_id,
         ground_item_id=ground_item_id,
@@ -4533,6 +5062,9 @@ def _collect_ground_credits_at_actor(sim, actor_eid, pos=None):
         x=int(ground.get("x", pos.x)),
         y=int(ground.get("y", pos.y)),
         z=int(ground.get("z", pos.z)),
+        risky=not bool((appraisal.get("entitlement") or {}).get("lawful_take", False)),
+        fallout=bool(appraisal.get("fallout", False)),
+        perceived_witness_count=int(((appraisal.get("observation") or {}).get("perceived_observer_count", 0)) or 0),
     ))
     return {
         "ground_item_id": ground_item_id,
@@ -4556,7 +5088,8 @@ def _collect_ground_items_at_actor(sim, actor_eid, pos=None):
         item_id = str(ground.get("item_id", "") or "").strip().lower()
         if not item_id:
             continue
-        if not _ground_item_pickup_is_safe(sim, actor_eid, ground):
+        appraisal = _ground_item_pickup_appraisal(sim, actor_eid, ground, distance=0)
+        if not appraisal.get("allowed"):
             continue
         if is_credstick_item(item_id):
             if not _inventory_can_accept_credsticks(inventory, owner_eid=actor_eid):
@@ -4569,13 +5102,14 @@ def _collect_ground_items_at_actor(sim, actor_eid, pos=None):
         score = _ground_item_interest_score(ground, distance=0)
         if score <= 0.0:
             continue
-        candidates.append((float(score), ground))
+        score += max(-12.0, min(18.0, float(appraisal.get("margin", 0.0) or 0.0) * 18.0))
+        candidates.append((float(score), ground, appraisal))
 
     if not candidates:
         return []
 
     results = []
-    for _score, ground in sorted(candidates, key=lambda row: row[0], reverse=True):
+    for _score, ground, appraisal in sorted(candidates, key=lambda row: row[0], reverse=True):
         item_id = str(ground.get("item_id", "") or "").strip().lower()
         item_def = ITEM_CATALOG.get(item_id, {})
         quantity = int(max(1, ground.get("quantity", 1) or 1))
@@ -4594,18 +5128,7 @@ def _collect_ground_items_at_actor(sim, actor_eid, pos=None):
             instance_factory=sim.new_item_instance_id,
             owner_eid=actor_eid,
             owner_tag="npc",
-            metadata=stamp_item_provenance(
-                sim,
-                {
-                    **ground,
-                    "metadata": metadata,
-                },
-                source_context=metadata.get("source_context", "ground_pickup"),
-                latent_claim_violation=bool((metadata or {}).get("latent_claim_violation", False)),
-                last_transfer_tick=int(getattr(sim, "tick", 0)),
-                last_transfer_kind="ground_pickup",
-                last_holder_eid=actor_eid,
-            ),
+            metadata=_npc_scavenged_item_metadata(sim, actor_eid, ground, appraisal),
         )
         if not added:
             continue
@@ -4619,11 +5142,20 @@ def _collect_ground_items_at_actor(sim, actor_eid, pos=None):
         if ground_item_id:
             sim.remove_ground_item(ground_item_id)
 
+        item_name = item_def.get("name", item_id.replace("_", " ").title())
+        _emit_npc_ground_item_take_consequences(
+            sim,
+            actor_eid,
+            ground,
+            appraisal,
+            item_name=item_name,
+        )
+
         sim.emit(Event(
             "item_picked_up",
             eid=actor_eid,
             item_id=item_id,
-            item_name=item_def.get("name", item_id.replace("_", " ").title()),
+            item_name=item_name,
             quantity=quantity,
             instance_id=instance_id,
             ground_item_id=ground_item_id,
@@ -4632,6 +5164,8 @@ def _collect_ground_items_at_actor(sim, actor_eid, pos=None):
             z=int(ground.get("z", pos.z)),
             cash_pickup=False,
             credits_gained=credits,
+            risky=not bool((appraisal.get("entitlement") or {}).get("lawful_take", False)),
+            fallout=bool(appraisal.get("fallout", False)),
         ))
         sim.emit(Event(
             "npc_ground_item_scavenged",
@@ -4643,6 +5177,9 @@ def _collect_ground_items_at_actor(sim, actor_eid, pos=None):
             x=int(ground.get("x", pos.x)),
             y=int(ground.get("y", pos.y)),
             z=int(ground.get("z", pos.z)),
+            risky=not bool((appraisal.get("entitlement") or {}).get("lawful_take", False)),
+            fallout=bool(appraisal.get("fallout", False)),
+            perceived_witness_count=int(((appraisal.get("observation") or {}).get("perceived_observer_count", 0)) or 0),
         ))
         if is_credstick_item(item_id):
             sim.emit(Event(
@@ -4655,6 +5192,9 @@ def _collect_ground_items_at_actor(sim, actor_eid, pos=None):
                 x=int(ground.get("x", pos.x)),
                 y=int(ground.get("y", pos.y)),
                 z=int(ground.get("z", pos.z)),
+                risky=not bool((appraisal.get("entitlement") or {}).get("lawful_take", False)),
+                fallout=bool(appraisal.get("fallout", False)),
+                perceived_witness_count=int(((appraisal.get("observation") or {}).get("perceived_observer_count", 0)) or 0),
             ))
         results.append({
             "ground_item_id": ground_item_id,
@@ -4662,6 +5202,12 @@ def _collect_ground_items_at_actor(sim, actor_eid, pos=None):
             "item_id": item_id,
             "quantity": quantity,
             "credits_gained": credits,
+            "risky": not bool((appraisal.get("entitlement") or {}).get("lawful_take", False)),
+            "fallout": bool(appraisal.get("fallout", False)),
         })
+        # One choice per action keeps cleanup social and competitive: another
+        # resident gets a chance at the rest of the pile, and a single NPC does
+        # not vacuum an entire combat scene in one simulation step.
+        break
 
     return results

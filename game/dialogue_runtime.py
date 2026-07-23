@@ -319,6 +319,8 @@ def world_trait_claim_text(topic, claim_value):
         return f"people are wary of a strange wild plant called {claim}."
     if topic == "unusual_flora":
         return f"people mention an unusual wild plant called {claim}."
+    if topic == "herbal_method":
+        return f"a campfire method going around says {claim}."
     return f"{topic.replace('_', ' ')} -> {claim}."
 
 

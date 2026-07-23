@@ -101,8 +101,25 @@ def load_mechanical_recipe_catalog(path=MECHANICAL_RECIPES_PATH):
             for item_id, quantity in raw_components.items()
             if _key(item_id)
         }
+        component_choices = []
+        raw_choices = row.get("component_choices") if isinstance(row.get("component_choices"), list) else ()
+        for choice_index, raw_choice in enumerate(raw_choices):
+            if not isinstance(raw_choice, dict):
+                continue
+            raw_options = raw_choice.get("options") if isinstance(raw_choice.get("options"), dict) else {}
+            options = {
+                _key(item_id): max(1, _int(quantity, 1))
+                for item_id, quantity in raw_options.items()
+                if _key(item_id)
+            }
+            if not options:
+                continue
+            component_choices.append({
+                "id": _key(raw_choice.get("id")) or f"choice_{choice_index + 1}",
+                "options": options,
+            })
         profile = dict(row.get("device_profile") or {}) if isinstance(row.get("device_profile"), dict) else {}
-        if not recipe_id or not plan_item_id or not output_item_id or not components or not profile:
+        if not recipe_id or not plan_item_id or not output_item_id or (not components and not component_choices) or not profile:
             continue
         recipes[recipe_id] = {
             "id": recipe_id,
@@ -110,6 +127,7 @@ def load_mechanical_recipe_catalog(path=MECHANICAL_RECIPES_PATH):
             "plan_item_id": plan_item_id,
             "output_item_id": output_item_id,
             "components": components,
+            "component_choices": tuple(component_choices),
             "difficulty": max(1.0, min(12.0, _float(row.get("difficulty"), 5.0))),
             "construction_ticks": max(1, _int(row.get("construction_ticks"), 2)),
             "field_craftable": bool(row.get("field_craftable", False)),
@@ -243,25 +261,51 @@ def _craft_tool(inventory, *, item_catalog=None):
     return max(candidates, key=lambda row: (row[0], row[1]))[2] if candidates else None
 
 
-def _selected_components(inventory, requirements):
+def _selected_components(inventory, requirements, component_choices=()):
+    entries = tuple(getattr(inventory, "items", ()) or ())
     by_item = {}
-    for entry in tuple(getattr(inventory, "items", ()) or ()):
+    remaining_by_index = {}
+    for index, entry in enumerate(entries):
         item_id = _key(entry.get("item_id"))
-        if item_id in requirements:
-            by_item.setdefault(item_id, []).append(entry)
-    selected = []
+        by_item.setdefault(item_id, []).append(index)
+        remaining_by_index[index] = max(0, _int(entry.get("quantity"), 0))
+    selected_by_index = {}
+
+    def allocate(item_id, needed, remaining, selected):
+        needed = max(1, _int(needed, 1))
+        for index in by_item.get(_key(item_id), ()):
+            amount = min(needed, remaining.get(index, 0))
+            if amount <= 0:
+                continue
+            remaining[index] -= amount
+            selected[index] = selected.get(index, 0) + amount
+            needed -= amount
+            if needed <= 0:
+                return True
+        return False
+
     for item_id, needed in requirements.items():
-        remaining = int(needed)
-        for entry in by_item.get(item_id, ()):
-            amount = min(remaining, max(0, _int(entry.get("quantity"), 0)))
-            if amount > 0:
-                selected.append((entry, amount))
-                remaining -= amount
-            if remaining <= 0:
-                break
-        if remaining > 0:
+        if not allocate(item_id, needed, remaining_by_index, selected_by_index):
             return None
-    return selected
+
+    for choice in tuple(component_choices or ()):
+        options = choice.get("options") if isinstance(choice, dict) and isinstance(choice.get("options"), dict) else {}
+        resolved = None
+        for item_id, needed in options.items():
+            candidate_remaining = dict(remaining_by_index)
+            candidate_selected = dict(selected_by_index)
+            if allocate(item_id, needed, candidate_remaining, candidate_selected):
+                resolved = (candidate_remaining, candidate_selected)
+                break
+        if resolved is None:
+            return None
+        remaining_by_index, selected_by_index = resolved
+
+    return [
+        (entries[index], quantity)
+        for index, quantity in sorted(selected_by_index.items())
+        if quantity > 0
+    ]
 
 
 def _quality_for_margin(margin):
@@ -287,7 +331,7 @@ def craft_mechanical_recipe(sim, eid, plan_entry, *, item_catalog=None, recipe_c
     tool = _craft_tool(inventory, item_catalog=catalog)
     if tool is None:
         return {"ok": False, "reason": "no_mechanical_tool", "recipe": recipe}
-    selected = _selected_components(inventory, recipe["components"])
+    selected = _selected_components(inventory, recipe["components"], recipe.get("component_choices"))
     if selected is None:
         return {"ok": False, "reason": "missing_components", "recipe": recipe}
 
@@ -433,7 +477,7 @@ def begin_mechanical_recipe_craft(sim, eid, plan_entry, *, item_catalog=None, re
         return {"ok": False, "reason": "no_inventory", "recipe": recipe}
     if _craft_tool(inventory, item_catalog=catalog) is None:
         return {"ok": False, "reason": "no_mechanical_tool", "recipe": recipe}
-    if _selected_components(inventory, recipe["components"]) is None:
+    if _selected_components(inventory, recipe["components"], recipe.get("component_choices")) is None:
         return {"ok": False, "reason": "missing_components", "recipe": recipe}
     if eid != getattr(sim, "player_eid", None):
         return craft_mechanical_recipe(sim, eid, plan_entry, item_catalog=catalog, recipe_catalog=recipes)

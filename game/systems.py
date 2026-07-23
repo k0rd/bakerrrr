@@ -727,6 +727,7 @@ PROPERTY_ARCHETYPE_DISPLAY = {
     "bait_shop": ("R", "building_roof_storefront"),
     "comms_shop": ("C", "property_service"),
     "drone_shop": ("D", "item_tool"),
+    "wire_shop": ("W", "building_roof_storefront"),
     "electronics_shop": ("E", "building_roof_storefront"),
     "outfitter": ("G", "building_roof_storefront"),
     "surplus_store": ("G", "building_roof_storefront"),

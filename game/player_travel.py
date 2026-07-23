@@ -774,16 +774,18 @@ class PlayerTravelRuntime:
                 self._emit_vehicle_blocked(eid, vehicle_prop, reason="shore_exit_required")
                 return False
         else:
-            park_x = int(pos.x)
-            park_y = int(pos.y)
-            park_z = int(pos.z)
             if vehicle_prop:
-                park_x, park_y, park_z = self._best_vehicle_exit_vehicle_tile(
-                    pos.x,
-                    pos.y,
-                    pos.z,
-                    vehicle_prop=vehicle_prop,
-                )
+                # A land vehicle's property anchor is authoritative.  Looking
+                # for a "better" parking cell here made cars hop sideways when
+                # their own property occupied the current tile.  Only the
+                # disembarking actor should be placed around the parked car.
+                park_x = int(vehicle_prop.get("x", pos.x))
+                park_y = int(vehicle_prop.get("y", pos.y))
+                park_z = int(vehicle_prop.get("z", pos.z))
+            else:
+                park_x = int(pos.x)
+                park_y = int(pos.y)
+                park_z = int(pos.z)
             exit_tile = self._best_vehicle_exit_player_tile(
                 park_x,
                 park_y,
@@ -795,6 +797,10 @@ class PlayerTravelRuntime:
         if state:
             state.set_in_vehicle(False, tick=self.sim.tick)
             set_vehicle_speed(state, 0, tick=self.sim.tick)
+        local_drive = getattr(self.sim, "local_drive_ui", None)
+        if isinstance(local_drive, dict):
+            local_drive["active"] = False
+            local_drive["last_step_at"] = 0.0
         self._set_local_ramp_auto_enter(False)
 
         if vehicle_prop:

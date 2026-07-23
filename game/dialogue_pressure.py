@@ -81,6 +81,7 @@ TOPIC_FAMILIES = {
     "service_street_doctor": "service_locator",
     "service_outfitter": "service_locator",
     "service_drone_parts": "service_locator",
+    "service_wire_gear": "service_locator",
     "service_justice": "service_locator",
     "service_used_cars": "service_locator",
     "service_vehicle_fetch": "service_locator",

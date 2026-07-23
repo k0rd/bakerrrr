@@ -2358,6 +2358,19 @@ def _report_device_item_for_npc(role, workplace_prop=None, home_prop=None):
 
 def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
     archetype = _property_archetype(workplace_prop or home_prop)
+    if archetype in {"herbalist_shop", "herbalist_camp"}:
+        return (
+            "pruning_shears",
+            "pruning_shears",
+            "mortar_kit",
+            "mortar_kit",
+            "field_knife",
+            "pocket_multitool",
+            "bandage_roll",
+            "bottled_water",
+            "canteen_coffee",
+            "water_purifier_tabs",
+        )
     if role == "guard" or archetype in SECURITY_ARCHETYPES:
         return (
             "med_gel",
@@ -2625,8 +2638,14 @@ def _seed_npc_inventory(sim, eid, rng, role, workplace_prop=None, home_prop=None
     archetype = _property_archetype(workplace_prop or home_prop)
     if archetype == "butcher_shop" and rng.random() < 0.34:
         _give_item(sim, eid, "butcher_apron", quantity=1)
-    elif archetype in {"herbalist_shop", "herbalist_camp"} and rng.random() < 0.34:
-        _give_item(sim, eid, "botany_apron", quantity=1)
+    elif archetype in {"herbalist_shop", "herbalist_camp"}:
+        if rng.random() < 0.34:
+            _give_item(sim, eid, "botany_apron", quantity=1)
+        # These are working tools, not flavor loot: without them generated
+        # herbalists can recognize plants but cannot cut, scrape, or turn their
+        # own harvest into circulating experimental knowledge.
+        _give_item(sim, eid, "pruning_shears", quantity=1)
+        _give_item(sim, eid, "mortar_kit", quantity=1)
     pool = [item_id for item_id in _inventory_pool_for(role, workplace_prop=workplace_prop, home_prop=home_prop) if item_id in ITEM_CATALOG]
     if not pool:
         return

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 from game.release_runtime import release_control_text
-from game.ui_text_runtime import _modal_body_widths, _modal_panel_width
+from game.ui_text_runtime import _modal_body_widths, _modal_panel_width, _wrapped_selection_index
 from ui.input_keys import (
     ENTER_KEYS,
     KEY_BACK_TAB,
@@ -425,12 +425,14 @@ def handle_report_input(host, key, *, line_text_fn, wrap_display_lines_fn):
             return True
 
         if key in (KEY_UP, ord("k"), ord("K")):
-            state["selected_index"] = int(state.get("selected_index", 0)) - 1
+            rows = list(state.get("rows", ()) or ())
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(rows))
             clamp_known_locations_selection(state, body_h=body_h)
             return True
 
         if key in (KEY_DOWN, ord("j"), ord("J")):
-            state["selected_index"] = int(state.get("selected_index", 0)) + 1
+            rows = list(state.get("rows", ()) or ())
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(rows))
             clamp_known_locations_selection(state, body_h=body_h)
             return True
 
@@ -458,12 +460,14 @@ def handle_report_input(host, key, *, line_text_fn, wrap_display_lines_fn):
 
     if report_kind == "known_people":
         if key in (KEY_UP, ord("k"), ord("K")):
-            state["selected_index"] = int(state.get("selected_index", 0)) - 1
+            rows = list(state.get("rows", ()) or ())
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(rows))
             clamp_known_people_selection(state, body_h=body_h)
             return True
 
         if key in (KEY_DOWN, ord("j"), ord("J")):
-            state["selected_index"] = int(state.get("selected_index", 0)) + 1
+            rows = list(state.get("rows", ()) or ())
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(rows))
             clamp_known_people_selection(state, body_h=body_h)
             return True
 

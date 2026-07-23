@@ -807,6 +807,33 @@ class TradeSystem(System):
                 ("field_dressing", 5),
             ),
         },
+        "wire_shop": {
+            "min_slots": 9,
+            "max_slots": 12,
+            "min_stock": 1,
+            "max_stock": 3,
+            "buy_mult_lo": 1.0,
+            "buy_mult_hi": 1.38,
+            "sell_ratio": 0.5,
+            "unlisted_sell_ratio": 0.3,
+            # These three make the shop a dependable on-ramp rather than a
+            # storefront that can randomly roll twelve advanced accessories
+            # and no usable interface. The rest of its Wire stock still varies.
+            "required_items": (
+                "cheap_deck",
+                "wire_talk_program",
+                "wire_route_probe_program",
+            ),
+            "item_pool": (
+                ("battery_pack", 14),
+                ("scrap_circuit", 12),
+                ("pocket_multitool", 10),
+                ("inspection_mirror", 7),
+                ("signal_jammer", 7),
+                ("phone", 8),
+                ("two_way_radio", 8),
+            ),
+        },
         "service_station": {
             "buy_mult_lo": 0.97,
             "buy_mult_hi": 1.28,
@@ -2426,7 +2453,18 @@ class TradeSystem(System):
                     adjusted *= 1.0 + min(0.34, 0.08 + (0.04 * len(overlap)))
             adjusted = int(max(1, round(adjusted)))
             weighted_pool.append((item_id, adjusted))
-        item_ids = self._weighted_unique(rng, weighted_pool, slots)
+        required_items = []
+        for item_id in tuple(profile.get("required_items", ()) or ()):
+            item_id = str(item_id or "").strip().lower()
+            if item_id in ITEM_CATALOG and item_id not in required_items:
+                required_items.append(item_id)
+        # Required stock consumes normal shelf space and is removed from the
+        # random pool. This keeps the guarantee honest without inflating a
+        # shop beyond its authored size.
+        slots = max(slots, len(required_items))
+        required_set = set(required_items)
+        weighted_pool = [row for row in weighted_pool if row[0] not in required_set]
+        item_ids = required_items + self._weighted_unique(rng, weighted_pool, slots - len(required_items))
         if not item_ids:
             item_ids = ["city_pass_token"]
 

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 
 from engine.events import Event
 from engine.systems import System
-from game.components import AI, Inventory, Position
+from game.components import AI, Inventory, NPCNeeds, Occupation, Position
 from game.color_words import color_word_display_name, normalize_color_word
 from game.flora_genetics import normalize_flora_genetics
 from game.flora_genetics import inherit_flora_genetics
@@ -21,13 +21,24 @@ from game.flora_runtime import (
     flora_at,
     flora_bloom_state,
     flora_harvest_limit,
+    flora_patch_harvestable,
     flora_catalog_for_sim,
     load_flora_catalog,
     normalize_flora_harvest_state,
     register_dynamic_flora_profile,
     register_flora_patch,
 )
-from game.herbal_chemistry_runtime import plant_chemistry_class, plant_secondary_traits
+from game.herbal_chemistry_runtime import (
+    HARVEST_METHOD_BY_FORM,
+    HERBAL_INGREDIENT_ITEM_IDS,
+    MORTAR_KIT_ITEM_ID,
+    _tool_for_method,
+    craft_herbal_medicine,
+    harvest_flora_patch,
+    learn_plant_trait,
+    plant_chemistry_class,
+    plant_secondary_traits,
+)
 from game.ecology_registry import ecology_registry_write_batch, register_native_flora_line
 from game.items import ITEM_CATALOG, item_display_name
 from game.property_runtime import property_fixture_type
@@ -68,6 +79,21 @@ GARDENER_ROLES = {
     "drying_shelf_clerk",
     "recipe_keeper",
 }
+FLORA_WORK_TOKENS = frozenset({
+    "botanist",
+    "caretaker",
+    "cultivator",
+    "field_herbalist",
+    "forager",
+    "gardener",
+    "herbalist",
+    "recipe_keeper",
+    "remedy_mixer",
+})
+FLORA_WORK_ARCHETYPES = frozenset({"herbalist_camp", "herbalist_shop"})
+NPC_FLORA_HARVEST_RADIUS = 12
+NPC_FLORA_HARVEST_COOLDOWN = 600
+NPC_HERBAL_EXPERIMENT_COOLDOWN = 1200
 GENERIC_PLANT_NAME_WORDS = {
     "plant",
     "flora",
@@ -1649,6 +1675,197 @@ def sync_pot_inventory_state(sim, eid, entry):
     return True
 
 
+def _npc_flora_work_profile(sim, eid, *, occupation=None, needs=None):
+    ai = sim.ecs.get(AI).get(eid)
+    occupation = occupation or sim.ecs.get(Occupation).get(eid)
+    needs = needs or sim.ecs.get(NPCNeeds).get(eid)
+    tokens = {
+        _key(getattr(ai, "role", "")),
+        _key(getattr(occupation, "career", "")),
+    }
+    workplace_id = str(getattr(occupation, "workplace", "") or "").strip()
+    workplace = getattr(sim, "properties", {}).get(workplace_id) if workplace_id else None
+    metadata = workplace.get("metadata") if isinstance(workplace, dict) and isinstance(workplace.get("metadata"), dict) else {}
+    archetype = _key(metadata.get("archetype"))
+    professional = bool(archetype in FLORA_WORK_ARCHETYPES or any(
+        token in FLORA_WORK_TOKENS
+        or any(work_token in token for work_token in ("herbal", "garden", "forag", "botan", "cultivat"))
+        for token in tokens
+        if token
+    ))
+    desperate = bool(needs is not None and min(float(getattr(needs, "hunger", 100.0)), float(getattr(needs, "thirst", 100.0))) < 18.0)
+    return {
+        "professional": professional,
+        "desperate": desperate,
+        "workplace_id": workplace_id,
+        "archetype": archetype,
+    }
+
+
+def _local_flora_rows(sim, x, y, z, radius):
+    chunk_rows = getattr(sim, "chunk_flora_records", None)
+    rows = []
+    seen = set()
+    if isinstance(chunk_rows, dict) and hasattr(sim, "chunk_coords"):
+        min_chunk = sim.chunk_coords(int(x) - int(radius), int(y) - int(radius))
+        max_chunk = sim.chunk_coords(int(x) + int(radius), int(y) + int(radius))
+        for cx in range(int(min_chunk[0]), int(max_chunk[0]) + 1):
+            for cy in range(int(min_chunk[1]), int(max_chunk[1]) + 1):
+                for row in tuple(chunk_rows.get((cx, cy), ()) or ()):
+                    if not isinstance(row, Mapping):
+                        continue
+                    flora_id = str(row.get("id", "") or "").strip()
+                    if not flora_id or flora_id in seen:
+                        continue
+                    canonical = getattr(sim, "flora_patches", {}).get(flora_id, row)
+                    if not isinstance(canonical, Mapping):
+                        continue
+                    seen.add(flora_id)
+                    rows.append(canonical)
+    # Explicitly registered regression/content patches may predate the chunk
+    # index.  This fallback is used only when the bounded buckets yielded no
+    # candidates; ordinary worlds stay on the indexed path.
+    if not rows and not isinstance(chunk_rows, dict):
+        for row in tuple(getattr(sim, "flora_patches", {}).values() or ()):
+            if isinstance(row, Mapping):
+                rows.append(row)
+    return tuple(rows)
+
+
+def find_npc_flora_harvest_target(sim, eid, pos=None, *, occupation=None, needs=None, radius=NPC_FLORA_HARVEST_RADIUS):
+    pos = pos or sim.ecs.get(Position).get(eid)
+    inventory = sim.ecs.get(Inventory).get(eid)
+    if pos is None or inventory is None:
+        return None
+    profile = _npc_flora_work_profile(sim, eid, occupation=occupation, needs=needs)
+    if not profile["professional"] and not profile["desperate"]:
+        return None
+    cooldowns = getattr(sim, "cultivation_harvester_cooldowns", None)
+    if not isinstance(cooldowns, dict):
+        sim.cultivation_harvester_cooldowns = {}
+        cooldowns = sim.cultivation_harvester_cooldowns
+    now = _safe_int(getattr(sim, "tick", 0), 0)
+    if _safe_int(cooldowns.get(_actor_key(eid)), 0) > now:
+        return None
+
+    candidates = []
+    for raw in _local_flora_rows(sim, pos.x, pos.y, pos.z, radius):
+        record = normalize_flora_harvest_state(dict(raw))
+        if not flora_patch_harvestable(record):
+            continue
+        try:
+            rx, ry, rz = int(record.get("x", 0)), int(record.get("y", 0)), int(record.get("z", 0))
+        except (TypeError, ValueError):
+            continue
+        if rz != int(pos.z):
+            continue
+        distance = abs(int(pos.x) - rx) + abs(int(pos.y) - ry)
+        if distance > int(radius):
+            continue
+        # Cultivated plants are somebody's work, even when no fence happens to
+        # enclose them.  Autonomous foraging stays on wild growth.
+        if str(record.get("cultivation_id", "") or "").strip():
+            continue
+        rarity = _key(record.get("rarity"), "common")
+        remaining = max(0, _safe_int(record.get("harvest_remaining"), 0))
+        reserve_line = rarity in {"rare", "very_rare", "protected", "endangered", "legendary", "unique"}
+        if reserve_line and (not profile["professional"] or remaining <= 1):
+            continue
+        traits = {_key(value) for value in tuple(record.get("secondary_traits", ()) or ()) if _key(value)}
+        tags = {_key(value) for value in tuple(record.get("tags", ()) or ()) if _key(value)}
+        if profile["desperate"] and not profile["professional"] and not ({"+nourish", "+hydrate"} & traits or {"edible", "food", "medicinal"} & tags):
+            continue
+        form = _key(record.get("growth_form"), "flower")
+        method = HARVEST_METHOD_BY_FORM.get(form, "pluck")
+        if _tool_for_method(inventory, method) is None:
+            continue
+        # A specialist's forage is a real work intention and must be able to
+        # beat the generic "patrol my home tile" duty fallback.  Emergency,
+        # safety, medical, and active service work still score above it.
+        score = 47.0 if profile["professional"] else 13.0
+        score += min(5.0, float(remaining) * 1.25)
+        score += 2.0 if rarity in {"uncommon", "rare"} else 0.0
+        score += 4.0 if profile["desperate"] and ({"+nourish", "+hydrate"} & traits) else 0.0
+        score -= float(distance) * 0.7
+        candidates.append((score, distance, str(record.get("id", "")), record))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (-row[0], row[1], row[2]))
+    score, distance, flora_id, record = candidates[0]
+    return {
+        "flora_id": flora_id,
+        "plant_id": _key(record.get("plant_id")),
+        "plant_name": str(record.get("name") or record.get("plant_id") or "wild plant").strip(),
+        "target": (int(record.get("x", 0)), int(record.get("y", 0)), int(record.get("z", 0))),
+        "distance": int(distance),
+        "score": float(score),
+        "professional": bool(profile["professional"]),
+    }
+
+
+def npc_harvest_flora_at_actor(sim, eid, pos=None):
+    pos = pos or sim.ecs.get(Position).get(eid)
+    if pos is None:
+        return False
+    target = find_npc_flora_harvest_target(sim, eid, pos, radius=1)
+    if not isinstance(target, dict):
+        return False
+    flora_id = str(target.get("flora_id", "") or "").strip()
+    if not flora_id or not harvest_flora_patch(sim, eid, flora_id=flora_id):
+        return False
+    learn_plant_trait(sim, eid, target.get("plant_id"), source_kind="npc_foraging")
+    inventory = sim.ecs.get(Inventory).get(eid)
+    now = _safe_int(getattr(sim, "tick", 0), 0)
+    if inventory is not None:
+        for entry in reversed(tuple(inventory.items or ())):
+            metadata = entry.get("metadata") if isinstance(entry, dict) and isinstance(entry.get("metadata"), dict) else None
+            if not isinstance(metadata, dict):
+                continue
+            if _safe_int(metadata.get("harvested_tick"), -1) != now or _key(metadata.get("source_plant_id")) != _key(target.get("plant_id")):
+                continue
+            metadata["npc_harvested"] = True
+            metadata["npc_harvested_by_eid"] = int(eid)
+            break
+    cooldowns = getattr(sim, "cultivation_harvester_cooldowns", {})
+    cooldowns[_actor_key(eid)] = now + NPC_FLORA_HARVEST_COOLDOWN
+    return True
+
+
+def npc_try_herbal_experiment(sim, eid):
+    profile = _npc_flora_work_profile(sim, eid)
+    if not profile["professional"]:
+        return False
+    inventory = sim.ecs.get(Inventory).get(eid)
+    if inventory is None or not any(_key(entry.get("item_id")) == MORTAR_KIT_ITEM_ID for entry in tuple(inventory.items or ()) if isinstance(entry, Mapping)):
+        return False
+    ingredients = [
+        entry
+        for entry in tuple(inventory.items or ())
+        if isinstance(entry, Mapping) and _key(entry.get("item_id")) in HERBAL_INGREDIENT_ITEM_IDS
+    ]
+    if len(ingredients) < 2:
+        return False
+    cooldowns = getattr(sim, "cultivation_experiment_cooldowns", None)
+    if not isinstance(cooldowns, dict):
+        sim.cultivation_experiment_cooldowns = {}
+        cooldowns = sim.cultivation_experiment_cooldowns
+    now = _safe_int(getattr(sim, "tick", 0), 0)
+    actor_key = _actor_key(eid)
+    if _safe_int(cooldowns.get(actor_key), 0) > now:
+        return False
+    selected = sorted(ingredients, key=lambda entry: str(entry.get("instance_id", "")))[:2]
+    result = craft_herbal_medicine(
+        sim,
+        eid,
+        recipe_id=None,
+        ingredient_instance_ids=[entry.get("instance_id") for entry in selected],
+        mode="self",
+        emit_event=True,
+    )
+    cooldowns[actor_key] = now + NPC_HERBAL_EXPERIMENT_COOLDOWN
+    return bool((result or {}).get("ok"))
+
+
 def npc_try_gardener_action(sim, eid):
     pos = sim.ecs.get(Position).get(eid)
     ai = sim.ecs.get(AI).get(eid)
@@ -1757,4 +1974,5 @@ class CultivationSystem(System):
         if now % 120 != 0:
             return
         for eid in tuple(self.sim.ecs.get(AI).keys())[:80]:
+            npc_try_herbal_experiment(self.sim, eid)
             npc_try_gardener_action(self.sim, eid)

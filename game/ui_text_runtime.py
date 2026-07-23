@@ -12,6 +12,16 @@ def _int_or_default(value, default):
         return default
 
 
+def _wrapped_selection_index(current, step, count):
+    """Move through a selectable row set cyclically, tolerating stale UI state."""
+    count = max(0, _int_or_default(count, 0))
+    if count <= 0:
+        return 0
+    current = _int_or_default(current, 0)
+    step = _int_or_default(step, 0)
+    return (current + step) % count
+
+
 def _tick_duration_label(sim, ticks):
     try:
         total_ticks = int(ticks)

@@ -355,6 +355,7 @@ from game.ui_text_runtime import (
     _rich_line,
     _segment,
     _tick_duration_label,
+    _wrapped_selection_index,
     _wrap_display_lines,
     _wrap_text_lines,
 )
@@ -2663,11 +2664,10 @@ class InputSystem(System):
             return self._drop_selected_drone_sheet_part()
         rows = list(state.get("rows", ()) or ())
         if key in (KEY_UP, ord("k"), ord("K")):
-            state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 1)
-            state["scroll"] = min(int(state.get("scroll", 0) or 0), int(state["selected_index"]))
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(rows))
             return True
         if key in (KEY_DOWN, ord("j"), ord("J")):
-            state["selected_index"] = min(max(0, len(rows) - 1), int(state.get("selected_index", 0) or 0) + 1)
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(rows))
             return True
         if key in ENTER_KEYS:
             return self._activate_selected_drone_sheet_row(prefer_workbench=True)
@@ -2892,12 +2892,12 @@ class InputSystem(System):
         if key in (KEY_UP, ord("k"), ord("K")):
             rows = self._refresh_wire_kit_ui()
             if rows:
-                state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 1)
+                state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(rows))
             return True
         if key in (KEY_DOWN, ord("j"), ord("J")):
             rows = self._refresh_wire_kit_ui()
             if rows:
-                state["selected_index"] = min(len(rows) - 1, int(state.get("selected_index", 0) or 0) + 1)
+                state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(rows))
             return True
         if key == KEY_PAGE_UP:
             state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 6)
@@ -3097,17 +3097,15 @@ class InputSystem(System):
         key = self._input_key_code(physical_input)
         if key in (27, ord("q"), ord("Q")):
             return self._close_wire_connection_ui()
-        rows = list(state.get("rows", ()) or [])
         if key in (KEY_UP, ord("k"), ord("K")):
-            self._refresh_wire_connection_ui()
+            rows = self._refresh_wire_connection_ui()
             if rows:
-                state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 1)
+                state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(rows))
             return True
         if key in (KEY_DOWN, ord("j"), ord("J")):
-            self._refresh_wire_connection_ui()
-            rows = list(state.get("rows", ()) or [])
+            rows = self._refresh_wire_connection_ui()
             if rows:
-                state["selected_index"] = min(len(rows) - 1, int(state.get("selected_index", 0) or 0) + 1)
+                state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(rows))
             return True
         if key == KEY_HOME:
             state["selected_index"] = 0
@@ -3582,11 +3580,11 @@ class InputSystem(System):
             return True
         rows = self._normalize_action_menu_selection(zoom_mode)
         if key in (KEY_UP, ord("k"), ord("K")):
-            state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 1)
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(rows))
             self._next_input_event(collapse_burst=False)
             return True
         if key in (KEY_DOWN, ord("j"), ord("J")):
-            state["selected_index"] = min(max(0, len(rows) - 1), int(state.get("selected_index", 0) or 0) + 1)
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(rows))
             self._next_input_event(collapse_burst=False)
             return True
         if key is not None:
@@ -5142,13 +5140,13 @@ class InputSystem(System):
             return True
 
         if key in (KEY_UP, ord("k"), ord("K")):
-            state["selected_index"] = int(state.get("selected_index", 0)) - 1
-            self._normalize_dialog_selection()
+            topics = list(state.get("topics", ()) or ())
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(topics))
             return True
 
         if key in (KEY_DOWN, ord("j"), ord("J")):
-            state["selected_index"] = int(state.get("selected_index", 0)) + 1
-            self._normalize_dialog_selection()
+            topics = list(state.get("topics", ()) or ())
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(topics))
             return True
 
         if ord("1") <= key <= ord("9"):
@@ -7139,12 +7137,23 @@ class InputSystem(System):
         mechanical_catalog = load_mechanical_recipe_catalog()
         if item_is_mechanical_plan(item_def, item_catalog=self.catalog):
             recipe = mechanical_recipe_for_plan(entry.get("item_id"), recipe_catalog=mechanical_catalog) or {}
-            components = ", ".join(
+            component_labels = [
                 f"{quantity} {item_display_name(item_id, item_catalog=self.catalog)}"
                 for item_id, quantity in dict(recipe.get("components", {}) or {}).items()
-            )
-            if components:
-                effect_labels.append(f"builds {item_display_name(recipe.get('output_item_id'), item_catalog=self.catalog)} from {components}")
+            ]
+            for choice in tuple(recipe.get("component_choices", ()) or ()):
+                options = choice.get("options") if isinstance(choice, dict) and isinstance(choice.get("options"), dict) else {}
+                option_label = " or ".join(
+                    f"{quantity} {item_display_name(item_id, item_catalog=self.catalog)}"
+                    for item_id, quantity in options.items()
+                )
+                if option_label:
+                    component_labels.append(f"({option_label})")
+            if component_labels:
+                effect_labels.append(
+                    f"builds {item_display_name(recipe.get('output_item_id'), item_catalog=self.catalog)} "
+                    f"from {', '.join(component_labels)}"
+                )
             effect_labels.append("U build")
         elif item_is_mechanical_device(item_def, item_catalog=self.catalog):
             recipe = mechanical_recipe_for_output(entry.get("item_id"), recipe_catalog=mechanical_catalog) or {}
@@ -7381,14 +7390,14 @@ class InputSystem(System):
 
         if key in (KEY_UP, ord("k"), ord("K")):
             state.pop("appearance_slot_choice", None)
-            state["selected_index"] -= 1
-            self._normalize_inventory_selection()
+            entries = self._inventory_panel_entries()
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(entries))
             return True
 
         if key in (KEY_DOWN, ord("j"), ord("J")):
             state.pop("appearance_slot_choice", None)
-            state["selected_index"] += 1
-            self._normalize_inventory_selection()
+            entries = self._inventory_panel_entries()
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(entries))
             return True
         if key is not None: #guard bad assumption
             if ord("1") <= key <= ord("9"):
@@ -7574,14 +7583,14 @@ class InputSystem(System):
             return True
 
         if key in (KEY_UP, ord("k"), ord("K")):
-            state["selected_index"] = int(state.get("selected_index", 0)) - 1
-            self._normalize_trade_selection()
+            rows = list(state.get("rows", ()) or ())
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(rows))
             self._inspect_selected_trade_row()
             return True
 
         if key in (KEY_DOWN, ord("j"), ord("J")):
-            state["selected_index"] = int(state.get("selected_index", 0)) + 1
-            self._normalize_trade_selection()
+            rows = list(state.get("rows", ()) or ())
+            state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(rows))
             self._inspect_selected_trade_row()
             return True
 

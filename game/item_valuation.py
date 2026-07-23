@@ -66,6 +66,7 @@ CORE_ITEM_BASE_VALUES = {
     "field_dressing": 14,
     "pain_blocker": 19,
     "scrap_circuit": 14,
+    "textile_scrap": 1,
     "battery_pack": 15,
     "wire_spool": 11,
     "salvaged_hardware": 8,

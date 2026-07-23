@@ -723,7 +723,7 @@ def choose_wire_data_family(scene, prop):
         options = ("payroll", "procurement", "rota", "personal_records")
     elif archetype == "drone_shop":
         options = ("drone_mod_plan", "electronics_schematic", "software_source", "procurement", "personal_records")
-    elif archetype in {"electronics_shop", "comms_shop"}:
+    elif archetype in {"electronics_shop", "comms_shop", "wire_shop"}:
         options = ("electronics_schematic", "software_source", "prototype_telemetry", "procurement", "personal_records")
     elif archetype in {"data_center", "tower"}:
         options = ("software_source", "prototype_telemetry", "procurement", "customer_habits", "personal_records")
@@ -970,7 +970,7 @@ def wire_data_buyer_profile_for_store(prop=None, store=None):
     }
     if archetype in {"bank", "brokerage"}:
         return dict(_BROKER_PROFILES["finance"], **extra)
-    if archetype in {"office", "tower", "data_center", "electronics_shop", "comms_shop", "drone_shop"}:
+    if archetype in {"office", "tower", "data_center", "electronics_shop", "comms_shop", "drone_shop", "wire_shop"}:
         return dict(_BROKER_PROFILES["corp_tech"], **extra)
     if archetype in {"media_lab", "civic_office", "city_hall"}:
         return dict(_BROKER_PROFILES["media_civic"], **extra)

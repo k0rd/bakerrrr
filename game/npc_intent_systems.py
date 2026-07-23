@@ -93,6 +93,10 @@ from game.npc_relationships import (
     should_block_solo_vehicle_for_partner as _should_block_solo_vehicle_for_partner,
 )
 from game.named_scars_runtime import maybe_record_named_scar_from_damage
+from game.cultivation_runtime import (
+    find_npc_flora_harvest_target,
+    npc_harvest_flora_at_actor,
+)
 from game.npc_self_protection_runtime import (
     active_self_protection_action,
     apply_self_protection_quirk,
@@ -4025,6 +4029,18 @@ class NPCWillSystem(System):
                 workplace_prop=workplace_prop,
                 role=ai.role,
             )
+            # The clock fallback is useful for uniformed duty roles, but an
+            # unemployed resident is not "on shift" merely because it is
+            # daytime.  Only a concrete job/site should suppress a tempting
+            # loose-item opportunity.
+            scavenging_work_active = bool(
+                work_active
+                and (
+                    occupation is not None
+                    or workplace_prop is not None
+                    or str(getattr(ai, "role", "") or "").strip().lower() in {"guard", "scout"}
+                )
+            )
             district_type = ""
             world = getattr(self.sim, "world", None)
             if world is not None:
@@ -4034,6 +4050,26 @@ class NPCWillSystem(System):
                     district = {}
                 district_type = str(district.get("district_type", "") or "").strip().lower()
             career = str(getattr(occupation, "career", "") or "").strip().lower()
+
+            flora_target = find_npc_flora_harvest_target(
+                self.sim,
+                eid,
+                pos,
+                occupation=occupation,
+                needs=needs,
+            )
+            if isinstance(flora_target, dict):
+                flora_score = float(flora_target.get("score", 0.0) or 0.0)
+                flora_profession = bool(flora_target.get("professional"))
+                if work_active and not flora_profession:
+                    flora_score *= 0.45
+                if ai.state == "harvesting_flora" and ai.target == flora_target.get("target"):
+                    flora_score += 4.0
+                if flora_score > best_score:
+                    best_intent = "harvesting_flora"
+                    best_score = flora_score
+                    best_target = flora_target["target"]
+                    best_target_eid = None
 
             collect_ground_credits = _effective_behavior_value(
                 self.sim,
@@ -4086,7 +4122,7 @@ class NPCWillSystem(System):
                     scavenging_score = float(scavenging_target.get("score", 0.0) or 0.0) * (
                         0.45 + (collect_ground_credits * 0.9)
                     )
-                    if work_active:
+                    if scavenging_work_active:
                         scavenging_score *= 0.55
                     if ai.state == "scavenging" and ai.target == scavenging_target.get("target"):
                         scavenging_score += 4.0
@@ -4102,7 +4138,7 @@ class NPCWillSystem(System):
                     item_score = float(item_target.get("score", 0.0) or 0.0) * (
                         0.4 + (scavenge_loose_items * 0.95)
                     )
-                    if work_active:
+                    if scavenging_work_active:
                         item_score *= 0.55
                     if ai.state == "scavenging" and ai.target == item_target.get("target"):
                         item_score += 4.0
@@ -4739,6 +4775,7 @@ class NPCInvestigateSystem(System):
         "leaving_property": 1,
         "chasing": 1,
         "scavenging": 2,
+        "harvesting_flora": 2,
         "selling_scavenged": 2,
         "casing_target": 2,
         "committing_property_crime": 2,
@@ -4773,6 +4810,7 @@ class NPCInvestigateSystem(System):
         "leaving_property",
         "chasing",
         "scavenging",
+        "harvesting_flora",
         "selling_scavenged",
         "casing_target",
         "committing_property_crime",
@@ -5271,6 +5309,7 @@ class NPCInvestigateSystem(System):
                 "patrolling",
                 "resting",
                 "scavenging",
+                "harvesting_flora",
                 "seeking_companionship",
                 "seeking_social",
                 "selling_scavenged",
@@ -7026,6 +7065,8 @@ class NPCInvestigateSystem(System):
 
                 if ai.state == "scavenging":
                     _collect_ground_items_at_actor(self.sim, eid, pos)
+                if ai.state == "harvesting_flora":
+                    npc_harvest_flora_at_actor(self.sim, eid, pos)
                 if ai.state == "selling_scavenged":
                     memory = memories.get(eid)
                     hidden_trade_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HIDDEN_TRADE, now=self.sim.tick)

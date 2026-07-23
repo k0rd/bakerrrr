@@ -903,13 +903,13 @@ class World:
     }
 
     OPTIONAL_BUILDINGS_BY_DISTRICT = {
-        "industrial": ("recycling_plant", "auto_garage", "freight_depot", "cold_storage", "tool_depot", "electronics_shop", "comms_shop", "drone_shop", "contractor_office", "service_station", "outerwear_shop"),
-        "residential": ("daycare", "laundromat", "pharmacy", "herbalist_shop", "bookshop", "hardware_store", "electronics_shop", "comms_shop", "drone_shop", "outfitter", "outfitter", "surplus_store", "thrift_store", "service_station", "barbershop", "salon", "top_shop", "bottom_shop", "shoe_shop", "hair_studio", "clothing_superstore", "employment_agency", "butcher_shop"),
-        "downtown": ("hotel", "courthouse", "jail", "jail", "metro_exchange", "courier_office", "employment_agency", "bounty_office", "gallery", "casino", "tavern", "electronics_shop", "comms_shop", "outfitter", "herbalist_shop", "clothing_superstore", "salon", "barbershop", "top_shop", "dress_shop", "shoe_shop", "outerwear_shop", "headwear_shop", "jewelry_shop", "accessory_shop", "hair_studio", "makeup_counter", "tattoo_parlor", "butcher_shop"),
-        "slums": ("chop_shop", "junk_market", "soup_kitchen", "flophouse", "street_kitchen", "jail", "thrift_store", "barbershop", "tattoo_parlor", "accessory_shop", "shoe_shop", "herbalist_shop", "butcher_shop"),
-        "corporate": ("data_center", "co_working_hub", "biotech_clinic", "brokerage", "media_lab", "electronics_shop", "comms_shop", "drone_shop", "employment_agency", "salon", "jewelry_shop", "makeup_counter", "dress_shop", "clothing_superstore", "herbalist_shop"),
-        "military": ("command_center", "motor_pool", "field_hospital", "recruitment_office", "bounty_office", "supply_bunker", "prison", "comms_shop", "drone_shop", "surplus_store"),
-        "entertainment": ("theater", "music_venue", "gaming_hall", "karaoke_box", "pool_hall", "casino", "electronics_shop", "bounty_office", "clothing_superstore", "salon", "barbershop", "hair_studio", "makeup_counter", "tattoo_parlor", "jewelry_shop", "accessory_shop", "dress_shop"),
+        "industrial": ("recycling_plant", "auto_garage", "freight_depot", "cold_storage", "tool_depot", "electronics_shop", "comms_shop", "drone_shop", "wire_shop", "contractor_office", "service_station", "outerwear_shop"),
+        "residential": ("daycare", "laundromat", "pharmacy", "herbalist_shop", "bookshop", "hardware_store", "electronics_shop", "comms_shop", "drone_shop", "wire_shop", "outfitter", "outfitter", "surplus_store", "thrift_store", "service_station", "barbershop", "salon", "top_shop", "bottom_shop", "shoe_shop", "hair_studio", "clothing_superstore", "employment_agency", "butcher_shop"),
+        "downtown": ("hotel", "courthouse", "jail", "jail", "metro_exchange", "courier_office", "employment_agency", "bounty_office", "gallery", "casino", "tavern", "electronics_shop", "comms_shop", "wire_shop", "wire_shop", "outfitter", "herbalist_shop", "clothing_superstore", "salon", "barbershop", "top_shop", "dress_shop", "shoe_shop", "outerwear_shop", "headwear_shop", "jewelry_shop", "accessory_shop", "hair_studio", "makeup_counter", "tattoo_parlor", "butcher_shop"),
+        "slums": ("chop_shop", "junk_market", "soup_kitchen", "flophouse", "street_kitchen", "jail", "wire_shop", "thrift_store", "barbershop", "tattoo_parlor", "accessory_shop", "shoe_shop", "herbalist_shop", "butcher_shop"),
+        "corporate": ("data_center", "co_working_hub", "biotech_clinic", "brokerage", "media_lab", "electronics_shop", "comms_shop", "drone_shop", "wire_shop", "wire_shop", "employment_agency", "salon", "jewelry_shop", "makeup_counter", "dress_shop", "clothing_superstore", "herbalist_shop"),
+        "military": ("command_center", "motor_pool", "field_hospital", "recruitment_office", "bounty_office", "supply_bunker", "prison", "comms_shop", "drone_shop", "wire_shop", "surplus_store"),
+        "entertainment": ("theater", "music_venue", "gaming_hall", "karaoke_box", "pool_hall", "casino", "electronics_shop", "wire_shop", "bounty_office", "clothing_superstore", "salon", "barbershop", "hair_studio", "makeup_counter", "tattoo_parlor", "jewelry_shop", "accessory_shop", "dress_shop"),
     }
 
     # Optional archetypes stay seed-available; city variation should come from
@@ -955,6 +955,7 @@ class World:
         "electronics_shop": ("showroom", "counter", "repair_bench", "stock_room"),
         "comms_shop": ("front_counter", "radio_wall", "service_bench", "stock_room"),
         "drone_shop": ("showroom", "module_wall", "test_bay", "parts_cage", "service_counter"),
+        "wire_shop": ("front_counter", "deck_wall", "software_racks", "interface_bench", "stock_room"),
         "outfitter": ("counter", "aisles", "stock_room", "storage"),
         "top_shop": ("front_rack", "fitting_room", "counter", "stock_room"),
         "bottom_shop": ("front_rack", "fitting_room", "counter", "stock_room"),
@@ -1122,6 +1123,7 @@ class World:
         "daycare",
         "dock_shack",
         "drone_shop",
+        "wire_shop",
         "electronics_shop",
         "hardware_store",
         "house",
@@ -1273,6 +1275,7 @@ class World:
         "electronics_shop": ("electronics_clerk", "bench_technician", "parts_buyer", "repair_tech", "device_specialist"),
         "comms_shop": ("radio_clerk", "signal_tech", "antenna_runner", "comms_buyer", "field_installer"),
         "drone_shop": ("drone_counter_clerk", "drone_technician", "module_fitter", "battery_runner", "sensor_specialist"),
+        "wire_shop": ("wire_clerk", "deck_technician", "software_buyer", "interface_fitter", "network_specialist"),
         "outfitter": ("outfitter_clerk", "trail_supplier", "sporting_buyer", "stock_runner"),
         "top_shop": ("shirt_seller", "rack_runner", "fitting_room_attendant", "stock_runner"),
         "bottom_shop": ("pants_seller", "rack_runner", "fitting_room_attendant", "stock_runner"),
@@ -1373,6 +1376,7 @@ class World:
         "tool_depot",
         "bookshop",
         "drone_shop",
+        "wire_shop",
         "electronics_shop",
         "hardware_store",
         "accessory_shop",
@@ -1434,6 +1438,7 @@ class World:
         "comms_shop",
         "hardware_store",
         "drone_shop",
+        "wire_shop",
         "electronics_shop",
         "accessory_shop",
         "barbershop",
@@ -1505,6 +1510,7 @@ class World:
         "electronics_shop": ("Electronics", "Device Shop", "Repair Counter"),
         "comms_shop": ("Comms", "Radio Supply", "Signal Shop"),
         "drone_shop": ("Drone Shop", "Drone Workshop", "Module Bay"),
+        "wire_shop": ("Wire Shop", "Deck Supply", "Interface House", "Wireware"),
         "accessory_shop": ("Accessories", "Finds", "Little Goods"),
         "barbershop": ("Barber", "Cuts", "Chair"),
         "bottom_shop": ("Trousers", "Bottoms", "Rack"),

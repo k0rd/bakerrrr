@@ -60,6 +60,7 @@ TOPIC_ORDER = (
     "service_appearance",
     "service_outfitter",
     "service_drone_parts",
+    "service_wire_gear",
     "service_records",
     "service_justice",
     "service_vehicle_sales",
@@ -295,6 +296,7 @@ TOPIC_DEFS = {
             "service_appearance",
             "service_outfitter",
             "service_drone_parts",
+            "service_wire_gear",
             "service_records",
             "service_justice",
             "service_vehicle_sales",
@@ -435,6 +437,11 @@ TOPIC_DEFS = {
         "root": False,
         "unlocks": (),
     },
+    "service_wire_gear": {
+        "label": "Any Wire gear nearby?",
+        "root": False,
+        "unlocks": (),
+    },
     "service_records": {
         "label": "Where can I inspect civic records?",
         "root": False,
@@ -550,6 +557,7 @@ TOPIC_DEFS = {
             "service_appearance",
             "service_outfitter",
             "service_drone_parts",
+            "service_wire_gear",
             "service_records",
             "service_justice",
             "service_vehicle_sales",
@@ -1534,6 +1542,12 @@ PLAYER_TOPIC_BANKS = {
         "Who sells drone modules or sensors around here?",
         "Where would I find radios, batteries, or drone stock?",
         "If I need drone parts, who is close?",
+    ),
+    "service_wire_gear": (
+        "Any Wire gear nearby?",
+        "Who sells decks or Wire software around here?",
+        "Where would I find an interface and programs?",
+        "If I need Wire equipment, who is close?",
     ),
     "service_records": (
         "Where can I inspect civic records?",
@@ -5441,6 +5455,8 @@ def topic_label(topic_id, context=None):
         return "Any outfitter nearby?"
     if topic_id == "service_drone_parts":
         return "Any drone parts nearby?"
+    if topic_id == "service_wire_gear":
+        return "Any Wire gear nearby?"
     if topic_id == "service_records":
         return "Where can I inspect civic records?"
     if topic_id == "service_justice":

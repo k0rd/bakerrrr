@@ -1624,14 +1624,42 @@ def _validate_mechanical_recipes(path, item_ids, report):
         if not isinstance(difficulty, (int, float)) or isinstance(difficulty, bool) or not 1.0 <= float(difficulty) <= 12.0:
             report.error(source, recipe_path + ["difficulty"], "difficulty must be a number from 1 through 12")
         components = row.get("components")
-        if not isinstance(components, dict) or not components:
-            report.error(source, recipe_path + ["components"], "components must be a non-empty item-id object")
+        if not isinstance(components, dict):
+            report.error(source, recipe_path + ["components"], "components must be an item-id object")
+            components = {}
         else:
             for component_id, quantity in components.items():
                 component_path = recipe_path + ["components", component_id]
                 if str(component_id).strip().lower() not in item_ids:
                     report.error(source, component_path, f"component {component_id!r} is not in items.json")
                 _validate_int(report, source, component_path, quantity, minimum=1, maximum=20, field_name="component quantity")
+        component_choices = row.get("component_choices", [])
+        if not isinstance(component_choices, list):
+            report.error(source, recipe_path + ["component_choices"], "component_choices must be a list")
+        else:
+            seen_choice_ids = set()
+            for choice_index, choice in enumerate(component_choices):
+                choice_path = recipe_path + ["component_choices", choice_index]
+                if not isinstance(choice, dict):
+                    report.error(source, choice_path, "component choice must be an object")
+                    continue
+                choice_id = str(choice.get("id", "") or "").strip().lower()
+                if not _validate_identifier(report, source, choice_path + ["id"], choice_id, field_name="component choice id"):
+                    continue
+                if choice_id in seen_choice_ids:
+                    report.error(source, choice_path + ["id"], f"duplicate component choice id {choice_id!r}")
+                seen_choice_ids.add(choice_id)
+                options = choice.get("options")
+                if not isinstance(options, dict) or len(options) < 2:
+                    report.error(source, choice_path + ["options"], "component choice options must contain at least two item quantities")
+                    continue
+                for component_id, quantity in options.items():
+                    option_path = choice_path + ["options", component_id]
+                    if str(component_id).strip().lower() not in item_ids:
+                        report.error(source, option_path, f"component option {component_id!r} is not in items.json")
+                    _validate_int(report, source, option_path, quantity, minimum=1, maximum=20, field_name="component option quantity")
+        if not components and not component_choices:
+            report.error(source, recipe_path, "mechanical recipe must define fixed components or component choices")
         profile = row.get("device_profile")
         if not isinstance(profile, dict):
             report.error(source, recipe_path + ["device_profile"], "device_profile must be an object")

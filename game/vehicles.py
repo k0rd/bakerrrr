@@ -67,6 +67,7 @@ DEFAULT_CATALOG = {
             "electronics_shop",
             "comms_shop",
             "drone_shop",
+            "wire_shop",
             "dock_shack",
             "pump_house",
             "survey_post",

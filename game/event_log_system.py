@@ -697,6 +697,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("vehicle_wire_tracker_changed", self.on_vehicle_wire_tracker_changed)
         self.sim.events.subscribe("vehicle_collision", self.on_vehicle_collision)
         self.sim.events.subscribe("vehicle_crash", self.on_vehicle_crash)
+        self.sim.events.subscribe("vehicle_structure_breached", self.on_vehicle_structure_breached)
         self.sim.events.subscribe("vehicle_explosion_armed", self.on_vehicle_explosion_armed)
         self.sim.events.subscribe("vehicle_exploded", self.on_vehicle_exploded)
         self.sim.events.subscribe("overworld_travelled", self.on_overworld_travelled)
@@ -4873,7 +4874,11 @@ class EventLogSystem(System):
         controller_eid = event.data.get("controller_eid")
         source_eid = event.data.get("source_eid")
         drone_label = self._event_drone_label(event)
-        dropped = len(tuple(event.data.get("dropped_items", ()) or ()))
+        dropped = sum(
+            max(1, _int_or_default(entry.get("quantity"), 1))
+            for entry in tuple(event.data.get("dropped_items", ()) or ())
+            if isinstance(entry, dict)
+        )
         destroyed = len(tuple(event.data.get("destroyed_items", ()) or ()))
         pieces = []
         if dropped:
@@ -4881,6 +4886,8 @@ class EventLogSystem(System):
         if destroyed:
             pieces.append(f"{destroyed} lost")
         suffix = f" Parts scatter ({', '.join(pieces)})." if pieces else ""
+        if bool(event.data.get("battery_exploded")):
+            suffix += " Its battery ruptures."
         if self.player_eid in {owner_eid, controller_eid, source_eid}:
             _log_player_feedback(self.sim, f"{drone_label} is destroyed.{suffix}", kind="danger")
             return
@@ -7865,6 +7872,17 @@ class EventLogSystem(System):
         self.sim.log.add(f"Exited {name}. Fuel {fuel}/{fuel_capacity}.")
         if fuel <= 0:
             self.sim.log.add(self._service_recovery_hint("fuel", on_foot=True))
+
+    def on_vehicle_structure_breached(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        vehicle_name = str(event.data.get("vehicle_name", "The vehicle") or "The vehicle").strip()
+        surface = str(event.data.get("surface_kind", "barrier") or "barrier").strip().lower()
+        self.sim.log.add(
+            f"{vehicle_name} smashes through the {surface}.",
+            channel="combat",
+            priority="high",
+        )
 
     def on_vehicle_onramp_nearby(self, event):
         if event.data.get("eid") != self.player_eid:

@@ -7128,6 +7128,14 @@
       "homemade": true
     }
   },
+  "textile_scrap": {
+    "name": "Textile Scrap",
+    "glyph": "{",
+    "stack_max": 99,
+    "tags": ["component", "textile_component", "bandage_material", "salvage", "junk", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
   "wire_spool": {
     "name": "Wire Spool",
     "glyph": ")",

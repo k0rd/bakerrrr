@@ -527,6 +527,7 @@ class NPCInteractionSystem(System):
         "service_bounty",
         "service_trade",
         "service_drone_parts",
+        "service_wire_gear",
         "service_herbal",
         "service_butcher",
         "service_appearance",
@@ -690,6 +691,7 @@ class NPCInteractionSystem(System):
     SOCIAL_KNOWLEDGE_SHARE_COOLDOWN_TICKS = 180
     OUTFITTER_LOCATOR_ARCHETYPES = ("outfitter", "surplus_store")
     DRONE_PARTS_LOCATOR_ARCHETYPES = ("electronics_shop", "comms_shop", "drone_shop")
+    WIRE_GEAR_LOCATOR_ARCHETYPES = ("wire_shop", "electronics_shop", "comms_shop")
     CIVIC_RECORDS_LOCATOR_ARCHETYPES = ("courthouse", "civic_office", "city_hall")
     JUSTICE_LOCATOR_ARCHETYPES = ("jail", "courthouse", "prison")
     JUSTICE_LOCATOR_ROLE_TOKENS = ("guard", "corrections", "deputy", "bailiff", "sergeant")
@@ -892,6 +894,15 @@ class NPCInteractionSystem(System):
             "archetypes": DRONE_PARTS_LOCATOR_ARCHETYPES,
             "local_summary": "In this chunk, {names_text} sells drone parts, radios, or electronics.",
             "near_summary": "Nearest drone or electronics counter I know is {distance_phrase} at {names_text}.",
+        },
+        "service_wire_gear": {
+            "services": (),
+            "service_label": "Wire gear counter",
+            "offer_label": "Wire decks and software",
+            "lead_kind": "service_wire_gear",
+            "archetypes": WIRE_GEAR_LOCATOR_ARCHETYPES,
+            "local_summary": "In this chunk, {names_text} sells Wire decks, interfaces, or software.",
+            "near_summary": "Nearest Wire gear counter I know is {distance_phrase} at {names_text}.",
         },
         "service_records": {
             "services": ("civic_records",),

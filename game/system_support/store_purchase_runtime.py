@@ -61,6 +61,7 @@ TACTICAL_BUYER_ARCHETYPES = {
     "tool_depot",
     "auto_garage",
     "drone_shop",
+    "wire_shop",
     "chop_shop",
     "pawn_shop",
     "backroom_market",
@@ -241,6 +242,13 @@ def _profile_for_archetype(archetype):
             "summary": "drone chassis, modules, power centers, batteries, sensors, and repairable device parts",
             "wanted": {"drone", "drone_part", "drone_module", "drone_assembly", "device", "battery", "circuit", "tool", "communication", "phone"},
             "adjacent": {"armor", "tactical", "survival", "medical", "cash", "credit"},
+            "refuse_dangerous": False,
+        })
+    elif archetype == "wire_shop":
+        profile.update({
+            "summary": "Wire interfaces, software, access adapters, credentials, and repairable electronics",
+            "wanted": {"wire", "wire_program", "wire_access", "software", "interface", "credential", "device", "communication", "battery", "circuit", "tool"},
+            "adjacent": {"wire_data", "data", "drone", "drone_part", "survival", "cash", "credit"},
             "refuse_dangerous": False,
         })
     elif archetype in {"bank", "brokerage"}:

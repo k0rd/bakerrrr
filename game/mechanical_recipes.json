@@ -8,9 +8,17 @@
     "plan_item_id": "tripline_alarm_plan",
     "output_item_id": "tripline_alarm",
     "components": {
-      "wire_spool": 1,
       "salvaged_hardware": 1
     },
+    "component_choices": [
+      {
+        "id": "line_material",
+        "options": {
+          "textile_scrap": 3,
+          "wire_spool": 1
+        }
+      }
+    ],
     "difficulty": 4.8,
     "construction_ticks": 2,
     "field_craftable": true,
@@ -32,10 +40,18 @@
     "plan_item_id": "restraint_snare_plan",
     "output_item_id": "restraint_snare",
     "components": {
-      "wire_spool": 1,
       "spring_clamp": 1,
       "salvaged_hardware": 1
     },
+    "component_choices": [
+      {
+        "id": "line_material",
+        "options": {
+          "textile_scrap": 5,
+          "wire_spool": 1
+        }
+      }
+    ],
     "difficulty": 6.0,
     "construction_ticks": 3,
     "field_craftable": true,

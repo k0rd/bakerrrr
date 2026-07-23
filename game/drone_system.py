@@ -205,6 +205,8 @@ def destroy_deployed_drone(
             "quantity": int(max(1, _int(entry.get("quantity"), 1))),
             "drop_kind": str(entry.get("drop_kind", "") or "").strip().lower() or "drone_part",
             "metadata": dict(entry.get("metadata") or {}),
+            "resolution": str(entry.get("resolution", "destroyed") or "destroyed").strip().lower(),
+            "salvage_item_id": str(entry.get("salvage_item_id", "") or "").strip().lower() or None,
         }
         for entry in tuple(resolution.get("destroyed_items", ()) or ())
         if str(entry.get("item_id", "") or "").strip()
@@ -214,6 +216,10 @@ def destroy_deployed_drone(
     owner_eid = getattr(state, "owner_eid", None)
     controller_eid = getattr(state, "controller_eid", None)
     source_instance_id = getattr(state, "source_item_instance_id", None)
+    battery_exploded = bool(resolution.get("battery_exploded"))
+    battery_item_id = resolution.get("battery_item_id")
+    battery_charge = int(max(0, _int(resolution.get("battery_charge"), 0)))
+    battery_charge_max = int(max(0, _int(resolution.get("battery_charge_max"), 0)))
     removed = sim.remove_entity(drone_eid)
     if removed:
         sim.emit(Event(
@@ -233,7 +239,26 @@ def destroy_deployed_drone(
             destroyed_items=destroyed_items,
             damage_amount=damage_amount,
             overkill_amount=int(max(0, _int(overkill_amount), 0)),
+            battery_exploded=battery_exploded,
+            battery_item_id=battery_item_id,
+            battery_charge=battery_charge,
+            battery_charge_max=battery_charge_max,
         ))
+        if battery_exploded:
+            sim.emit(Event(
+                "drone_battery_exploded",
+                drone_eid=drone_eid,
+                source_eid=source_eid,
+                owner_eid=owner_eid,
+                controller_eid=controller_eid,
+                source_item_instance_id=source_instance_id,
+                battery_item_id=battery_item_id,
+                battery_charge=battery_charge,
+                battery_charge_max=battery_charge_max,
+                x=drop_x,
+                y=drop_y,
+                z=drop_z,
+            ))
     return bool(removed)
 
 

@@ -50,6 +50,7 @@ from game.checks import (
 from game.dialogue_runtime import active_contractor_record
 from game.drone_runtime import drone_hull_damage_absorb
 from game.drone_system import destroy_deployed_drone
+from game.corpse_loot_runtime import resolve_corpse_inventory_drops
 from game.physical_target_runtime import (
     apply_physical_property_damage,
     weapon_targetable_property_at,
@@ -141,6 +142,42 @@ class WeaponSystem(System):
         self.sim.events.subscribe("weapon_cycle_request", self.on_weapon_cycle_request)
         self.sim.events.subscribe("weapon_fire_request", self.on_weapon_fire_request)
         self.sim.events.subscribe("melee_attack_request", self.on_melee_attack_request)
+        self.sim.events.subscribe("drone_battery_exploded", self.on_drone_battery_exploded)
+
+    def on_drone_battery_exploded(self, event):
+        charge = int(max(0, event.data.get("battery_charge", 0) or 0))
+        charge_max = int(max(1, event.data.get("battery_charge_max", 1) or 1))
+        radius = 2 if charge_max >= 110 and charge * 2 >= charge_max else 1
+        damage = max(8, min(24, 8 + (charge // 10)))
+        source_eid = event.data.get("source_eid")
+        x = int(event.data.get("x", 0) or 0)
+        y = int(event.data.get("y", 0) or 0)
+        z = int(event.data.get("z", 0) or 0)
+        self._explode(
+            {
+                "source_eid": source_eid,
+                "weapon_id": "drone_battery_explosion",
+                "damage": damage,
+                "explosion_radius": radius,
+                "aoe_falloff": 0.45,
+                "cover_penetration": 0.15,
+                "damage_source": True,
+                "fire_intensity": 3,
+                "smoke_intensity": 1,
+            },
+            x=x,
+            y=y,
+            z=z,
+        )
+        self.sim.emit(Event(
+            "noise",
+            source_eid=source_eid,
+            x=x,
+            y=y,
+            z=z,
+            radius=max(6, radius * 4),
+            cause="drone_battery_explosion",
+        ))
 
     def _first_projectile_hit_entity_at(self, x, y, z, *, exclude_eid=None, skip_downed=False):
         drones = self.sim.ecs.get(DroneState)
@@ -1381,9 +1418,18 @@ class WeaponSystem(System):
             drop_z = int(pos.z) if pos else 0
 
             dropped_items = []
+            destroyed_inventory_items = ()
             inv = inventories.get(eid)
             if inv:
-                for entry in list(inv.items):
+                inventory_resolution = resolve_corpse_inventory_drops(
+                    self.sim,
+                    eid,
+                    inv,
+                    death_token=f"{downed_tick}:{reason}",
+                    item_catalog=ITEM_CATALOG,
+                )
+                destroyed_inventory_items = tuple(inventory_resolution.get("destroyed_items", ()) or ())
+                for entry in tuple(inventory_resolution.get("drops", ()) or ()):
                     item_id = str(entry.get("item_id", "")).strip()
                     if not item_id:
                         continue
@@ -1421,7 +1467,11 @@ class WeaponSystem(System):
                         owner_tag=None,
                         metadata=meta,
                     )
-                    dropped_items.append({"item_id": item_id, "quantity": qty})
+                    dropped_items.append({
+                        "item_id": item_id,
+                        "quantity": qty,
+                        "drop_kind": str(entry.get("drop_kind", "") or "").strip().lower() or "corpse_loot",
+                    })
 
             loadout = loadouts.get(eid)
             if loadout and loadout.reserve_ammo:
@@ -1500,6 +1550,7 @@ class WeaponSystem(System):
                 y=drop_y,
                 z=drop_z,
                 dropped_items=dropped_items,
+                destroyed_items=destroyed_inventory_items,
                 npc_role=npc_role,
                 npc_credits=npc_credits,
                 p2p_bonus=p2p_bonus,
@@ -1519,10 +1570,10 @@ class WeaponSystem(System):
         positions = self.sim.ecs.get(Position)
 
         hit_count = 0
-        for target_eid, pos in positions.items():
+        for target_eid, pos in tuple(positions.items()):
             if pos.z != z:
                 continue
-            if target_eid == source_eid:
+            if target_eid == source_eid and not bool(projectile.get("damage_source")):
                 continue
             dist = _manhattan(x, y, pos.x, pos.y)
             if dist > radius:

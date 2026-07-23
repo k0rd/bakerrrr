@@ -4236,6 +4236,84 @@
       "weight": 4
     }
   ],
+  "archetype:wire_shop": [
+    {
+      "item_id": "battery_pack",
+      "weight": 14
+    },
+    {
+      "item_id": "scrap_circuit",
+      "weight": 12
+    },
+    {
+      "item_id": "cheap_deck",
+      "weight": 16
+    },
+    {
+      "item_id": "skin_contact_rig",
+      "weight": 9
+    },
+    {
+      "item_id": "wetwire_jack",
+      "weight": 6
+    },
+    {
+      "item_id": "corp_interface_cable",
+      "weight": 6
+    },
+    {
+      "item_id": "cracked_service_dongle",
+      "weight": 6
+    },
+    {
+      "item_id": "drone_radio_bridge",
+      "weight": 4
+    },
+    {
+      "item_id": "vehicle_bus_coupler",
+      "weight": 4
+    },
+    {
+      "item_id": "wire_talk_program",
+      "weight": 16
+    },
+    {
+      "item_id": "wire_route_probe_program",
+      "weight": 14
+    },
+    {
+      "item_id": "wire_trace_scrubber_program",
+      "weight": 9
+    },
+    {
+      "item_id": "wire_signal_cloak_program",
+      "weight": 7
+    },
+    {
+      "item_id": "wire_checksum_ward_program",
+      "weight": 7
+    },
+    {
+      "item_id": "wire_panic_eject_program",
+      "weight": 7
+    },
+    {
+      "item_id": "wire_door_latch_program",
+      "weight": 6
+    },
+    {
+      "item_id": "wire_camera_loop_program",
+      "weight": 5
+    },
+    {
+      "item_id": "wire_data_siphon_shell_program",
+      "weight": 4
+    },
+    {
+      "item_id": "wire_backup_image",
+      "weight": 4
+    }
+  ],
   "archetype:field_camp": [
     {
       "item_id": "street_ration",

@@ -429,6 +429,48 @@ def _restore_wall_tile(sim, x, y, z):
     )
 
 
+def _restore_damage_record(sim, prop, record):
+    """Restore one recorded surface and reconcile its durability state.
+
+    The tile and durability stores are both canonical consumers of structural
+    damage.  Repairing only the tile leaves a visually intact surface that the
+    damage runtime still considers broken, so every repair lane comes through
+    this helper.
+    """
+
+    x = _int_or(record.get("x"), default=0)
+    y = _int_or(record.get("y"), default=0)
+    z = _int_or(record.get("z"), default=0)
+    repair_kind = _normalize_repair_kind(
+        record.get("repair_kind"),
+        aperture_kind=record.get("aperture_kind"),
+    )
+    if repair_kind == "window":
+        _restore_window_tile(sim, x, y, z)
+    elif repair_kind == "door":
+        _restore_door_tile(sim, prop, x, y, z, aperture_kind=record.get("aperture_kind", "door"))
+    elif repair_kind == "wall":
+        _restore_wall_tile(sim, x, y, z)
+    else:
+        return ""
+
+    # Local import avoids a module cycle: structural damage records breaks
+    # through this module, while repair must reconcile that same state.
+    try:
+        from game.system_support.structure_damage_runtime import structural_surface_state
+
+        surface = structural_surface_state(sim, prop, x, y, z, kind=repair_kind, create=False)
+        if isinstance(surface, dict):
+            maximum = max(1, _int_or(surface.get("max_hp"), default=1))
+            surface["hp"] = maximum
+            surface["broken"] = False
+            surface["repaired_tick"] = _int_or(getattr(sim, "tick", 0), default=0)
+            surface.pop("broken_tick", None)
+    except (ImportError, AttributeError):
+        pass
+    return repair_kind
+
+
 def repair_building_damage(sim, prop):
     summary = property_damage_summary(sim, prop)
     records = tuple(summary.get("records", ()) or ())
@@ -438,19 +480,7 @@ def repair_building_damage(sim, prop):
             "restored_count": 0,
         }
     for record in records:
-        x = _int_or(record.get("x"), default=0)
-        y = _int_or(record.get("y"), default=0)
-        z = _int_or(record.get("z"), default=0)
-        repair_kind = _normalize_repair_kind(
-            record.get("repair_kind"),
-            aperture_kind=record.get("aperture_kind"),
-        )
-        if repair_kind == "window":
-            _restore_window_tile(sim, x, y, z)
-        elif repair_kind == "door":
-            _restore_door_tile(sim, prop, x, y, z, aperture_kind=record.get("aperture_kind", "door"))
-        else:
-            _restore_wall_tile(sim, x, y, z)
+        _restore_damage_record(sim, prop, record)
 
     state = _stored_damage_state(prop, create=True)
     state["records"] = []
@@ -527,18 +557,8 @@ def quiet_maintenance_cleanup(sim, prop, *, max_records=1, source_kind="maintena
     restored_keys = set()
     restored_kinds = []
     for record in records:
-        x = _int_or(record.get("x"), default=0)
-        y = _int_or(record.get("y"), default=0)
-        z = _int_or(record.get("z"), default=0)
-        repair_kind = _normalize_repair_kind(
-            record.get("repair_kind"),
-            aperture_kind=record.get("aperture_kind"),
-        )
-        if repair_kind == "window":
-            _restore_window_tile(sim, x, y, z)
-        elif repair_kind == "door":
-            _restore_door_tile(sim, prop, x, y, z, aperture_kind=record.get("aperture_kind", "door"))
-        else:
+        repair_kind = _restore_damage_record(sim, prop, record)
+        if not repair_kind:
             continue
         restored_keys.add(_record_key(record))
         restored_kinds.append(repair_kind)
@@ -585,6 +605,90 @@ def quiet_maintenance_cleanup(sim, prop, *, max_records=1, source_kind="maintena
     return result
 
 
+def structural_maintenance_cleanup(sim, prop, *, max_records=1, source_kind="structural_crew", emit_event=True):
+    """Let an assigned structural crew restore a bounded number of surfaces.
+
+    Unlike quiet maintenance this lane may address offender-linked, fire, wall,
+    and breach damage.  It still never acts while the property is actively on
+    fire, and callers are expected to provide real workers and elapsed labor.
+    """
+
+    if sim is None or not isinstance(prop, dict) or _text(prop.get("kind")).lower() != "building":
+        return {"ok": False, "reason": "invalid_property", "restored_count": 0}
+    try:
+        limit = max(0, int(max_records))
+    except (TypeError, ValueError):
+        limit = 1
+    if limit <= 0:
+        return {"ok": False, "reason": "no_budget", "restored_count": 0}
+
+    try:
+        from game.system_support.fire_runtime import property_fire_cells
+
+        if property_fire_cells(sim, _text(prop.get("id"))):
+            return {"ok": False, "reason": "active_fire", "restored_count": 0}
+    except (ImportError, AttributeError):
+        pass
+
+    kind_order = {"window": 0, "door": 1, "wall": 2}
+    # Inferred rows exist for contractor compatibility with old saves, but can
+    # also describe an unloaded or deliberately sparse tilemap.  Autonomous
+    # crews only answer explicit damage facts produced by live destruction.
+    records = [
+        dict(record)
+        for record in tuple(property_damage_records(sim, prop) or ())
+        if _text(record.get("cause")).lower() != "inferred"
+    ]
+    records.sort(key=lambda record: (
+        kind_order.get(_normalize_repair_kind(record.get("repair_kind"), record.get("aperture_kind")), 3),
+        _int_or(record.get("damage_tick"), default=-10_000),
+        _record_key(record),
+    ))
+    records = records[:limit]
+    if not records:
+        return {"ok": False, "reason": "no_structural_damage", "restored_count": 0}
+
+    restored_keys = set()
+    restored_kinds = []
+    for record in records:
+        repair_kind = _restore_damage_record(sim, prop, record)
+        if not repair_kind:
+            continue
+        restored_keys.add(_record_key(record))
+        restored_kinds.append(repair_kind)
+    if not restored_keys:
+        return {"ok": False, "reason": "nothing_restored", "restored_count": 0}
+
+    state = _stored_damage_state(prop, create=True)
+    state["records"] = [
+        existing
+        for existing in list(state.get("records", ()) or ())
+        if _record_key(_clean_damage_record(existing) or {}) not in restored_keys
+    ]
+    result = {
+        "ok": True,
+        "reason": "restored",
+        "property_id": _text(prop.get("id")),
+        "property_name": _text(prop.get("name", prop.get("id"))),
+        "restored_count": len(restored_keys),
+        "restored_kinds": tuple(restored_kinds),
+        "source_kind": _text(source_kind).lower() or "structural_crew",
+    }
+    if emit_event:
+        sim.emit(Event(
+            "structural_maintenance_resolved",
+            property_id=result["property_id"],
+            property_name=result["property_name"],
+            restored_count=int(result["restored_count"]),
+            restored_kinds=tuple(restored_kinds),
+            source_kind=result["source_kind"],
+            x=_int_or(prop.get("x"), default=0),
+            y=_int_or(prop.get("y"), default=0),
+            z=_int_or(prop.get("z"), default=0),
+        ))
+    return result
+
+
 __all__ = [
     "owned_building_properties",
     "owned_repairable_buildings",
@@ -595,4 +699,5 @@ __all__ = [
     "quiet_maintenance_cleanup",
     "record_building_damage",
     "repair_building_damage",
+    "structural_maintenance_cleanup",
 ]

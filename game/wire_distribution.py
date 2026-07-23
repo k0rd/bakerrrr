@@ -52,6 +52,33 @@ WIRE_ITEM_BASE_VALUES = {
 }
 
 WIRE_STORE_POOL_EXTRAS = {
+    "wire_shop": (
+        ("cheap_deck", 18),
+        ("skin_contact_rig", 10),
+        ("wetwire_jack", 8),
+        ("corp_interface_cable", 7),
+        ("cracked_service_dongle", 8),
+        ("drone_radio_bridge", 5),
+        ("vehicle_bus_coupler", 5),
+        ("wire_talk_program", 18),
+        ("wire_route_probe_program", 16),
+        ("wire_trace_scrubber_program", 10),
+        ("wire_signal_cloak_program", 8),
+        ("wire_proxy_route_program", 8),
+        ("wire_tunnel_route_program", 6),
+        ("wire_checksum_ward_program", 8),
+        ("wire_panic_eject_program", 8),
+        ("wire_sacrificial_shell_program", 6),
+        ("wire_door_latch_program", 7),
+        ("wire_camera_loop_program", 6),
+        ("wire_data_siphon_shell_program", 5),
+        ("wire_handshake_breaker_program", 4),
+        ("wire_spike_program", 3),
+        ("wire_ice_cutter_program", 3),
+        ("wire_backup_image", 5),
+        ("wire_license_key", 4),
+        ("wire_access_key", 3),
+    ),
     "contractor_office": (
         ("cracked_service_dongle", 8),
         ("corp_interface_cable", 6),
@@ -298,7 +325,7 @@ def _quality_for_context(distribution_context, *, seed_token=""):
         choices = ("poor", "standard", "standard")
     elif context in {"backroom_market"}:
         choices = ("poor", "standard", "good")
-    elif context in {"contractor_office", "electronics_shop", "comms_shop", "drone_shop", "brokerage", "data_center", "media_lab", "office", "tower"}:
+    elif context in {"wire_shop", "contractor_office", "electronics_shop", "comms_shop", "drone_shop", "brokerage", "data_center", "media_lab", "office", "tower"}:
         choices = ("standard", "standard", "good")
     else:
         choices = ("standard",)

@@ -9,6 +9,7 @@ import random
 
 from engine.events import Event
 from engine.systems import System
+from engine.visibility import has_line_of_sight
 from game import systems as _systems
 from game.system_support.actor_runtime import _detail_tick_allowed
 from game.system_support.offense_runtime import (
@@ -68,6 +69,7 @@ class NPCMemorySystem(System):
         self.sim.events.subscribe("creature_hazard_triggered", self.on_creature_hazard_triggered)
         self.sim.events.subscribe("world_condition_triggered", self.on_world_condition_triggered)
         self.sim.events.subscribe("flora_natural_rumor_seeded", self.on_flora_natural_rumor_seeded)
+        self.sim.events.subscribe("herbal_medicine_crafted", self.on_herbal_medicine_crafted)
 
     def on_noise(self, event):
         source_eid = event.data.get("source_eid")
@@ -898,6 +900,88 @@ class NPCMemorySystem(System):
                 parent_line_name=event.data.get("parent_line_name"),
                 source="natural_crossbreed",
             )
+
+    def on_herbal_medicine_crafted(self, event):
+        """Turn a small successful improvisation into shareable folk method.
+
+        This deliberately excludes catalogue recipes and failed/odd mixtures.
+        Listeners learn a concrete experiment to try, not recipe mastery.
+        """
+
+        if str(event.data.get("experiment_result", "") or "").strip().lower() != "useful":
+            return
+        try:
+            ingredient_count = int(event.data.get("ingredient_count", 0) or 0)
+        except (TypeError, ValueError):
+            ingredient_count = 0
+        if ingredient_count != 2:
+            return
+        ingredient_names = tuple(
+            str(value or "").strip()
+            for value in tuple(event.data.get("ingredient_names", ()) or ())
+            if str(value or "").strip()
+        )
+        if len(ingredient_names) != 2:
+            return
+        result_read = str(event.data.get("herbal_result_read", "") or event.data.get("recipe_name", "useful blend") or "useful blend").strip()
+        if not result_read:
+            result_read = "useful blend"
+        claim = f"mixing {ingredient_names[0]} with {ingredient_names[1]} may make {result_read}"
+        signature = "|".join(sorted(name.lower() for name in ingredient_names)) + f"|{result_read.lower()}"
+        source_eid = event.data.get("eid")
+        source_pos = self.sim.ecs.get(Position).get(source_eid)
+        if source_pos is None:
+            return
+        state = getattr(self.sim, "herbal_method_rumor_state", None)
+        if not isinstance(state, dict):
+            self.sim.herbal_method_rumor_state = {}
+            state = self.sim.herbal_method_rumor_state
+        now = int(getattr(self.sim, "tick", 0) or 0)
+        previous_tick = state.get(signature)
+        if previous_tick is not None and now - int(previous_tick) < 600:
+            return
+        state[signature] = now
+
+        positions = self.sim.ecs.get(Position)
+        memories = self.sim.ecs.get(NPCMemory)
+        for eid in self.sim.entity_ids_in_radius(source_pos.x, source_pos.y, source_pos.z, 6):
+            memory = memories.get(eid)
+            pos = positions.get(eid)
+            if memory is None or pos is None or int(pos.z) != int(source_pos.z):
+                continue
+            distance = _manhattan(pos.x, pos.y, source_pos.x, source_pos.y)
+            if distance > 6:
+                continue
+            if eid != source_eid and distance > 1:
+                try:
+                    if not has_line_of_sight(self.sim, pos.x, pos.y, pos.z, source_pos.x, source_pos.y, source_pos.z):
+                        continue
+                except Exception:
+                    pass
+            memory.remember(
+                tick=now,
+                kind="world_trait",
+                strength=0.94 if eid == source_eid else max(0.3, 0.78 - (distance * 0.07)),
+                topic="herbal_method",
+                claimed_value=claim,
+                is_true=True,
+                via="self_experiment" if eid == source_eid else "witnessed_herbal_experiment",
+                source_eid=source_eid,
+                ingredient_names=ingredient_names,
+                result_read=result_read,
+                method_signature=signature,
+            )
+        self.sim.emit(Event(
+            "herbal_method_rumor_seeded",
+            source_eid=source_eid,
+            claimed_value=claim,
+            ingredient_names=ingredient_names,
+            result_read=result_read,
+            method_signature=signature,
+            x=int(source_pos.x),
+            y=int(source_pos.y),
+            z=int(source_pos.z),
+        ))
 
     def update(self):
         memories = self.sim.ecs.get(NPCMemory)

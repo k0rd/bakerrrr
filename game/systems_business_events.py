@@ -59,6 +59,10 @@ from game.system_support.fire_runtime import (
     property_fire_cells,
     suppress_fire_cell,
 )
+from game.system_support.building_repair_runtime import (
+    property_damage_records,
+    structural_maintenance_cleanup,
+)
 from game.specialist_casework import assess_fire_response_scene
 from game.quiet_maintenance_runtime import (
     quiet_maintenance_actor_line,
@@ -2868,7 +2872,6 @@ def _business_event_aftermath_blueprint(category, *, event_phase=""):
             "drift_preferred": False,
         }
     if event_phase == "cleanup_detail":
-        second_career = "sanitation_worker" if category in {"medical", "hospitality", "entertainment"} else "maintenance_tech"
         return {
             "scene_type": "shift",
             "fixture_name": "Cleanup Cart",
@@ -2883,7 +2886,11 @@ def _business_event_aftermath_blueprint(category, *, event_phase=""):
                 },
                 {
                     "role": "worker",
-                    "career": second_career,
+                    # Cleanup can expose serious structural work in every
+                    # building category.  The general crew covers sanitation;
+                    # the second worker must always be capable of actually
+                    # finishing a broken window, door, or wall.
+                    "career": "maintenance_tech",
                     "linger_ticks": 12,
                     "work_authority": "site_cleanup",
                 },
@@ -5699,8 +5706,9 @@ class BusinessPulseAftermathSystem(System):
         self.sim.events.subscribe("npc_killed", self.on_npc_killed)
         self.sim.events.subscribe("player_killed", self.on_player_killed)
         self.sim.events.subscribe("creature_hazard_triggered", self.on_creature_hazard_triggered)
+        self.sim.events.subscribe("structure_broken", self.on_structure_broken)
 
-    def _record(self, *, x, y, z, incident_kind="violence", severity=0.4, casualty=False, serious=False, damage_kind=""):
+    def _record(self, *, x, y, z, incident_kind="violence", severity=0.4, casualty=False, serious=False, damage_kind="", prop=None):
         return _record_business_event_aftermath(
             self.sim,
             x=x,
@@ -5711,6 +5719,25 @@ class BusinessPulseAftermathSystem(System):
             casualty=casualty,
             serious=serious,
             damage_kind=damage_kind,
+            prop=prop,
+        )
+
+    def on_structure_broken(self, event):
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        prop = getattr(self.sim, "properties", {}).get(property_id)
+        if not isinstance(prop, dict):
+            return
+        kind = str(event.data.get("surface_kind", "wall") or "wall").strip().lower() or "wall"
+        severity = {"window": 0.34, "door": 0.48, "wall": 0.68}.get(kind, 0.5)
+        self._record(
+            x=event.data.get("x", prop.get("x", 0)),
+            y=event.data.get("y", prop.get("y", 0)),
+            z=event.data.get("z", prop.get("z", 0)),
+            incident_kind="hazard",
+            severity=severity,
+            serious=True,
+            damage_kind=f"broken_{kind}",
+            prop=prop,
         )
 
     def on_entity_damaged(self, event):
@@ -7873,40 +7900,138 @@ class BusinessSceneWorkSystem(System):
             scene["cleanup_status"] = "complete"
             return
         workers = self._worker_ids(scene, ("cleanup_crew", "sanitation_worker", "maintenance_tech"))
-        worker_eid = next((eid for eid in workers if self._actor_can_work(eid)), None)
-        if worker_eid is None or not self._actor_work_authorized(scene, worker_eid):
-            scene["cleanup_status"] = "interrupted" if workers else "uncrewed"
-            return
-        pos = self.sim.ecs.get(Position).get(worker_eid)
         anchor = (scene or {}).get("anchor")
         if not isinstance(anchor, (tuple, list)) or len(anchor) < 3:
             anchor = (int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0)))
         anchor = (int(anchor[0]), int(anchor[1]), int(anchor[2]))
-        if int(pos.z) != anchor[2] or _manhattan(int(pos.x), int(pos.y), anchor[0], anchor[1]) > 3:
-            self._set_actor_work_target(scene, worker_eid, anchor)
-            scene["cleanup_status"] = "approaching"
-            return
-        if int(self.sim.tick) < int(scene.get("cleanup_next_work_tick", 0) or 0):
-            scene["cleanup_status"] = "working"
-            return
 
         severity = max(0.0, min(1.0, float(entry.get("severity", 0.4) or 0.4)))
         required_actions = max(2, int(2.0 + (severity * 3.0) + 0.999))
-        actions = int(entry.get("cleanup_actions", 0) or 0) + 1
-        entry["cleanup_actions"] = actions
         entry["cleanup_required_actions"] = required_actions
-        entry["cleanup_progress"] = min(1.0, float(actions) / float(required_actions))
-        entry["cleanup_last_tick"] = int(self.sim.tick)
-        entry["cleanup_worker_eid"] = int(worker_eid)
-        entry["cleanup_work_authority"] = str(self._actor_note(worker_eid).get("work_authority", "") or "").strip().lower()
-        scene["cleanup_next_work_tick"] = int(self.sim.tick) + _AFTERMATH_CLEANUP_WORK_INTERVAL
-        scene["cleanup_status"] = "working"
-        scene["cleanup_progress"] = float(entry["cleanup_progress"])
-        note = self._actor_note(worker_eid)
-        note["work_status"] = "clearing the aftermath"
+        actions = int(entry.get("cleanup_actions", 0) or 0)
+        worker_eid = None
+        note = None
 
         if actions < required_actions:
-            return
+            worker_eid = next((eid for eid in workers if self._actor_can_work(eid)), None)
+            if worker_eid is None or not self._actor_work_authorized(scene, worker_eid):
+                scene["cleanup_status"] = "interrupted" if workers else "uncrewed"
+                return
+            pos = self.sim.ecs.get(Position).get(worker_eid)
+            if int(pos.z) != anchor[2] or _manhattan(int(pos.x), int(pos.y), anchor[0], anchor[1]) > 3:
+                self._set_actor_work_target(scene, worker_eid, anchor)
+                scene["cleanup_status"] = "approaching"
+                return
+            if int(self.sim.tick) < int(scene.get("cleanup_next_work_tick", 0) or 0):
+                scene["cleanup_status"] = "working"
+                return
+            actions += 1
+            entry["cleanup_actions"] = actions
+            entry["cleanup_progress"] = min(1.0, float(actions) / float(required_actions))
+            entry["cleanup_last_tick"] = int(self.sim.tick)
+            entry["cleanup_worker_eid"] = int(worker_eid)
+            entry["cleanup_work_authority"] = str(self._actor_note(worker_eid).get("work_authority", "") or "").strip().lower()
+            scene["cleanup_next_work_tick"] = int(self.sim.tick) + _AFTERMATH_CLEANUP_WORK_INTERVAL
+            scene["cleanup_status"] = "working"
+            scene["cleanup_progress"] = float(entry["cleanup_progress"])
+            note = self._actor_note(worker_eid)
+            note["work_status"] = "clearing the aftermath"
+            if actions < required_actions:
+                return
+
+        if not bool(entry.get("minor_maintenance_completed")):
+            minor_result = run_quiet_maintenance(
+                self.sim,
+                prop,
+                source_kind="aftermath_cleanup",
+                preferred_kind="minor_repair",
+                emit_event=True,
+            )
+            entry["minor_maintenance_completed"] = True
+            scene["cleanup_minor_maintenance_result"] = dict(minor_result or {})
+
+        damage_records = list(
+            record
+            for record in tuple(property_damage_records(self.sim, prop) or ())
+            if str(record.get("cause", "") or "").strip().lower() != "inferred"
+        )
+        structural_kind_order = {"window": 0, "door": 1, "wall": 2}
+        damage_records.sort(key=lambda record: (
+            structural_kind_order.get(str(record.get("repair_kind", "") or "").strip().lower(), 3),
+            int(record.get("damage_tick", -10_000) or -10_000),
+            int(record.get("z", 0) or 0),
+            int(record.get("y", 0) or 0),
+            int(record.get("x", 0) or 0),
+        ))
+        if damage_records:
+            if property_fire_cells(self.sim, property_id):
+                scene["cleanup_status"] = "waiting_for_fire_control"
+                for eid in workers:
+                    self._actor_note(eid)["work_status"] = "waiting for fire control"
+                return
+            maintenance_workers = self._worker_ids(scene, ("maintenance_tech",))
+            worker_eid = next((eid for eid in maintenance_workers if self._actor_can_work(eid)), None)
+            if worker_eid is None:
+                scene["cleanup_status"] = "awaiting_structural_crew"
+                return
+            if not self._actor_work_authorized(scene, worker_eid):
+                scene["cleanup_status"] = "interrupted"
+                return
+            pos = self.sim.ecs.get(Position).get(worker_eid)
+            if int(pos.z) != anchor[2] or _manhattan(int(pos.x), int(pos.y), anchor[0], anchor[1]) > 3:
+                self._set_actor_work_target(scene, worker_eid, anchor)
+                scene["cleanup_status"] = "structural_crew_approaching"
+                return
+
+            target = damage_records[0]
+            target_kind = str(target.get("repair_kind", "wall") or "wall").strip().lower() or "wall"
+            target_key = f"{int(target.get('x', 0) or 0)}:{int(target.get('y', 0) or 0)}:{int(target.get('z', 0) or 0)}"
+            if str(entry.get("structural_target_key", "") or "") != target_key:
+                entry["structural_target_key"] = target_key
+                entry["structural_actions"] = 0
+            structural_required = {"window": 2, "door": 4, "wall": 7}.get(target_kind, 5)
+            if str(target.get("cause", "") or "").strip().lower() in {"fire", "explosion", "ramming", "vehicle_collision"}:
+                structural_required += 1
+            entry["structural_required_actions"] = structural_required
+            if int(self.sim.tick) < int(scene.get("structural_next_work_tick", 0) or 0):
+                scene["cleanup_status"] = "structural_repair"
+                return
+            structural_actions = int(entry.get("structural_actions", 0) or 0) + 1
+            entry["structural_actions"] = structural_actions
+            entry["structural_progress"] = min(1.0, float(structural_actions) / float(structural_required))
+            entry["structural_worker_eid"] = int(worker_eid)
+            scene["structural_next_work_tick"] = int(self.sim.tick) + _AFTERMATH_CLEANUP_WORK_INTERVAL
+            scene["cleanup_status"] = "structural_repair"
+            scene["structural_progress"] = float(entry["structural_progress"])
+            note = self._actor_note(worker_eid)
+            note["work_target"] = (
+                int(target.get("x", anchor[0]) or anchor[0]),
+                int(target.get("y", anchor[1]) or anchor[1]),
+                int(target.get("z", anchor[2]) or anchor[2]),
+            )
+            note["work_status"] = f"repairing a {target_kind}"
+            if structural_actions < structural_required:
+                return
+            structural_result = structural_maintenance_cleanup(
+                self.sim,
+                prop,
+                max_records=1,
+                source_kind="business_aftermath_structural_crew",
+                emit_event=True,
+            )
+            scene["last_structural_result"] = dict(structural_result or {})
+            if not bool((structural_result or {}).get("ok")):
+                scene["cleanup_status"] = str((structural_result or {}).get("reason", "structural_repair_stalled") or "structural_repair_stalled")
+                return
+            entry["structural_actions"] = 0
+            entry.pop("structural_target_key", None)
+            entry["structural_repairs_completed"] = int(entry.get("structural_repairs_completed", 0) or 0) + int(structural_result.get("restored_count", 0) or 0)
+            if any(
+                str(record.get("cause", "") or "").strip().lower() != "inferred"
+                for record in tuple(property_damage_records(self.sim, prop) or ())
+            ):
+                return
+
         maintenance = run_quiet_maintenance(
             self.sim,
             prop,
@@ -7926,6 +8051,12 @@ class BusinessSceneWorkSystem(System):
         scene["cleanup_status"] = "complete"
         scene["cleanup_completed_tick"] = int(self.sim.tick)
         scene["cleanup_maintenance_result"] = dict(maintenance or {})
+        if worker_eid is None:
+            worker_eid = next((eid for eid in workers if self._actor_can_work(eid)), None)
+        if worker_eid is None:
+            scene["cleanup_status"] = "uncrewed"
+            return
+        note = self._actor_note(worker_eid)
         note["work_status"] = "cleanup complete"
         self.sim.emit(Event(
             "business_aftermath_cleanup_completed",

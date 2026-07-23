@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from game.color_words import normalize_color_word, render_key_for_color_word
 from game.technical_research import drone_module_profile_with_research
 
@@ -11,6 +13,9 @@ DRONE_CHASSIS_CLASSES = ("A", "B", "C", "D", "E")
 DRONE_PROFILE_KINDS = ("chassis", "power_center", "battery", "module", "assembly")
 PACKED_DRONE_ITEM_ID = "packed_drone"
 DRONE_DESTROYED_SALVAGE_ITEM_ID = "scrap_circuit"
+DRONE_TINKERING_PRECURSOR_TAG = "mechanical_component"
+DRONE_TINKERING_PRECURSOR_CHANCE_DENOMINATOR = 4
+DRONE_BATTERY_OUTCOME_DENOMINATOR = 8
 DRONE_DEPLOY_TILE_OFFSETS = (
     (0, -1),
     (1, 0),
@@ -928,74 +933,158 @@ def _drop_entry_from_physical_part(state, item_id, drop_kind, *, metadata=None):
     }
 
 
-def _stable_score(*parts):
-    token = "|".join(str(part) for part in parts)
-    total = 0
-    for idx, char in enumerate(token):
-        total += (idx + 1) * ord(char)
-    return total
-
-
-def _destroyed_candidate_count(state, candidate_count, *, damage_amount=None, overkill_amount=0, damage_kind=""):
-    candidate_count = _safe_int(candidate_count, 0, minimum=0)
-    if candidate_count <= 0:
-        return 0
-
-    kind = _clean_text(damage_kind).lower()
-    if any(token in kind for token in ("emp", "electrical", "shock", "stun", "disable")):
-        return 1
-
-    hull_hp_max = _safe_int(getattr(state, "hull_hp_max", 1), 1, minimum=1)
-    damage_amount = _safe_int(damage_amount, hull_hp_max, minimum=0)
-    overkill_amount = _safe_int(overkill_amount, 0, minimum=0)
-    overkill_step = max(1, (hull_hp_max + 2) // 3)
-    count = 1 + (overkill_amount // overkill_step)
-    if any(token in kind for token in ("explosion", "explosive", "blast", "fire", "flame")):
-        count += 1
-    elif any(token in kind for token in ("crush", "vehicle", "impact")) and damage_amount >= max(1, hull_hp_max // 2):
-        count += 1
-    return min(candidate_count, max(1, int(count)))
-
-
-def _destroyed_candidate_indexes(state, candidates, *, damage_amount=None, overkill_amount=0, damage_kind=""):
-    count = _destroyed_candidate_count(
-        state,
-        len(candidates),
-        damage_amount=damage_amount,
-        overkill_amount=overkill_amount,
-        damage_kind=damage_kind,
+def _drone_salvage_identity(state):
+    metadata = getattr(state, "source_metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    module_ids = tuple(
+        _clean_item_id((module or {}).get("item_id") or (module or {}).get("module_item_id"))
+        for module in tuple(getattr(state, "modules", ()) or ())
+        if isinstance(module, dict)
     )
-    if count <= 0:
-        return set()
+    return (
+        _clean_text(getattr(state, "source_item_instance_id", "")),
+        _clean_text(metadata.get("serial")),
+        _clean_text(getattr(state, "deployed_tick", "")),
+        _clean_item_id(getattr(state, "chassis_item_id", "")),
+        _clean_item_id(getattr(state, "power_center_item_id", "")),
+        _clean_item_id(getattr(state, "battery_item_id", "")),
+        module_ids,
+    )
+
+
+def _drone_salvage_roll(state, label, upper_bound):
+    upper_bound = _safe_int(upper_bound, 0, minimum=0)
+    if upper_bound <= 0:
+        return 0
+    token = repr((_drone_salvage_identity(state), _clean_text(label))).encode("utf-8")
+    digest = hashlib.blake2b(token, digest_size=8).digest()
+    return int.from_bytes(digest, "big") % upper_bound
+
+
+def _module_is_procedure(entry, *, item_catalog=None):
+    item_id = _clean_item_id((entry or {}).get("item_id"))
+    profile = drone_profile_for_item(item_id, item_catalog=item_catalog)
+    module_kind = _clean_text(profile.get("module_kind")).lower()
+    return module_kind.startswith("procedure_")
+
+
+def _recover_one_salvage_candidate(state, indexes, label):
+    indexes = tuple(int(index) for index in indexes)
+    if not indexes or _drone_salvage_roll(state, f"{label}:recover", 2) == 0:
+        return None
+    return indexes[_drone_salvage_roll(state, f"{label}:choice", len(indexes))]
+
+
+def _tinkering_precursor_item_ids(*, item_catalog=None):
+    catalog = _catalog(item_catalog)
+    return tuple(sorted(
+        item_id
+        for item_id, item_def in catalog.items()
+        if isinstance(item_def, dict)
+        and DRONE_TINKERING_PRECURSOR_TAG in {
+            _clean_text(tag).lower()
+            for tag in tuple(item_def.get("tags", ()) or ())
+            if _clean_text(tag)
+        }
+    ))
+
+
+def _component_salvage_entry(state, component, component_index, *, item_catalog=None):
+    precursors = _tinkering_precursor_item_ids(item_catalog=item_catalog)
+    salvage_item_id = DRONE_DESTROYED_SALVAGE_ITEM_ID
+    drop_kind = "component_scrap"
+    if (
+        precursors
+        and _drone_salvage_roll(
+            state,
+            f"precursor:{component_index}:{component.get('item_id')}:{component.get('drop_kind')}",
+            DRONE_TINKERING_PRECURSOR_CHANCE_DENOMINATOR,
+        ) == 0
+    ):
+        salvage_item_id = precursors[_drone_salvage_roll(
+            state,
+            f"precursor-choice:{component_index}:{component.get('item_id')}",
+            len(precursors),
+        )]
+        drop_kind = "tinkering_precursor"
+
+    metadata = {
+        "source_context": "drone_destroyed",
+        "drop_kind": drop_kind,
+        "source_component_item_ids": (_clean_item_id(component.get("item_id")),),
+        "source_component_kinds": (_clean_text(component.get("drop_kind"), "drone_part").lower(),),
+    }
+    chassis_class = _clean_text(getattr(state, "chassis_class", "")).upper()
+    if chassis_class:
+        metadata["chassis_class"] = chassis_class
     source_instance_id = _clean_text(getattr(state, "source_item_instance_id", ""))
-    scored = []
-    for idx, entry in enumerate(tuple(candidates or ())):
-        scored.append((
-            _stable_score(
-                source_instance_id,
-                getattr(state, "chassis_item_id", ""),
-                getattr(state, "power_center_item_id", ""),
-                getattr(state, "battery_item_id", ""),
-                entry.get("item_id"),
-                entry.get("drop_kind"),
-                idx,
-                damage_amount,
-                overkill_amount,
-                damage_kind,
-            ),
-            idx,
-        ))
-    scored.sort()
-    return {idx for _score, idx in scored[:count]}
+    if source_instance_id:
+        metadata["source_item_instance_id"] = source_instance_id
+    return {
+        "item_id": salvage_item_id,
+        "quantity": 1,
+        "metadata": metadata,
+        "drop_kind": drop_kind,
+    }
 
 
-def drone_destroyed_drop_resolution(state, *, damage_amount=None, overkill_amount=0, damage_kind=""):
-    candidates = []
+def _coalesce_component_salvage(entries, *, item_catalog=None):
+    catalog = _catalog(item_catalog)
+    grouped = {}
+    order = []
+    for entry in tuple(entries or ()):
+        key = (_clean_item_id(entry.get("item_id")), _clean_text(entry.get("drop_kind")).lower())
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(entry)
+
+    drops = []
+    for item_id, drop_kind in order:
+        records = grouped[(item_id, drop_kind)]
+        item_def = catalog.get(item_id, {}) if isinstance(catalog, dict) else {}
+        stack_max = max(1, _safe_int((item_def or {}).get("stack_max"), 1, minimum=1))
+        for start in range(0, len(records), stack_max):
+            chunk = records[start:start + stack_max]
+            metadata = dict(chunk[0].get("metadata") or {})
+            metadata["source_component_item_ids"] = tuple(
+                item
+                for record in chunk
+                for item in tuple((record.get("metadata") or {}).get("source_component_item_ids", ()) or ())
+                if item
+            )
+            metadata["source_component_kinds"] = tuple(
+                kind
+                for record in chunk
+                for kind in tuple((record.get("metadata") or {}).get("source_component_kinds", ()) or ())
+                if kind
+            )
+            metadata["source_component_count"] = len(chunk)
+            drops.append({
+                "item_id": item_id,
+                "quantity": len(chunk),
+                "metadata": metadata,
+                "drop_kind": drop_kind,
+            })
+    return tuple(drops)
+
+
+def drone_destroyed_drop_resolution(
+    state,
+    *,
+    damage_amount=None,
+    overkill_amount=0,
+    damage_kind="",
+    item_catalog=None,
+):
+    del damage_amount, overkill_amount, damage_kind
+    cargo_drops = []
     for cargo in tuple(getattr(state, "cargo", ()) or ()):
         entry = _drop_entry_from_cargo(cargo)
         if entry:
-            candidates.append(entry)
+            cargo_drops.append(entry)
 
+    components = []
     for item_id, drop_kind, metadata in (
         (getattr(state, "chassis_item_id", None), "chassis", {}),
         (getattr(state, "power_center_item_id", None), "power_center", {}),
@@ -1010,48 +1099,79 @@ def drone_destroyed_drop_resolution(state, *, damage_amount=None, overkill_amoun
     ):
         entry = _drop_entry_from_physical_part(state, item_id, drop_kind, metadata=metadata)
         if entry:
-            candidates.append(entry)
+            components.append(entry)
     for module in tuple(getattr(state, "modules", ()) or ()):
         entry = _drop_entry_from_module(module)
         if entry:
-            candidates.append(entry)
+            components.append(entry)
 
-    drops = []
-    destroyed_items = []
-    destroyed_indexes = _destroyed_candidate_indexes(
-        state,
-        candidates,
-        damage_amount=damage_amount,
-        overkill_amount=overkill_amount,
-        damage_kind=damage_kind,
-    )
-    for idx, entry in enumerate(candidates):
-        if idx in destroyed_indexes:
-            destroyed_items.append(dict(entry))
-            continue
-        drops.append(entry)
-
-    salvage_metadata = {
-        "source_context": "drone_destroyed",
-        "drop_kind": "debris_salvage",
+    core_indexes = [
+        idx
+        for idx, entry in enumerate(components)
+        if entry.get("drop_kind") in {"chassis", "power_center"}
+    ]
+    procedure_indexes = [
+        idx
+        for idx, entry in enumerate(components)
+        if entry.get("drop_kind") == "module" and _module_is_procedure(entry, item_catalog=item_catalog)
+    ]
+    hardware_indexes = [
+        idx
+        for idx, entry in enumerate(components)
+        if entry.get("drop_kind") == "module" and idx not in procedure_indexes
+    ]
+    recovered_indexes = {
+        index
+        for index in (
+            _recover_one_salvage_candidate(state, core_indexes, "core"),
+            _recover_one_salvage_candidate(state, hardware_indexes, "hardware"),
+            _recover_one_salvage_candidate(state, procedure_indexes, "procedure"),
+        )
+        if index is not None
     }
-    chassis_class = _clean_text(getattr(state, "chassis_class", "")).upper()
-    if chassis_class:
-        salvage_metadata["chassis_class"] = chassis_class
-    source_instance_id = _clean_text(getattr(state, "source_item_instance_id", ""))
-    if source_instance_id:
-        salvage_metadata["source_item_instance_id"] = source_instance_id
-    drops.append({
-        "item_id": DRONE_DESTROYED_SALVAGE_ITEM_ID,
-        "quantity": 1,
-        "metadata": salvage_metadata,
-        "drop_kind": "debris_salvage",
-    })
+    battery_indexes = [
+        idx
+        for idx, entry in enumerate(components)
+        if entry.get("drop_kind") == "battery"
+    ]
+    exploded_indexes = set()
+    if battery_indexes:
+        battery_index = battery_indexes[0]
+        battery_roll = _drone_salvage_roll(state, "battery:outcome", DRONE_BATTERY_OUTCOME_DENOMINATOR)
+        if battery_roll == 0:
+            recovered_indexes.add(battery_index)
+        elif battery_roll == 1 and _safe_int(getattr(state, "battery_charge", 0), 0, minimum=0) > 0:
+            exploded_indexes.add(battery_index)
+
+    drops = list(cargo_drops)
+    destroyed_items = []
+    component_salvage = []
+    for idx, entry in enumerate(components):
+        if idx in recovered_indexes:
+            drops.append(entry)
+            continue
+        if idx in exploded_indexes:
+            destroyed = dict(entry)
+            destroyed["resolution"] = "exploded"
+            destroyed["salvage_item_id"] = None
+            destroyed_items.append(destroyed)
+            continue
+        salvage = _component_salvage_entry(state, entry, idx, item_catalog=item_catalog)
+        destroyed = dict(entry)
+        destroyed["resolution"] = "scrapped"
+        destroyed["salvage_item_id"] = salvage.get("item_id")
+        destroyed_items.append(destroyed)
+        component_salvage.append(salvage)
+    drops.extend(_coalesce_component_salvage(component_salvage, item_catalog=item_catalog))
     return {
         "drops": tuple(drops),
         "destroyed_items": tuple(destroyed_items),
+        "battery_exploded": bool(exploded_indexes),
+        "battery_item_id": _clean_item_id(getattr(state, "battery_item_id", "")) or None,
+        "battery_charge": _safe_int(getattr(state, "battery_charge", 0), 0, minimum=0),
+        "battery_charge_max": _safe_int(getattr(state, "battery_charge_max", 0), 0, minimum=0),
     }
 
 
-def drone_destroyed_drop_entries(state):
-    return tuple(drone_destroyed_drop_resolution(state).get("drops", ()))
+def drone_destroyed_drop_entries(state, *, item_catalog=None):
+    return tuple(drone_destroyed_drop_resolution(state, item_catalog=item_catalog).get("drops", ()))
