@@ -27,18 +27,22 @@ Successful runs can write optional generated reward files under:
 saves/rewards/
 ```
 
-The first version writes one item file, one area profile file, one receipt, and one ledger row:
+The current exporter writes one deterministic world-culture bundle: three related circulating objects, one area profile, two matching room-curiosity flavors, one local UI color dialect, one receipt, and one ledger row:
 
 ```bash
 saves/rewards/items/
 saves/rewards/world_profiles/
+saves/rewards/room_curiosity_flavors/
+saves/rewards/ui_themes/
 saves/rewards/receipts/
 saves/rewards/earned_rewards.json
 ```
 
-These files are not enabled automatically. To use a generated reward in a future run, copy the item JSON into `config/custom_content/items/` and the area profile JSON into `config/custom_content/world_profiles/` before starting a new run.
+These files are not enabled automatically. To use a generated reward in a future run, copy each JSON into the matching folder under `config/custom_content/` before starting a new run.
 
-UI themes validate through the same custom-content loader and may become generated rewards later, but the current reward exporter does not create theme files yet.
+The bundle is selected from visible completion facts such as the objective and safe facilitator role/domain context. A medic-assisted run can leave behind a care-network dialect; wire, route, nightlife, civic, and workshop completions can leave their own. Identical completion facts produce identical files. When no completion fact names a clear domain, the run seed supplies a stable tiebreaker.
+
+This is variety progression, not permanent character power. Installed objects enter matching shops, interior loot, and resident inventories. The area profile, interior flavors, and visual dialect make the same bit of culture recur through ordinary future-world generation.
 
 The receipt and ledger prove that the files were earned from a BAKERRRR run. They are not required for ordinary custom-content loading, and editing a copy of a reward file just makes it normal player-authored custom content.
 
@@ -95,11 +99,13 @@ Item ids must be lowercase letters, numbers, and underscores only. Custom ids ca
 
 Allowed item fields in this version:
 
-`name`, `glyph`, `stack_max`, `tags`, `category`, `legal_status`, `effects`, `appearance_family`, `appearance_slots`, `identification_profile`, `substance_profile`, `lead_profile`, `object_profile`
+`name`, `glyph`, `stack_max`, `tags`, `category`, `legal_status`, `effects`, `appearance_family`, `appearance_slots`, `identification_profile`, `substance_profile`, `lead_profile`, `object_profile`, `world_distribution`
 
 This version does not add custom weapons, armor, containers, throwables, tools, scripts, or new building types.
 
 `object_profile` is optional metadata for small, placeable world objects. It does not make an item appear in the world by itself. A game system has to place or consume the object before it matters.
+
+`world_distribution` is an optional, bounded way for an item to join native world circulation. It accepts `store_archetypes`, `loot_archetypes`, and `carrier_archetypes`, each using the public building ids listed under world profiles, plus an integer `weight` from `1` through `100`. A declared item competes for ordinary matching shop slots, can replace a small share of matching interior loot rolls, and can rarely be carried by people whose workplace or home matches. It is not placed in the player's starting inventory.
 
 Allowed `object_profile` fields:
 

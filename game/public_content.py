@@ -20,6 +20,13 @@ PUBLIC_ITEM_NEEDS = (
     "thirst",
 )
 
+PUBLIC_ITEM_WORLD_DISTRIBUTION_FIELDS = (
+    "store_archetypes",
+    "loot_archetypes",
+    "carrier_archetypes",
+    "weight",
+)
+
 PUBLIC_STATUS_MODIFIERS = {
     "energy_tick_delta": "Energy change each tick while the status lasts.",
     "safety_tick_delta": "Safety/nerve change each tick while the status lasts.",

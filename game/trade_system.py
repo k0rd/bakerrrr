@@ -31,7 +31,7 @@ from game.fashion_market import (
 )
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor, item_entry_is_critical_quest_item
 from game.item_valuation import ITEM_BASE_VALUES as SHARED_ITEM_BASE_VALUES, item_fair_value
-from game.items import ITEM_CATALOG
+from game.items import ITEM_CATALOG, world_distributed_item_pool
 from game.organization_reputation import organization_instability_profile
 from game.organization_response import property_vigilante_denial
 from game.organizations import (
@@ -2022,6 +2022,9 @@ class TradeSystem(System):
         if wire_pool:
             profile["item_pool"] = tuple(profile.get("item_pool", ())) + tuple(wire_pool)
             profile["max_slots"] = int(max(profile.get("max_slots", 5), min(12, int(profile.get("max_slots", 5)) + 3)))
+        earned_pool = world_distributed_item_pool("store", archetype, item_catalog=ITEM_CATALOG)
+        if earned_pool:
+            profile["item_pool"] = tuple(profile.get("item_pool", ())) + tuple(earned_pool)
         return profile
 
     def _is_storefront(self, prop):

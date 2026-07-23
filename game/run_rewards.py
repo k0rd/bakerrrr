@@ -21,8 +21,8 @@ from game.meaningful_objects_runtime import reward_object_profile
 from game.public_content import public_area_types, public_building_archetype_ids, public_district_types
 
 
-RUN_REWARD_GENERATOR_VERSION = "run_rewards_v1"
-RUN_REWARD_SCHEMA_VERSION = 1
+RUN_REWARD_GENERATOR_VERSION = "run_rewards_v2_world_culture"
+RUN_REWARD_SCHEMA_VERSION = 2
 RUN_REWARD_SIGNATURE_SALT = b"bakerrrr-earned-run-reward-v1"
 REWARD_ROOT = SAVE_DIR / "rewards"
 LEDGER_FILENAME = "earned_rewards.json"
@@ -34,7 +34,6 @@ _ITEM_FAMILIES = (
     {
         "kind": "steady_charm",
         "label": "steady charm",
-        "name_words": ("Steady", "Anchor", "Old Route", "Quiet Count"),
         "glyph": "*",
         "tags": ("consumable", "keepsake", "earned", "focus"),
         "effects": ({"type": "modify_need", "need": "safety", "delta": 14},),
@@ -42,7 +41,6 @@ _ITEM_FAMILIES = (
     {
         "kind": "runner_patch",
         "label": "runner patch",
-        "name_words": ("Runner", "Back-Street", "Late Shift", "Lucky Walk"),
         "glyph": "=",
         "tags": ("consumable", "keepsake", "earned", "energy"),
         "effects": ({"type": "modify_need", "need": "energy", "delta": 12},),
@@ -50,7 +48,6 @@ _ITEM_FAMILIES = (
     {
         "kind": "pocket_ration",
         "label": "pocket ration",
-        "name_words": ("Pocket", "Last Counter", "Warm Shelf", "Good-Enough"),
         "glyph": "%",
         "tags": ("consumable", "keepsake", "earned", "food"),
         "effects": ({"type": "modify_need", "need": "hunger", "delta": -16},),
@@ -58,7 +55,6 @@ _ITEM_FAMILIES = (
     {
         "kind": "rain_token",
         "label": "rain token",
-        "name_words": ("Rain", "Canal", "Spare Cup", "Clear Bottle"),
         "glyph": "!",
         "tags": ("consumable", "keepsake", "earned", "drink"),
         "effects": ({"type": "modify_need", "need": "thirst", "delta": -16},),
@@ -66,7 +62,6 @@ _ITEM_FAMILIES = (
     {
         "kind": "soft_wrap",
         "label": "soft wrap",
-        "name_words": ("Soft Wrap", "Field Wrap", "Clean Rag", "Little Mercy"),
         "glyph": "+",
         "tags": ("consumable", "keepsake", "earned", "medical"),
         "effects": ({"type": "restore_hp", "delta": 7},),
@@ -74,22 +69,11 @@ _ITEM_FAMILIES = (
     {
         "kind": "calling_card",
         "label": "calling card",
-        "name_words": ("Calling", "Known Door", "Table Talk", "Friendly Counter"),
         "glyph": "?",
         "tags": ("consumable", "keepsake", "earned", "social"),
         "effects": ({"type": "modify_need", "need": "social", "delta": 12},),
     },
 )
-
-_ITEM_OBJECT_PROFILE_FAMILY = {
-    "steady_charm": "tokens_charms",
-    "runner_patch": "textiles",
-    "pocket_ration": "containers",
-    "rain_token": "tokens_charms",
-    "soft_wrap": "medical_herbal",
-    "calling_card": "paper_books",
-}
-
 
 _PROFILE_FAMILIES = (
     {
@@ -219,6 +203,144 @@ _PROFILE_FAMILIES = (
             "casino": 1.2,
             "courier_office": 1.1,
         },
+    },
+)
+
+_ITEM_FAMILY_BY_KIND = {str(row["kind"]): row for row in _ITEM_FAMILIES}
+_PROFILE_FAMILY_BY_KIND = {str(row["kind"]): row for row in _PROFILE_FAMILIES}
+
+
+# A successful run currently does not know enough about every mastery domain to
+# extract one exact achievement honestly.  Until that seam is ready, the run's
+# visible facts choose a coherent culture family.  Every row below produces
+# objects, a region bias, interior encounters, and a restrained visual dialect
+# that can all circulate as ordinary future-world material.
+_CULTURE_FAMILIES = (
+    {
+        "kind": "care_network",
+        "label": "Care Network",
+        "keywords": ("medic", "clinic", "medical", "hospital", "herbal", "botany", "rescue", "relief"),
+        "item_kinds": ("soft_wrap", "rain_token", "steady_charm"),
+        "profile_kinds": ("quiet_residential", "roadside_favor"),
+        "provision_names": ("Ward Tea", "Night-Shift Wrap", "Relief Tin", "Clean-Counter Tonic"),
+        "token_names": ("Blue Ward Token", "Quiet Queue Chit", "Relief Route Mark"),
+        "curio_names": ("Mended Clinic Ribbon", "Little Mercy Ledger", "After-Hours Herb Tin"),
+        "object_families": ("medical_herbal", "tokens_charms", "paper_books"),
+        "distribution": {
+            "store_archetypes": ("pharmacy", "biotech_clinic", "herbalist_shop", "soup_kitchen"),
+            "loot_archetypes": ("pharmacy", "biotech_clinic", "field_hospital", "herbalist_shop"),
+            "carrier_archetypes": ("pharmacy", "biotech_clinic", "field_hospital", "herbalist_shop", "soup_kitchen"),
+        },
+        "curiosities": (
+            ("backroom_doctor", ("pharmacy", "biotech_clinic", "field_hospital"), ("back_office", "service_office", "storage"), "Clean wrapping and a handwritten queue mark a care shift that does not appear on the public hours."),
+            ("quiet_contact", ("herbalist_shop", "soup_kitchen", "pharmacy"), ("back_office", "quiet_room", "stock_room"), "A tiny relief mark repeats on cups, parcels, and one carefully folded note."),
+        ),
+        "theme_tokens": {"accent": "flora_flower_white", "title": "human_accent", "divider": "flora_leaf", "footer": "human_olive"},
+    },
+    {
+        "kind": "wire_archive",
+        "label": "Wire Archive",
+        "keywords": ("wire", "hack", "data", "records", "server", "surveillance", "software", "network"),
+        "item_kinds": ("runner_patch", "steady_charm", "calling_card"),
+        "profile_kinds": ("security_shadow", "canal_work"),
+        "provision_names": ("Cold Rack Patch", "Archive Wake Strip", "Night Console Sachet"),
+        "token_names": ("Dead Port Token", "Blue-Glass Access Chit", "Relay Route Mark"),
+        "curio_names": ("Folded Audit Ribbon", "Burned Contact Ledger", "Pocket Cable Rosary"),
+        "object_families": ("tools_parts", "tokens_charms", "paper_books"),
+        "distribution": {
+            "store_archetypes": ("wire_shop", "electronics_shop", "comms_shop"),
+            "loot_archetypes": ("wire_shop", "data_center", "server_hub", "comms_shop"),
+            "carrier_archetypes": ("wire_shop", "data_center", "server_hub", "comms_shop"),
+        },
+        "curiosities": (
+            ("records_keeper", ("data_center", "server_hub", "wire_shop"), ("records_room", "server_room", "surveillance_room"), "A second index shadows the official archive, with route marks where names should be."),
+            ("stash_ledger", ("electronics_shop", "comms_shop", "office"), ("back_office", "storage", "service_office"), "Someone has kept the obsolete part numbers and the doors they still open."),
+        ),
+        "theme_tokens": {"accent": "vehicle_glass", "title": "player", "divider": "item_metal", "footer": "human_denim"},
+    },
+    {
+        "kind": "route_exchange",
+        "label": "Route Exchange",
+        "keywords": ("courier", "route", "delivery", "transit", "travel", "freight", "transport", "road"),
+        "item_kinds": ("runner_patch", "pocket_ration", "rain_token"),
+        "profile_kinds": ("roadside_favor", "canal_work"),
+        "provision_names": ("Relay Supper", "Last-Stop Water", "Long Route Patch"),
+        "token_names": ("Spare Platform Chit", "Low Bridge Token", "Third-Shift Fare Mark"),
+        "curio_names": ("Folded Route Cloth", "Rain-Smudged Timetable", "Freight Desk Keepsake"),
+        "object_families": ("containers", "tokens_charms", "paper_books"),
+        "distribution": {
+            "store_archetypes": ("courier_office", "metro_exchange", "service_station", "outfitter"),
+            "loot_archetypes": ("courier_office", "freight_depot", "metro_exchange", "service_station"),
+            "carrier_archetypes": ("courier_office", "freight_depot", "metro_exchange", "service_station"),
+        },
+        "curiosities": (
+            ("transit_staff_roamer", ("metro_exchange", "freight_depot", "courier_office"), ("platform", "ticketing", "service_office"), "A hand-corrected route board preserves stops that the printed system has forgotten."),
+            ("stash_ledger", ("service_station", "warehouse", "courier_office"), ("stock_room", "storage", "back_office"), "Old fare marks have been sorted by destination instead of value."),
+        ),
+        "theme_tokens": {"accent": "flora_flower_gold", "title": "human_rust", "divider": "terrain_trail", "footer": "human_olive"},
+    },
+    {
+        "kind": "night_market",
+        "label": "Night Market",
+        "keywords": ("gang", "cult", "smuggl", "theft", "thief", "casino", "night", "covert"),
+        "item_kinds": ("calling_card", "steady_charm", "pocket_ration"),
+        "profile_kinds": ("night_lights", "market_afterglow"),
+        "provision_names": ("Back-Aisle Supper", "Closing-Time Calm", "Lucky Counter Sweet"),
+        "token_names": ("Red Table Chit", "Known Door Token", "After-Hours Favor Mark"),
+        "curio_names": ("Velvet Pocket Ledger", "Cheap Sign Rosary", "Folded Market Ribbon"),
+        "object_families": ("containers", "tokens_charms", "paper_books"),
+        "distribution": {
+            "store_archetypes": ("pawn_shop", "junk_market", "casino", "nightclub", "thrift_store"),
+            "loot_archetypes": ("pawn_shop", "casino", "nightclub", "tavern", "pool_hall"),
+            "carrier_archetypes": ("pawn_shop", "casino", "nightclub", "tavern", "pool_hall"),
+        },
+        "curiosities": (
+            ("afterhours_pusher", ("nightclub", "casino", "tavern"), ("vip_lounge", "back_office", "service_corridor"), "A familiar little table mark appears only after the public counters close."),
+            ("backroom_entrepreneur", ("pawn_shop", "junk_market", "pool_hall"), ("back_office", "stock_room", "storage"), "Bundles are counted by favor and neighborhood, not by price."),
+        ),
+        "theme_tokens": {"accent": "casino_chip", "title": "casino_gold", "divider": "casino_red", "footer": "human_wine"},
+    },
+    {
+        "kind": "civic_memory",
+        "label": "Civic Memory",
+        "keywords": ("civic", "justice", "community", "investigat", "public", "neighborhood", "witness", "bureau"),
+        "item_kinds": ("calling_card", "steady_charm", "soft_wrap"),
+        "profile_kinds": ("quiet_residential", "security_shadow"),
+        "provision_names": ("Long Meeting Tea", "Watch Desk Wrap", "Public Counter Mint"),
+        "token_names": ("Open Session Chit", "Block Watch Token", "Stamped Queue Mark"),
+        "curio_names": ("Dog-Eared Census Leaf", "Mended Notice Ribbon", "Little Public Ledger"),
+        "object_families": ("paper_books", "tokens_charms", "paper_books"),
+        "distribution": {
+            "store_archetypes": ("courthouse", "office", "bookshop", "soup_kitchen"),
+            "loot_archetypes": ("courthouse", "office", "checkpoint", "bookshop"),
+            "carrier_archetypes": ("courthouse", "office", "checkpoint", "soup_kitchen"),
+        },
+        "curiosities": (
+            ("records_keeper", ("courthouse", "office", "checkpoint"), ("records_office", "archive", "clerk_office"), "Corrections in three inks show where the public record and the lived block finally agreed."),
+            ("quiet_contact", ("bookshop", "soup_kitchen", "office"), ("back_office", "meeting_room", "quiet_room"), "A neighborhood mark has been added beside names that still answer their doors."),
+        ),
+        "theme_tokens": {"accent": "actor_role_accent", "title": "objective", "divider": "building_edge_painted", "footer": "human_slate"},
+    },
+    {
+        "kind": "workshop_line",
+        "label": "Workshop Line",
+        "keywords": ("drone", "tool", "mechanic", "repair", "salvage", "tinker", "manufactur", "workshop"),
+        "item_kinds": ("runner_patch", "pocket_ration", "steady_charm"),
+        "profile_kinds": ("canal_work", "roadside_favor"),
+        "provision_names": ("Bench Tea", "Late Shift Ration", "Grease-Paper Patch"),
+        "token_names": ("Tool Crib Chit", "Repaired Brass Token", "Third Bench Mark"),
+        "curio_names": ("Matched Washer String", "Pocket Parts Ledger", "Mended Shop Ribbon"),
+        "object_families": ("containers", "tokens_charms", "tools_parts"),
+        "distribution": {
+            "store_archetypes": ("tool_depot", "hardware_store", "machine_shop", "drone_shop", "junk_market"),
+            "loot_archetypes": ("tool_depot", "machine_shop", "factory", "drone_shop", "recycling_plant"),
+            "carrier_archetypes": ("tool_depot", "machine_shop", "factory", "drone_shop", "recycling_plant"),
+        },
+        "curiosities": (
+            ("backroom_entrepreneur", ("machine_shop", "drone_shop", "tool_depot"), ("back_office", "service_office", "stock_room"), "A repaired-parts exchange is being run from the edge of the official work orders."),
+            ("stash_ledger", ("factory", "recycling_plant", "junk_market"), ("storage", "locker_wall", "service_corridor"), "Discarded serials have been paired into working families in a grease-soft ledger."),
+        ),
+        "theme_tokens": {"accent": "item_metal", "title": "human_accent", "divider": "building_edge_gray_c", "footer": "human_charcoal"},
     },
 )
 
@@ -354,37 +476,110 @@ def _valid_weight_map(weights: dict[str, float], valid_ids) -> dict[str, float]:
     }
 
 
-def _build_item_definition(reward_id: str, source_payload: dict[str, Any]) -> tuple[str, dict[str, Any], str]:
-    family = _ITEM_FAMILIES[_variant_index(source_payload, len(_ITEM_FAMILIES), salt="item-family")]
-    word = family["name_words"][_variant_index(source_payload, len(family["name_words"]), salt="item-name")]
-    objective = _clean_identifier(source_payload.get("objective_title", "run")).replace("_", " ").title()
-    item_id = f"{reward_id}_keepsake"
-    name = f"{word} Keepsake"
-    if len(name) < 18 and objective and objective != "Run Objective":
-        name = f"{word} Keepsake"
-    item = {
-        "name": name,
-        "glyph": str(family["glyph"]),
-        "stack_max": 1,
-        "tags": list(family["tags"]),
-        "category": "consumable",
-        "legal_status": "legal",
-        "object_profile": reward_object_profile(
-            source_payload,
-            reward_id,
-            family_hint=_ITEM_OBJECT_PROFILE_FAMILY.get(str(family["kind"]), ""),
-        ),
-        "effects": [dict(effect) for effect in family["effects"]],
-        "lead_profile": {
-            "summary": f"Earned after {source_payload.get('objective_title') or 'a successful run'}.",
-            "tags": ["earned_reward", str(family["kind"])],
-        },
+def _culture_source_text(source_payload: dict[str, Any]) -> str:
+    chunks = [
+        source_payload.get("objective_title", ""),
+        source_payload.get("reason", ""),
+    ]
+    facilitator = source_payload.get("facilitator_context")
+    if isinstance(facilitator, dict):
+        for value in facilitator.values():
+            if isinstance(value, (list, tuple, set)):
+                chunks.extend(value)
+            else:
+                chunks.append(value)
+    return " ".join(str(value or "").strip().lower() for value in chunks if str(value or "").strip())
+
+
+def _select_culture_family(source_payload: dict[str, Any]) -> dict[str, Any]:
+    source_text = _culture_source_text(source_payload)
+    scored = []
+    for row in _CULTURE_FAMILIES:
+        score = sum(1 for keyword in row.get("keywords", ()) if str(keyword) in source_text)
+        if score:
+            scored.append((score, str(row["kind"]), row))
+    if scored:
+        best_score = max(row[0] for row in scored)
+        finalists = [row[2] for row in scored if row[0] == best_score]
+        return finalists[_variant_index(source_payload, len(finalists), salt="culture-semantic-tie")]
+    return _CULTURE_FAMILIES[_variant_index(source_payload, len(_CULTURE_FAMILIES), salt="culture-fallback")]
+
+
+def _distribution_profile(culture: dict[str, Any], slot: int) -> dict[str, Any]:
+    source = culture.get("distribution") if isinstance(culture.get("distribution"), dict) else {}
+    # Slots are all visible but not ubiquitous. Provisions circulate more
+    # readily than tokens, and curios remain the rarest part of the dialect.
+    weights = (18, 11, 7)
+    profile = {
+        key: list(values)
+        for key, values in source.items()
+        if key in {"store_archetypes", "loot_archetypes", "carrier_archetypes"}
     }
-    return item_id, item, str(family["label"])
+    profile["weight"] = weights[max(0, min(len(weights) - 1, int(slot)))]
+    return profile
 
 
-def _build_world_profile(reward_id: str, source_payload: dict[str, Any]) -> tuple[str, dict[str, Any], str]:
-    family = _PROFILE_FAMILIES[_variant_index(source_payload, len(_PROFILE_FAMILIES), salt="profile-family")]
+def _build_item_definitions(
+    reward_id: str,
+    source_payload: dict[str, Any],
+    culture: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], list[str], str]:
+    provision_kind = culture["item_kinds"][
+        _variant_index(source_payload, len(culture["item_kinds"]), salt=f"{culture['kind']}:provision-kind")
+    ]
+    provision_family = _ITEM_FAMILY_BY_KIND[str(provision_kind)]
+    name_groups = (
+        culture["provision_names"],
+        culture["token_names"],
+        culture["curio_names"],
+    )
+    suffixes = ("provision", "token", "curio")
+    glyphs = (str(provision_family["glyph"]), "*", "?")
+    tag_groups = (
+        tuple(provision_family["tags"]) + ("world_culture",),
+        ("token", "social", "keepsake", "earned", "world_culture"),
+        ("junk", "token", "social", "keepsake", "earned", "world_culture"),
+    )
+    effect_groups = (
+        [dict(effect) for effect in provision_family["effects"]],
+        [],
+        [],
+    )
+    items: dict[str, dict[str, Any]] = {}
+    labels: list[str] = []
+    for slot, suffix in enumerate(suffixes):
+        item_id = f"{reward_id}_{slot + 1:02d}_{suffix}"
+        names = name_groups[slot]
+        name = str(names[_variant_index(source_payload, len(names), salt=f"{culture['kind']}:{suffix}:name")])
+        family_hint = str(culture["object_families"][slot])
+        item = {
+            "name": name,
+            "glyph": glyphs[slot],
+            "stack_max": 1,
+            "tags": list(dict.fromkeys(tag_groups[slot])),
+            "category": "consumable" if slot == 0 else "misc",
+            "legal_status": "legal",
+            "object_profile": reward_object_profile(
+                source_payload,
+                f"{reward_id}:{suffix}",
+                family_hint=family_hint,
+            ),
+            "effects": effect_groups[slot],
+            "world_distribution": _distribution_profile(culture, slot),
+        }
+        items[item_id] = item
+        labels.append(name)
+    return items, labels, str(provision_family["label"])
+
+
+def _build_world_profile(
+    reward_id: str,
+    source_payload: dict[str, Any],
+    culture: dict[str, Any],
+) -> tuple[str, dict[str, Any], str]:
+    profile_kinds = tuple(culture.get("profile_kinds", ()))
+    family_kind = profile_kinds[_variant_index(source_payload, len(profile_kinds), salt=f"{culture['kind']}:profile-family")]
+    family = _PROFILE_FAMILY_BY_KIND[str(family_kind)]
     label_word = family["label_words"][_variant_index(source_payload, len(family["label_words"]), salt="profile-label")]
     profile_id = f"{reward_id}_area"
     valid_buildings = public_building_archetype_ids()
@@ -400,6 +595,43 @@ def _build_world_profile(reward_id: str, source_payload: dict[str, Any]) -> tupl
         "service_building_weights": _valid_weight_map(family["service_building_weights"], valid_buildings),
     }
     return profile_id, profile, str(family["kind"])
+
+
+def _build_room_curiosity_flavors(
+    reward_id: str,
+    culture: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    flavors = {}
+    base_profiles = []
+    for index, row in enumerate(culture.get("curiosities", ())):
+        base_profile, archetypes, room_kinds, signal = row
+        flavor_id = f"{reward_id}_{index + 1:02d}_room"
+        flavors[flavor_id] = {
+            "label": f"{culture['label']} {str(base_profile).replace('_', ' ').title()}",
+            "base_profile": str(base_profile),
+            "selection_weight": 1.35 if index == 0 else 0.9,
+            "archetypes": list(archetypes),
+            "room_kinds": list(room_kinds),
+            "room_curiosity_signal": str(signal),
+        }
+        base_profiles.append(str(base_profile))
+    return flavors, base_profiles
+
+
+def _build_ui_theme(
+    reward_id: str,
+    culture: dict[str, Any],
+    world_profile: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    theme_id = f"{reward_id}_theme"
+    return theme_id, {
+        "label": f"{culture['label']} Glass",
+        "selection_weight": 1.0,
+        "area_types": list(world_profile.get("area_types", ())),
+        "district_types": list(world_profile.get("district_types", ())),
+        "context_tags": [],
+        "tokens": dict(culture.get("theme_tokens", {})),
+    }
 
 
 def _read_ledger(ledger_path: Path) -> dict[str, Any]:
@@ -453,51 +685,79 @@ def _existing_row_for_source(ledger: dict[str, Any], source_run_id: str) -> dict
     return None
 
 
-def _summary_lines(label: str, item_path: Path, profile_path: Path, receipt_path: Path, readme_path: Path) -> list[str]:
-    return [
-        "Generated reward files:",
+_DOMAIN_LABELS = {
+    "items": "Circulating objects",
+    "world_profiles": "Area profile",
+    "room_curiosity_flavors": "Interior flavors",
+    "ui_themes": "Local visual dialect",
+}
+
+
+def _summary_lines(
+    label: str,
+    files: list[dict[str, Any]],
+    receipt_path: Path,
+    readme_path: Path,
+) -> list[str]:
+    lines = [
+        "Generated world-growth reward:",
         f"  {label} exported as optional custom content.",
-        f"  Item: {_path_display(item_path)}",
-        f"  Area profile: {_path_display(profile_path)}",
+    ]
+    for record in files:
+        domain = str(record.get("domain", "") or "")
+        path = Path(str(record.get("path", "") or ""))
+        lines.append(f"  {_DOMAIN_LABELS.get(domain, domain.replace('_', ' ').title())}: {_path_display(path)}")
+    lines.extend((
         f"  Receipt: {_path_display(receipt_path)}",
         f"  Install note: {_path_display(readme_path)}",
+    ))
+    return lines
+
+
+def _readme_text(label: str, files: list[dict[str, Any]], receipt_path: Path) -> str:
+    lines = [
+        f"Generated world-growth reward: {label}",
+        "",
+        "These files are optional. They are not enabled automatically.",
+        "Together they add one coherent bit of culture to later worlds; they do not grant a starting bonus.",
+        "",
     ]
-
-
-def _readme_text(label: str, item_path: Path, profile_path: Path, receipt_path: Path) -> str:
-    return "\n".join(
-        (
-            f"Generated reward: {label}",
-            "",
-            "These files are optional. They are not enabled automatically.",
-            "",
-            "To try the item in a future run, copy:",
-            f"  {_path_display(item_path)}",
+    for record in files:
+        domain = str(record.get("domain", "") or "")
+        path = Path(str(record.get("path", "") or ""))
+        lines.extend((
+            f"To install {_DOMAIN_LABELS.get(domain, domain.replace('_', ' ')).lower()}, copy:",
+            f"  {_path_display(path)}",
             "to:",
-            "  config/custom_content/items/",
+            f"  config/custom_content/{domain}/",
             "",
-            "To try the area profile in a future run, copy:",
-            f"  {_path_display(profile_path)}",
-            "to:",
-            "  config/custom_content/world_profiles/",
-            "",
-            "The receipt proves this bundle was generated by BAKERRRR:",
-            f"  {_path_display(receipt_path)}",
-            "",
-            "The item and area profile are normal custom-content examples. You can inspect them,",
-            "edit copies for your own experiments, or leave them unused.",
-            "",
-        )
-    )
+        ))
+    lines.extend((
+        "The receipt proves this bundle was generated by BAKERRRR:",
+        f"  {_path_display(receipt_path)}",
+        "",
+        "The objects enter matching shops, loose interior loot, and resident inventories through",
+        "their world_distribution profiles. The area, room, and visual files use the same public",
+        "custom-content schemas. You can install the bundle, inspect it as an example, or leave it unused.",
+        "",
+    ))
+    return "\n".join(lines)
 
 
 def _result_from_row(row: dict[str, Any], *, export_root: Path) -> dict[str, Any]:
     reward_id = str(row.get("reward_id", "") or "")
     artifacts = list(row.get("artifacts", ()) or ())
-    item_artifact = next((artifact for artifact in artifacts if artifact.get("domain") == "items"), {})
-    profile_artifact = next((artifact for artifact in artifacts if artifact.get("domain") == "world_profiles"), {})
-    item_path = export_root / str(item_artifact.get("path", f"items/{reward_id}.json"))
-    profile_path = export_root / str(profile_artifact.get("path", f"world_profiles/{reward_id}.json"))
+    files = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        domain = str(artifact.get("domain", "") or "")
+        rel_path = str(artifact.get("path", f"{domain}/{reward_id}.json") or f"{domain}/{reward_id}.json")
+        files.append({
+            "domain": domain,
+            "path": str(export_root / rel_path),
+            "loaded_ids": list(artifact.get("loaded_ids", ()) or ()),
+        })
     receipt_path = export_root / "receipts" / f"{reward_id}.json"
     readme_path = Path(str(row.get("readme_path", export_root / f"{reward_id}_README.txt")))
     label = str(row.get("reward_label", reward_id.replace("_", " ").title()) or reward_id)
@@ -505,15 +765,12 @@ def _result_from_row(row: dict[str, Any], *, export_root: Path) -> dict[str, Any
         "exported": False,
         "reward_id": reward_id,
         "reward_label": label,
-        "files": [
-            {"domain": "items", "path": str(item_path), "loaded_ids": list(item_artifact.get("loaded_ids", ()) or ())},
-            {"domain": "world_profiles", "path": str(profile_path), "loaded_ids": list(profile_artifact.get("loaded_ids", ()) or ())},
-        ],
+        "files": files,
         "receipt": copy.deepcopy(row),
         "receipt_path": str(receipt_path),
         "ledger_path": str(export_root / LEDGER_FILENAME),
         "readme_path": str(readme_path),
-        "summary_lines": _summary_lines(label, item_path, profile_path, receipt_path, readme_path),
+        "summary_lines": _summary_lines(label, files, receipt_path, readme_path),
     }
 
 
@@ -548,20 +805,38 @@ def export_success_reward_bundle(sim, player_eid=None, event_data=None, *, expor
     if existing is not None:
         return _result_from_row(existing, export_root=root)
 
-    item_id, item_def, item_label = _build_item_definition(reward_id, source_payload)
-    profile_id, profile_def, profile_kind = _build_world_profile(reward_id, source_payload)
-    reward_label = f"{item_label.title()} and {profile_def['label']}"
+    culture = _select_culture_family(source_payload)
+    item_defs, item_labels, provision_label = _build_item_definitions(reward_id, source_payload, culture)
+    profile_id, profile_def, profile_kind = _build_world_profile(reward_id, source_payload, culture)
+    flavor_defs, flavor_kinds = _build_room_curiosity_flavors(reward_id, culture)
+    theme_id, theme_def = _build_ui_theme(reward_id, culture, profile_def)
+    reward_label = f"{culture['label']} World Legacy"
 
-    item_doc = wrap_object_document({item_id: item_def}, schema_version=SCHEMA_VERSION)
+    item_doc = wrap_object_document(item_defs, schema_version=SCHEMA_VERSION)
     profile_doc = wrap_object_document({profile_id: profile_def}, schema_version=SCHEMA_VERSION)
+    flavor_doc = wrap_object_document(flavor_defs, schema_version=SCHEMA_VERSION)
+    theme_doc = wrap_object_document({theme_id: theme_def}, schema_version=SCHEMA_VERSION)
 
     item_path = root / "items" / f"{reward_id}.json"
     profile_path = root / "world_profiles" / f"{reward_id}.json"
+    flavor_path = root / "room_curiosity_flavors" / f"{reward_id}.json"
+    theme_path = root / "ui_themes" / f"{reward_id}.json"
     receipt_path = root / "receipts" / f"{reward_id}.json"
     readme_path = root / f"{reward_id}_README.txt"
 
     item_hash = _json_write(item_path, item_doc)
     profile_hash = _json_write(profile_path, profile_doc)
+    flavor_hash = _json_write(flavor_path, flavor_doc)
+    theme_hash = _json_write(theme_path, theme_doc)
+
+    item_ids = list(item_defs)
+    flavor_ids = list(flavor_defs)
+    files = [
+        {"domain": "items", "path": str(item_path), "loaded_ids": item_ids},
+        {"domain": "world_profiles", "path": str(profile_path), "loaded_ids": [profile_id]},
+        {"domain": "room_curiosity_flavors", "path": str(flavor_path), "loaded_ids": flavor_ids},
+        {"domain": "ui_themes", "path": str(theme_path), "loaded_ids": [theme_id]},
+    ]
 
     receipt = {
         "schema_version": RUN_REWARD_SCHEMA_VERSION,
@@ -572,15 +847,19 @@ def export_success_reward_bundle(sim, player_eid=None, event_data=None, *, expor
         "content_domain": "custom_content",
         "custom_content_schema_version": SCHEMA_VERSION,
         "reward_family": {
-            "item": item_label,
+            "culture": str(culture["kind"]),
+            "item": provision_label,
+            "items": item_labels,
             "world_profile": profile_kind,
+            "room_curiosity_flavors": flavor_kinds,
+            "ui_theme": str(culture["kind"]),
         },
         "source": source_payload,
         "artifacts": [
             {
                 "domain": "items",
                 "path": f"items/{reward_id}.json",
-                "loaded_ids": [item_id],
+                "loaded_ids": item_ids,
                 "sha256": item_hash,
             },
             {
@@ -589,11 +868,23 @@ def export_success_reward_bundle(sim, player_eid=None, event_data=None, *, expor
                 "loaded_ids": [profile_id],
                 "sha256": profile_hash,
             },
+            {
+                "domain": "room_curiosity_flavors",
+                "path": f"room_curiosity_flavors/{reward_id}.json",
+                "loaded_ids": flavor_ids,
+                "sha256": flavor_hash,
+            },
+            {
+                "domain": "ui_themes",
+                "path": f"ui_themes/{reward_id}.json",
+                "loaded_ids": [theme_id],
+                "sha256": theme_hash,
+            },
         ],
     }
     receipt["signature"] = sign_reward_receipt(receipt)
     _json_write(receipt_path, receipt)
-    readme_path.write_text(_readme_text(reward_label, item_path, profile_path, receipt_path), encoding="utf-8")
+    readme_path.write_text(_readme_text(reward_label, files, receipt_path), encoding="utf-8")
 
     ledger["schema_version"] = RUN_REWARD_SCHEMA_VERSION
     ledger["rewards"] = [row for row in ledger.get("rewards", ()) or () if str(row.get("source_run_id", "")) != source_run_id]
@@ -604,17 +895,17 @@ def export_success_reward_bundle(sim, player_eid=None, event_data=None, *, expor
         "exported": True,
         "reward_id": reward_id,
         "reward_label": reward_label,
-        "item_id": item_id,
+        "item_id": item_ids[0],
+        "item_ids": item_ids,
         "profile_id": profile_id,
-        "files": [
-            {"domain": "items", "path": str(item_path), "loaded_ids": [item_id]},
-            {"domain": "world_profiles", "path": str(profile_path), "loaded_ids": [profile_id]},
-        ],
+        "room_curiosity_ids": flavor_ids,
+        "ui_theme_id": theme_id,
+        "files": files,
         "receipt": copy.deepcopy(receipt),
         "receipt_path": str(receipt_path),
         "ledger_path": str(ledger_path),
         "readme_path": str(readme_path),
-        "summary_lines": _summary_lines(reward_label, item_path, profile_path, receipt_path, readme_path),
+        "summary_lines": _summary_lines(reward_label, files, receipt_path, readme_path),
     }
 
 

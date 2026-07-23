@@ -21,6 +21,7 @@ from game.public_content import (
     PUBLIC_DENSITY_LEVELS,
     PUBLIC_ITEM_EFFECT_TYPES,
     PUBLIC_ITEM_NEEDS,
+    PUBLIC_ITEM_WORLD_DISTRIBUTION_FIELDS,
     PUBLIC_ROOM_CURIOSITY_BASE_PROFILES,
     PUBLIC_ROOM_CURIOSITY_FLAVOR_FIELDS,
     PUBLIC_ROOM_CURIOSITY_ROOM_KINDS,
@@ -60,6 +61,7 @@ CUSTOM_ITEM_ALLOWED_FIELDS = {
     "substance_profile",
     "lead_profile",
     "object_profile",
+    "world_distribution",
 }
 
 CUSTOM_ITEM_DISALLOWED_FIELDS = {
@@ -377,6 +379,29 @@ def _validate_custom_item(issues, source, item_id, item, *, root=CUSTOM_CONTENT_
         clean["substance_profile"] = withdrawal
     elif substance is not None and not isinstance(substance, dict):
         _issue(issues, "error", domain, source, f"$.{item_id}.substance_profile", "substance_profile must be an object", root=root)
+    distribution = item.get("world_distribution")
+    if distribution is not None:
+        distribution_path = f"$.{item_id}.world_distribution"
+        if not isinstance(distribution, dict):
+            _issue(issues, "error", domain, source, distribution_path, "world_distribution must be an object", root=root)
+        else:
+            valid_archetypes = public_building_archetype_ids()
+            for key in sorted(distribution):
+                if str(key) not in PUBLIC_ITEM_WORLD_DISTRIBUTION_FIELDS:
+                    _issue(issues, "error", domain, source, f"{distribution_path}.{key}", "unknown world_distribution field", root=root)
+            for key in ("store_archetypes", "loot_archetypes", "carrier_archetypes"):
+                _validate_string_list(
+                    issues,
+                    domain,
+                    source,
+                    f"{distribution_path}.{key}",
+                    distribution.get(key, []),
+                    valid_archetypes,
+                    root=root,
+                )
+            raw_weight = distribution.get("weight", 10)
+            if not isinstance(raw_weight, int) or isinstance(raw_weight, bool) or not 1 <= raw_weight <= 100:
+                _issue(issues, "error", domain, source, f"{distribution_path}.weight", "weight must be an integer from 1 through 100", root=root)
     return clean
 
 

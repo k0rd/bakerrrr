@@ -552,6 +552,22 @@ def _normalize_lead_profile(value):
     }
 
 
+def _normalize_world_distribution(value):
+    raw = value if isinstance(value, dict) else {}
+    if not raw:
+        return None
+    try:
+        weight = max(1, min(100, int(raw.get("weight", 10) or 10)))
+    except (TypeError, ValueError):
+        weight = 10
+    result = {"weight": weight}
+    for key in ("store_archetypes", "loot_archetypes", "carrier_archetypes"):
+        values = _string_tuple(raw.get(key))
+        if values:
+            result[key] = values
+    return result if len(result) > 1 else None
+
+
 DEFAULT_ITEM_CATALOG = {
     "street_ration": {
         "name": "Street Ration",
@@ -1368,6 +1384,7 @@ def _normalize_item_catalog_source(source):
             "trap_profile": _normalize_trap_profile(item.get("trap_profile")),
             "substance_profile": _normalize_substance_profile(item.get("substance_profile")),
             "lead_profile": _normalize_lead_profile(item.get("lead_profile")),
+            "world_distribution": _normalize_world_distribution(item.get("world_distribution")),
             "drone_profile": normalize_drone_profile(item.get("drone_profile"), item_id=item_id),
             "wire_profile": normalize_wire_profile(item.get("wire_profile"), item_id=item_id),
             "wire_interface_profile": normalize_wire_interface_profile(
@@ -1417,6 +1434,57 @@ def load_item_catalog(path=ITEMS_PATH, extra_items=None):
 
 def normalize_item_definitions(items):
     return _normalize_item_catalog_source(items)
+
+
+_WORLD_DISTRIBUTION_INDEX = {}
+_WORLD_DISTRIBUTION_EXTERNAL_CACHE = {}
+
+
+def _build_world_distribution_index(catalog):
+    index = {}
+    channel_keys = {
+        "store": "store_archetypes",
+        "loot": "loot_archetypes",
+        "carrier": "carrier_archetypes",
+    }
+    for item_id, item_def in catalog.items():
+        if not isinstance(item_def, dict):
+            continue
+        profile = item_def.get("world_distribution")
+        if not isinstance(profile, dict):
+            continue
+        try:
+            weight = max(1, min(100, int(profile.get("weight", 10) or 10)))
+        except (TypeError, ValueError):
+            weight = 10
+        for channel, field in channel_keys.items():
+            for raw_archetype in profile.get(field, ()):
+                archetype = str(raw_archetype or "").strip().lower()
+                if archetype:
+                    index.setdefault((channel, archetype), []).append((str(item_id), weight))
+    return {key: tuple(sorted(rows)) for key, rows in index.items()}
+
+
+def world_distributed_item_pool(channel, archetype, item_catalog=None):
+    """Return indexed weighted items native to one world context.
+
+    Distribution is opt-in on the item definition. Built-in items continue to
+    use their authored loot and store tables; earned/custom objects can use
+    this narrow public profile to join those same circulation paths.
+    """
+
+    catalog = item_catalog or ITEM_CATALOG
+    if catalog is ITEM_CATALOG:
+        index = _WORLD_DISTRIBUTION_INDEX
+    else:
+        marker = (id(catalog), len(catalog))
+        index = _WORLD_DISTRIBUTION_EXTERNAL_CACHE.get(marker)
+        if index is None:
+            index = _build_world_distribution_index(catalog)
+            _WORLD_DISTRIBUTION_EXTERNAL_CACHE.clear()
+            _WORLD_DISTRIBUTION_EXTERNAL_CACHE[marker] = index
+    key = (str(channel or "").strip().lower(), str(archetype or "").strip().lower())
+    return tuple(index.get(key, ()))
 
 
 def load_loot_tables(path=LOOT_TABLES_PATH, item_catalog=None):
@@ -2109,12 +2177,16 @@ def roll_loot(rng, table_key="default", count=1, loot_tables=None):
 
 ITEM_CATALOG = load_item_catalog()
 LOOT_TABLES = load_loot_tables(item_catalog=ITEM_CATALOG)
+_WORLD_DISTRIBUTION_INDEX.update(_build_world_distribution_index(ITEM_CATALOG))
 
 
 def refresh_item_runtime(custom_items=None):
     parsed = load_item_catalog(extra_items=custom_items if isinstance(custom_items, dict) else None)
     ITEM_CATALOG.clear()
     ITEM_CATALOG.update(parsed)
+    _WORLD_DISTRIBUTION_INDEX.clear()
+    _WORLD_DISTRIBUTION_INDEX.update(_build_world_distribution_index(ITEM_CATALOG))
+    _WORLD_DISTRIBUTION_EXTERNAL_CACHE.clear()
     loot_tables = load_loot_tables(item_catalog=ITEM_CATALOG)
     LOOT_TABLES.clear()
     LOOT_TABLES.update(loot_tables)

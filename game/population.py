@@ -47,7 +47,7 @@ from game.ecology_registry import native_fauna_profiles
 from game.fauna_genetics import apply_animal_genome_expression, founder_animal_genome
 from game.appearance_loadout import cosmetic_variant_metadata, is_appearance_item, seed_npc_appearance_from_description
 from game.drone_distribution import drone_distribution_metadata
-from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot
+from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot, world_distributed_item_pool
 from game.human_identity import seed_human_identity_profile
 from game.npc_names import generate_human_personal_name, human_descriptor
 from game.npc_relationships import seed_relationship_from_home_bond
@@ -2081,6 +2081,9 @@ def seed_chunk_items(sim, chunk, property_records):
             continue
         table_key = loot_table_for_property(kind=record.get("kind"), archetype=record.get("archetype"))
         rolled_items = list(roll_loot(rng, table_key=table_key, count=count))
+        distributed_pool = world_distributed_item_pool("loot", _property_archetype(prop), item_catalog=ITEM_CATALOG)
+        if rolled_items and distributed_pool and rng.random() < 0.18:
+            rolled_items[-1] = _weighted_choice(rng, distributed_pool)
         if rolled_items and not any(_is_useful_loot_item(item_id) for item_id in rolled_items):
             useful_item = _contextual_useful_loot_candidate(prop, rng)
             if useful_item:
@@ -2647,14 +2650,21 @@ def _seed_npc_inventory(sim, eid, rng, role, workplace_prop=None, home_prop=None
         _give_item(sim, eid, "pruning_shears", quantity=1)
         _give_item(sim, eid, "mortar_kit", quantity=1)
     pool = [item_id for item_id in _inventory_pool_for(role, workplace_prop=workplace_prop, home_prop=home_prop) if item_id in ITEM_CATALOG]
-    if not pool:
-        return
-    _give_item(sim, eid, rng.choice(pool), quantity=1)
-    if rng.random() < 0.28:
+    if pool:
         _give_item(sim, eid, rng.choice(pool), quantity=1)
-    if role in {"thief", "drunk"} and rng.random() < 0.42:
-        _give_item(sim, eid, rng.choice(pool), quantity=1)
-    if role == "thief" and rng.random() < 0.07:
+        if rng.random() < 0.28:
+            _give_item(sim, eid, rng.choice(pool), quantity=1)
+        if role in {"thief", "drunk"} and rng.random() < 0.42:
+            _give_item(sim, eid, rng.choice(pool), quantity=1)
+    distributed_rows = {}
+    for carrier_prop in (workplace_prop, home_prop):
+        carrier_archetype = _property_archetype(carrier_prop)
+        for item_id, weight in world_distributed_item_pool("carrier", carrier_archetype, item_catalog=ITEM_CATALOG):
+            distributed_rows[item_id] = max(int(weight), int(distributed_rows.get(item_id, 0)))
+    distributed_pool = tuple(sorted(distributed_rows.items()))
+    if distributed_pool and rng.random() < 0.10:
+        _give_item(sim, eid, _weighted_choice(rng, distributed_pool), quantity=1)
+    if pool and role == "thief" and rng.random() < 0.07:
         # A rare coherent electronic getaway kit.  Seeding both halves keeps
         # remote-device use from depending on two unrelated loot rolls.
         _give_item(sim, eid, "remote_release_rig", quantity=1)
