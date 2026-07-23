@@ -22,6 +22,7 @@ from game.components import (
 )
 from game.human_description import build_human_description_profile
 from game.items import ITEM_CATALOG
+from game.knowledge_notebook import note_person_notebook_mutation
 from game.lighting import ambient_snapshot
 
 
@@ -95,7 +96,8 @@ def remember_presented_identity(
         return None
     if tick is None:
         tick = int(getattr(sim, "tick", 0) or 0)
-    entry = ledger.person_entry(subject_eid) or {}
+    existing = ledger.person_entry(subject_eid)
+    entry = existing or {}
     first_met_tick = entry.get("first_met_tick")
     last_met_tick = entry.get("last_met_tick")
     if met_directly:
@@ -122,7 +124,15 @@ def remember_presented_identity(
         last_met_tick=last_met_tick,
         identity_snapshot=actor_identity_snapshot(sim, subject_eid),
     )
-    return ledger.person_entry(subject_eid)
+    updated = ledger.person_entry(subject_eid)
+    note_person_notebook_mutation(
+        sim,
+        viewer_eid,
+        subject_eid,
+        before=dict(existing) if isinstance(existing, dict) else None,
+        after=updated,
+    )
+    return updated
 
 
 def identities_are_mutually_known(sim, left_eid, right_eid):

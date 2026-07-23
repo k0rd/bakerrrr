@@ -9,6 +9,7 @@ runtime.
 from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
+from game.knowledge_notebook import note_property_notebook_mutation
 from game.property_doors import _door_tile_is_occupied
 from game.system_support.access_checks import (
     _maybe_damage_access_tool,
@@ -1008,6 +1009,9 @@ class PropertySystem(System):
 
                 owner_knowledge = knowledges.get(owner_eid)
                 if owner_knowledge:
+                    prior_entry = owner_knowledge.property_entry(property_id)
+                    prior_entry = dict(prior_entry) if isinstance(prior_entry, dict) else None
+                    prior_hidden = bool(owner_knowledge.is_hidden(property_id))
                     owner_knowledge.remember(
                         property_id,
                         owner_eid=owner_eid,
@@ -1016,6 +1020,15 @@ class PropertySystem(System):
                         tick=self.sim.tick,
                         anchored=True,
                         anchor_kind="owned",
+                    )
+                    note_property_notebook_mutation(
+                        self.sim,
+                        owner_eid,
+                        prop,
+                        before=prior_entry,
+                        after=owner_knowledge.property_entry(property_id),
+                        hidden_before=prior_hidden,
+                        hidden_after=bool(owner_knowledge.is_hidden(property_id)),
                     )
 
             if assets and owner_eid == self.player_eid:

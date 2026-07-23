@@ -3866,6 +3866,7 @@ class SiteServiceSystem(System):
                 confidence=0.68,
                 lead_kind="service_intel",
                 hidden=False,
+                notebook_notice_emitted=True,
             ))
         return bool(changed)
 

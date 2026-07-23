@@ -407,12 +407,11 @@ class PropertyAwarenessSystem(System):
                         or inside_bounds
                     )
                 )
-                knowledge.remember(
-                    prop["id"],
-                    owner_eid=prop.get("owner_eid"),
-                    owner_tag=prop.get("owner_tag"),
+                notebook_notice_emitted = _remember_property_lead_for_actor(
+                    self.sim,
+                    eid,
+                    prop,
                     confidence=confidence,
-                    tick=self.sim.tick,
                     anchored=anchored,
                     anchor_kind=(
                         "owned"
@@ -458,6 +457,7 @@ class PropertyAwarenessSystem(System):
                         property_name=str(prop.get("name", prop.get("id", "location"))).strip() or "location",
                         discovery_mode="presence",
                         confidence=new_confidence,
+                        notebook_notice_emitted=bool(notebook_notice_emitted),
                     ))
 
         # Knowledge sharing within trusted social links.
@@ -496,12 +496,14 @@ class PropertyAwarenessSystem(System):
                     if shared_conf <= existing_conf + 0.05:
                         continue
 
-                    other_knowledge.remember(
-                        property_id,
-                        owner_eid=info.get("owner_eid"),
-                        owner_tag=info.get("owner_tag"),
+                    prop = self.sim.properties.get(str(property_id))
+                    if not isinstance(prop, dict):
+                        continue
+                    _remember_property_lead_for_actor(
+                        self.sim,
+                        other_eid,
+                        prop,
                         confidence=shared_conf,
-                        tick=self.sim.tick,
                     )
 
                     self.sim.emit(Event(

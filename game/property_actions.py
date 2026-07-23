@@ -209,7 +209,7 @@ class PropertyActionRuntime:
         if prior_confidence + 0.01 >= confidence and prior_kind == next_kind:
             return False
 
-        _remember_property_lead_for_actor(
+        notebook_notice_emitted = _remember_property_lead_for_actor(
             self.sim,
             eid,
             prop,
@@ -235,6 +235,7 @@ class PropertyActionRuntime:
                 property_name=str(prop.get("name", prop.get("id", "location"))).strip() or "location",
                 discovery_mode=str(discovery_mode or "sight").strip().lower() or "sight",
                 confidence=new_confidence,
+                notebook_notice_emitted=bool(notebook_notice_emitted),
             ))
         return new_confidence > prior_confidence + 0.01
 

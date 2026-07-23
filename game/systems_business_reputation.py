@@ -10,6 +10,7 @@ from game.incident_runtime import incident_record
 from game.property_runtime import (
     finance_services_for_property as _finance_services_for_property,
     property_is_storefront as _property_is_storefront,
+    remember_property_lead_for_actor as _remember_property_lead_for_actor,
     resolve_property_record as _resolve_property_record,
     site_services_for_property as _site_services_for_property,
 )
@@ -342,16 +343,15 @@ def remember_hidden_social_site_for_actor(sim, eid, property_id, *, source_eid=N
     prior_source = existing.get("source_eid") if isinstance(existing, dict) else None
     prior_hidden = bool(knowledge.is_hidden(property_key))
     next_confidence = _clamp_unit(confidence, default=0.5)
-    knowledge.remember(
-        property_key,
-        owner_eid=prop.get("owner_eid"),
-        owner_tag=prop.get("owner_tag"),
+    _remember_property_lead_for_actor(
+        sim,
+        actor_eid,
+        prop,
         confidence=next_confidence,
-        tick=int(getattr(sim, "tick", 0) or 0),
         source_eid=source_eid,
         lead_kind="social",
+        hidden=True,
     )
-    knowledge.hide(property_key)
     return (
         not isinstance(existing, dict)
         or prior_confidence + 0.04 < next_confidence

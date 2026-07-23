@@ -1020,6 +1020,7 @@ class ItemActionRuntime:
                 source_item_name=item_name,
                 lead_kind=str(lead_profile.get("lead_kind", "") or "").strip().lower(),
                 hidden=hidden,
+                notebook_notice_emitted=True,
             ))
 
         entry_metadata = dict(entry.get("metadata") or {}) if isinstance(entry.get("metadata"), dict) else {}

@@ -17,6 +17,7 @@ from game.components import (
     Position,
 )
 from game.items import ITEM_CATALOG
+from game.knowledge_notebook import note_person_notebook_mutation
 from game.wire_consequences import wire_network_key, wire_network_property, wire_security_reset_delay
 from game.wire_kit import wire_kit_add_entry, wire_kit_can_accept_entry, wire_kit_remove_entry, wire_state_for_actor
 from game.wire_runtime import normalize_wire_entry_metadata, wire_entry_display_name, wire_profile_for_item
@@ -897,6 +898,13 @@ def _remember_wire_data_subject(sim, actor_eid, metadata):
         property_id=source_id,
         source_topic="wire_data",
         dedupe_window=0,
+    )
+    note_person_notebook_mutation(
+        sim,
+        actor_eid,
+        subject_eid,
+        before=dict(existing) if isinstance(existing, Mapping) else None,
+        after=ledger.person_entry(subject_eid),
     )
     return True
 

@@ -4218,16 +4218,15 @@ class FinalOperationSystem(System):
         prop = self.sim.properties.get(property_id)
         if not isinstance(prop, dict):
             return
-        knowledge.remember(
-            property_id,
-            owner_eid=prop.get("owner_eid"),
-            owner_tag=prop.get("owner_tag"),
+        _remember_property_lead_for_actor(
+            self.sim,
+            self.player_eid,
+            prop,
             confidence=1.0,
-            tick=int(getattr(self.sim, "tick", 0)),
             anchored=True,
             anchor_kind="final_operation",
+            hidden=False,
         )
-        knowledge.unhide(property_id)
 
     def _finish_completed(self, completed):
         self.sim.emit(Event(

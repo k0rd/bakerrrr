@@ -26,6 +26,7 @@ from game.components import (
 )
 from game.justice_identity_runtime import justice_identity_state
 from game.justice_runtime import justice_snapshot, justice_summary_rows
+from game.knowledge_notebook import note_person_notebook_mutation
 from game.npc_relationships import current_relationship_for_actor
 from game.organizations import organization_policy_snapshot, organization_profile
 
@@ -735,6 +736,13 @@ def remember_civic_record_inspection(sim, viewer_eid, record, *, property_id=Non
         property_id=_text(property_id) or None,
         source_topic="civic_records",
         dedupe_window=0,
+    )
+    note_person_notebook_mutation(
+        sim,
+        viewer_eid,
+        subject_eid,
+        before=dict(existing) if isinstance(existing, dict) else None,
+        after=ledger.person_entry(subject_eid),
     )
     return True
 

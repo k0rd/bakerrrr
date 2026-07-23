@@ -6,6 +6,7 @@ main behavior file as a dumping ground for every property-adjacent utility.
 """
 
 from game.components import Inventory, Position, PropertyKnowledge
+from game.knowledge_notebook import note_property_notebook_mutation
 from game.property_access import (
     controller_intrusion_access_for_actor as _controller_intrusion_access_for_actor,
     finance_services_for_property as _finance_services_for_property_base,
@@ -565,13 +566,25 @@ def property_status_text(sim, prop, hour=None):
     return _property_status_text(sim, prop, hour=hour)
 
 
-def remember_property_lead_for_actor(sim, viewer_eid, prop, *, source_eid=None, lead_kind=None, confidence=0.5, hidden=None):
+def remember_property_lead_for_actor(
+    sim,
+    viewer_eid,
+    prop,
+    *,
+    source_eid=None,
+    lead_kind=None,
+    confidence=0.5,
+    hidden=None,
+    anchored=None,
+    anchor_kind=None,
+):
     if viewer_eid is None or not prop:
         return False
     knowledge = sim.ecs.get(PropertyKnowledge).get(viewer_eid)
     if not knowledge:
         return False
     existing = knowledge.known.get(prop["id"])
+    prior_entry = dict(existing) if isinstance(existing, dict) else None
     prior_conf = float(existing.get("confidence", 0.0)) if existing else 0.0
     prior_source = existing.get("source_eid") if existing else None
     prior_kind = str(existing.get("lead_kind", "") or "").strip().lower() if existing else ""
@@ -584,6 +597,8 @@ def remember_property_lead_for_actor(sim, viewer_eid, prop, *, source_eid=None, 
         tick=int(getattr(sim, "tick", 0)),
         source_eid=source_eid,
         lead_kind=lead_kind,
+        anchored=anchored,
+        anchor_kind=anchor_kind,
     )
     hidden_changed = False
     if hidden is True:
@@ -591,14 +606,33 @@ def remember_property_lead_for_actor(sim, viewer_eid, prop, *, source_eid=None, 
     elif hidden is False:
         hidden_changed = bool(knowledge.unhide(prop["id"]))
     current_hidden = bool(knowledge.is_hidden(prop["id"]))
-    return (
+    current_entry = knowledge.known.get(prop["id"])
+    current_conf = float(current_entry.get("confidence", 0.0)) if isinstance(current_entry, dict) else 0.0
+    current_source = current_entry.get("source_eid") if isinstance(current_entry, dict) else None
+    current_kind = str(current_entry.get("lead_kind", "") or "").strip().lower() if isinstance(current_entry, dict) else ""
+    changed = (
         existing is None
-        or prior_conf + 0.04 < float(confidence)
-        or prior_source != source_eid
-        or prior_kind != str(lead_kind or "").strip().lower()
+        or prior_conf + 0.001 < current_conf
+        or prior_source != current_source
+        or prior_kind != current_kind
+        or (prior_entry or {}).get("owner_eid") != (current_entry or {}).get("owner_eid")
+        or (prior_entry or {}).get("owner_tag") != (current_entry or {}).get("owner_tag")
+        or bool((prior_entry or {}).get("anchored")) != bool((current_entry or {}).get("anchored"))
+        or (prior_entry or {}).get("anchor_kind") != (current_entry or {}).get("anchor_kind")
         or prior_hidden != current_hidden
         or hidden_changed
     )
+    if changed:
+        note_property_notebook_mutation(
+            sim,
+            viewer_eid,
+            prop,
+            before=prior_entry,
+            after=current_entry,
+            hidden_before=prior_hidden,
+            hidden_after=current_hidden,
+        )
+    return changed
 
 
 def ensure_runtime_container_entry_instance_ids(sim, entries):

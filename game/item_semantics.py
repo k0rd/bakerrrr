@@ -360,6 +360,7 @@ def item_identification_profile(item_or_entry, item_catalog=None) -> dict:
         "family": family,
         "requires_identification": bool(profile.get("requires_identification", False)),
         "auto_identify_on_use": bool(profile.get("auto_identify_on_use", False)),
+        "unidentified_name": str(profile.get("unidentified_name", "") or "").strip(),
         "appraisal_fields": tuple(
             _key(field)
             for field in profile.get("appraisal_fields", ())
@@ -487,6 +488,10 @@ def item_unknown_name_for_actor(sim, actor_eid, item_or_entry, *, item_catalog=N
     custom = str(metadata.get("perceived_name", "") or "").strip()
     if custom:
         return custom
+    profile = item_identification_profile(item_or_entry, item_catalog=item_catalog)
+    authored_unknown_name = str(profile.get("unidentified_name", "") or "").strip()
+    if authored_unknown_name:
+        return authored_unknown_name
     traits = _appearance_traits(sim, item_or_entry, item_catalog=item_catalog)
     family = _key(traits.get("family")) or item_appearance_family(item_or_entry, item_catalog=item_catalog)
     if family == "injectable":

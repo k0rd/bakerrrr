@@ -587,7 +587,8 @@
     "identification_profile": {
       "family": "medical",
       "requires_identification": true,
-      "auto_identify_on_use": true
+      "auto_identify_on_use": true,
+      "unidentified_name": "Odd Herbal Concoction"
     },
     "effects": [
       {
@@ -622,7 +623,8 @@
     "identification_profile": {
       "family": "medical",
       "requires_identification": true,
-      "auto_identify_on_use": true
+      "auto_identify_on_use": true,
+      "unidentified_name": "Odd Herbal Concoction"
     },
     "effects": [
       {

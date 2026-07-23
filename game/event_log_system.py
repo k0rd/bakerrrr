@@ -2,6 +2,7 @@
 
 import random
 
+from engine.events import Event
 from engine.sites import layout_chunk_site, site_gameplay_profile
 from engine.systems import System
 from game.components import (
@@ -70,6 +71,7 @@ from game.items import (
     prepare_item_stack_metadata,
 )
 from game.herbal_chemistry_runtime import secondary_trait_labels
+from game.knowledge_notebook import notebook_binding_label
 from game.item_semantics import (
     appraise_item_for_actor,
     item_display_name_for_actor,
@@ -422,9 +424,17 @@ class EventLogSystem(System):
     def __init__(self, sim, player_eid):
         super().__init__(sim)
         self.player_eid = player_eid
+        self.runs_without_turn = True
+        self.runs_while_paused = True
         self.run_warning_flags = set()
         self.last_location_building_token = ""
         self.last_location_room_token = ""
+        assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+        self._held_credits_snapshot = (
+            _int_or_default(getattr(assets, "credits", 0), 0)
+            if assets is not None
+            else None
+        )
 
         player_pos = self.sim.ecs.get(Position).get(self.player_eid)
         if player_pos is not None:
@@ -446,6 +456,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("scan_report", self.on_scan_report)
         self.sim.events.subscribe("look_mode_toggled", self.on_look_mode_toggled)
         self.sim.events.subscribe("cursor_examined", self.on_cursor_examined)
+        self.sim.events.subscribe("knowledge_notebook_updated", self.on_knowledge_notebook_updated)
+        self.sim.events.subscribe("player_credits_changed", self.on_player_credits_changed)
         self.sim.events.subscribe("property_self_discovered", self.on_property_self_discovered)
         self.sim.events.subscribe("player_mode_toggled", self.on_player_mode_toggled)
         self.sim.events.subscribe("player_hidden_changed", self.on_player_hidden_changed)
@@ -745,6 +757,39 @@ class EventLogSystem(System):
         self.sim.events.subscribe("chunk_focus_changed", self.on_chunk_focus_changed)
         self.sim.events.subscribe("npc_suppressed", self.on_npc_suppressed)
         self.sim.events.subscribe("npc_surrendered", self.on_npc_surrendered)
+
+    def update(self):
+        assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+        if assets is None:
+            self._held_credits_snapshot = None
+            return
+        current = _int_or_default(getattr(assets, "credits", 0), 0)
+        previous = self._held_credits_snapshot
+        self._held_credits_snapshot = current
+        if previous is None or current == previous:
+            return
+        self.sim.emit(Event(
+            "player_credits_changed",
+            eid=self.player_eid,
+            credits_before=int(previous),
+            credits_after=int(current),
+            delta=int(current - previous),
+        ))
+
+    def on_player_credits_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        before = _int_or_default(event.data.get("credits_before"), 0)
+        after = _int_or_default(event.data.get("credits_after"), before)
+        delta = _int_or_default(event.data.get("delta"), after - before)
+        if delta == 0 or after == before:
+            return
+        self._log(
+            f"Credits {delta:+d}c ({after}c held).",
+            channel="status",
+            priority="high",
+            dedupe_window=0,
+        )
 
     def _log(self, text, *, channel="general", priority="normal", dedupe_window=None, dedupe_key=None):
         self.sim.log.add(
@@ -2348,6 +2393,57 @@ class EventLogSystem(System):
             else:
                 self.sim.log.add(_line_text(entry))
 
+    def on_knowledge_notebook_updated(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        notebook_kind = str(event.data.get("notebook_kind", "") or "").strip().lower()
+        subject_id = str(event.data.get("subject_id", "") or "").strip()
+        subject_name = str(event.data.get("subject_name", "") or "").strip()
+        change_kind = str(event.data.get("change_kind", "updated") or "updated").strip().lower()
+        hidden = bool(event.data.get("hidden"))
+        bindings = None
+        for system in tuple(getattr(self.sim, "systems", ()) or ()):
+            if getattr(system, "player_eid", None) != self.player_eid:
+                continue
+            candidate = getattr(system, "control_bindings", None)
+            if isinstance(candidate, dict):
+                bindings = candidate
+                break
+        key_label = notebook_binding_label(self.sim, bindings=bindings)
+
+        if notebook_kind == "locations":
+            subject_name = subject_name or "a location"
+            if change_kind == "refiled":
+                if hidden:
+                    text = f"You move {subject_name} to hidden locations in your notebook ({key_label})."
+                else:
+                    text = f"You move {subject_name} to known locations in your notebook ({key_label})."
+            elif change_kind == "recorded":
+                section = "hidden locations" if hidden else "locations"
+                text = f"You record {subject_name} in your {section} notebook ({key_label})."
+            else:
+                section = "hidden locations" if hidden else "locations"
+                text = f"You update {subject_name} in your {section} notebook ({key_label})."
+        elif notebook_kind == "people":
+            subject_name = subject_name or "an unknown person"
+            if change_kind == "recorded":
+                text = f"You add {subject_name} to your people notebook ({key_label})."
+            elif change_kind == "identified":
+                text = f"You identify {subject_name} in your people notebook ({key_label})."
+            else:
+                text = f"You update {subject_name} in your people notebook ({key_label})."
+        else:
+            subject_name = subject_name or "new information"
+            text = f"You record {subject_name} in your {notebook_kind or 'notes'} ({key_label})."
+
+        priority = "high" if str(event.data.get("significance", "major")).strip().lower() == "major" else "normal"
+        self._log(
+            text,
+            channel="knowledge",
+            priority=priority,
+            dedupe_window=0,
+        )
+
     def on_property_self_discovered(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -2357,6 +2453,18 @@ class EventLogSystem(System):
         hidden = bool(event.data.get("hidden"))
         confidence = max(0, min(100, int(round(float(event.data.get("confidence", 0.0) or 0.0) * 100.0))))
         bucket = "hidden locations" if hidden else "known locations"
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        if not bool(event.data.get("notebook_notice_emitted")):
+            self.on_knowledge_notebook_updated(Event(
+                "knowledge_notebook_updated",
+                eid=self.player_eid,
+                notebook_kind="locations",
+                subject_id=property_id,
+                subject_name=property_name,
+                change_kind="recorded",
+                significance="major",
+                hidden=hidden,
+            ))
         if discovery_mode == "interact":
             self.sim.log.add(f"Location confirmed: {property_name} added to {bucket} ({confidence}% confidence).")
             return

@@ -478,7 +478,7 @@ def _prompt_player_gender_identity_text(*, initial_value=None, character_name=""
     if resume:
         detail = "This save predates player identity metadata. Choose how NPCs should address you."
     else:
-        detail = "Choose the identity NPCs use for pronouns and social address. Assigned sex is rolled separately."
+        detail = "Choose the identity NPCs use for pronouns and social address."
     return _prompt_choice_text(
         prompt,
         _PLAYER_IDENTITY_OPTIONS,

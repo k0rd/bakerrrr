@@ -168,14 +168,17 @@ def _normalize_identification_profile(item_id, tags, item, appearance_family):
     if not isinstance(appraisal_fields, (list, tuple)):
         appraisal_fields = ("item_quality", "item_durability", "item_max_durability")
 
+    declared_family = str(raw.get("family", "") or "").strip().lower()
+
     return {
-        "family": str(appearance_family or "").strip().lower(),
+        "family": declared_family or str(appearance_family or "").strip().lower(),
         "requires_identification": bool(
             raw.get("requires_identification", default_requires_identification)
         ),
         "auto_identify_on_use": bool(
             raw.get("auto_identify_on_use", default_auto_identify_on_use)
         ),
+        "unidentified_name": str(raw.get("unidentified_name", "") or "").strip(),
         "appraisal_fields": tuple(
             str(field).strip().lower()
             for field in appraisal_fields

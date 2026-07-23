@@ -123,6 +123,7 @@ from game.item_semantics import (
     item_requires_identification,
     item_tags,
 )
+from game.knowledge_notebook import note_person_notebook_mutation
 from game.human_identity import (
     conjugate_present,
     is_human_identity,
@@ -2225,7 +2226,7 @@ class NPCInteractionSystem(System):
                     prop,
                     lead_kind="contact",
                 )
-        return (
+        changed = (
             existing is None
             or prior_source != effective_source
             or prior_relation != effective_relation
@@ -2236,6 +2237,15 @@ class NPCInteractionSystem(System):
             or prior_snapshot != effective_snapshot
             or (prior_standing < 0.66 <= float(standing))
         )
+        if changed:
+            note_person_notebook_mutation(
+                self.sim,
+                self.player_eid,
+                person_eid,
+                before=dict(existing) if isinstance(existing, dict) else None,
+                after=updated_entry,
+            )
+        return changed
 
     def _remember_direct_human_meeting(self, context):
         if not isinstance(context, dict):

@@ -29,6 +29,7 @@ from game.components import (
 from game.civic_records import civic_license_is_active
 from game.economy import chunk_economy_profile
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
+from game.knowledge_notebook import note_person_notebook_mutation
 from game.organization_reputation import apply_organization_reputation_delta
 from game.property_access import (
     finance_services_for_property,
@@ -7116,6 +7117,13 @@ def _apply_contact_favor(sim, player_eid, opportunity):
             property_id=property_id,
             benefits=benefits,
             introduced=True,
+        )
+        note_person_notebook_mutation(
+            sim,
+            player_eid,
+            person_eid,
+            before=dict(existing) if isinstance(existing, dict) and existing else None,
+            after=ledger.person_entry(person_eid),
         )
         applied["contact_favor"] = round(max(0.0, target_standing - existing_standing), 3)
 
