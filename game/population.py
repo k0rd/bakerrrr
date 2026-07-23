@@ -1382,13 +1382,27 @@ def _seed_chunk_social_bonds(sim, actor_contexts):
     home_groups = {}
     work_groups = {}
     home_positions = {}
+    home_property_ids = {}
 
     for eid, context in actor_contexts.items():
-        home_id = str(context.get("home_property_id") or "").strip()
+        home_property_id = str(context.get("home_property_id") or "").strip()
+        home_anchor = context.get("home_anchor")
+        try:
+            normalized_home_anchor = (
+                int(home_anchor[0]),
+                int(home_anchor[1]),
+                int(home_anchor[2]),
+            )
+        except (IndexError, TypeError, ValueError):
+            normalized_home_anchor = None
+        home_id = home_property_id
+        if not home_id and normalized_home_anchor is not None:
+            home_id = "anchor:{}:{}:{}".format(*normalized_home_anchor)
         work_id = str(context.get("work_property_id") or "").strip()
         if home_id:
             home_groups.setdefault(home_id, []).append(eid)
-            home_positions[home_id] = context.get("home_anchor")
+            home_positions[home_id] = normalized_home_anchor
+            home_property_ids[home_id] = home_property_id
         if work_id:
             work_groups.setdefault(work_id, []).append(eid)
 
@@ -1416,7 +1430,7 @@ def _seed_chunk_social_bonds(sim, actor_contexts):
                         right_eid,
                         closeness=closeness,
                         trust=trust,
-                        home_property_id=home_id,
+                        home_property_id=home_property_ids.get(home_id, ""),
                     )
 
     for work_id, members in work_groups.items():

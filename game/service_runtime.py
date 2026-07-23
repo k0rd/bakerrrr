@@ -23,6 +23,12 @@ from game.property_runtime import (
     property_is_storefront as _property_is_storefront,
     storefront_service_mode as _storefront_service_mode,
 )
+from game.slot_machine import (
+    SLOT_BONUS_WILD_WEIGHT_SCALE,
+    normalize_slot_bonus_wild_weight_scale,
+    resolve_bakerrrr_slot,
+    slot_seed_contract,
+)
 from game.system_support.entity_naming import _entity_display_name
 from game.vehicles import roll_vehicle_paint_key, roll_vehicle_profile
 from ui.text_attrs import A_BOLD
@@ -1685,19 +1691,6 @@ CASINO_RANK_NAME_BY_VALUE = {
     13: "king",
     14: "ace",
 }
-CASINO_SLOT_REELS = (
-    ("CHERRY", "LEMON", "BAR", "HORSESHOE", "BELL", "CHERRY", "BAR", "SEVEN", "LEMON", "BAR", "BELL", "SEVEN"),
-    ("BAR", "CHERRY", "BELL", "LEMON", "BAR", "HORSESHOE", "SEVEN", "CHERRY", "BAR", "BELL", "LEMON", "SEVEN"),
-    ("LEMON", "BAR", "CHERRY", "SEVEN", "BAR", "BELL", "CHERRY", "HORSESHOE", "BAR", "SEVEN", "LEMON", "BELL"),
-)
-CASINO_SLOT_SYMBOL_LABELS = {
-    "CHERRY": "Cherry",
-    "LEMON": "Lemon",
-    "BAR": "Bar",
-    "HORSESHOE": "Horseshoe",
-    "BELL": "Bell",
-    "SEVEN": "Seven",
-}
 CASINO_PLINKO_LANE_COUNT = 7
 CASINO_PLINKO_ROWS = 8
 CASINO_PLINKO_BUCKET_MULTIPLIERS = (0.0, 0.4, 0.8, 1.2, 3.0, 1.2, 0.8, 0.4, 0.0)
@@ -1759,12 +1752,12 @@ CASINO_ROULETTE_RED_NUMBERS = frozenset({
 })
 CASINO_GAME_PROFILES = {
     "slots": {
-        "title": "Slots",
+        "title": "Cheeky Star Aster",
         "service_label": "slots",
-        "menu_label": "Play slots",
+        "menu_label": "Play Cheeky Star Aster",
         "bet_options": (10, 25, 50),
-        "prompt": "Pick a stake and let the reels fly.",
-        "note": "Three reels, classic symbols, and a loud machine when the sevens land.",
+        "prompt": "Pick a stake for five reels and forty lines through the city.",
+        "note": "Objects and flowers pay the low lines; Bakerrrr people pay the majors. Three wire signals open one of three deep features.",
         "social_gain": (1, 3),
     },
     "video_poker": {
@@ -2132,7 +2125,7 @@ def _casino_table_context(
             raw_features.update(source)
     accepted_feature_keys = {
         "accent", "accent_colors", "accents", "allow_public",
-        "colors", "debug_table", "house_edge", "math_profile",
+        "bonus_wild_weight_scale", "colors", "debug_table", "house_edge", "math_profile",
         "palette", "stake_profile", "table_tone", "variance",
     }
     for key in sorted(raw_features):
@@ -2212,6 +2205,14 @@ def _casino_table_context(
     if math_profile not in {"bounded", "swingy", "soft", "street"}:
         ignored_features.append(f"math_profile:{math_profile}")
         math_profile = "bounded"
+    slot_bonus_wild_weight_scale = None
+    if game == "slots":
+        slot_bonus_wild_weight_scale = normalize_slot_bonus_wild_weight_scale(
+            raw_features.get(
+                "bonus_wild_weight_scale",
+                prop_context.get("bonus_wild_weight_scale", SLOT_BONUS_WILD_WEIGHT_SCALE),
+            )
+        )
 
     sponsor_label = "gang house" if resolved_sponsor_kind == "gang" else "house"
     color_read = "/".join(accents[:2]) if accents else "standard"
@@ -2226,6 +2227,8 @@ def _casino_table_context(
         resolved_stake_profile,
         resolved_tone,
     ]
+    if slot_bonus_wild_weight_scale is not None:
+        context_id_parts.append(f"wild-{slot_bonus_wild_weight_scale:.4f}")
     return {
         "game": game,
         "allowed": bool(allowed),
@@ -2234,6 +2237,7 @@ def _casino_table_context(
         "stake_ladder": tuple(int(value) for value in stake_ladder),
         "math_profile": math_profile,
         "variance": float(variance),
+        "bonus_wild_weight_scale": slot_bonus_wild_weight_scale,
         "sponsor_kind": resolved_sponsor_kind,
         "sponsor_id": resolved_sponsor_id,
         "sponsor_summary": sponsor_label,
@@ -2250,7 +2254,7 @@ def _casino_table_context(
 def _casino_table_context_summary(context):
     if not isinstance(context, dict):
         return {}
-    return {
+    summary = {
         "game": str(context.get("game", "")).strip().lower(),
         "stake_profile": str(context.get("stake_profile", "")).strip().lower(),
         "math_profile": str(context.get("math_profile", "")).strip().lower(),
@@ -2263,6 +2267,11 @@ def _casino_table_context_summary(context):
         "table_read": str(context.get("table_read", "")).strip(),
         "ignored_features": tuple(str(key) for key in tuple(context.get("ignored_features", ()) or ())),
     }
+    if str(context.get("game", "")).strip().lower() == "slots":
+        summary["bonus_wild_weight_scale"] = normalize_slot_bonus_wild_weight_scale(
+            context.get("bonus_wild_weight_scale", SLOT_BONUS_WILD_WEIGHT_SCALE)
+        )
+    return summary
 
 
 def _casino_preserved_table_context(session):
@@ -2481,6 +2490,16 @@ def _casino_round_seed(sim, eid, prop_or_id, service, wager, round_index):
     )
 
 
+def _casino_slot_round_contract(sim, prop_or_id, round_index):
+    prop_id = prop_or_id.get("id") if isinstance(prop_or_id, dict) else prop_or_id
+    return slot_seed_contract(
+        getattr(sim, "seed", 0),
+        f"{str(prop_id or 'unplaced-cabinet')}:cheeky-star-aster",
+        int(getattr(sim, "tick", 0) or 0),
+        sequence=max(0, int(round_index)),
+    )
+
+
 def _casino_social_gain(service, seed_token):
     profile = _casino_game_profile(service)
     social_lo, social_hi = (1, 3)
@@ -2656,19 +2675,6 @@ def _casino_ascii_craps_layout(view="layout"):
         "| PROPS 2 3 11 12 | ANY 7    |",
         "+-----------------------------+",
     ]
-
-
-def _casino_ascii_reel_window(reels):
-    labels = [
-        str(CASINO_SLOT_SYMBOL_LABELS.get(str(symbol or "").strip().upper(), str(symbol or "").strip().title() or "BAR"))[:6].center(6)
-        for symbol in list(reels or ())
-    ]
-    if not labels:
-        labels = ["  --  "]
-    top = " ".join(".------." for _ in labels)
-    middle = " ".join(f"|{label}|" for label in labels)
-    bottom = " ".join("'------'" for _ in labels)
-    return [top, middle, bottom]
 
 
 def _casino_shuffled_deck(seed_token):
@@ -5305,75 +5311,23 @@ def _casino_three_card_poker_resolve(session, action):
     }
 
 
-def _casino_slots_resolve(seed_token, wager):
-    reels = []
-    spin_rng = random.Random(f"{seed_token}:slots")
-    for strip in CASINO_SLOT_REELS:
-        reels.append(str(strip[spin_rng.randrange(len(strip))]).strip().upper() or "BAR")
-    counts = Counter(reels)
-    payout_mult = 0.0
-    outcome_key = "blank"
-    headline = "Cold reels."
-    detail = "The machine clacks through a dead spin and the house keeps the bet."
-    if len(counts) == 1:
-        symbol = reels[0]
-        if symbol == "SEVEN":
-            payout_mult = 8.0
-            outcome_key = "jackpot"
-            headline = "Triple sevens."
-            detail = "All three reels land on sevens and the cabinet starts screaming."
-        elif symbol == "BAR":
-            payout_mult = 5.0
-            outcome_key = "triple_bar"
-            headline = "Triple bars."
-            detail = "The bars line up cleanly and the hopper rattles out a chunky win."
-        elif symbol == "BELL":
-            payout_mult = 4.0
-            outcome_key = "triple_bell"
-            headline = "Bell line."
-            detail = "Three bells ring together and the machine pays with gusto."
-        elif symbol == "CHERRY":
-            payout_mult = 3.0
-            outcome_key = "triple_cherry"
-            headline = "Cherry line."
-            detail = "Three cherries roll through and the house coughs up a bright little prize."
-        else:
-            payout_mult = 2.0
-            outcome_key = "triple_match"
-            headline = "Full match."
-            detail = "All three reels match for a tidy line hit."
-    elif counts.get("CHERRY", 0) == 2:
-        payout_mult = 1.4
-        outcome_key = "double_cherry"
-        headline = "Two cherries."
-        detail = "A pair of cherries catches the payline and softens the swing."
-    elif counts.get("CHERRY", 0) == 1 and counts.get("SEVEN", 0) == 1:
-        payout_mult = 1.1
-        outcome_key = "mixed_line"
-        headline = "Mixed line."
-        detail = "A cherry and a seven clip the line for a tiny kickback."
-
-    payout = max(0, int(round(float(payout_mult) * float(wager))))
-    reel_text = " | ".join(CASINO_SLOT_SYMBOL_LABELS.get(symbol, symbol.title()) for symbol in reels)
-    result_lines = []
-    result_lines.extend(_casino_ascii_reel_window(reels))
-    result_lines.extend([
-        f"Reels: {reel_text}",
-        detail,
-    ])
-    return {
+def _casino_slots_resolve(
+    seed_contract,
+    wager,
+    *,
+    bonus_wild_weight_scale=SLOT_BONUS_WILD_WEIGHT_SCALE,
+):
+    result = resolve_bakerrrr_slot(
+        seed_contract,
+        wager,
+        bonus_wild_weight_scale=bonus_wild_weight_scale,
+    )
+    token = str((seed_contract or {}).get("token", seed_contract)) if isinstance(seed_contract, dict) else str(seed_contract)
+    result.update({
         "service": "slots",
-        "wager": int(wager),
-        "stake": int(wager),
-        "payout": int(payout),
-        "outcome_key": outcome_key,
-        "headline": headline,
-        "detail": detail,
-        "summary": f"Reels {reel_text}. {headline}",
-        "result_lines": result_lines,
-        "reels": tuple(reels),
-        "social_gain": _casino_social_gain("slots", seed_token),
-    }
+        "social_gain": _casino_social_gain("slots", token),
+    })
+    return result
 
 
 def _casino_plinko_multiplier_label(multiplier):
@@ -6667,6 +6621,7 @@ __all__ = [
     "_casino_roulette_resolve",
     "_casino_roulette_start",
     "_casino_round_seed",
+    "_casino_slot_round_contract",
     "_casino_slots_resolve",
     "_casino_table_context",
     "_casino_table_context_summary",

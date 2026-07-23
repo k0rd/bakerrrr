@@ -34,6 +34,7 @@ from game.organizations import (
 )
 from game.player_businesses import property_supports_player_business
 from game.service_runtime import casino_game_capabilities
+from game.slot_machine import SLOT_BONUS_WILD_WEIGHT_SCALE, normalize_slot_bonus_wild_weight_scale
 
 
 GANG_ENTERPRISE_INTERVAL = 540
@@ -116,6 +117,25 @@ GANG_MOTIFS = (
 )
 GANG_HOUSE_GAME_STAKE_CULTURES = ("nickel_corner", "street", "house", "danger_room")
 GANG_HOUSE_GAME_TONES = ("loud", "watched", "ritual", "swagger", "quiet", "hungry")
+GANG_SLOT_BONUS_WILD_WEIGHT_SCALES = {
+    "nickel_corner": (1.075, 1.1),
+    "street": (1.075, 1.1, 1.125),
+    "house": (1.1, 1.125, 1.15),
+    "danger_room": (1.125, 1.15, 1.175),
+}
+
+
+def _gang_slot_bonus_wild_weight_scale(sim, gang_org_eid, stake_culture):
+    """Seed cabinet math independently from later house-profile additions."""
+
+    choices = GANG_SLOT_BONUS_WILD_WEIGHT_SCALES.get(
+        _key(stake_culture),
+        (SLOT_BONUS_WILD_WEIGHT_SCALE,),
+    )
+    rng = random.Random(
+        f"gang-slot-cabinet:{getattr(sim, 'seed', 0)}:{int(gang_org_eid)}:{_key(stake_culture)}"
+    )
+    return normalize_slot_bonus_wild_weight_scale(rng.choice(choices))
 
 
 def _text(value):
@@ -340,7 +360,15 @@ def gang_house_game_profile(sim, gang_org_eid):
     key = f"gang_house_game:{gang_org_eid}"
     stored = state.get("house_games", {}).get(key)
     if isinstance(stored, dict):
-        return dict(stored)
+        row = dict(stored)
+        if _key(row.get("favored_game")) == "slots" and "slot_bonus_wild_weight_scale" not in row:
+            row["slot_bonus_wild_weight_scale"] = _gang_slot_bonus_wild_weight_scale(
+                sim,
+                gang_org_eid,
+                row.get("stake_culture", "house"),
+            )
+            state["house_games"][key] = dict(row)
+        return row
     if not _is_gang_organization(sim, gang_org_eid):
         return {}
     capabilities = {
@@ -380,6 +408,7 @@ def gang_house_game_profile(sim, gang_org_eid):
         "danger_room": "gang_high",
     }.get(stake_culture, "gang_house")
     tone = rng.choice(GANG_HOUSE_GAME_TONES)
+    slot_bonus_wild_weight_scale = _gang_slot_bonus_wild_weight_scale(sim, gang_org_eid, stake_culture)
     colors = []
     for color in (style.get("color"), style.get("accent_color")):
         clean = _key(color)
@@ -401,6 +430,7 @@ def gang_house_game_profile(sim, gang_org_eid):
         "stake_culture": stake_culture,
         "stake_profile": stake_profile,
         "table_tone": tone,
+        "slot_bonus_wild_weight_scale": float(slot_bonus_wild_weight_scale),
         "risk_band": _text(capability.get("risk_band")) or "medium",
         "social_texture": _text(capability.get("social_texture")) or "table",
         "supports_table_context": bool(capability.get("supports_table_context")),
@@ -473,6 +503,16 @@ def apply_gang_house_game_to_property(sim, gang_org_eid, prop, *, exposure="fron
     contexts = metadata.get("casino_table_contexts")
     if not isinstance(contexts, dict):
         contexts = {}
+    table_features = {
+        "colors": tuple(profile.get("game_colors", ()) or ()),
+        "stake_profile": _text(profile.get("stake_profile")) or "gang_house",
+        "table_tone": _text(profile.get("table_tone")) or "watched",
+        "variance": 0.74 if profile.get("stake_culture") == "danger_room" else 0.55,
+    }
+    if game_id == "slots":
+        table_features["bonus_wild_weight_scale"] = normalize_slot_bonus_wild_weight_scale(
+            profile.get("slot_bonus_wild_weight_scale", SLOT_BONUS_WILD_WEIGHT_SCALE)
+        )
     contexts[game_id] = {
         "sponsor_kind": "gang",
         "sponsor_id": int(gang_org_eid),
@@ -480,12 +520,7 @@ def apply_gang_house_game_to_property(sim, gang_org_eid, prop, *, exposure="fron
         "stake_profile": _text(profile.get("stake_profile")) or "gang_house",
         "table_tone": _text(profile.get("table_tone")) or "watched",
         "presentation_accents": tuple(profile.get("game_colors", ()) or ()),
-        "features": {
-            "colors": tuple(profile.get("game_colors", ()) or ()),
-            "stake_profile": _text(profile.get("stake_profile")) or "gang_house",
-            "table_tone": _text(profile.get("table_tone")) or "watched",
-            "variance": 0.74 if profile.get("stake_culture") == "danger_room" else 0.55,
-        },
+        "features": table_features,
     }
     metadata["casino_table_contexts"] = contexts
     if game_id == "three_bright":

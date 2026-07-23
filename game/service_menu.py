@@ -136,6 +136,7 @@ from game.service_runtime import (
     _casino_roulette_stage_bet,
     _casino_roulette_start,
     _casino_round_seed,
+    _casino_slot_round_contract,
     _casino_slots_resolve,
     _casino_table_context,
     _casino_three_bones_market_from_key,
@@ -1099,6 +1100,7 @@ class ServiceMenuSystem(System):
         self.sim.emit(Event("site_service_blocked", **payload))
 
     def _emit_casino_round(self, prop, service, round_result, *, show_result=True):
+        self._ensure_casino_action_time(prop, service, round_result)
         payload, blocked = _casino_apply_round_result(self.sim, self.player_eid, prop, service, round_result)
         if blocked:
             if show_result:
@@ -1175,7 +1177,46 @@ class ServiceMenuSystem(System):
             return_option_id=str(state.get("return_option_id", service)).strip().lower(),
         )
 
+    def _advance_casino_action_time(self, prop, service, *, round_result=None):
+        """Spend one world tick for a valid risk-bearing casino action.
+
+        Crash owns a live tick graph already.  Other games use this shared
+        seam so instant rounds, terminal decisions, continuations, and
+        forfeited posted stakes all obey the same minimum without charging
+        menu navigation or staged-bet editing.
+        """
+
+        service = str(service or "").strip().lower()
+        if service == "crash":
+            return 0
+        start_tick = int(getattr(self.sim, "tick", 0) or 0)
+        advanced = int(self.sim.advance_time(
+            1,
+            reason="casino_gambling_action",
+            actor_eid=self.player_eid,
+            property_id=prop.get("id") if isinstance(prop, dict) else None,
+            service=service,
+        ) or 0)
+        if isinstance(round_result, dict):
+            round_result["_casino_action_time_spent"] = True
+            round_result["time_advanced_ticks"] = max(
+                1,
+                int(round_result.get("time_advanced_ticks", 0) or 0) + advanced,
+            )
+            round_result["casino_action_started_tick"] = int(start_tick)
+            round_result["casino_action_finished_tick"] = int(getattr(self.sim, "tick", start_tick) or start_tick)
+        return advanced
+
+    def _ensure_casino_action_time(self, prop, service, round_result):
+        if not isinstance(round_result, dict):
+            return 0
+        already_spent = bool(round_result.pop("_casino_action_time_spent", False))
+        if already_spent or str(service or "").strip().lower() == "crash":
+            return 0
+        return self._advance_casino_action_time(prop, service, round_result=round_result)
+
     def _settle_casino_round(self, prop, service, round_result, *, next_session=None, continue_notice=""):
+        self._ensure_casino_action_time(prop, service, round_result)
         payload, blocked = _casino_apply_round_result(self.sim, self.player_eid, prop, service, round_result)
         if blocked:
             self._clear_casino_session()
@@ -2032,8 +2073,18 @@ class ServiceMenuSystem(System):
             return session
 
         if service == "slots":
-            seed_token = self._casino_round_seed(prop, service, wager)
-            self._settle_casino_round(prop, service, _casino_slots_resolve(seed_token, wager))
+            credits = self._wallet_credits()
+            if credits < wager:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            round_index = _site_service_roll_index(self.sim, self.player_eid, prop, service)
+            seed_contract = _casino_slot_round_contract(self.sim, prop, round_index)
+            round_result = _casino_slots_resolve(
+                seed_contract,
+                wager,
+                bonus_wild_weight_scale=table_context.get("bonus_wild_weight_scale"),
+            )
+            self._settle_casino_round(prop, service, round_result)
             return
 
         if service == "plinko":
@@ -2272,6 +2323,8 @@ class ServiceMenuSystem(System):
                 self._settle_casino_round(prop, service, round_result)
                 return True
             next_session, round_result = _casino_bloom_cards_grow(current)
+            if next_session or round_result:
+                self._advance_casino_action_time(prop, service, round_result=round_result)
             if round_result:
                 self._settle_casino_round(prop, service, round_result)
                 return True
@@ -2398,6 +2451,8 @@ class ServiceMenuSystem(System):
         if service == "twenty_one" and option_id in {"twenty_one:hit", "twenty_one:stand"}:
             action = "hit" if option_id.endswith(":hit") else "stand"
             next_session, round_result = _casino_twenty_one_resolve(session, action)
+            if next_session or round_result:
+                self._advance_casino_action_time(prop, service, round_result=round_result)
             if round_result:
                 self._settle_casino_round(prop, service, round_result)
             elif next_session:
@@ -2412,6 +2467,8 @@ class ServiceMenuSystem(System):
                 return True
             action = "double" if option_id.endswith(":double") else "split"
             next_session, round_result = _casino_twenty_one_resolve(session, action)
+            if next_session or round_result:
+                self._advance_casino_action_time(prop, service, round_result=round_result)
             if round_result:
                 self._settle_casino_round(prop, service, round_result)
             elif next_session:

@@ -9374,6 +9374,151 @@ class PygameView:
             glyph = str(card.get("glyph", "'") if isinstance(card, dict) else "'")[:1] or "'"
             _text(glyph, card_rect.left + 3, card_rect.top + 1, bloom, self._ui_bold_font)
 
+        def _draw_slot_person(cell, role):
+            role = str(role or "RUNNER").strip().upper()
+            profiles = {
+                "HUNTER": ((100, 151, 82), (54, 72, 46), (193, 139, 91), "coat"),
+                "TINKERER": ((63, 137, 184), (188, 103, 58), (126, 83, 58), "jacket"),
+                "RUNNER": ((205, 74, 135), (74, 36, 68), (218, 164, 112), "runner"),
+            }
+            outfit, accent, skin, shape = profiles.get(role, profiles["RUNNER"])
+            unit = max(1, min(cell.w, cell.h) // 12)
+            cx = cell.centerx
+            head_r = max(2, unit * 2)
+            head_y = cell.top + max(head_r + 1, cell.h // 4)
+            body_top = head_y + head_r
+            foot_y = cell.bottom - max(2, unit)
+            shoulder = max(2, unit * (3 if shape != "runner" else 2))
+            hip = max(2, unit * (2 if shape == "coat" else 3))
+            self.pygame.draw.circle(self.surface, (35, 28, 32), (cx, head_y), head_r + 1)
+            self.pygame.draw.circle(self.surface, skin, (cx, head_y), head_r)
+            if role == "RUNNER":
+                self.pygame.draw.arc(
+                    self.surface,
+                    (92, 38, 65),
+                    self.pygame.Rect(cx - head_r - 1, head_y - head_r - 2, (head_r + 1) * 2, (head_r + 1) * 2),
+                    math.pi,
+                    math.tau,
+                    max(1, unit),
+                )
+                self.pygame.draw.line(self.surface, (92, 38, 65), (cx + head_r, head_y), (cx + head_r + unit, body_top + unit * 2), max(1, unit))
+            else:
+                hair = (65, 48, 38) if role == "HUNTER" else (112, 66, 41)
+                self.pygame.draw.arc(self.surface, hair, self.pygame.Rect(cx - head_r, head_y - head_r, head_r * 2, head_r * 2), math.pi, math.tau, max(1, unit))
+            body_bottom = max(body_top + 3, foot_y - unit * 3)
+            body = [(cx - shoulder, body_top), (cx + shoulder, body_top), (cx + hip, body_bottom), (cx - hip, body_bottom)]
+            self.pygame.draw.polygon(self.surface, outfit, body)
+            self.pygame.draw.line(self.surface, accent, (cx, body_top + 1), (cx, body_bottom), max(1, unit))
+            arm_y = body_top + max(1, (body_bottom - body_top) // 3)
+            self.pygame.draw.line(self.surface, skin, (cx - shoulder, arm_y), (cx - shoulder - unit * 2, body_bottom - unit), max(1, unit))
+            self.pygame.draw.line(self.surface, skin, (cx + shoulder, arm_y), (cx + shoulder + unit * 2, body_bottom - unit), max(1, unit))
+            leg_gap = max(1, unit)
+            self.pygame.draw.line(self.surface, accent, (cx - leg_gap, body_bottom), (cx - leg_gap - unit, foot_y), max(1, unit + 1))
+            self.pygame.draw.line(self.surface, accent, (cx + leg_gap, body_bottom), (cx + leg_gap + unit, foot_y), max(1, unit + 1))
+            if role == "HUNTER":
+                self.pygame.draw.line(self.surface, gold, (cx - shoulder, body_top), (cx + shoulder, body_bottom), max(1, unit))
+            elif role == "TINKERER":
+                self.pygame.draw.circle(self.surface, (227, 181, 68), (cx + max(1, unit), body_top + unit * 2), max(1, unit))
+            else:
+                self.pygame.draw.line(self.surface, (235, 192, 216), (cx - hip, body_bottom), (cx + hip, body_bottom), max(1, unit))
+
+        def _draw_slot_symbol(cell, symbol, *, winning=False, locked=False):
+            cell = self.pygame.Rect(cell)
+            symbol = str(symbol or "SCRAP").strip().upper()
+            old_clip = self.surface.get_clip()
+            self.surface.set_clip(cell)
+            try:
+                base = (20, 24, 30) if (cell.x // max(1, cell.w)) % 2 else (24, 29, 36)
+                self.pygame.draw.rect(self.surface, base, cell, border_radius=max(1, self.cell_px // 10))
+                border = (240, 200, 76) if winning else ((194, 92, 218) if locked else (57, 74, 82))
+                self.pygame.draw.rect(self.surface, border, cell, 2 if winning or locked else 1, border_radius=max(1, self.cell_px // 10))
+                cx, cy = cell.center
+                size = max(3, min(cell.w, cell.h) // 3)
+                stroke = max(1, min(cell.w, cell.h) // 14)
+                if symbol in {"HUNTER", "TINKERER", "RUNNER"}:
+                    _draw_slot_person(cell.inflate(-max(2, cell.w // 8), -2), symbol)
+                elif symbol == "SCRAP":
+                    color = (143, 151, 156)
+                    for step in range(8):
+                        angle = math.tau * step / 8.0
+                        inner = (cx + int(math.cos(angle) * size * 0.55), cy + int(math.sin(angle) * size * 0.55))
+                        outer = (cx + int(math.cos(angle) * size), cy + int(math.sin(angle) * size))
+                        self.pygame.draw.line(self.surface, color, inner, outer, stroke)
+                    self.pygame.draw.circle(self.surface, color, (cx, cy), max(2, size * 2 // 3), stroke)
+                    self.pygame.draw.rect(self.surface, (72, 79, 84), self.pygame.Rect(cx - stroke, cy - stroke, stroke * 2 + 1, stroke * 2 + 1))
+                elif symbol in {"PETAL", "ASTER"}:
+                    petal = (224, 126, 181) if symbol == "PETAL" else (203, 137, 232)
+                    stem = (72, 143, 82)
+                    radius = max(2, size // 2)
+                    if symbol == "PETAL":
+                        self.pygame.draw.line(self.surface, stem, (cx, cy + size), (cx, cy), stroke)
+                    steps = 5 if symbol == "PETAL" else 8
+                    for step in range(steps):
+                        angle = math.tau * step / float(steps)
+                        px = cx + int(math.cos(angle) * radius)
+                        py = cy + int(math.sin(angle) * radius)
+                        self.pygame.draw.circle(self.surface, petal, (px, py), radius)
+                    self.pygame.draw.circle(self.surface, (247, 210, 92), (cx, cy), max(2, radius // 2 + 1))
+                    if symbol == "ASTER":
+                        self.pygame.draw.circle(self.surface, (247, 229, 166), (cx, cy), size + 2, 1)
+                elif symbol == "CREDIT":
+                    coin = (222, 174, 58)
+                    self.pygame.draw.circle(self.surface, (111, 76, 28), (cx - size // 3, cy + size // 4), size)
+                    self.pygame.draw.circle(self.surface, coin, (cx + size // 4, cy - size // 5), size)
+                    self.pygame.draw.circle(self.surface, (249, 221, 116), (cx + size // 4, cy - size // 5), max(2, size * 2 // 3), 1)
+                    self.pygame.draw.line(self.surface, (128, 88, 28), (cx, cy - size // 2), (cx, cy + size // 3), stroke)
+                elif symbol == "KEY":
+                    color = (102, 205, 213)
+                    bow_x = cx - size // 2
+                    self.pygame.draw.circle(self.surface, color, (bow_x, cy), max(2, size // 2), stroke)
+                    self.pygame.draw.line(self.surface, color, (bow_x + size // 2, cy), (cx + size, cy), stroke + 1)
+                    self.pygame.draw.line(self.surface, color, (cx + size // 2, cy), (cx + size // 2, cy + size // 2), stroke)
+                    self.pygame.draw.line(self.surface, color, (cx + size, cy), (cx + size, cy + size // 3), stroke)
+                elif symbol == "MASK":
+                    mask = self.pygame.Rect(cx - size, cy - size * 2 // 3, size * 2, size * 4 // 3)
+                    self.pygame.draw.ellipse(self.surface, (160, 90, 180), mask)
+                    eye_r = max(1, size // 4)
+                    self.pygame.draw.ellipse(self.surface, (18, 19, 24), self.pygame.Rect(cx - size * 2 // 3, cy - eye_r, eye_r * 2, eye_r + 1))
+                    self.pygame.draw.ellipse(self.surface, (18, 19, 24), self.pygame.Rect(cx + size // 3, cy - eye_r, eye_r * 2, eye_r + 1))
+                    self.pygame.draw.line(self.surface, (220, 143, 223), mask.midleft, (cell.left + 2, cy + size), stroke)
+                    self.pygame.draw.line(self.surface, (220, 143, 223), mask.midright, (cell.right - 3, cy + size), stroke)
+                elif symbol == "DRONE":
+                    shell = (73, 151, 207)
+                    body = self.pygame.Rect(cx - size * 2 // 3, cy - size // 2, size * 4 // 3, size)
+                    self.pygame.draw.rect(self.surface, shell, body, border_radius=max(1, stroke))
+                    for dx, dy in ((-size, -size // 2), (size, -size // 2), (-size, size // 2), (size, size // 2)):
+                        self.pygame.draw.line(self.surface, shell, (cx, cy), (cx + dx, cy + dy), stroke)
+                        self.pygame.draw.circle(self.surface, (145, 205, 230), (cx + dx, cy + dy), max(2, stroke + 1), 1)
+                    self.pygame.draw.circle(self.surface, (235, 99, 118), (cx, cy), max(1, stroke))
+                elif symbol == "WIRE":
+                    color = (64, 218, 189)
+                    points = [
+                        (cell.left + 3, cy + size // 2),
+                        (cx - size // 2, cy - size // 2),
+                        (cx, cy + size // 3),
+                        (cx + size // 2, cy - size),
+                        (cell.right - 4, cy - size // 4),
+                    ]
+                    self.pygame.draw.lines(self.surface, color, False, points, stroke + 1)
+                    for point in (points[0], points[2], points[-1]):
+                        self.pygame.draw.circle(self.surface, (211, 249, 228), point, max(1, stroke))
+                elif symbol == "SIGNAL":
+                    color = (112, 234, 139)
+                    mast_bottom = (cx, cy + size)
+                    mast_top = (cx, cy - size // 3)
+                    self.pygame.draw.line(self.surface, color, mast_bottom, mast_top, stroke)
+                    self.pygame.draw.circle(self.surface, (239, 250, 183), mast_top, max(2, stroke + 1))
+                    for radius in (max(3, size // 2), max(5, size)):
+                        arc = self.pygame.Rect(cx - radius, cy - size // 3 - radius, radius * 2, radius * 2)
+                        self.pygame.draw.arc(self.surface, color, arc, math.pi * 1.15, math.pi * 1.85, stroke)
+                    self.pygame.draw.line(self.surface, (62, 130, 84), (cell.left + 3, cell.bottom - 3), (cell.right - 4, cell.bottom - 3), stroke)
+                if winning:
+                    glint = max(2, min(cell.w, cell.h) // 8)
+                    self.pygame.draw.line(self.surface, (255, 244, 177), cell.topleft, (cell.left + glint, cell.top), 2)
+                    self.pygame.draw.line(self.surface, (255, 244, 177), cell.topleft, (cell.left, cell.top + glint), 2)
+            finally:
+                self.surface.set_clip(old_clip)
+
         def _draw_roulette():
             wheel = self.pygame.Rect(rect.left + 12, rect.top + 10, min(rect.h - 20, rect.w // 3), min(rect.h - 20, rect.w // 3))
             wheel.center = (rect.left + max(wheel.w // 2 + 12, rect.w // 4), rect.centery)
@@ -9632,16 +9777,81 @@ class PygameView:
             self.pygame.draw.circle(self.surface, cursor, (ball_x, ball_y), radius)
             _center_text("PLINKO", self.pygame.Rect(board.left + 4, board.top + 2, board.w - 8, title_h), gold, self._ui_bold_font)
         elif service == "slots":
-            reels = list(payload.get("reels", ()) or ("BELL", "BAR", "7"))
-            reel_w = max(self.cell_px * 3, min(self.cell_px * 6, (rect.w - self.cell_px * 3) // max(1, len(reels))))
-            reel_h = max(self.cell_px * 3, rect.h - self.cell_px * 2)
-            start_x = rect.centerx - ((reel_w * len(reels)) + (self.cell_px * (len(reels) - 1))) // 2
-            top = rect.top + (rect.h - reel_h) // 2
-            for idx, symbol in enumerate(reels[:5]):
-                reel = self.pygame.Rect(start_x + idx * (reel_w + self.cell_px), top, reel_w, reel_h)
-                self.pygame.draw.rect(self.surface, (232, 225, 202), reel, border_radius=max(2, self.cell_px // 5))
-                self.pygame.draw.rect(self.surface, gold, reel, 2, border_radius=max(2, self.cell_px // 5))
-                _center_text(str(symbol).replace("_", " ")[:7], reel, red if str(symbol).upper() == "7" else black, self._ui_bold_font)
+            raw_grid = payload.get("grid") or payload.get("reels") or ()
+            grid = []
+            for raw_reel in list(raw_grid or ())[:5]:
+                if isinstance(raw_reel, (list, tuple)):
+                    reel = [str(symbol or "SCRAP").strip().upper() or "SCRAP" for symbol in raw_reel[:4]]
+                else:
+                    reel = [str(raw_reel or "SCRAP").strip().upper() or "SCRAP"]
+                while len(reel) < 4:
+                    reel.append(("SCRAP", "PETAL", "CREDIT", "KEY")[len(reel)])
+                grid.append(reel)
+            while len(grid) < 5:
+                grid.append(["SCRAP", "PETAL", "CREDIT", "KEY"])
+
+            winning = {
+                (int(cell[0]), int(cell[1]))
+                for cell in list(payload.get("winning_cells", ()) or ())
+                if isinstance(cell, (list, tuple)) and len(cell) >= 2
+            }
+            feature = payload.get("feature") if isinstance(payload.get("feature"), dict) else {}
+            locked = {
+                (int(cell[0]), int(cell[1]))
+                for cell in list(feature.get("locked_cells", ()) or ())
+                if isinstance(cell, (list, tuple)) and len(cell) >= 2
+            }
+            frame = rect.inflate(-max(6, self.cell_px // 2), -max(4, self.cell_px // 4))
+            title_h = max(12, min(self.cell_px, frame.h // 6))
+            status_h = max(10, min(self.cell_px, frame.h // 7))
+            grid_rect = self.pygame.Rect(
+                frame.left,
+                frame.top + title_h,
+                frame.w,
+                max(4, frame.h - title_h - status_h),
+            )
+            cabinet = (38, 30, 54)
+            cabinet_alt = (52, 37, 67)
+            self.pygame.draw.rect(self.surface, cabinet, frame, border_radius=max(3, self.cell_px // 5))
+            self.pygame.draw.rect(self.surface, (183, 90, 190), frame, max(1, self.cell_px // 10), border_radius=max(3, self.cell_px // 5))
+            self.pygame.draw.line(self.surface, (94, 228, 181), (frame.left + 4, grid_rect.top - 2), (frame.right - 5, grid_rect.top - 2), 1)
+            _center_text("CHEEKY STAR ASTER", self.pygame.Rect(frame.left + 4, frame.top, frame.w - 8, title_h), (239, 176, 226), self._ui_bold_font)
+
+            gap = max(1, self.cell_px // 10)
+            cell_w = max(3, (grid_rect.w - gap * 4) // 5)
+            cell_h = max(3, (grid_rect.h - gap * 3) // 4)
+            used_w = cell_w * 5 + gap * 4
+            used_h = cell_h * 4 + gap * 3
+            start_x = grid_rect.centerx - used_w // 2
+            start_y = grid_rect.centery - used_h // 2
+            for reel_index, reel in enumerate(grid[:5]):
+                for row_index, symbol in enumerate(reel[:4]):
+                    cell = self.pygame.Rect(
+                        start_x + reel_index * (cell_w + gap),
+                        start_y + row_index * (cell_h + gap),
+                        cell_w,
+                        cell_h,
+                    )
+                    if (reel_index + row_index) % 2:
+                        self.pygame.draw.rect(self.surface, cabinet_alt, cell)
+                    _draw_slot_symbol(
+                        cell,
+                        symbol,
+                        winning=(reel_index, row_index) in winning,
+                        locked=(reel_index, row_index) in locked,
+                    )
+
+            feature_title = str(feature.get("title", "") or "").strip()
+            try:
+                payout_mult = float(payload.get("payout_multiplier", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                payout_mult = 0.0
+            left_status = feature_title.upper() if feature_title else "40 LINES"
+            right_status = f"{payout_mult:g}x" if mode == "result" else "5 x 4"
+            status = self.pygame.Rect(frame.left + 5, grid_rect.bottom, frame.w - 10, status_h)
+            _text(left_status, status.left, status.top + max(0, (status.h - self._ui_font.get_height()) // 2), (112, 234, 139) if feature_title else muted, self._ui_font)
+            right_surface = self._ui_bold_font.render(right_status, True, gold)
+            self.surface.blit(right_surface, (status.right - right_surface.get_width(), status.top + max(0, (status.h - right_surface.get_height()) // 2)))
         else:
             _center_text(str(service).replace("_", " ").title(), rect, gold, self._ui_bold_font)
         return used_cells
