@@ -17,6 +17,7 @@ from game.flora_runtime import (
     EXHAUSTED_FLORA_STAGES,
     DEFAULT_GLYPH_BY_FORM,
     DEFAULT_RENDER_KEY_BY_FORM,
+    advance_loaded_flora_regrowth,
     dynamic_flora_profile,
     flora_at,
     flora_bloom_state,
@@ -559,6 +560,14 @@ def _flora_record_from_cultivation(sim, record):
         "harvest_limit": harvest_limit,
         "harvest_count": max(0, _safe_int(record.get("harvest_count"), 0)),
         "harvest_remaining": harvest_remaining,
+        "lifetime_harvest_count": max(0, _safe_int(record.get("lifetime_harvest_count"), 0)),
+        "regrowth_started_tick": record.get("regrowth_started_tick"),
+        "regrowth_pause_baseline": max(0, _safe_int(record.get("regrowth_pause_baseline"), 0)),
+        "last_regrowth_tick": record.get("last_regrowth_tick"),
+        "regrown_tick": record.get("regrown_tick"),
+        "regrowth_count": max(0, _safe_int(record.get("regrowth_count"), 0)),
+        "paused_ticks": max(0, _safe_int(record.get("paused_ticks"), 0)),
+        "growth_paused": bool(record.get("growth_paused")),
         "fertility_remaining": max(0, _safe_int(record.get("fertility_remaining"), 0)),
         "chemistry_class": _key(record.get("chemistry_class")),
         "parent_chemistry_classes": list(record.get("parent_chemistry_classes", ()) or ()),
@@ -618,8 +627,14 @@ def sync_cultivation_from_flora_patch(sim, flora_record):
         "harvest_count",
         "harvest_remaining",
         "harvest_exhausted",
+        "lifetime_harvest_count",
         "last_harvest_tick",
         "exhausted_tick",
+        "regrowth_started_tick",
+        "regrowth_pause_baseline",
+        "last_regrowth_tick",
+        "regrown_tick",
+        "regrowth_count",
         "genetics",
         "secondary_traits",
         "chemistry_class",
@@ -737,6 +752,12 @@ def _new_cultivation_record(sim, source, *, container_kind, x=None, y=None, z=0,
         "harvest_limit": harvest_limit,
         "harvest_count": 0,
         "harvest_remaining": 0 if failed else harvest_limit,
+        "lifetime_harvest_count": 0,
+        "regrowth_started_tick": None,
+        "regrowth_pause_baseline": 0,
+        "last_regrowth_tick": None,
+        "regrown_tick": None,
+        "regrowth_count": 0,
         "tended_tick": None,
         "tend_count": 0,
         "tags": list(source.get("tags") or ()),
@@ -1967,8 +1988,12 @@ class CultivationSystem(System):
             ))
 
     def update(self):
-        advance_cultivation_records(self.sim)
         now = _safe_int(getattr(self.sim, "tick", 0), 0)
+        if now % 600 == 0:
+            regrowth = advance_loaded_flora_regrowth(self.sim, now=now)
+            for record in tuple(regrowth.get("records", ()) or ()):
+                sync_cultivation_from_flora_patch(self.sim, record)
+        advance_cultivation_records(self.sim)
         if now % 600 == 0:
             natural_crossbreed_loaded_flora(self.sim)
         if now % 120 != 0:

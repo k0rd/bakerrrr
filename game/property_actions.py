@@ -174,6 +174,8 @@ class PropertyActionRuntime:
         except (TypeError, ValueError):
             prior_confidence = 0.0
         prior_kind = str((existing or {}).get("lead_kind", "") or "").strip().lower()
+        prior_anchored = bool((existing or {}).get("anchored"))
+        prior_anchor_kind = str((existing or {}).get("anchor_kind", "") or "").strip().lower()
 
         if confidence is None:
             confidence = self.action_system.PLAYER_DISCOVERY_CONFIDENCE.get(
@@ -206,7 +208,11 @@ class PropertyActionRuntime:
                 else None
             )
         next_kind = lead_kind or prior_kind
-        if prior_confidence + 0.01 >= confidence and prior_kind == next_kind:
+        if (
+            prior_confidence + 0.01 >= confidence
+            and prior_kind == next_kind
+            and prior_anchored
+        ):
             return False
 
         notebook_notice_emitted = _remember_property_lead_for_actor(
@@ -215,14 +221,11 @@ class PropertyActionRuntime:
             prop,
             confidence=confidence,
             lead_kind=lead_kind,
+            anchored=True,
+            anchor_kind=prior_anchor_kind or mode,
         )
 
         updated = knowledge.known.get(prop["id"]) if isinstance(knowledge.known, dict) else None
-        if isinstance(updated, dict):
-            updated["anchored"] = True
-            updated["anchor_kind"] = mode
-            if updated.get("first_tick") is None:
-                updated["first_tick"] = int(getattr(self.sim, "tick", 0))
         try:
             new_confidence = float((updated or {}).get("confidence", prior_confidence) or prior_confidence)
         except (TypeError, ValueError):
@@ -237,7 +240,7 @@ class PropertyActionRuntime:
                 confidence=new_confidence,
                 notebook_notice_emitted=bool(notebook_notice_emitted),
             ))
-        return new_confidence > prior_confidence + 0.01
+        return bool(notebook_notice_emitted)
 
     def active_interact_property_near(self, pos):
         del pos

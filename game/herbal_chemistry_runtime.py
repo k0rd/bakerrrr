@@ -15,6 +15,7 @@ from engine.visibility import has_line_of_sight
 
 from game.components import Inventory, PlayerAssets, Position
 from game.flora_runtime import (
+    EXHAUSTED_FLORA_STAGES,
     dynamic_flora_profile,
     ensure_dynamic_flora_profiles,
     flora_harvest_context,
@@ -1151,7 +1152,18 @@ def _update_flora_record(sim, record_id, updates):
     return record
 
 
-def nearest_harvestable_flora(sim, x, y, z=0, *, radius=1, preferred_dir=None, exact_direction=False):
+def _nearest_flora_matching(
+    sim,
+    x,
+    y,
+    z=0,
+    *,
+    radius=1,
+    preferred_dir=None,
+    exact_direction=False,
+    harvestable=None,
+    exhausted_only=False,
+):
     target = None
     if exact_direction and isinstance(preferred_dir, tuple) and len(preferred_dir) >= 2:
         dx = _safe_int(preferred_dir[0], 0)
@@ -1160,7 +1172,16 @@ def nearest_harvestable_flora(sim, x, y, z=0, *, radius=1, preferred_dir=None, e
             target = (int(x) + dx, int(y) + dy, int(z))
     rows = []
     for record in getattr(sim, "flora_patches", {}).values() if isinstance(getattr(sim, "flora_patches", None), dict) else ():
-        if not isinstance(record, dict) or not flora_patch_harvestable(record):
+        if not isinstance(record, dict):
+            continue
+        is_harvestable = flora_patch_harvestable(record)
+        normalized = normalize_flora_harvest_state(record)
+        is_exhausted = _key(normalized.get("stage")) in EXHAUSTED_FLORA_STAGES
+        if harvestable is True and not is_harvestable:
+            continue
+        if harvestable is False and is_harvestable:
+            continue
+        if exhausted_only and not is_exhausted:
             continue
         rx, ry, rz = _safe_int(record.get("x"), 0), _safe_int(record.get("y"), 0), _safe_int(record.get("z"), 0)
         if rz != int(z):
@@ -1181,6 +1202,32 @@ def nearest_harvestable_flora(sim, x, y, z=0, *, radius=1, preferred_dir=None, e
         rows.append((distance, str(record.get("id", "")), record))
     rows.sort(key=lambda item: (item[0], item[1]))
     return rows[0][2] if rows else None
+
+
+def nearest_harvestable_flora(sim, x, y, z=0, *, radius=1, preferred_dir=None, exact_direction=False):
+    return _nearest_flora_matching(
+        sim,
+        x,
+        y,
+        z,
+        radius=radius,
+        preferred_dir=preferred_dir,
+        exact_direction=exact_direction,
+        harvestable=True,
+    )
+
+
+def nearest_exhausted_flora(sim, x, y, z=0, *, radius=1, preferred_dir=None, exact_direction=False):
+    return _nearest_flora_matching(
+        sim,
+        x,
+        y,
+        z,
+        radius=radius,
+        preferred_dir=preferred_dir,
+        exact_direction=exact_direction,
+        exhausted_only=True,
+    )
 
 
 def _harvest_units(record, tool):

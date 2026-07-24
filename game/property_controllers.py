@@ -10,6 +10,7 @@ from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
 from game.knowledge_notebook import note_property_notebook_mutation
+from game.property_runtime import remember_property_lead_for_actor
 from game.property_doors import _door_tile_is_occupied
 from game.system_support.access_checks import (
     _maybe_damage_access_tool,
@@ -592,6 +593,18 @@ class PropertySystem(System):
                 reason="offline",
             ))
             return
+
+        # A live linked panel gives the player a precise, named physical
+        # anchor even when it refuses access.  Record that fact at the same
+        # boundary where the panel proves its target, before outcome handling.
+        remember_property_lead_for_actor(
+            self.sim,
+            eid,
+            target_prop,
+            confidence=0.95,
+            anchored=True,
+            anchor_kind="access_panel",
+        )
 
         controller = _property_access_controller(self.sim, target_prop)
         entry = _property_focus_position(target_prop)

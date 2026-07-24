@@ -3853,8 +3853,10 @@ class SiteServiceSystem(System):
             eid,
             prop,
             lead_kind="service_intel",
-            confidence=0.68,
+            confidence=0.9,
             hidden=False,
+            anchored=True,
+            anchor_kind="service_intel",
         )
         if changed:
             self.sim.emit(Event(
@@ -3863,7 +3865,7 @@ class SiteServiceSystem(System):
                 property_id=prop.get("id"),
                 property_name=str(prop.get("name", prop.get("id", "location"))).strip() or "location",
                 discovery_mode="intel",
-                confidence=0.68,
+                confidence=0.9,
                 lead_kind="service_intel",
                 hidden=False,
                 notebook_notice_emitted=True,

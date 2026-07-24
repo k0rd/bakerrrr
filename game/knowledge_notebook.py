@@ -93,9 +93,10 @@ def note_property_notebook_mutation(
     """Classify and announce a meaningful locations-notebook mutation.
 
     A new place, a public/hidden reclassification, a new kind of actionable
-    lead, or crossing a confidence band is important enough for the default
-    HUD.  A smaller confidence/source refinement remains available in the
-    verbose All log without occupying the normal HUD signal budget.
+    lead, an unknown-to-known location anchor, or a confidence refinement can
+    all change how the player navigates the world. Presentation keeps every
+    real locations mutation in the default log; this classifier still keeps
+    the mutation label and significance useful to other consumers.
     """
 
     if not isinstance(prop, Mapping) or not isinstance(after, Mapping):

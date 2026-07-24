@@ -12,6 +12,7 @@ import random
 from functools import lru_cache
 from pathlib import Path
 
+from engine.events import Event
 from game.content_warnings import warn_content_fallback
 from game.flora_genetics import normalize_flora_genetics
 from game.json_metadata import split_object_document
@@ -100,6 +101,21 @@ EXHAUSTED_FLORA_STAGES = frozenset(("picked", "picked_over", "spent", "exhausted
 IMMATURE_FLORA_STAGES = frozenset(("seeded", "sprouting", "young"))
 FAILED_FLORA_STAGES = frozenset(("withering", "failed"))
 NIGHT_BLOOM_TAGS = frozenset(("night_bloom", "night_blooming", "moon", "lantern"))
+FLORA_REGROWTH_HOURS_BY_FORM = {
+    "grass": 6,
+    "moss": 8,
+    "reed": 10,
+    "vine": 12,
+    "fern": 14,
+    "flower": 18,
+    "shrub": 24,
+    "lichen": 30,
+}
+FLORA_REGROWTH_RARITY_MULTIPLIER = {
+    "common": 1.0,
+    "uncommon": 1.5,
+    "rare": 2.5,
+}
 
 
 def _str_key(value, fallback=""):
@@ -820,6 +836,12 @@ def flora_harvest_updates_after_pick(record, *, eid=None, tick=0, method="", ite
         "harvested_by_eid": eid,
         "harvested_tick": _safe_int(tick, 0),
         "last_harvest_tick": _safe_int(tick, 0),
+        "lifetime_harvest_count": max(
+            _safe_int(row.get("lifetime_harvest_count"), _safe_int(row.get("harvest_count"), 0)),
+            _safe_int(row.get("harvest_count"), 0),
+        ) + 1,
+        "regrowth_started_tick": _safe_int(tick, 0),
+        "regrowth_pause_baseline": max(0, _safe_int(row.get("paused_ticks"), 0)),
         "harvest_method": str(method or "").strip().lower(),
         "output_item_id": str(item_id or "").strip().lower(),
         "output_instance_id": str(instance_id or "").strip(),
@@ -827,7 +849,215 @@ def flora_harvest_updates_after_pick(record, *, eid=None, tick=0, method="", ite
     if exhausted:
         updates["exhaustion_kind"] = exhaustion_kind
         updates["exhausted_tick"] = _safe_int(tick, 0)
+    else:
+        updates["exhaustion_kind"] = ""
+        updates["exhausted_tick"] = None
     return updates
+
+
+def flora_regrowth_interval_ticks(record):
+    """Return the active-world ticks needed to recover one harvest use."""
+
+    if not isinstance(record, dict):
+        record = {}
+    potential = record.get("harvest_potential") if isinstance(record.get("harvest_potential"), dict) else {}
+    configured_ticks = record.get("regrowth_ticks")
+    if configured_ticks is None:
+        configured_ticks = potential.get("regrowth_ticks")
+    configured_hours = record.get("regrowth_hours")
+    if configured_hours is None:
+        configured_hours = potential.get("regrowth_hours")
+
+    if configured_ticks is not None:
+        base_ticks = max(DEFAULT_TICKS_PER_HOUR, _safe_int(configured_ticks, DEFAULT_TICKS_PER_HOUR))
+    elif configured_hours is not None:
+        base_ticks = max(
+            DEFAULT_TICKS_PER_HOUR,
+            int(max(1.0, _safe_float(configured_hours, 1.0)) * DEFAULT_TICKS_PER_HOUR),
+        )
+    else:
+        form = _str_key(record.get("growth_form"), "flower")
+        rarity = _str_key(record.get("rarity"), "common")
+        hours = FLORA_REGROWTH_HOURS_BY_FORM.get(form, FLORA_REGROWTH_HOURS_BY_FORM["flower"])
+        rarity_multiplier = FLORA_REGROWTH_RARITY_MULTIPLIER.get(rarity, 1.0)
+        base_ticks = int(float(hours) * float(rarity_multiplier) * DEFAULT_TICKS_PER_HOUR)
+
+    care_multiplier = 1.0
+    if str(record.get("cultivation_id") or "").strip():
+        container = _str_key(record.get("container_kind"), "ground")
+        care_multiplier *= {"planter": 0.80, "pot": 0.90}.get(container, 0.90)
+        quality_bonus = min(2, max(0, _safe_int(record.get("maintenance_quality_bonus"), 0)))
+        care_multiplier *= 1.0 - 0.10 * quality_bonus
+
+    raw_ticks = max(DEFAULT_TICKS_PER_HOUR, int(float(base_ticks) * care_multiplier))
+    return max(
+        DEFAULT_TICKS_PER_HOUR,
+        ((raw_ticks + DEFAULT_TICKS_PER_HOUR - 1) // DEFAULT_TICKS_PER_HOUR) * DEFAULT_TICKS_PER_HOUR,
+    )
+
+
+def _flora_record_chunk_key(sim, record):
+    chunk = record.get("chunk") if isinstance(record, dict) else None
+    if isinstance(chunk, (tuple, list)) and len(chunk) == 2:
+        try:
+            return (int(chunk[0]), int(chunk[1]))
+        except (TypeError, ValueError):
+            pass
+    try:
+        return tuple(int(value) for value in sim.chunk_coords(record.get("x", 0), record.get("y", 0)))
+    except Exception:
+        size = max(1, _safe_int(getattr(sim, "chunk_size", 16), 16))
+        return (_safe_int(record.get("x"), 0) // size, _safe_int(record.get("y"), 0) // size)
+
+
+def _loaded_flora_records(sim):
+    patches, chunk_records = ensure_flora_state(sim)
+    loaded = getattr(getattr(sim, "world", None), "loaded_chunks", None)
+    loaded_keys = set(loaded) if isinstance(loaded, dict) and loaded else set(chunk_records)
+    rows = []
+    seen = set()
+    for key in sorted(loaded_keys):
+        for stored in tuple(chunk_records.get(key, ()) or ()):
+            if not isinstance(stored, dict):
+                continue
+            record_id = str(stored.get("id") or "").strip()
+            if not record_id or record_id in seen:
+                continue
+            canonical = patches.get(record_id)
+            rows.append(canonical if isinstance(canonical, dict) else stored)
+            seen.add(record_id)
+    if rows or chunk_records:
+        return tuple(rows)
+    for stored in tuple(patches.values()):
+        if not isinstance(stored, dict):
+            continue
+        if loaded_keys and _flora_record_chunk_key(sim, stored) not in loaded_keys:
+            continue
+        record_id = str(stored.get("id") or "").strip()
+        if record_id and record_id not in seen:
+            rows.append(stored)
+            seen.add(record_id)
+    return tuple(rows)
+
+
+def _store_flora_record(sim, record):
+    patches, chunk_records = ensure_flora_state(sim)
+    record_id = str((record or {}).get("id") or "").strip()
+    if not record_id:
+        return
+    stored = dict(record)
+    patches[record_id] = stored
+    key = _flora_record_chunk_key(sim, stored)
+    bucket = []
+    replaced = False
+    for row in tuple(chunk_records.get(key, ()) or ()):
+        if str((row or {}).get("id") or "").strip() == record_id:
+            bucket.append(dict(stored))
+            replaced = True
+        else:
+            bucket.append(dict(row) if isinstance(row, dict) else row)
+    if not replaced:
+        bucket.append(dict(stored))
+    chunk_records[key] = bucket
+
+
+def _advance_flora_record_regrowth(record, now):
+    row = normalize_flora_harvest_state(record)
+    stage = _str_key(row.get("stage"), "mature")
+    if stage in FAILED_FLORA_STAGES or stage in IMMATURE_FLORA_STAGES or bool(row.get("growth_paused")):
+        return row, 0, False
+    limit = flora_harvest_limit(row)
+    remaining = max(0, min(limit, _safe_int(row.get("harvest_remaining"), limit)))
+    if remaining >= limit:
+        return row, 0, False
+
+    anchor_values = []
+    for field in ("regrowth_started_tick", "last_harvest_tick", "exhausted_tick", "harvested_tick"):
+        value = row.get(field)
+        if value not in (None, ""):
+            anchor_values.append(_safe_int(value, now))
+    paused_total = max(0, _safe_int(row.get("paused_ticks"), 0))
+    if not anchor_values:
+        row["regrowth_started_tick"] = int(now)
+        row["regrowth_pause_baseline"] = int(paused_total)
+        return row, 0, True
+
+    anchor = max(anchor_values)
+    pause_baseline = max(0, _safe_int(row.get("regrowth_pause_baseline"), paused_total))
+    paused_since_anchor = max(0, paused_total - pause_baseline)
+    active_elapsed = max(0, int(now) - int(anchor) - int(paused_since_anchor))
+    interval = flora_regrowth_interval_ticks(row)
+    recovered = min(limit - remaining, active_elapsed // interval)
+    if recovered <= 0:
+        return row, 0, False
+
+    row["lifetime_harvest_count"] = max(
+        _safe_int(row.get("lifetime_harvest_count"), 0),
+        _safe_int(row.get("harvest_count"), 0),
+    )
+    remaining += int(recovered)
+    residual = active_elapsed - int(recovered) * interval
+    row["harvest_remaining"] = int(remaining)
+    row["harvest_count"] = max(0, int(limit) - int(remaining))
+    row["harvest_exhausted"] = False
+    row["regrowth_started_tick"] = int(now) - int(residual)
+    row["regrowth_pause_baseline"] = int(paused_total)
+    row["last_regrowth_tick"] = int(now)
+    row["regrowth_count"] = max(0, _safe_int(row.get("regrowth_count"), 0)) + int(recovered)
+    row.pop("exhaustion_kind", None)
+    row.pop("exhausted_tick", None)
+    form = _str_key(row.get("growth_form"), "flower")
+    if remaining >= limit:
+        row["stage"] = "mature"
+        row["regrown_tick"] = int(now)
+    else:
+        row["stage"] = PARTIAL_HARVEST_STAGE_BY_FORM.get(form, "thinned")
+    return normalize_flora_harvest_state(row), int(recovered), True
+
+
+def advance_loaded_flora_regrowth(sim, *, now=None):
+    """Advance harvested flora already indexed in realized chunk buckets."""
+
+    now = _safe_int(getattr(sim, "tick", 0) if now is None else now, 0)
+    checked = 0
+    initialized = 0
+    recovered_uses = 0
+    changed_records = []
+    for record in _loaded_flora_records(sim):
+        if not isinstance(record, dict):
+            continue
+        checked += 1
+        updated, recovered, changed = _advance_flora_record_regrowth(record, now)
+        if not changed:
+            continue
+        _store_flora_record(sim, updated)
+        changed_records.append(updated)
+        if recovered <= 0:
+            initialized += 1
+            continue
+        recovered_uses += int(recovered)
+        sim.emit(Event(
+            "flora_regrown",
+            flora_id=updated.get("id"),
+            plant_id=updated.get("plant_id"),
+            plant_name=updated.get("name"),
+            growth_form=updated.get("growth_form"),
+            rarity=updated.get("rarity"),
+            recovered_uses=int(recovered),
+            harvest_remaining=_safe_int(updated.get("harvest_remaining"), 0),
+            harvest_limit=_safe_int(updated.get("harvest_limit"), 1),
+            fully_regrown=_safe_int(updated.get("harvest_remaining"), 0) >= _safe_int(updated.get("harvest_limit"), 1),
+            regrowth_interval_ticks=flora_regrowth_interval_ticks(updated),
+            x=updated.get("x"),
+            y=updated.get("y"),
+            z=updated.get("z", 0),
+        ))
+    return {
+        "checked": int(checked),
+        "initialized": int(initialized),
+        "recovered_uses": int(recovered_uses),
+        "records": tuple(changed_records),
+    }
 
 
 def _flora_record_id(cx, cy, cluster_index, tile_index):

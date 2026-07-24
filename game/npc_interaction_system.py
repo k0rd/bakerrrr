@@ -1949,7 +1949,17 @@ class NPCInteractionSystem(System):
             return None
         return prop
 
-    def _remember_player_property_lead(self, prop, source_eid, lead_kind, confidence, *, hidden=None):
+    def _remember_player_property_lead(
+        self,
+        prop,
+        source_eid,
+        lead_kind,
+        confidence,
+        *,
+        hidden=None,
+        anchored=None,
+        anchor_kind=None,
+    ):
         changed = _remember_property_lead_for_actor(
             self.sim,
             self.player_eid,
@@ -1958,6 +1968,8 @@ class NPCInteractionSystem(System):
             lead_kind=lead_kind,
             confidence=confidence,
             hidden=hidden,
+            anchored=anchored,
+            anchor_kind=anchor_kind,
         )
         self._dialogue_mark_property_reference(
             source_eid,
@@ -6581,14 +6593,14 @@ class NPCInteractionSystem(System):
                 pass
         return self._player_business_property_anchor(home_prop)
 
-    def _player_business_offer_social_fit(self, npc_eid, target_prop, *, current_prop=None):
+    def _player_business_offer_social_fit(self, npc_eid, target_prop, *, current_prop=None, current_anchor=None):
         target_anchor = self._player_business_property_anchor(target_prop)
-        current_anchor = self._player_business_property_anchor(current_prop)
+        current_anchor = current_anchor or self._player_business_property_anchor(current_prop)
         if target_anchor is None:
-            return {"bonus": 0.0, "current_pull": 0.0, "nearby_names": ()}
+            return {"bonus": 0.0, "current_pull": 0.0, "nearby_names": (), "current_roots": ()}
         social = self.sim.ecs.get(NPCSocial).get(npc_eid)
         if not social or not isinstance(getattr(social, "bonds", None), dict):
-            return {"bonus": 0.0, "current_pull": 0.0, "nearby_names": ()}
+            return {"bonus": 0.0, "current_pull": 0.0, "nearby_names": (), "current_roots": ()}
 
         relation_weights = {
             "family": 1.0,
@@ -6602,6 +6614,7 @@ class NPCInteractionSystem(System):
         target_bonus = 0.0
         current_pull = 0.0
         nearby_names = []
+        current_roots = []
         for other_eid, bond in social.bonds.items():
             if other_eid == self.player_eid or not isinstance(bond, dict):
                 continue
@@ -6662,12 +6675,29 @@ class NPCInteractionSystem(System):
                     continue
                 best_current_distance = min(current_distances)
                 if best_current_distance <= 8 and best_target_distance > best_current_distance + 4:
-                    current_pull += weight * strength * max(0.0, (8.0 - float(best_current_distance)) / 8.0) * 0.1
+                    pull = weight * strength * max(0.0, (8.0 - float(best_current_distance)) / 8.0) * 0.1
+                    current_pull += pull
+                    current_roots.append({
+                        "relation": "partner" if relation in {"partner", "spouse"} else relation,
+                        "name": _entity_display_name(self.sim, other_eid, title_case=True),
+                        "pull": round(float(pull), 4),
+                        "current_distance": int(best_current_distance),
+                        "target_distance": int(best_target_distance),
+                    })
+
+        current_roots.sort(
+            key=lambda row: (
+                -float(row.get("pull", 0.0) or 0.0),
+                0 if str(row.get("relation", "")).strip().lower() == "partner" else 1,
+                str(row.get("name", "")),
+            )
+        )
 
         return {
             "bonus": min(0.2, float(target_bonus)),
             "current_pull": min(0.14, float(current_pull)),
             "nearby_names": tuple(nearby_names[:2]),
+            "current_roots": tuple(current_roots[:3]),
         }
 
     def _pending_player_business_hire_offer(self, npc_eid):
@@ -6696,6 +6726,12 @@ class NPCInteractionSystem(System):
             "current_business_name": str(factors.get("current_business_name", "") or "").strip(),
             "commute_delta": factors.get("commute_delta"),
             "nearby_social_names": tuple(factors.get("nearby_social_names", ()) or ()),
+            "current_social_roots": tuple(factors.get("current_social_roots", ()) or ()),
+            "role_fit_label": str(factors.get("role_fit_label", "") or "").strip().lower(),
+            "premium_over_market": max(0, int(factors.get("premium_over_market", 0) or 0)),
+            "explanation_threshold": max(1, int(factors.get("explanation_threshold", 2) or 2)),
+            "quote_explanation_reason": str(factors.get("quote_explanation_reason", "") or "").strip().lower(),
+            "quote_explanation_relation": str(factors.get("quote_explanation_relation", "") or "").strip().lower(),
             "created_tick": int(getattr(self.sim, "tick", 0) or 0),
         }
         self._dialogue_memory(npc_eid)["pending_player_business_hire_offer"] = staged
@@ -6713,9 +6749,6 @@ class NPCInteractionSystem(System):
 
         role_id = str(context.get("role_id", "") or "").strip().lower()
         raw_career = str(getattr(context.get("occupation"), "career", "") or "").strip().lower()
-        if role_id == "guard" or "guard" in raw_career or "security" in raw_career:
-            return False, "career_conflict", {}
-
         factors = self._player_business_hire_offer_factors(context, option)
         npc_eid = context.get("npc_eid")
         role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
@@ -6747,57 +6780,121 @@ class NPCInteractionSystem(System):
                 staff_role=current_staff_role,
             )
 
-        quoted_wage = int(target_market_wage)
+        # A quote is the NPC's actual threshold, not a hidden pass/fail roll.
+        # Life burdens add to the rate; a materially better location can offset
+        # some of them.  The exact accepted quote remains a payroll promise.
+        base_wage = max(
+            int(target_market_wage),
+            int(current_wage) if bool(factors.get("poaching")) else 0,
+        )
+        premium_parts = {}
+        reason_strengths = {}
+
+        def add_premium(reason, amount):
+            amount = max(0, int(amount or 0))
+            if amount <= 0:
+                return
+            premium_parts[reason] = premium_parts.get(reason, 0) + amount
+            reason_strengths[reason] = reason_strengths.get(reason, 0) + amount
+
         if bool(factors.get("poaching")):
-            lifestyle_credit = 1 if (
-                float(factors.get("commute_score", 0.0) or 0.0) >= 0.08
-                or float(factors.get("social_bonus", 0.0) or 0.0) >= 0.08
-            ) else 0
-            quoted_wage = max(quoted_wage, int(current_wage) + 1 - lifestyle_credit)
-            burden = (
-                float(factors.get("job_attachment_penalty", 0.0) or 0.0)
-                + float(factors.get("current_social_pull", 0.0) or 0.0)
-                + max(0.0, -float(factors.get("commute_score", 0.0) or 0.0))
-                - float(factors.get("social_bonus", 0.0) or 0.0)
-                - max(0.0, float(factors.get("commute_score", 0.0) or 0.0))
+            add_premium("job_attachment", factors.get("job_attachment_units", 1))
+            pay_gap = max(0, int(current_wage) - int(target_market_wage))
+            if pay_gap:
+                reason_strengths["current_pay"] = pay_gap
+
+        current_roots = tuple(factors.get("current_social_roots", ()) or ())
+        root_relation = str((current_roots[0] if current_roots else {}).get("relation", "") or "").strip().lower()
+        social_units = max(0, int(factors.get("current_social_units", 0) or 0))
+        if social_units:
+            social_reason = "partner_roots" if root_relation == "partner" else (
+                "family_roots" if root_relation == "family" else "social_roots"
             )
-            premium = max(0, min(3, int(max(0.0, burden - 0.06) / 0.08 + 0.999)))
-            quoted_wage = max(quoted_wage, int(current_wage) + premium)
-        if str(context.get("pressure_tier", "") or "").strip().lower() == "high":
-            quoted_wage += 1
+            add_premium(social_reason, social_units)
+
+        add_premium("commute", factors.get("commute_burden_units", 0))
+        add_premium("career_change", factors.get("career_change_units", 0))
+        add_premium("role_fit", factors.get("role_fit_units", 0))
+        add_premium("local_pressure", factors.get("pressure_units", 0))
+        if bool(factors.get("spoiled_partner_preference")):
+            add_premium("spoiled_partner", 2)
+
+        lifestyle_credit = max(0, int(factors.get("lifestyle_credit", 0) or 0))
+        raw_personal_premium = max(0, sum(premium_parts.values()) - lifestyle_credit)
+        quoted_wage = max(1, min(20, int(base_wage) + int(raw_personal_premium)))
+        premium_over_market = max(0, int(quoted_wage) - int(target_market_wage))
+        explanation_threshold = max(2, (int(target_market_wage) + 4) // 5)
+
+        reason_priority = {
+            "partner_roots": 9,
+            "family_roots": 8,
+            "career_change": 7,
+            "commute": 6,
+            "current_pay": 5,
+            "job_attachment": 4,
+            "role_fit": 3,
+            "spoiled_partner": 2,
+            "social_roots": 1,
+            "local_pressure": 0,
+        }
+        explanation_reason = ""
+        if premium_over_market >= explanation_threshold and reason_strengths:
+            explanation_reason = max(
+                reason_strengths,
+                key=lambda reason: (
+                    int(reason_strengths.get(reason, 0) or 0),
+                    int(reason_priority.get(reason, -1)),
+                ),
+            )
 
         factors = dict(factors)
         factors.update({
             "current_wage": int(max(0, current_wage)),
             "target_market_wage": int(target_market_wage),
-            "quoted_wage": int(max(1, min(20, quoted_wage))),
+            "quoted_wage": int(quoted_wage),
+            "premium_over_market": int(premium_over_market),
+            "explanation_threshold": int(explanation_threshold),
+            "quote_explanation_reason": explanation_reason,
+            "quote_explanation_relation": root_relation,
+            "premium_parts": dict(premium_parts),
         })
         return True, "quote", factors
 
-    def _spoiled_partner_hire_line(self, context, option, quoted_wage):
+    def _spoiled_partner_hire_preference(self, context, option):
         occupation = context.get("occupation") if isinstance(context, dict) else None
         career = str(getattr(occupation, "career", "") or "").strip().lower()
         if career not in {"resident", "lodger", "shelter_guest"}:
-            return ""
+            return False
         npc_eid = context.get("npc_eid")
         relationship = current_relationship_for_actor(self.sim, npc_eid, minimum_stage="spouse")
         if not isinstance(relationship, dict) or str(relationship.get("stage", "") or "").strip().lower() != "spouse":
-            return ""
+            return False
         roll = random.Random(
             f"{self.sim.seed}:spoiled-partner-hire:{npc_eid}:{option.get('property_id')}:{option.get('role')}"
         ).random()
-        if roll >= 0.46:
+        return bool(roll < 0.46)
+
+    def _spoiled_partner_hire_line(self, context, option, quoted_wage, *, premium_over_market=0):
+        if not self._spoiled_partner_hire_preference(context, option):
             return ""
+        premium_over_market = max(0, int(premium_over_market or 0))
+        if premium_over_market >= 2:
+            premium_text = f"{premium_over_market} credit" + ("" if premium_over_market == 1 else "s")
+            return (
+                "My partner keeps me spoiled, so getting me onto a schedule is not cheap. "
+                f"I would need {_credit_amount_label(quoted_wage)} an hour, {premium_text} above the usual rate."
+            )
         return f"My partner keeps me spoiled, so getting me onto a schedule takes {_credit_amount_label(quoted_wage)} an hour."
 
     def _player_business_hire_offer_factors(self, context, option):
         if not isinstance(context, dict) or not isinstance(option, dict):
             return {"score_delta": 0.0, "threshold_delta": 0.0, "decline_reason": ""}
+        npc_eid = context.get("npc_eid")
         target_prop = option.get("prop")
         current_prop = option.get("current_prop") or context.get("workplace_prop")
         target_anchor = self._player_business_property_anchor(target_prop)
         current_anchor = self._player_business_property_anchor(current_prop)
-        home_anchor = self._player_business_home_anchor(context.get("npc_eid"), home_prop=context.get("home_prop"))
+        home_anchor = self._player_business_home_anchor(npc_eid, home_prop=context.get("home_prop"))
         target_commute = self._player_business_anchor_distance(home_anchor, target_anchor)
         current_commute = self._player_business_anchor_distance(home_anchor, current_anchor)
 
@@ -6815,24 +6912,68 @@ class NPCInteractionSystem(System):
 
         organization_role = str(context.get("organization_role", "") or "").strip().lower()
         coworker_count = max(0, int(context.get("coworker_count", 0) or 0))
+        npc_traits = context.get("npc_traits") or self.sim.ecs.get(NPCTraits).get(npc_eid) or NPCTraits()
+        loyalty = _clamp(float(getattr(npc_traits, "loyalty", 0.5) or 0.5), lo=0.0, hi=1.0)
+        discipline = _clamp(float(getattr(npc_traits, "discipline", 0.5) or 0.5), lo=0.0, hi=1.0)
+        bravery = _clamp(float(getattr(npc_traits, "bravery", 0.5) or 0.5), lo=0.0, hi=1.0)
+
+        job_attachment_units = 0
         job_attachment_penalty = 0.0
         if poaching:
-            job_attachment_penalty = 0.1 + min(0.08, coworker_count * 0.018)
-            if organization_role in {"owner", "manager"}:
-                job_attachment_penalty += 0.05
+            job_attachment_units = 1
+            if loyalty >= 0.45:
+                job_attachment_units += 1
+            if loyalty >= 0.8:
+                job_attachment_units += 1
+            if coworker_count >= 3:
+                job_attachment_units += 1
+            if organization_role == "manager":
+                job_attachment_units += 1
+            elif organization_role == "owner":
+                job_attachment_units += 3
+            job_attachment_penalty = min(0.36, 0.04 * float(job_attachment_units))
 
         social_fit = self._player_business_offer_social_fit(
-            context.get("npc_eid"),
+            npc_eid,
             target_prop,
             current_prop=current_prop if poaching else None,
+            current_anchor=home_anchor or current_anchor,
         )
         social_bonus = float(social_fit.get("bonus", 0.0) or 0.0)
-        current_social_pull = float(social_fit.get("current_pull", 0.0) or 0.0) if poaching else 0.0
+        current_social_pull = float(social_fit.get("current_pull", 0.0) or 0.0)
+        current_social_units = max(0, min(4, int((current_social_pull / 0.035) + 0.999)))
+
+        commute_burden_units = 0
+        if commute_delta is not None and int(commute_delta) <= -5:
+            commute_burden_units = min(4, (abs(int(commute_delta)) + 7) // 8)
+        elif target_commute is not None and current_commute is None and int(target_commute) > 16:
+            commute_burden_units = min(3, (int(target_commute) - 7) // 10)
+
+        raw_career = str(getattr(context.get("occupation"), "career", "") or "").strip().lower()
+        role_id = str(context.get("role_id", "") or "").strip().lower()
+        career_change = bool(role_id == "guard" or "guard" in raw_career or "security" in raw_career)
+        career_change_units = (3 + (1 if discipline >= 0.72 else 0)) if career_change else 0
+
+        target_role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
+        role_fit = player_business_role_fit(self.sim, npc_eid, target_prop, target_role)
+        role_fit_label = str((role_fit or {}).get("label", "solid") or "solid").strip().lower()
+        role_fit_units = 2 if role_fit_label == "weak" else 1 if role_fit_label == "patchy" else 0
 
         attention = max(0, min(100, int(context.get("pressure_attention", 0) or 0)))
         heat_penalty = min(0.025, (float(attention) / 100.0) * 0.025)
-        if str(context.get("pressure_tier", "") or "").strip().lower() == "high":
+        pressure_tier = str(context.get("pressure_tier", "") or "").strip().lower()
+        pressure_units = 0
+        if pressure_tier == "high":
             heat_penalty += 0.006
+            pressure_units = 1 + (1 if bravery < 0.34 else 0)
+
+        lifestyle_credit = 0
+        if commute_delta is not None and int(commute_delta) >= 8:
+            lifestyle_credit += 1 + (1 if int(commute_delta) >= 20 else 0)
+        if social_bonus >= 0.07:
+            lifestyle_credit += 1 + (1 if social_bonus >= 0.14 else 0)
+        if role_fit_label in {"strong", "excellent"}:
+            lifestyle_credit += 1
 
         score_delta = commute_score + social_bonus - job_attachment_penalty - current_social_pull - heat_penalty
         threshold_delta = 0.06 if poaching else 0.0
@@ -6855,11 +6996,129 @@ class NPCInteractionSystem(System):
             "commute_score": float(commute_score),
             "social_bonus": float(social_bonus),
             "current_social_pull": float(current_social_pull),
+            "current_social_units": int(current_social_units),
             "job_attachment_penalty": float(job_attachment_penalty),
+            "job_attachment_units": int(job_attachment_units),
             "heat_penalty": float(heat_penalty),
+            "commute_burden_units": int(commute_burden_units),
+            "career_change": bool(career_change),
+            "career_change_units": int(career_change_units),
+            "role_fit_label": role_fit_label,
+            "role_fit_units": int(role_fit_units),
+            "pressure_units": int(pressure_units),
+            "lifestyle_credit": int(lifestyle_credit),
+            "loyalty": round(float(loyalty), 3),
+            "discipline": round(float(discipline), 3),
+            "bravery": round(float(bravery), 3),
             "nearby_social_names": tuple(social_fit.get("nearby_names", ()) or ()),
+            "current_social_roots": tuple(social_fit.get("current_roots", ()) or ()),
+            "spoiled_partner_preference": bool(self._spoiled_partner_hire_preference(context, option)),
             "current_business_name": str(option.get("current_business_name", "") or context.get("player_business_hire_current_name", "") or "").strip(),
         }
+
+    def _player_business_hire_quote_line(self, context, option, factors):
+        business_name = str(option.get("business_name", "the business") or "the business").strip() or "the business"
+        role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
+        current_business_name = str(
+            factors.get("current_business_name", "")
+            or option.get("current_business_name", "")
+            or "my current job"
+        ).strip() or "my current job"
+        quoted_wage = max(1, int(factors.get("quoted_wage", 1) or 1))
+        premium = max(0, int(factors.get("premium_over_market", 0) or 0))
+        explanation_threshold = max(1, int(factors.get("explanation_threshold", 2) or 2))
+        reason = str(factors.get("quote_explanation_reason", "") or "").strip().lower()
+
+        if bool(factors.get("poaching")):
+            ordinary = (
+                f"I would leave {current_business_name} for {business_name} at "
+                f"{_credit_amount_label(quoted_wage)} an hour."
+            )
+        elif role == "manager":
+            ordinary = f"I would run {business_name} for {_credit_amount_label(quoted_wage)} an hour."
+        else:
+            ordinary = f"I would take shifts at {business_name} for {_credit_amount_label(quoted_wage)} an hour."
+        if not reason or premium < explanation_threshold:
+            return ordinary
+
+        root_relation = str(factors.get("quote_explanation_relation", "") or "").strip().lower()
+        organization_role = str(context.get("organization_role", "") or "").strip().lower()
+        intros = {
+            "partner_roots": (
+                "That would be rough on me because my partner lives here.",
+                "My partner is rooted around here, so leaving is not a light ask.",
+                "I have a life here with my partner; changing jobs would pull against that.",
+            ),
+            "family_roots": (
+                "My family is rooted here, and I cannot treat that move as nothing.",
+                "Leaving would pull me away from family I rely on around here.",
+                "I have family ties here that make the change harder on me.",
+            ),
+            "social_roots": (
+                "Most of the people I rely on are around here.",
+                "I would be leaving a useful circle of people behind.",
+                "My ties here make that change more costly than it looks.",
+            ),
+            "commute": (
+                "That would make the trip to work a lot rougher on me.",
+                "The distance is the part that makes me hesitate.",
+                "I would be spending a lot more of my day getting there and back.",
+            ),
+            "career_change": (
+                "That is a real change from the work I know.",
+                "You are asking me to step out of my line of work.",
+                "I could make that career change, but it would not be a casual one.",
+            ),
+            "current_pay": (
+                f"I already have a better-paying place at {current_business_name}.",
+                f"I cannot leave {current_business_name} just to move backward on pay.",
+                f"My current rate at {current_business_name} sets a higher floor.",
+            ),
+            "job_attachment": (
+                (
+                    f"People at {current_business_name} depend on me to keep things moving."
+                    if organization_role in {"owner", "manager"}
+                    else f"I have put down roots with the crew at {current_business_name}."
+                ),
+                f"Walking away from {current_business_name} would cost me more than a clean break.",
+                f"I am not eager to abandon the people I work with at {current_business_name}.",
+            ),
+            "role_fit": (
+                "That role is a stretch from what I am good at.",
+                "I can do the work, but I would be climbing a learning curve.",
+                "You are asking me to cover work that does not come naturally to me.",
+            ),
+            "spoiled_partner": (
+                "My partner keeps me spoiled, so getting me onto a schedule is not cheap.",
+                "I am comfortable with my partner looking after me; a work schedule has to be worth changing that.",
+                "My partner and I have a comfortable arrangement already.",
+            ),
+            "local_pressure": (
+                "With the block this hot, showing up for a shift carries extra risk.",
+                "There is enough trouble around here that I need the risk priced in.",
+                "Work is one thing; working through this much pressure is another.",
+            ),
+        }
+        if reason == "social_roots" and root_relation == "coworker":
+            intros["social_roots"] = (
+                "I would be leaving coworkers I trust behind.",
+                "The crew I know is part of what keeps me where I am.",
+                "I have working relationships here that are worth something to me.",
+            )
+
+        premium_text = f"{premium} credit" + ("" if premium == 1 else "s")
+        rate_lines = (
+            f"I would need {_credit_amount_label(quoted_wage)} an hour, {premium_text} above the usual rate.",
+            f"Make it {_credit_amount_label(quoted_wage)} an hour. That is {premium_text} over the usual rate.",
+            f"For me, the number is {_credit_amount_label(quoted_wage)} an hour—{premium_text} above usual.",
+        )
+        rng = random.Random(
+            f"{self.sim.seed}:business-hire-reason:{context.get('npc_eid')}:{option.get('property_id')}:{role}:{reason}"
+        )
+        intro_choices = tuple(intros.get(reason, ()))
+        if not intro_choices:
+            return ordinary
+        return f"{rng.choice(intro_choices)} {rng.choice(rate_lines)}"
 
     def _player_business_hire_option_for_role(self, context, role):
         option = context.get("player_business_hire_option") if isinstance(context, dict) else None
@@ -6938,34 +7197,17 @@ class NPCInteractionSystem(System):
         accepted, reason, offer_factors = self._player_business_hire_quote(context, option)
         business_name = str(option.get("business_name", "the business")).strip() or "the business"
         role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
-        current_business_name = str(
-            offer_factors.get("current_business_name", "")
-            or option.get("current_business_name", "")
-            or "my current job"
-        ).strip() or "my current job"
         if not accepted:
             if reason == "guarded":
                 line = "No. Not after this."
-            elif reason == "career_conflict":
-                line = f"No. {business_name} is not my kind of work."
             elif role == "manager":
                 line = f"Not me. I am not taking point on {business_name}."
             else:
                 line = f"Maybe another time. I am not taking work at {business_name} right now."
             return {"npc_lines": [line]}
-        pending = self._stage_player_business_hire_offer(npc_eid, option, offer_factors)
-        quoted_wage = int((pending or {}).get("quoted_wage", 1) or 1)
-        if bool(offer_factors.get("poaching")):
-            line = (
-                f"I would leave {current_business_name} for {business_name} at "
-                f"{_credit_amount_label(quoted_wage)} an hour."
-            )
-        elif role == "manager":
-            line = f"I would run {business_name} for {_credit_amount_label(quoted_wage)} an hour."
-        else:
-            line = f"I would take shifts at {business_name} for {_credit_amount_label(quoted_wage)} an hour."
-        spoiled_line = self._spoiled_partner_hire_line(context, option, quoted_wage)
-        return {"npc_lines": [spoiled_line or line]}
+        self._stage_player_business_hire_offer(npc_eid, option, offer_factors)
+        line = self._player_business_hire_quote_line(context, option, offer_factors)
+        return {"npc_lines": [line]}
 
     def _complete_player_business_hire(self, context, option, *, npc_eid, offer_factors, contracted_wage):
         business_name = str(option.get("business_name", "the business")).strip() or "the business"
@@ -7014,22 +7256,31 @@ class NPCInteractionSystem(System):
             line = f"Deal. I can take shifts at {business_name} for {_credit_amount_label(contracted_wage)} an hour."
         if bool(offer_factors.get("poaching")):
             if role == "manager":
-                line = f"Yeah. I can leave {current_business_name} and run {business_name} for you."
+                line = (
+                    f"Yeah. I can leave {current_business_name} and run {business_name} for you at "
+                    f"{_credit_amount_label(contracted_wage)} an hour."
+                )
             else:
-                line = f"Yeah. I can leave {current_business_name} and take shifts at {business_name}."
+                line = (
+                    f"Yeah. I can leave {current_business_name} and take shifts at {business_name} for "
+                    f"{_credit_amount_label(contracted_wage)} an hour."
+                )
+            followups = []
             commute_delta = offer_factors.get("commute_delta")
             try:
                 if commute_delta is not None and int(commute_delta) >= 5:
-                    line = line[:-1] + "; it is closer to home."
+                    followups.append("It is closer to home.")
             except (TypeError, ValueError):
                 pass
             nearby_names = tuple(offer_factors.get("nearby_social_names", ()) or ())
             if nearby_names:
-                line = line[:-1] + f"; {nearby_names[0]} is nearby."
+                followups.append(f"{nearby_names[0]} is nearby.")
+            if followups:
+                line = f"{line} {' '.join(followups)}"
         if housing_kind == "workplace_lodging":
-            line = line[:-1] + " and stay on-site."
+            line = f"{line} I can stay on-site."
         elif housing_kind in {"nearby_housing", "nearby_lodging"} and housing_name:
-            line = line[:-1] + f" and stay at {housing_name}."
+            line = f"{line} I can stay at {housing_name}."
         return {"npc_lines": [line], "close": True}
 
     def _accept_player_business_hire_offer(self, context):
@@ -13503,6 +13754,8 @@ class NPCInteractionSystem(System):
                     source_eid=npc_eid,
                     lead_kind=lead_kind,
                     confidence=max(0.76, float(context.get("lead_confidence", 0.6)) + 0.08),
+                    anchored=True,
+                    anchor_kind="directions",
                 )
             bank_id = "where_place" if summary else "where_place_none"
             return {

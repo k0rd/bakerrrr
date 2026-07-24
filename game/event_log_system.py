@@ -2409,34 +2409,44 @@ class EventLogSystem(System):
             if isinstance(candidate, dict):
                 bindings = candidate
                 break
-        key_label = notebook_binding_label(self.sim, bindings=bindings)
+        key_label = f"[{notebook_binding_label(self.sim, bindings=bindings)}]"
 
         if notebook_kind == "locations":
             subject_name = subject_name or "a location"
             if change_kind == "refiled":
                 if hidden:
-                    text = f"You move {subject_name} to hidden locations in your notebook ({key_label})."
+                    text = f"You move {subject_name} to hidden locations in your notebook {key_label}."
                 else:
-                    text = f"You move {subject_name} to known locations in your notebook ({key_label})."
+                    text = f"You move {subject_name} to known locations in your notebook {key_label}."
             elif change_kind == "recorded":
                 section = "hidden locations" if hidden else "locations"
-                text = f"You record {subject_name} in your {section} notebook ({key_label})."
+                text = f"You record {subject_name} in your {section} notebook {key_label}."
             else:
                 section = "hidden locations" if hidden else "locations"
-                text = f"You update {subject_name} in your {section} notebook ({key_label})."
+                text = f"You update {subject_name} in your {section} notebook {key_label}."
         elif notebook_kind == "people":
             subject_name = subject_name or "an unknown person"
             if change_kind == "recorded":
-                text = f"You add {subject_name} to your people notebook ({key_label})."
+                text = f"You add {subject_name} to your people notebook {key_label}."
             elif change_kind == "identified":
-                text = f"You identify {subject_name} in your people notebook ({key_label})."
+                text = f"You identify {subject_name} in your people notebook {key_label}."
             else:
-                text = f"You update {subject_name} in your people notebook ({key_label})."
+                text = f"You update {subject_name} in your people notebook {key_label}."
         else:
             subject_name = subject_name or "new information"
-            text = f"You record {subject_name} in your {notebook_kind or 'notes'} ({key_label})."
+            verb = "record" if change_kind == "recorded" else "update"
+            text = f"You {verb} {subject_name} in your {notebook_kind or 'notes'} {key_label}."
 
-        priority = "high" if str(event.data.get("significance", "major")).strip().lower() == "major" else "normal"
+        # Location knowledge is navigational state, not ambient flavor.  A real
+        # mutation can be as important as the first record: most notably, an
+        # existing place becoming anchored to an actual location.  The shared
+        # notebook seam already suppresses unchanged facts, so every location
+        # mutation can safely survive the default filter.
+        priority = (
+            "high"
+            if notebook_kind == "locations" or change_kind == "recorded"
+            else "normal"
+        )
         self._log(
             text,
             channel="knowledge",
@@ -2936,7 +2946,7 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, "No harvestable plant is close enough.", kind="craft")
             return
         if reason == "picked":
-            _log_player_feedback(self.sim, f"{plant_name} is already picked over.", kind="craft")
+            _log_player_feedback(self.sim, "That plant has already been recently harvested.", kind="craft")
             return
         if reason == "no_tool":
             _log_player_feedback(self.sim, f"You need the right tool to {method} {plant_name}.", kind="craft")

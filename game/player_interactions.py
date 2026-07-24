@@ -7,7 +7,7 @@ from game.components import AI, AnimalGenome, AnimalReproduction, CreatureIdenti
 from game.fauna_breeding import assist_fauna_breeding
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
-from game.herbal_chemistry_runtime import harvest_flora_patch, nearest_harvestable_flora
+from game.herbal_chemistry_runtime import harvest_flora_patch, nearest_exhausted_flora, nearest_harvestable_flora
 from game.hunting_runtime import field_dress_carcass, nearest_hunting_carcass
 from game.meaningful_objects_runtime import nearest_item_backed_object_fixture, pickup_meaningful_object_fixture
 from game.opportunities import _item_label, mark_bounty_target_restrained, resolve_opportunities
@@ -1505,6 +1505,27 @@ class PlayerInteractionRuntime:
                 flora.get("id"),
                 preferred_dir=preferred_dir,
                 exact_direction=exact_direction,
+            )
+            return
+
+        exhausted_flora = None
+        if preferred_dir is not None:
+            exhausted_flora = nearest_exhausted_flora(
+                self.sim,
+                pos.x,
+                pos.y,
+                pos.z,
+                radius=1,
+                preferred_dir=preferred_dir,
+                exact_direction=True,
+            )
+        if exhausted_flora is not None:
+            harvest_flora_patch(
+                self.sim,
+                eid,
+                exhausted_flora.get("id"),
+                preferred_dir=preferred_dir,
+                exact_direction=True,
             )
             return
 

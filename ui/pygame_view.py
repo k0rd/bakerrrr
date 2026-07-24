@@ -5428,6 +5428,7 @@ class PygameView:
 
     def _draw_vehicle_onramp_overlay(self, x, y, color=None, attrs=0):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.05)
+        transit = self._styled_overlay_color("transit", attrs=attrs, bold_scale=1.12)
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
         overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
@@ -5478,16 +5479,35 @@ class PygameView:
         self.pygame.draw.polygon(overlay, (accent[0], accent[1], accent[2], 112), ramp_points)
         self.pygame.draw.lines(overlay, accent, True, ramp_points, max(1, stroke_w))
 
+        # Keep a tiny but unmistakable route badge above the road shape.  The
+        # ramp itself often inherits terrain_road gray, so deriving this badge
+        # from that same frame made the old chevron disappear into the street.
         badge_r = max(3, self.cell_px // 5)
         badge_c = (self.cell_px - badge_r - max(1, self.cell_px // 12), badge_r + max(1, self.cell_px // 12))
         self.pygame.draw.circle(overlay, shadow, (badge_c[0] + 1, badge_c[1] + 1), badge_r)
-        self.pygame.draw.circle(overlay, (accent[0], accent[1], accent[2], 196), badge_c, badge_r)
-        chevron = [
-            (badge_c[0] - max(1, badge_r // 2), badge_c[1] - max(1, badge_r // 3)),
-            (badge_c[0], badge_c[1]),
-            (badge_c[0] - max(1, badge_r // 2), badge_c[1] + max(1, badge_r // 3)),
-        ]
-        self.pygame.draw.lines(overlay, (18, 22, 26, 214), False, chevron, max(1, stroke_w))
+        self.pygame.draw.circle(overlay, (transit[0], transit[1], transit[2], 236), badge_c, badge_r)
+        self.pygame.draw.circle(overlay, (12, 18, 24, 228), badge_c, badge_r, max(1, stroke_w))
+        arrow_tip = (
+            badge_c[0] + max(1, badge_r // 2),
+            badge_c[1] - max(1, badge_r // 2),
+        )
+        arrow_tail = (
+            badge_c[0] - max(1, badge_r // 2),
+            badge_c[1] + max(1, badge_r // 2),
+        )
+        arrow_color = (242, 248, 250, 246)
+        self.pygame.draw.line(overlay, arrow_color, arrow_tail, arrow_tip, max(1, stroke_w))
+        self.pygame.draw.lines(
+            overlay,
+            arrow_color,
+            False,
+            [
+                (arrow_tip[0] - max(1, badge_r // 2), arrow_tip[1]),
+                arrow_tip,
+                (arrow_tip[0], arrow_tip[1] + max(1, badge_r // 2)),
+            ],
+            max(1, stroke_w),
+        )
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
