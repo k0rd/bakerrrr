@@ -6582,7 +6582,7 @@
   "fresh_blossoms": {
     "name": "Fresh Blossoms",
     "glyph": "'",
-    "stack_max": 1,
+    "stack_max": 20,
     "tags": [
       "herbal_ingredient",
       "plant_material",
@@ -6595,7 +6595,7 @@
   "leaf_clippings": {
     "name": "Leaf Clippings",
     "glyph": ",",
-    "stack_max": 1,
+    "stack_max": 20,
     "tags": [
       "herbal_ingredient",
       "plant_material",
@@ -6608,7 +6608,7 @@
   "moss_scrapings": {
     "name": "Moss Scrapings",
     "glyph": ",",
-    "stack_max": 1,
+    "stack_max": 20,
     "tags": [
       "herbal_ingredient",
       "plant_material",
@@ -6621,7 +6621,7 @@
   "vine_cuttings": {
     "name": "Vine Cuttings",
     "glyph": ";",
-    "stack_max": 1,
+    "stack_max": 20,
     "tags": [
       "herbal_ingredient",
       "plant_material",

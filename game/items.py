@@ -1739,6 +1739,54 @@ def prepare_item_stack_metadata(item_id, metadata=None, quantity=1, item_catalog
     return prepared
 
 
+def item_stack_identity(item_id, metadata=None, item_catalog=None):
+    """Return a stable identity for stacks whose per-instance details matter.
+
+    Ordinary catalog items retain the historical item-id-only stacking rule.
+    Plant materials are different: two handfuls from the same genetic line can
+    share a stack, while material from another plant or with different active
+    traits must not silently inherit the first stack's chemistry metadata.
+    """
+    item_key = str(item_id or "").strip().lower()
+    catalog = item_catalog or ITEM_CATALOG
+    item_def = catalog.get(item_key, {}) if isinstance(catalog, dict) else {}
+    tags = {
+        str(tag).strip().lower()
+        for tag in tuple(item_def.get("tags", ()) or ())
+        if str(tag).strip()
+    }
+    if "plant_material" not in tags and "herbal_ingredient" not in tags:
+        return None
+
+    payload = dict(metadata or {}) if isinstance(metadata, dict) else {}
+    traits = sorted({
+        str(trait).strip().lower()
+        for trait in tuple(payload.get("secondary_traits", ()) or ())
+        if str(trait).strip()
+    })
+    genetics = payload.get("genetics") if isinstance(payload.get("genetics"), dict) else {}
+    identity = {
+        "item_id": item_key,
+        "plant_id": str(payload.get("source_plant_id", "") or "").strip().lower(),
+        "chemistry_class": str(payload.get("chemistry_class", "") or "").strip().lower(),
+        "secondary_traits": traits,
+        "plant_part": str(payload.get("plant_part", "") or "").strip().lower(),
+        "bloom_state": str(payload.get("bloom_state", "") or "").strip().lower(),
+        "quality": str(payload.get("quality", "") or "").strip().lower(),
+        "stability_band": str(payload.get("stability_band", "") or "").strip().lower(),
+        "genetics": genetics,
+    }
+    return json.dumps(identity, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def item_stacks_are_compatible(item_id, existing_metadata=None, incoming_metadata=None, item_catalog=None):
+    existing_identity = item_stack_identity(item_id, existing_metadata, item_catalog=item_catalog)
+    incoming_identity = item_stack_identity(item_id, incoming_metadata, item_catalog=item_catalog)
+    if existing_identity is None and incoming_identity is None:
+        return True
+    return existing_identity == incoming_identity
+
+
 def _ground_item_district(sim, x, y):
     world = getattr(sim, "world", None)
     if world is None:

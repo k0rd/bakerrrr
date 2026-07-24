@@ -1331,7 +1331,11 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         "bloom_state": str(harvest_context.get("bloom_state") or "").strip().lower(),
         "day_phase": str(harvest_context.get("day_phase") or "").strip().lower(),
         "harvest_hour": int(harvest_context.get("harvest_hour", 0) or 0),
-        "material_units": int(units),
+        # Inventory quantity is the material count.  Keep the metadata value
+        # per unit so splitting or consuming one item cannot duplicate a whole
+        # harvest batch's potency.
+        "material_units": 1,
+        "harvest_batch_units": int(units),
         "quality": quality,
         "quality_hint": str(harvest_context.get("quality_hint") or "").strip().lower(),
         "harvested_tick": _safe_int(getattr(sim, "tick", 0), 0),
@@ -1343,7 +1347,7 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
     if tool.get("item_id"):
         metadata["tool_item_id"] = tool.get("item_id")
     owner_tag = "player" if eid == getattr(sim, "player_eid", None) else "npc"
-    if not _inventory_can_accept(inventory, item_id, 1, metadata=metadata, owner_eid=eid, owner_tag=owner_tag):
+    if not _inventory_can_accept(inventory, item_id, units, metadata=metadata, owner_eid=eid, owner_tag=owner_tag):
         sim.emit(Event(
             "flora_harvest_blocked",
             eid=eid,
@@ -1353,7 +1357,15 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
             reason="inventory_full",
         ))
         return False
-    added, instance_id = _add_inventory_item(sim, inventory, item_id, 1, metadata=metadata, owner_eid=eid, owner_tag=owner_tag)
+    added, instance_id = _add_inventory_item(
+        sim,
+        inventory,
+        item_id,
+        units,
+        metadata=metadata,
+        owner_eid=eid,
+        owner_tag=owner_tag,
+    )
     if not added:
         sim.emit(Event("flora_harvest_blocked", eid=eid, flora_id=record.get("id"), plant_name=record.get("name"), reason="inventory_full"))
         return False
@@ -1383,6 +1395,7 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         harvest_method=method,
         tool_item_id=tool.get("item_id"),
         material_units=int(units),
+        output_quantity=int(units),
         output_item_id=item_id,
         output_item_name=item_display_name_for_actor(
             sim,

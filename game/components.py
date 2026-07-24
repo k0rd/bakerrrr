@@ -5,6 +5,7 @@ from game.items import (
     item_metadata_has_scratch_roll,
     item_metadata_with_creation_seed,
     item_inventory_slot_cost,
+    item_stacks_are_compatible,
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
     split_item_stack_metadata,
@@ -3372,6 +3373,12 @@ class Inventory:
                 if entry.get("owner_eid") != owner_eid:
                     continue
                 if entry.get("owner_tag") != owner_tag:
+                    continue
+                if not item_stacks_are_compatible(
+                    item_id,
+                    existing_metadata=entry.get("metadata"),
+                    incoming_metadata=remaining_metadata,
+                ):
                     continue
 
                 room = stack_max - entry["quantity"]
