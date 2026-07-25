@@ -1408,6 +1408,7 @@ class World:
         "pool_hall",
     }
     PUBLIC_BUILDING_ARCHETYPES = {
+        "courthouse",
         "metro_exchange",
     }
 

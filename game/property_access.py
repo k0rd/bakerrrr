@@ -132,6 +132,7 @@ PUBLIC_HOURS_BY_ARCHETYPE = {
     "comms_shop": (8, 20),
     "corner_store": (6, 23),
     "contractor_office": (7, 19),
+    "courthouse": (9, 18),
     "courier_office": (7, 19),
     "daycare": (7, 18),
     "drone_shop": (9, 19),
@@ -189,7 +190,7 @@ PUBLIC_HOURS_BY_ARCHETYPE = {
 
 NEUTRAL_STANDING_REASONS = {"", "none", "open_business", "public_space"}
 AUTO_CONTROLLER_OWNER_TAGS = {"", "public", "city", "community", "neutral", "none", "unowned"}
-ALWAYS_PUBLIC_ARCHETYPES = {"metro_exchange"}
+ALWAYS_PUBLIC_ARCHETYPES = {"courthouse", "metro_exchange"}
 PUBLIC_UNDERGROUND_PASSAGE_ARCHETYPES = {
     "metro_underpass",
     "service_basement",

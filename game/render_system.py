@@ -3660,21 +3660,22 @@ class RenderSystem(System):
                 if not visible_now and not explored:
                     continue
                 tile = self.sim.tilemap.tile_at(display_pos[0], display_pos[1], active_z)
-                if (
-                    str(prop.get("kind", "") or "").strip().lower() != "vehicle"
-                    and _tile_prefers_feature_legend(self.sim, tile, display_pos[0], display_pos[1], active_z)
-                ):
-                    continue
-
                 appearance = self.sim.appearance.property(
                     prop,
                     active_quest_target=active_quest_target,
                 )
                 if (
+                    str(prop.get("kind", "") or "").strip().lower() != "vehicle"
+                    and _tile_prefers_feature_legend(self.sim, tile, display_pos[0], display_pos[1], active_z)
+                    and str(getattr(appearance, "semantic_id", "") or "").strip().lower()
+                    not in {"prop_vehicle_onramp"}
+                ):
+                    continue
+
+                if (
                     active_vehicle_prop
                     and str(prop_id) == str(active_vehicle_prop.get("id", "") or "").strip()
                     and player_vehicle_state
-                    and player_vehicle_state.in_vehicle
                 ):
                     appearance = _vehicle_appearance_with_heading(appearance, player_vehicle_state)
                 if visible_now:
