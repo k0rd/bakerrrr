@@ -6244,13 +6244,47 @@ class PygameView:
             neckline_y = q(8)
             strap_offset = max(1, shoulder_half - 1)
             strap_top_y = min(neckline_y, q(6) + 1)
-            if garment in {"bra", "bralette", "bandeau"}:
-                self.pygame.draw.line(overlay, fill, (mid_x - shoulder_half, neckline_y), (mid_x + shoulder_half, neckline_y), max(1, q(1)))
-                if garment != "bandeau":
-                    self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, strap_top_y), (mid_x - strap_offset, neckline_y), 1)
-                    self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, strap_top_y), (mid_x + strap_offset, neckline_y), 1)
+            if garment == "bandeau":
+                band_half = max(2, shoulder_half - 1)
+                self.pygame.draw.line(overlay, fill, (mid_x - band_half, neckline_y), (mid_x + band_half, neckline_y), max(1, q(1)))
+            elif garment in {"bra", "bralette"}:
+                cup_half = max(1, q(1))
+                cup_top_y = neckline_y - (1 if garment == "bralette" else 0)
+                band_y = min(px - 1, neckline_y + 1)
+                for side in (-1, 1):
+                    cup_center = mid_x + side * max(1, cup_half)
+                    cup = [
+                        (cup_center - cup_half, band_y),
+                        (cup_center, cup_top_y),
+                        (cup_center + cup_half, band_y),
+                    ]
+                    self.pygame.draw.polygon(overlay, fill, cup)
+                self.pygame.draw.line(overlay, shade, (mid_x - shoulder_half + 1, band_y), (mid_x + shoulder_half - 1, band_y), 1)
+                for sx in (mid_x - strap_offset, mid_x + strap_offset):
+                    self.pygame.draw.line(overlay, edge, (sx, strap_top_y), (sx, cup_top_y), 1)
+                if "strappy" in detail:
+                    self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, strap_top_y), (mid_x - 1, band_y), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, strap_top_y), (mid_x + 1, band_y), 1)
+            elif garment == "camisole":
+                cami_half = max(1, shoulder_half - 1)
+                lower_top_y = min(px - 1, neckline_y + 1)
+                bodice = [
+                    (mid_x - cami_half, lower_top_y),
+                    (mid_x + cami_half, lower_top_y),
+                    (mid_x + waist_half, q(10)),
+                    (mid_x - waist_half, q(10)),
+                ]
+                self.pygame.draw.polygon(overlay, fill, bodice)
+                self.pygame.draw.line(overlay, shade, (mid_x - cami_half, lower_top_y), (mid_x, lower_top_y + 1), 1)
+                self.pygame.draw.line(overlay, shade, (mid_x, lower_top_y + 1), (mid_x + cami_half, lower_top_y), 1)
+                for sx in (mid_x - strap_offset, mid_x + strap_offset):
+                    target_x = mid_x - cami_half if sx < mid_x else mid_x + cami_half
+                    self.pygame.draw.line(overlay, edge, (sx, strap_top_y), (target_x, lower_top_y), 1)
+                if "strappy" in detail:
+                    self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, strap_top_y), (mid_x - 1, lower_top_y + 1), 1)
+                    self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, strap_top_y), (mid_x + 1, lower_top_y + 1), 1)
             else:
-                top_half = max(1, shoulder_half - (1 if garment == "camisole" else 0))
+                top_half = max(1, shoulder_half)
                 bodice = [
                     (mid_x - top_half, neckline_y),
                     (mid_x + top_half, neckline_y),
@@ -6261,21 +6295,72 @@ class PygameView:
                 ]
                 self.pygame.draw.polygon(overlay, fill, bodice)
                 self.pygame.draw.line(overlay, shade, bodice[0], bodice[1], 1)
-                if garment in {"camisole", "tank_undershirt"}:
+                if garment == "tank_undershirt":
                     self.pygame.draw.line(overlay, edge, (mid_x - strap_offset, strap_top_y), (mid_x - strap_offset, neckline_y), 1)
                     self.pygame.draw.line(overlay, edge, (mid_x + strap_offset, strap_top_y), (mid_x + strap_offset, neckline_y), 1)
         elif kind == "base_bottom":
-            if garment in {"boxers", "boyshorts"}:
+            waist_y = q(10)
+            hip_line_y = q(11)
+            lower_y = min(px - 1, q(12))
+            center_half = max(1, q(1))
+            if garment == "boyshorts":
+                inner_gap = max(1, q(1))
+                left_leg = [
+                    (mid_x - basewear_hip_half, waist_y),
+                    (mid_x - inner_gap, waist_y),
+                    (mid_x - inner_gap, hip_line_y + 1),
+                    (mid_x - basewear_hip_half + 1, hip_line_y + 1),
+                ]
+                right_leg = [(2 * mid_x - point_x, point_y) for point_x, point_y in reversed(left_leg)]
+                self.pygame.draw.polygon(overlay, fill, left_leg)
+                self.pygame.draw.polygon(overlay, fill, right_leg)
+                self.pygame.draw.line(overlay, edge, left_leg[0], (mid_x - inner_gap, waist_y), 1)
+                self.pygame.draw.line(overlay, edge, (mid_x + inner_gap, waist_y), right_leg[-1], 1)
+            elif garment in {"boxers", "boxer_briefs"}:
                 self.pygame.draw.rect(overlay, fill, self.pygame.Rect(mid_x - basewear_hip_half, q(10), max(3, basewear_hip_half * 2 + 1), max(2, q(2))))
             elif garment == "thong":
-                self.pygame.draw.line(overlay, fill, (mid_x - basewear_hip_half, q(10)), (mid_x + basewear_hip_half, q(10)), 1)
-                self.pygame.draw.line(overlay, fill, (mid_x, q(10)), (mid_x, q(11)), 1)
+                for side in (-1, 1):
+                    outer_x = mid_x + side * basewear_hip_half
+                    self.pygame.draw.line(overlay, fill, (outer_x, waist_y), (mid_x + side, hip_line_y), 1)
+                    if "strappy" in detail and px >= 20:
+                        self.pygame.draw.line(overlay, edge, (outer_x, waist_y - 1), (mid_x + side, hip_line_y - 1), 1)
+                self.pygame.draw.polygon(overlay, fill, [(mid_x - 1, hip_line_y), (mid_x + 1, hip_line_y), (mid_x, lower_y)])
+            elif garment in {"bikini_panties", "cheeky_panties"}:
+                panel_half = center_half + (1 if garment == "cheeky_panties" and px >= 20 else 0)
+                for side in (-1, 1):
+                    outer_x = mid_x + side * basewear_hip_half
+                    inner_x = mid_x + side * panel_half
+                    self.pygame.draw.line(overlay, fill, (outer_x, waist_y), (inner_x, hip_line_y), 1)
+                    if "strappy" in detail and px >= 20:
+                        self.pygame.draw.line(overlay, edge, (outer_x, waist_y - 1), (inner_x, hip_line_y - 1), 1)
+                panel = [
+                    (mid_x - panel_half, hip_line_y),
+                    (mid_x + panel_half, hip_line_y),
+                    (mid_x + 1, lower_y),
+                    (mid_x - 1, lower_y),
+                ]
+                self.pygame.draw.polygon(overlay, fill, panel)
+                if garment == "cheeky_panties":
+                    self.pygame.draw.line(overlay, edge, (mid_x - panel_half, hip_line_y), (mid_x + panel_half, hip_line_y), 1)
+            elif garment == "high_waist_panties":
+                high_y = q(9)
+                high_half = max(1, waist_half)
+                fitted = [
+                    (mid_x - high_half, high_y),
+                    (mid_x + high_half, high_y),
+                    (mid_x + basewear_hip_half, waist_y),
+                    (mid_x + center_half, lower_y),
+                    (mid_x - center_half, lower_y),
+                    (mid_x - basewear_hip_half, waist_y),
+                ]
+                self.pygame.draw.polygon(overlay, fill, fitted)
+                self.pygame.draw.line(overlay, edge, fitted[0], fitted[1], 1)
             else:
                 briefs = [
-                    (mid_x - basewear_hip_half, q(10)),
-                    (mid_x + basewear_hip_half, q(10)),
-                    (mid_x + 1, q(12)),
-                    (mid_x - 1, q(12)),
+                    (mid_x - basewear_hip_half, waist_y),
+                    (mid_x + basewear_hip_half, waist_y),
+                    (mid_x + 1, lower_y),
+                    (mid_x - 1, lower_y),
                 ]
                 self.pygame.draw.polygon(overlay, fill, briefs)
                 self.pygame.draw.line(overlay, edge, briefs[0], briefs[1], 1)
@@ -6440,28 +6525,69 @@ class PygameView:
             }
             return by_kind.get(kind, ((mid_x, px // 2),))
 
+        basewear_clip = None
         if kind == "base_top":
             top_y = shoulder_y + max(1, px // 22)
-            bottom_y = hip_y - max(1, px // 18)
-            base_rect = self.pygame.Rect(body_left, top_y, max(6, body_right - body_left), max(4, bottom_y - top_y))
-            if garment in {"bra", "bralette", "bandeau"}:
-                band_y = top_y + max(2, px // 10)
-                band_h = max(3, px // 8)
-                band = self.pygame.Rect(body_left - max(1, px // 30), band_y, max(7, body_right - body_left + max(2, px // 15)), band_h)
-                self.pygame.draw.rect(overlay, outline, band.move(1, 1), border_radius=max(1, px // 16))
-                self.pygame.draw.rect(overlay, fill, band, border_radius=max(1, px // 16))
-                if garment != "bandeau":
-                    strap_dx = max(2, px // 10)
-                    for sx in (mid_x - strap_dx, mid_x + strap_dx):
-                        self.pygame.draw.line(overlay, outline, (sx + 1, band.top + 1), (sx + 1, top_y - 1), stroke_w + 1)
-                        self.pygame.draw.line(overlay, edge, (sx, band.top), (sx, top_y - 1), stroke_w)
-                if garment in {"bra", "bralette"}:
-                    cup_w = max(3, band.w // 2)
-                    for cup_x in (band.left, band.centerx):
-                        cup = self.pygame.Rect(cup_x, band.top, cup_w, band.h)
-                        self.pygame.draw.arc(overlay, edge, cup, 0.15, 3.0, stroke_w)
-                    self.pygame.draw.circle(overlay, shade, band.center, max(1, px // 34))
-                base_rect = band
+            bottom_y = hip_y - max(2, px // 12)
+            if garment == "bandeau":
+                band_half = max(3, actor_shoulder_half - 1)
+                band_y = top_y + max(2, px // 11)
+                band_h = max(2, px // 15)
+                base_rect = self.pygame.Rect(mid_x - band_half, band_y, band_half * 2, band_h)
+                self.pygame.draw.rect(overlay, fill, base_rect, border_radius=max(1, px // 22))
+                self.pygame.draw.line(overlay, edge, base_rect.topleft, (base_rect.right - 1, base_rect.top), stroke_w)
+            elif garment in {"bra", "bralette"}:
+                cup_outer = max(2, actor_shoulder_half - 1)
+                cup_peak = max(1, min(cup_outer - 1, px // 12))
+                cup_top_y = top_y if garment == "bralette" else top_y + max(1, px // 24)
+                band_y = top_y + max(3, px // (7 if garment == "bralette" else 8))
+                left_cup = [(mid_x - cup_outer, band_y), (mid_x - cup_peak, cup_top_y), (mid_x, band_y)]
+                right_cup = [(mid_x, band_y), (mid_x + cup_peak, cup_top_y), (mid_x + cup_outer, band_y)]
+                for cup in (left_cup, right_cup):
+                    self.pygame.draw.polygon(overlay, fill, cup)
+                    self.pygame.draw.lines(overlay, edge, False, cup, stroke_w)
+                self.pygame.draw.line(overlay, shade, (mid_x - cup_outer, band_y), (mid_x + cup_outer, band_y), stroke_w)
+                strap_top = max(shoulder_y, top_y - max(1, px // 14))
+                for sx in (mid_x - cup_peak, mid_x + cup_peak):
+                    self.pygame.draw.line(overlay, edge, (sx, cup_top_y), (sx, strap_top), stroke_w)
+                if "strappy" in detail:
+                    self.pygame.draw.line(overlay, edge, (mid_x - cup_peak, strap_top), (mid_x - 1, band_y), stroke_w)
+                    self.pygame.draw.line(overlay, edge, (mid_x + cup_peak, strap_top), (mid_x + 1, band_y), stroke_w)
+                base_rect = self.pygame.Rect(
+                    mid_x - cup_outer,
+                    strap_top,
+                    cup_outer * 2 + 1,
+                    max(3, band_y - strap_top + 1),
+                )
+            elif garment == "camisole":
+                cami_half = max(2, actor_shoulder_half - 1)
+                neckline_y = top_y + max(2, px // 14)
+                neck_depth = max(1, px // 18)
+                waist_y = neckline_y + max(2, (bottom_y - neckline_y) // 2)
+                waist_half = max(1, min(actor_shoulder_half, actor_hip_half) - max(2, px // 16))
+                bodice = [
+                    (mid_x - cami_half, neckline_y),
+                    (mid_x, neckline_y + neck_depth),
+                    (mid_x + cami_half, neckline_y),
+                    (mid_x + waist_half, waist_y),
+                    (body_right - 1, bottom_y),
+                    (body_left + 1, bottom_y),
+                    (mid_x - waist_half, waist_y),
+                ]
+                self.pygame.draw.polygon(overlay, fill, bodice)
+                self.pygame.draw.lines(overlay, shade, False, bodice[:3], stroke_w)
+                strap_top = max(shoulder_y, top_y - max(1, px // 14))
+                for sx in (mid_x - cami_half, mid_x + cami_half):
+                    self.pygame.draw.line(overlay, edge, (sx, neckline_y), (sx, strap_top), stroke_w)
+                if "strappy" in detail:
+                    self.pygame.draw.line(overlay, edge, (mid_x - cami_half, strap_top), (mid_x - 1, neckline_y + neck_depth), stroke_w)
+                    self.pygame.draw.line(overlay, edge, (mid_x + cami_half, strap_top), (mid_x + 1, neckline_y + neck_depth), stroke_w)
+                base_rect = self.pygame.Rect(
+                    body_left + 1,
+                    strap_top,
+                    max(5, body_right - body_left - 1),
+                    max(4, bottom_y - strap_top + 1),
+                )
             else:
                 shoulder_half = actor_shoulder_half
                 waist_y = top_y + max(1, (bottom_y - top_y) // 2)
@@ -6476,11 +6602,11 @@ class PygameView:
                 ]
                 self.pygame.draw.polygon(overlay, outline, [(bx + 1, by + 1) for bx, by in bodice])
                 self.pygame.draw.polygon(overlay, fill, bodice)
-                if garment in {"camisole", "tank_undershirt"}:
+                if garment == "tank_undershirt":
                     strap_top = max(shoulder_y, top_y - max(1, px // 12))
                     for sx in (mid_x - shoulder_half + 1, mid_x + shoulder_half - 1):
                         self.pygame.draw.line(overlay, edge, (sx, top_y), (sx, strap_top), stroke_w)
-                neck_depth = max(2, px // (8 if garment == "camisole" else 11))
+                neck_depth = max(2, px // 11)
                 self.pygame.draw.arc(
                     overlay,
                     shade,
@@ -6489,6 +6615,11 @@ class PygameView:
                     3.1,
                     stroke_w,
                 )
+                base_rect = self.pygame.Rect(body_left, top_y, max(6, body_right - body_left), max(4, bottom_y - top_y))
+            basewear_clip = self.pygame.mask.from_surface(overlay, threshold=1).to_surface(
+                setcolor=(255, 255, 255, 255),
+                unsetcolor=(0, 0, 0, 0),
+            )
             if "lacy" in detail or "scallop" in detail:
                 scallop_y = base_rect.bottom - 1
                 for scallop_x in range(base_rect.left + 1, base_rect.right, max(2, px // 12)):
@@ -6505,12 +6636,12 @@ class PygameView:
 
         elif kind == "base_bottom":
             high_waist = garment == "high_waist_panties"
-            waist_y = hip_y - max(4 if high_waist else 2, px // (6 if high_waist else 10))
-            lower_y = min(foot_y - 2, waist_y + max(4, px // 5))
             fit_inset = max(1, px // 32)
-            half = max(2, min(max(3, px // 7), actor_hip_half - fit_inset))
-            base_rect = self.pygame.Rect(mid_x - half, waist_y, half * 2, max(4, lower_y - waist_y))
-            if garment in {"boxers", "boxer_briefs", "boyshorts"}:
+            half = max(2, min(max(3, px // 6), actor_hip_half - fit_inset))
+            waist_y = hip_y - max(2, px // 12)
+            lower_y = min(foot_y - 3, hip_y + max(2, px // 12))
+            base_rect = self.pygame.Rect(mid_x - half, waist_y, half * 2 + 1, max(3, lower_y - waist_y + 1))
+            if garment in {"boxers", "boxer_briefs"}:
                 leg_h = max(3, px // (6 if garment == "boxers" else 7))
                 leg_w = max(3, px // 8)
                 gap = max(1, px // 30)
@@ -6522,13 +6653,64 @@ class PygameView:
                     self.pygame.draw.rect(overlay, outline, leg.move(1, 1), border_radius=max(1, px // 30))
                     self.pygame.draw.rect(overlay, fill, leg, border_radius=max(1, px // 30))
                 base_rect = self.pygame.Rect(waistband.left, waistband.top, waistband.w, leg_h + waistband.h)
+            elif garment == "boyshorts":
+                gap = max(1, px // 24)
+                waistband_y = hip_y - max(2, px // 11)
+                inner_left = mid_x - gap
+                left_leg = [
+                    (mid_x - half, waistband_y),
+                    (inner_left, waistband_y),
+                    (inner_left, hip_y + max(1, px // 18)),
+                    (mid_x - half + 1, hip_y + max(1, px // 18)),
+                ]
+                right_leg = [(2 * mid_x - point_x, point_y) for point_x, point_y in reversed(left_leg)]
+                self.pygame.draw.polygon(overlay, fill, left_leg)
+                self.pygame.draw.polygon(overlay, fill, right_leg)
+                self.pygame.draw.line(overlay, edge, left_leg[0], left_leg[1], stroke_w)
+                self.pygame.draw.line(overlay, edge, right_leg[-1], right_leg[-2], stroke_w)
+                base_rect = self.pygame.Rect(mid_x - half, waistband_y, half * 2 + 1, max(3, hip_y - waistband_y + max(2, px // 18)))
             elif garment == "thong":
-                waistband = self.pygame.Rect(mid_x - half, waist_y, half * 2, max(2, px // 16))
-                self.pygame.draw.rect(overlay, fill, waistband, border_radius=max(1, px // 30))
-                thong = [(waistband.left + 1, waistband.bottom), (waistband.right - 1, waistband.bottom), (mid_x, lower_y)]
-                self.pygame.draw.polygon(overlay, outline, [(tx + 1, ty + 1) for tx, ty in thong])
-                self.pygame.draw.polygon(overlay, fill, thong)
-                base_rect = self.pygame.Rect(waistband.left, waist_y, waistband.w, max(3, lower_y - waist_y))
+                panel_y = hip_y
+                for side in (-1, 1):
+                    outer_x = mid_x + side * half
+                    self.pygame.draw.line(overlay, fill, (outer_x, waist_y), (mid_x + side, panel_y), stroke_w)
+                    if "strappy" in detail:
+                        self.pygame.draw.line(overlay, edge, (outer_x, waist_y - max(1, px // 24)), (mid_x + side, panel_y - 1), stroke_w)
+                self.pygame.draw.polygon(overlay, fill, [(mid_x - 1, panel_y), (mid_x + 1, panel_y), (mid_x, lower_y)])
+            elif garment in {"bikini_panties", "cheeky_panties"}:
+                panel_half = max(2, px // (12 if garment == "cheeky_panties" else 16))
+                panel_y = hip_y - (1 if garment == "cheeky_panties" else 0)
+                for side in (-1, 1):
+                    outer_x = mid_x + side * half
+                    inner_x = mid_x + side * panel_half
+                    self.pygame.draw.line(overlay, fill, (outer_x, waist_y), (inner_x, panel_y), stroke_w)
+                    if "strappy" in detail:
+                        self.pygame.draw.line(overlay, edge, (outer_x, waist_y - max(1, px // 24)), (inner_x, panel_y - 1), stroke_w)
+                panel = [
+                    (mid_x - panel_half, panel_y),
+                    (mid_x + panel_half, panel_y),
+                    (mid_x + 1, lower_y),
+                    (mid_x - 1, lower_y),
+                ]
+                self.pygame.draw.polygon(overlay, fill, panel)
+                if garment == "cheeky_panties":
+                    self.pygame.draw.line(overlay, edge, panel[0], panel[1], stroke_w)
+            elif high_waist:
+                high_y = hip_y - max(4, px // 6)
+                high_half = max(2, min(half - 1, min(actor_shoulder_half, actor_hip_half) - max(1, px // 18)))
+                fitted = [
+                    (mid_x - high_half, high_y),
+                    (mid_x + high_half, high_y),
+                    (mid_x + half, waist_y),
+                    (mid_x + max(2, px // 14), hip_y),
+                    (mid_x + 1, lower_y),
+                    (mid_x - 1, lower_y),
+                    (mid_x - max(2, px // 14), hip_y),
+                    (mid_x - half, waist_y),
+                ]
+                self.pygame.draw.polygon(overlay, fill, fitted)
+                self.pygame.draw.line(overlay, edge, fitted[0], fitted[1], stroke_w)
+                base_rect = self.pygame.Rect(mid_x - half, high_y, half * 2 + 1, max(4, lower_y - high_y + 1))
             else:
                 briefs = [
                     (mid_x - half, waist_y),
@@ -6539,6 +6721,10 @@ class PygameView:
                 self.pygame.draw.polygon(overlay, outline, [(bx + 1, by + 1) for bx, by in briefs])
                 self.pygame.draw.polygon(overlay, fill, briefs)
                 self.pygame.draw.line(overlay, edge, briefs[0], briefs[1], stroke_w)
+            basewear_clip = self.pygame.mask.from_surface(overlay, threshold=1).to_surface(
+                setcolor=(255, 255, 255, 255),
+                unsetcolor=(0, 0, 0, 0),
+            )
             if "contrast" in detail or "sporty" in detail or "ribbon" in detail:
                 self.pygame.draw.line(overlay, edge, (base_rect.left, base_rect.top + 1), (base_rect.right - 1, base_rect.top + 1), max(1, stroke_w + 1))
             if "lacy" in detail or "scallop" in detail:
@@ -6756,6 +6942,10 @@ class PygameView:
                 radius=max(1, px // 36),
             )
 
+        if basewear_clip is not None:
+            # Lace, finish, prints, and embroidery may decorate the cut, but
+            # they must not silently fill its negative space back in.
+            overlay.blit(basewear_clip, (0, 0), special_flags=self.pygame.BLEND_RGBA_MULT)
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_actor_identity_rune_overlay(self, x, y, color=None, attrs=0, *, effects=()):
