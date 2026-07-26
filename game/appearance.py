@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Mapping, Tuple
 
@@ -2030,6 +2031,77 @@ class AppearanceManager:
     def __init__(self, sim, catalog=None):
         self.sim = sim
         self.catalog = catalog or get_runtime_semantic_catalog()
+        self._tile_snapshot_cache = OrderedDict()
+        self._tile_snapshot_cache_limit = 32_768
+        self._tile_snapshot_cache_hits = 0
+        self._tile_snapshot_cache_misses = 0
+
+    def _tile_snapshot_context_key(self, tile, x, y, z, revealed_building_id):
+        x = int(x)
+        y = int(y)
+        z = int(z)
+        tilemap = getattr(self.sim, "tilemap", None)
+        structure = self.sim.structure_at(x, y, z) if hasattr(self.sim, "structure_at") else None
+        building_id = building_id_from_structure(structure)
+        revealed = bool(building_id) and building_id == str(revealed_building_id or "")
+
+        detail = ""
+        area_type = ""
+        district_type = ""
+        if hasattr(self.sim, "detail_for_xy"):
+            detail = str(self.sim.detail_for_xy(x, y) or "")
+        if hasattr(self.sim, "chunk_coords"):
+            cx, cy = self.sim.chunk_coords(x, y)
+            loaded = getattr(getattr(self.sim, "world", None), "loaded_chunks", {}).get((cx, cy), {})
+            district = loaded.get("chunk", {}).get("district", {}) if isinstance(loaded, dict) else {}
+            if isinstance(district, dict):
+                area_type = str(district.get("area_type", "") or "").strip().lower()
+                district_type = str(district.get("district_type", "") or "").strip().lower()
+
+        glyph = str(getattr(tile, "glyph", "") or "")[:1] if tile is not None else ""
+        links = (False, False)
+        if glyph in {":", "S", "E"}:
+            links = floor_link_flags(self.sim, x, y, z)
+
+        aperture_kind = ""
+        if glyph == "+":
+            prop = property_covering(self.sim, x, y, z)
+            aperture = property_aperture_at(prop, x, y, z)
+            if isinstance(aperture, Mapping):
+                aperture_kind = str(aperture.get("kind", "door") or "door").strip().lower()
+
+        structure_token = ("", "", "")
+        if building_id and isinstance(structure, dict):
+            structure_token = (
+                str(building_id),
+                _building_roof_style(structure),
+                _building_material_style(structure),
+            )
+        return (
+            x,
+            y,
+            z,
+            tile,
+            int(getattr(tile, "visual_revision", 0) or 0) if tile is not None else 0,
+            structure_token,
+            revealed,
+            detail,
+            area_type,
+            district_type,
+            links,
+            aperture_kind,
+        )
+
+    def clear_tile_snapshot_cache(self):
+        self._tile_snapshot_cache.clear()
+
+    def tile_snapshot_cache_stats(self):
+        return {
+            "size": len(self._tile_snapshot_cache),
+            "limit": int(self._tile_snapshot_cache_limit),
+            "hits": int(self._tile_snapshot_cache_hits),
+            "misses": int(self._tile_snapshot_cache_misses),
+        }
 
     def entity(self, eid, *, player_eid=None):
         render = self.sim.ecs.get(Render).get(eid)
@@ -2135,7 +2207,15 @@ class AppearanceManager:
         )
 
     def tile(self, tile, x, y, z=0, *, revealed_building_id=""):
-        return tile_render_snapshot(
+        cache_key = self._tile_snapshot_context_key(tile, x, y, z, revealed_building_id)
+        cached = self._tile_snapshot_cache.get(cache_key)
+        if cached is not None:
+            self._tile_snapshot_cache.move_to_end(cache_key)
+            self._tile_snapshot_cache_hits += 1
+            return cached
+
+        self._tile_snapshot_cache_misses += 1
+        snapshot = tile_render_snapshot(
             self.sim,
             tile,
             x,
@@ -2144,6 +2224,11 @@ class AppearanceManager:
             revealed_building_id=revealed_building_id,
             catalog=self.catalog,
         )
+        self._tile_snapshot_cache[cache_key] = snapshot
+        self._tile_snapshot_cache.move_to_end(cache_key)
+        while len(self._tile_snapshot_cache) > self._tile_snapshot_cache_limit:
+            self._tile_snapshot_cache.popitem(last=False)
+        return snapshot
 
     def property(self, prop, *, active_quest_target=None):
         return property_render_snapshot(

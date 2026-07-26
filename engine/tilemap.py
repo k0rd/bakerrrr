@@ -46,6 +46,10 @@ class Tile:
         self.overlays = tuple(overlay for overlay in (overlays or ()) if isinstance(overlay, dict))
         self.attrs = int(attrs or 0)
         self.visible = bool(visible)
+        # Monotonic, persistence-safe appearance generation.  Render caches can
+        # retain a tile snapshot while this value is unchanged without storing
+        # callbacks or runtime renderer objects on the tile itself.
+        self.visual_revision = 0
 
     def set_appearance(
         self,
@@ -60,32 +64,63 @@ class Tile:
         attrs=_UNCHANGED,
         visible=_UNCHANGED,
     ):
+        changed = False
+
         if glyph is not _UNCHANGED:
-            self.glyph = str(glyph)[:1] or "."
-        if color is not _UNCHANGED:
+            value = str(glyph)[:1] or "."
+            if value != self.glyph:
+                self.glyph = value
+                changed = True
+        if color is not _UNCHANGED and color != self.color:
             self.color = color
+            changed = True
         if semantic_id is not _UNCHANGED:
             semantic_text = str(semantic_id).strip()
-            self.semantic_id = semantic_text or None
+            value = semantic_text or None
+            if value != self.semantic_id:
+                self.semantic_id = value
+                changed = True
         if layer is not _UNCHANGED:
             layer_text = str(layer).strip().lower()
-            self.layer = layer_text or None
+            value = layer_text or None
+            if value != self.layer:
+                self.layer = value
+                changed = True
         if priority is not _UNCHANGED:
-            self.priority = None if priority is None else int(priority)
+            value = None if priority is None else int(priority)
+            if value != self.priority:
+                self.priority = value
+                changed = True
         if effects is not _UNCHANGED:
-            self.effects = tuple(
+            value = tuple(
                 dict.fromkeys(
                     str(effect).strip().lower()
                     for effect in effects
                     if str(effect).strip()
                 )
             )
+            if value != self.effects:
+                self.effects = value
+                changed = True
         if overlays is not _UNCHANGED:
-            self.overlays = tuple(overlay for overlay in overlays if isinstance(overlay, dict))
+            value = tuple(overlay for overlay in overlays if isinstance(overlay, dict))
+            if value != self.overlays:
+                self.overlays = value
+                changed = True
         if attrs is not _UNCHANGED:
-            self.attrs = int(attrs or 0)
+            value = int(attrs or 0)
+            if value != self.attrs:
+                self.attrs = value
+                changed = True
         if visible is not _UNCHANGED:
-            self.visible = bool(visible)
+            value = bool(visible)
+            if value != self.visible:
+                self.visible = value
+                changed = True
+
+        if changed:
+            self.visual_revision = int(getattr(self, "visual_revision", 0) or 0) + 1
+        return changed
 
 
 class TileMap:
@@ -114,6 +149,10 @@ class TileMap:
         self.visibility_global_revision = 0
         self.visibility_chunk_size = 16
         self.visibility_chunk_revisions = {}
+        self.visual_revision = 0
+        self.visual_global_revision = 0
+        self.visual_chunk_size = 16
+        self.visual_chunk_revisions = {}
         # floor transition index:
         # maps (x,y,z,dz) -> {"x":tx, "y":ty, "z":tz, "kind":kind}
         self.floor_links = {}
@@ -153,8 +192,50 @@ class TileMap:
         previous = floor.get(key)
         previous_transparent = True if previous is None else bool(getattr(previous, "transparent", True))
         floor[key] = tile
+        self.mark_visual_changed(x, y, z)
         if previous_transparent != bool(getattr(tile, "transparent", True)):
             self.mark_visibility_changed(x, y, z)
+
+    def mark_visual_changed(self, x=None, y=None, z=0):
+        """Advance render-only revisions without disturbing FOV caches."""
+
+        self.visual_revision = int(getattr(self, "visual_revision", 0) or 0) + 1
+        if x is None or y is None:
+            self.visual_global_revision = self.visual_revision
+            return self.visual_revision
+        try:
+            x = int(x)
+            y = int(y)
+            z = int(z)
+            size = max(1, int(getattr(self, "visual_chunk_size", 16) or 16))
+        except (TypeError, ValueError):
+            self.visual_global_revision = self.visual_revision
+            return self.visual_revision
+
+        chunk_revisions = getattr(self, "visual_chunk_revisions", None)
+        if not isinstance(chunk_revisions, dict):
+            chunk_revisions = {}
+            self.visual_chunk_revisions = chunk_revisions
+        chunk_revisions[(x // size, y // size, z)] = self.visual_revision
+        return self.visual_revision
+
+    def visual_revision_at(self, x, y, z=0):
+        try:
+            tile = self.tile_at(int(x), int(y), int(z))
+        except (TypeError, ValueError):
+            return 0
+        return int(getattr(tile, "visual_revision", 0) or 0) if tile is not None else 0
+
+    def set_tile_appearance(self, x, y, z=0, **appearance):
+        """Mutate a tile appearance and notify retained render caches once."""
+
+        tile = self.tile_at(x, y, z)
+        if tile is None or not hasattr(tile, "set_appearance"):
+            return False
+        changed = bool(tile.set_appearance(**appearance))
+        if changed:
+            self.mark_visual_changed(x, y, z)
+        return changed
 
     def mark_visibility_changed(self, x=None, y=None, z=0):
         self.visibility_revision = int(getattr(self, "visibility_revision", 0) or 0) + 1
@@ -222,6 +303,8 @@ class TileMap:
             "z": from_z,
             "kind": kind,
         }
+        self.mark_visual_changed(x, y, from_z)
+        self.mark_visual_changed(x, y, to_z)
 
     def floor_transition(self, x, y, z, dz):
         return self.floor_links.get((x, y, z, dz))

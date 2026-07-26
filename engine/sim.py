@@ -259,6 +259,13 @@ class Simulation:
         if not isinstance(getattr(tilemap, "visibility_chunk_revisions", None), dict):
             tilemap.visibility_chunk_revisions = {}
         tilemap.visibility_chunk_size = max(1, int(getattr(self, "chunk_size", 16) or 16))
+        if not hasattr(tilemap, "visual_revision"):
+            tilemap.visual_revision = 0
+        if not hasattr(tilemap, "visual_global_revision"):
+            tilemap.visual_global_revision = int(getattr(tilemap, "visual_revision", 0) or 0)
+        if not isinstance(getattr(tilemap, "visual_chunk_revisions", None), dict):
+            tilemap.visual_chunk_revisions = {}
+        tilemap.visual_chunk_size = max(1, int(getattr(self, "chunk_size", 16) or 16))
         tilemap.on_add_entity = self._on_tilemap_add_entity
         tilemap.on_move_entity = self._on_tilemap_move_entity
         tilemap.on_remove_entity = self._on_tilemap_remove_entity
@@ -656,7 +663,10 @@ class Simulation:
             visibility_changed = not bool(getattr(tile, "transparent", True))
             tile.walkable = True
             tile.transparent = True
-            tile.set_appearance(
+            self.tilemap.set_tile_appearance(
+                x,
+                y,
+                z,
                 glyph="/",
                 color="feature_breach",
                 semantic_id="feature_breach",
@@ -669,7 +679,10 @@ class Simulation:
         visibility_changed = bool(getattr(tile, "transparent", True)) != bool(is_open)
         tile.walkable = bool(is_open)
         tile.transparent = bool(is_open)
-        tile.set_appearance(
+        self.tilemap.set_tile_appearance(
+            x,
+            y,
+            z,
             glyph="'" if is_open else "+",
             color="feature_door",
             semantic_id="feature_door",
@@ -2429,7 +2442,13 @@ class Simulation:
                 if self.structure_at(x, y, 0) is not None:
                     continue
                 if hasattr(tile, "set_appearance"):
-                    tile.set_appearance(color=color, semantic_id=semantic_id)
+                    self.tilemap.set_tile_appearance(
+                        x,
+                        y,
+                        0,
+                        color=color,
+                        semantic_id=semantic_id,
+                    )
                 else:
                     self.tilemap.set_tile(
                         x,

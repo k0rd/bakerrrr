@@ -500,7 +500,7 @@ def _prompt_player_gender_identity_view(
         detail = "This save predates player identity metadata. Choose how NPCs should address you."
         subtitle = "Resume identity upgrade"
     else:
-        detail = "Choose the identity NPCs use for pronouns and social address. Assigned sex is rolled separately."
+        detail = "Choose the identity NPCs use for pronouns and social address."
         subtitle = "Street-level run identity"
     if hasattr(view, "prompt_choice"):
         return view.prompt_choice(

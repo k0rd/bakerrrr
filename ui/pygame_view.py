@@ -3,7 +3,7 @@ import math
 import os
 import sys
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from pathlib import Path
 
 from game.appearance_palette import pygame_palette_entries
@@ -184,6 +184,17 @@ class PygameView:
         self._marker_font = pygame.font.SysFont("DejaVu Sans Mono", marker_font_px, bold=True)
         token_font_px = max(7, int(round(self.cell_px * 0.32)))
         self._token_font = pygame.font.SysFont("DejaVu Sans Mono", token_font_px, bold=True)
+        self._font_surface_cache = OrderedDict()
+        self._font_surface_cache_limit = 4_096
+        self._font_surface_cache_hits = 0
+        self._font_surface_cache_misses = 0
+        self._font_measure_cache = OrderedDict()
+        self._font_measure_cache_limit = 8_192
+        self._procedural_surface_cache = OrderedDict()
+        self._procedural_surface_cache_limit = 8_192
+        self._procedural_surface_cache_hits = 0
+        self._procedural_surface_cache_misses = 0
+        self._procedural_cache_source_position = None
         self.key_queue = deque()
         self.input_queue = deque()
         self._controller_module = None
@@ -1317,8 +1328,10 @@ class PygameView:
                 stroke_w,
             )
 
-    @staticmethod
-    def _tile_visual_seed(x, y, salt=""):
+    def _tile_visual_seed(self, x, y, salt=""):
+        source = self._procedural_cache_source_position
+        if isinstance(source, tuple) and len(source) >= 2:
+            x, y = source[0], source[1]
         value = (int(x) * 73856093) ^ (int(y) * 19349663)
         for char in str(salt or ""):
             value = ((value * 131) + ord(char)) & 0x7FFFFFFF
@@ -7120,6 +7133,9 @@ class PygameView:
             mod = max(1, int(mod))
         except (TypeError, ValueError):
             mod = 4
+        source = self._procedural_cache_source_position
+        if isinstance(source, tuple) and len(source) >= 2:
+            x, y = source[0], source[1]
         ix = int(x)
         iy = int(y)
         return ((ix * 17) + (iy * 31) + ((ix + iy) * 7)) % mod
@@ -7722,6 +7738,9 @@ class PygameView:
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _wire_variant(self, x, y, kind=""):
+        source = self._procedural_cache_source_position
+        if isinstance(source, tuple) and len(source) >= 2:
+            x, y = source[0], source[1]
         total = (int(x) * 37) + (int(y) * 73)
         for ch in str(kind or ""):
             total = (total * 31 + ord(ch)) & 0xFFFFFFFF
@@ -8409,6 +8428,90 @@ class PygameView:
             return "elevator"
         return ""
 
+    def _draw_cached_procedural_shape(
+        self,
+        x,
+        y,
+        ch,
+        color=None,
+        color_word=None,
+        attrs=0,
+        semantic_id=None,
+        effects=None,
+        light_tint=None,
+    ):
+        """Resolve one procedural cell once, then retain its alpha surface."""
+
+        x = int(x)
+        y = int(y)
+        normalized_tint = self._normalize_light_tint(light_tint)
+        cache_key = (
+            x,
+            y,
+            str(ch)[:1] or " ",
+            self._render_cache_key_value(color),
+            str(color_word or "").strip().lower(),
+            int(attrs or 0),
+            str(semantic_id or "").strip().lower(),
+            self._render_cache_key_value(tuple(effects or ())),
+            self._render_cache_key_value(normalized_tint),
+        )
+        cached = self._procedural_surface_cache.get(cache_key)
+        if cached is not None:
+            self._procedural_surface_cache.move_to_end(cache_key)
+            self._procedural_surface_cache_hits += 1
+            shape, surface = cached
+            if shape and surface is not None:
+                self.surface.blit(surface, (x * self.cell_px, y * self.cell_px))
+                hook = getattr(self, "_on_procedural_cache_hit", None)
+                if callable(hook):
+                    hook(
+                        shape,
+                        x,
+                        y,
+                        ch,
+                        color=color,
+                        color_word=color_word,
+                        attrs=attrs,
+                        semantic_id=semantic_id,
+                        effects=effects,
+                        light_tint=light_tint,
+                    )
+            return shape
+
+        self._procedural_surface_cache_misses += 1
+        target_surface = self.surface
+        previous_source = self._procedural_cache_source_position
+        capture = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+        self.surface = capture
+        self._procedural_cache_source_position = (x, y)
+        try:
+            shape = self._draw_procedural_shape(
+                0,
+                0,
+                ch,
+                color=color,
+                color_word=color_word,
+                attrs=attrs,
+                semantic_id=semantic_id,
+                effects=effects,
+                light_tint=light_tint,
+            )
+        finally:
+            self.surface = target_surface
+            self._procedural_cache_source_position = previous_source
+
+        cached_surface = capture if shape else None
+        self._bounded_cache_store(
+            self._procedural_surface_cache,
+            cache_key,
+            (shape, cached_surface),
+            self._procedural_surface_cache_limit,
+        )
+        if shape:
+            target_surface.blit(capture, (x * self.cell_px, y * self.cell_px))
+        return shape
+
     def _color_value(self, color):
         if color is None:
             return self.palette["default"]
@@ -8476,6 +8579,95 @@ class PygameView:
             self._animation_tick = int(animation_tick)
         except (TypeError, ValueError):
             self._animation_tick = 0
+
+    @staticmethod
+    def _render_cache_key_value(value):
+        if isinstance(value, dict):
+            return tuple(
+                sorted(
+                    (str(key), PygameView._render_cache_key_value(item))
+                    for key, item in value.items()
+                )
+            )
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return tuple(PygameView._render_cache_key_value(item) for item in value)
+        try:
+            hash(value)
+        except TypeError:
+            return repr(value)
+        return value
+
+    @staticmethod
+    def _bounded_cache_store(cache, key, value, limit):
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > max(1, int(limit)):
+            cache.popitem(last=False)
+
+    def _font_surface(self, font, text, fg, bg=None):
+        text = str(text or "")
+        fg_key = tuple(int(channel) for channel in fg)
+        bg_key = None if bg is None else tuple(int(channel) for channel in bg)
+        key = (id(font), text, fg_key, bg_key)
+        cached = self._font_surface_cache.get(key)
+        if cached is not None:
+            self._font_surface_cache.move_to_end(key)
+            self._font_surface_cache_hits += 1
+            return cached
+
+        self._font_surface_cache_misses += 1
+        if bg is None:
+            surface = font.render(text, True, fg)
+        else:
+            surface = font.render(text, True, fg, bg)
+        self._bounded_cache_store(
+            self._font_surface_cache,
+            key,
+            surface,
+            self._font_surface_cache_limit,
+        )
+        return surface
+
+    def _font_text_width(self, font, text):
+        text = str(text or "")
+        key = (id(font), text)
+        cached = self._font_measure_cache.get(key)
+        if cached is not None:
+            self._font_measure_cache.move_to_end(key)
+            return int(cached)
+        width = int(font.size(text)[0])
+        self._bounded_cache_store(
+            self._font_measure_cache,
+            key,
+            width,
+            self._font_measure_cache_limit,
+        )
+        return width
+
+    def clear_render_caches(self):
+        self._font_surface_cache.clear()
+        self._font_measure_cache.clear()
+        self._procedural_surface_cache.clear()
+
+    def render_cache_stats(self):
+        return {
+            "font": {
+                "size": len(self._font_surface_cache),
+                "limit": int(self._font_surface_cache_limit),
+                "hits": int(self._font_surface_cache_hits),
+                "misses": int(self._font_surface_cache_misses),
+            },
+            "font_measure": {
+                "size": len(self._font_measure_cache),
+                "limit": int(self._font_measure_cache_limit),
+            },
+            "procedural": {
+                "size": len(self._procedural_surface_cache),
+                "limit": int(self._procedural_surface_cache_limit),
+                "hits": int(self._procedural_surface_cache_hits),
+                "misses": int(self._procedural_surface_cache_misses),
+            },
+        }
 
     def _wants_layered_draw(self, layer=None, priority=None):
         return layer is not None or priority is not None
@@ -8612,7 +8804,7 @@ class PygameView:
             color_word = overlay.get("color_word")
             semantic_id = overlay.get("semantic_id")
             overlay_attrs = int(attrs or 0) | int(overlay.get("attrs", 0) or 0)
-            if self._draw_procedural_shape(
+            if self._draw_cached_procedural_shape(
                 x,
                 y,
                 glyph,
@@ -8645,7 +8837,7 @@ class PygameView:
         previous_light_tint = self._active_surface_light_tint
         self._active_surface_light_tint = self._normalize_light_tint(light_tint)
         try:
-            if self._draw_procedural_shape(x, y, text[0], color=color, color_word=color_word, attrs=attrs, semantic_id=semantic_id, effects=effects, light_tint=light_tint):
+            if self._draw_cached_procedural_shape(x, y, text[0], color=color, color_word=color_word, attrs=attrs, semantic_id=semantic_id, effects=effects, light_tint=light_tint):
                 self._draw_overlay_stack(x, y, overlays, attrs=attrs, light_tint=light_tint)
                 return
             preserve_background = self._preserve_background_for_color(color)
@@ -8676,7 +8868,7 @@ class PygameView:
         cell_y = int(y) * self.cell_px
         if not preserve_background or bg != (0, 0, 0):
             self.surface.fill(bg, (cell_x, cell_y, self.cell_px, self.cell_px))
-        glyph = self.font.render(str(ch)[:1] or " ", True, fg)
+        glyph = self._font_surface(self.font, str(ch)[:1] or " ", fg)
         self.surface.blit(glyph, (cell_x, cell_y))
 
     def _normalize_light_tint(self, tint):
@@ -8780,7 +8972,7 @@ class PygameView:
     def text_wrap_width(self, cell_width):
         cell_width = max(1, int(cell_width))
         font = self._ui_font
-        char_px = max(1, int(font.size("M")[0]))
+        char_px = max(1, self._font_text_width(font, "M"))
         return max(1, (cell_width * self.cell_px) // char_px)
 
     def _fit_text_to_pixel_width(self, text, font, max_pixel_width):
@@ -8788,14 +8980,14 @@ class PygameView:
         max_pixel_width = max(0, int(max_pixel_width))
         if not text or max_pixel_width <= 0:
             return ""
-        if font.size(text)[0] <= max_pixel_width:
+        if self._font_text_width(font, text) <= max_pixel_width:
             return text
 
         low = 0
         high = len(text)
         while low < high:
             mid = (low + high + 1) // 2
-            if font.size(text[:mid])[0] <= max_pixel_width:
+            if self._font_text_width(font, text[:mid]) <= max_pixel_width:
                 low = mid
             else:
                 high = mid - 1
@@ -8815,7 +9007,7 @@ class PygameView:
                 continue
             remaining = line
             while remaining:
-                if font.size(remaining)[0] <= max_pixel_width:
+                if self._font_text_width(font, remaining) <= max_pixel_width:
                     wrapped.append(remaining)
                     break
                 words = remaining.split()
@@ -8823,7 +9015,7 @@ class PygameView:
                 consumed_words = 0
                 for idx, word in enumerate(words):
                     proposed = word if not candidate else f"{candidate} {word}"
-                    if font.size(proposed)[0] <= max_pixel_width:
+                    if self._font_text_width(font, proposed) <= max_pixel_width:
                         candidate = proposed
                         consumed_words = idx + 1
                     else:
@@ -8867,10 +9059,7 @@ class PygameView:
             fg = (fg[0] // 2, fg[1] // 2, fg[2] // 2)
 
         font = self._ui_font_for_attrs(attrs)
-        if bg is None:
-            surface = font.render(text, True, fg)
-        else:
-            surface = font.render(text, True, fg, bg)
+        surface = self._font_surface(font, text, fg, bg)
 
         cell_y = int(y) * self.cell_px
         dest_y = cell_y + max(0, (self.cell_px - surface.get_height()) // 2)
@@ -9011,10 +9200,7 @@ class PygameView:
                 min(255, int(fg[2] * 1.2)),
             )
 
-        if bg is None:
-            surface = self.font.render(text, True, fg)
-        else:
-            surface = self.font.render(text, True, fg, bg)
+        surface = self._font_surface(self.font, text, fg, bg)
         cell_y = int(y) * self.cell_px
         dest_y = cell_y + max(0, (self.cell_px - surface.get_height()) // 2)
         self.surface.blit(surface, (int(pixel_x), dest_y))

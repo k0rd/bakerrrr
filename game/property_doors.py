@@ -109,7 +109,10 @@ def _set_door_open_state(sim, x, y, z, is_open):
     visibility_changed = bool(getattr(tile, "transparent", True)) != bool(is_open)
     tile.walkable = bool(is_open)
     tile.transparent = bool(is_open)
-    tile.set_appearance(
+    sim.tilemap.set_tile_appearance(
+        x,
+        y,
+        z,
         glyph="'" if is_open else "+",
         color="feature_door",
         semantic_id="feature_door",
