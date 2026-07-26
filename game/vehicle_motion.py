@@ -6,8 +6,8 @@ import math
 
 from engine.events import Event
 
-from game.components import Collider, Position, Render, VehicleState, Vitality
-from game.movement_runtime import _entity_blocks, try_move_entity
+from game.components import Collider, DroneState, Position, Render, VehicleState, Vitality
+from game.movement_runtime import try_move_entity
 from game.property_runtime import (
     property_aperture_at as _property_aperture_at,
     property_enclosing_structure as _property_enclosing_structure,
@@ -352,6 +352,33 @@ def _vehicle_structural_surface(sim, x, y, z=0):
     return prop, aperture, str(kind or ""), bool(broken)
 
 
+def _vehicle_entity_collision_target(sim, moving_eid, x, y, z=0):
+    """Find a solid actor or deployed drone without making drones block feet."""
+
+    colliders = sim.ecs.get(Collider)
+    drone_states = sim.ecs.get(DroneState)
+    candidates = []
+    for other_eid in tuple(sim.tilemap.entities_at(int(x), int(y), int(z)) or ()):
+        if other_eid == moving_eid:
+            continue
+        collider = colliders.get(other_eid)
+        blocks = bool(collider is not None and getattr(collider, "blocks", False))
+        drone_state = drone_states.get(other_eid)
+        deployed_drone = bool(
+            drone_state is not None
+            and str(getattr(drone_state, "mode", "") or "").strip().lower() == "deployed"
+        )
+        if not blocks and not deployed_drone:
+            continue
+        # A real blocking actor takes the impact before a drone sharing its tile.
+        priority = 1 if deployed_drone else 0
+        candidates.append((priority, int(other_eid), other_eid))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (row[0], row[1]))
+    return candidates[0][2]
+
+
 def vehicle_local_block_reason(sim, eid, vehicle_prop, x, y, z=0, *, medium=None):
     x = int(x)
     y = int(y)
@@ -398,8 +425,8 @@ def vehicle_local_block_reason(sim, eid, vehicle_prop, x, y, z=0, *, medium=None
     if sim.structure_at(x, y, z) is not None and not structure_broken:
         return "property_tile"
 
-    blocked, blocker_eid = _entity_blocks(sim, eid, x, y, z)
-    if blocked:
+    blocker_eid = _vehicle_entity_collision_target(sim, eid, x, y, z)
+    if blocker_eid is not None:
         return f"blocked_entity:{blocker_eid}"
     return None
 
@@ -441,6 +468,28 @@ def _vehicle_collision_damage(vehicle_prop, speed):
 
 
 def _apply_vehicle_collision_damage(sim, driver_eid, target_eid, vehicle_prop, speed, x, y, z):
+    drone_state = sim.ecs.get(DroneState).get(target_eid)
+    if (
+        drone_state is not None
+        and str(getattr(drone_state, "mode", "") or "").strip().lower() == "deployed"
+    ):
+        # Lazy import keeps vehicle durability available to the shared physical
+        # property seam without forming a module import cycle.
+        from game.drone_system import apply_deployed_drone_collision_damage
+
+        result = apply_deployed_drone_collision_damage(
+            sim,
+            target_eid,
+            _vehicle_collision_damage(vehicle_prop, speed),
+            source_eid=driver_eid,
+            damage_kind="vehicle_collision",
+            weapon_id="vehicle",
+            x=int(x),
+            y=int(y),
+            z=int(z),
+        )
+        return int(result.get("damage", 0) or 0), bool(result.get("destroyed"))
+
     vitalities = sim.ecs.get(Vitality)
     colliders = sim.ecs.get(Collider)
     renders = sim.ecs.get(Render)
@@ -915,13 +964,28 @@ def apply_vehicle_crash(
 def apply_vehicle_collision(sim, driver_eid, target_eid, vehicle_prop, speed, x, y, z):
     impact_speed = max(1, min(vehicle_top_speed(vehicle_prop), int(speed or 1)))
     wear_loss = 0 if impact_speed < 2 else 1 if impact_speed < 4 else 2
+    target_drone_state = sim.ecs.get(DroneState).get(target_eid)
+    target_is_drone = bool(
+        target_drone_state is not None
+        and str(getattr(target_drone_state, "mode", "") or "").strip().lower() == "deployed"
+    )
+    target_chassis = str(getattr(target_drone_state, "chassis_class", "") or "").strip().upper()
+    if target_is_drone:
+        chassis_wear = 1 if target_chassis in {"D", "E"} else 0
+        wear_loss = max(1, wear_loss + chassis_wear)
     durability_before, durability_after, durability_lost = apply_vehicle_durability_loss(
         sim,
         vehicle_prop,
         wear_loss,
         cause="vehicle_collision",
     )
-    target_name = _entity_display_name(sim, target_eid, title_case=False) or "someone"
+    target_name = (
+        f"{target_chassis}-class drone"
+        if target_is_drone and target_chassis
+        else "drone"
+        if target_is_drone
+        else _entity_display_name(sim, target_eid, title_case=False) or "someone"
+    )
     damage, downed = _apply_vehicle_collision_damage(sim, driver_eid, target_eid, vehicle_prop, impact_speed, x, y, z)
     sim.emit(Event(
         "vehicle_collision",
@@ -939,6 +1003,8 @@ def apply_vehicle_collision(sim, driver_eid, target_eid, vehicle_prop, speed, x,
         vehicle_broken=bool(durability_after <= 0),
         damage=damage,
         target_downed=downed,
+        target_kind="drone" if target_is_drone else "actor",
+        target_chassis=target_chassis or None,
         x=int(x),
         y=int(y),
         z=int(z),
@@ -953,7 +1019,15 @@ def apply_vehicle_collision(sim, driver_eid, target_eid, vehicle_prop, speed, x,
         cause="vehicle_collision",
         target_eid=target_eid,
     ))
-    if damage > 0:
+    target_owned_by_driver = bool(
+        target_is_drone
+        and driver_eid is not None
+        and driver_eid in {
+            getattr(target_drone_state, "owner_eid", None),
+            getattr(target_drone_state, "controller_eid", None),
+        }
+    )
+    if damage > 0 and not target_owned_by_driver:
         context = "unarmed_assault" if int(impact_speed) <= 1 else "melee_assault"
         score = 28 if int(impact_speed) <= 1 else 48
         _emit_action_offense_event(

@@ -15,6 +15,7 @@ from game.drone_runtime import (
     drone_deploy_tile_is_threshold,
     drone_deploy_tile_open,
     drone_destroyed_drop_resolution,
+    drone_hull_damage_absorb,
     drone_link_disruption_status,
     drone_state_controlled_by_actor,
     drone_state_has_capability,
@@ -30,6 +31,8 @@ from game.drone_procedures import (
 from game.drone_programs import active_drone_program, run_drone_program_step, sync_drone_program_metadata
 from game.drone_recon import apply_autonomous_mapping_knowledge
 from game.movement_runtime import try_move_entity
+from game.physical_target_runtime import apply_physical_property_damage, weapon_targetable_property_at
+from game.property_runtime import property_is_vehicle, vehicle_label, vehicle_profile_from_property
 from game.system_support.fire_runtime import fire_cell_state
 
 
@@ -41,6 +44,20 @@ DRONE_HOLD_CLEAR_OFFSETS = (
     (-1, 0),
 )
 DRONE_LOCAL_PATH_NODE_LIMIT = 128
+DRONE_VEHICLE_IMPACT_RAW_BY_CLASS = {
+    "A": 7,
+    "B": 11,
+    "C": 16,
+    "D": 22,
+    "E": 30,
+}
+DRONE_SELF_IMPACT_RAW_BY_CLASS = {
+    "A": 12,
+    "B": 11,
+    "C": 10,
+    "D": 9,
+    "E": 8,
+}
 
 
 def _int(value, default=0):
@@ -65,6 +82,24 @@ def _deployed_drone_state(sim, drone_eid):
     if str(getattr(state, "mode", "") or "").strip().lower() != "deployed":
         return None
     return state
+
+
+def _vehicle_property_at(sim, x, y, z=0):
+    prop = weapon_targetable_property_at(sim, int(x), int(y), int(z))
+    return prop if property_is_vehicle(prop) else None
+
+
+def _drone_vehicle_impact_raw(state):
+    chassis_class = str(getattr(state, "chassis_class", "") or "").strip().upper()
+    return int(DRONE_VEHICLE_IMPACT_RAW_BY_CLASS.get(chassis_class, 12))
+
+
+def _drone_self_impact_raw(state, vehicle_prop):
+    chassis_class = str(getattr(state, "chassis_class", "") or "").strip().upper()
+    profile = vehicle_profile_from_property(vehicle_prop) or {}
+    power = max(1, min(10, _int(profile.get("power"), 5)))
+    durability = max(0, min(10, _int(profile.get("durability"), 5)))
+    return int(DRONE_SELF_IMPACT_RAW_BY_CLASS.get(chassis_class, 10) + (power // 2) + (durability // 3))
 
 
 def _range_anchor(sim, state):
@@ -93,6 +128,8 @@ def _drone_path_cell_open(sim, drone_eid, state, x, y, z):
     if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
         return False
     if drone_knows_armed_mechanical_device_at(sim, drone_eid, int(x), int(y), int(z)):
+        return False
+    if _vehicle_property_at(sim, int(x), int(y), int(z)) is not None:
         return False
     for other_eid in tuple(sim.tilemap.entities_at(int(x), int(y), int(z)) or ()):
         if other_eid == drone_eid:
@@ -150,6 +187,82 @@ def _sync_state_hull_from_vitality(state, vitality):
     state.hull_hp_max = int(max(1, _int(getattr(vitality, "max_hp", 1), 1)))
     state.source_metadata["hull_hp"] = int(state.hull_hp)
     state.source_metadata["hull_hp_max"] = int(state.hull_hp_max)
+
+
+def apply_deployed_drone_collision_damage(
+    sim,
+    drone_eid,
+    raw_damage,
+    *,
+    source_eid=None,
+    damage_kind="collision",
+    weapon_id="impact",
+    x=None,
+    y=None,
+    z=None,
+):
+    """Apply a physical impact through drone hull armor and salvage rules."""
+
+    state = _deployed_drone_state(sim, drone_eid)
+    vitality = sim.ecs.get(Vitality).get(drone_eid)
+    pos = sim.ecs.get(Position).get(drone_eid)
+    if state is None or vitality is None:
+        return {"damage": 0, "destroyed": False, "reason": "not_deployed"}
+
+    if x is None:
+        x = getattr(pos, "x", 0)
+    if y is None:
+        y = getattr(pos, "y", 0)
+    if z is None:
+        z = getattr(pos, "z", 0)
+    previous_hp = int(max(0, getattr(vitality, "hp", 0) or 0))
+    raw_damage = int(max(1, _int(raw_damage, 1)))
+    armor_absorb = drone_hull_damage_absorb(
+        state,
+        weapon_id=weapon_id,
+        damage_kind=damage_kind,
+    )
+    final_damage = int(max(1, round(raw_damage * (1.0 - armor_absorb))))
+    vitality.hp = max(0, int(vitality.hp) - final_damage)
+    chassis_class = str(getattr(state, "chassis_class", "") or "").strip().upper()
+    sim.emit(Event(
+        "entity_damaged",
+        target_eid=drone_eid,
+        source_eid=source_eid,
+        weapon_id=str(weapon_id or "impact"),
+        damage_kind=str(damage_kind or "collision"),
+        raw_damage=raw_damage,
+        damage=final_damage,
+        cover_absorb=0.0,
+        armor_absorb=round(float(armor_absorb), 3),
+        armor_name=f"{chassis_class}-class hull" if chassis_class else "drone hull",
+        hp=vitality.hp,
+        max_hp=vitality.max_hp,
+        x=int(x),
+        y=int(y),
+        z=int(z),
+    ))
+    _sync_state_hull_from_vitality(state, vitality)
+
+    destroyed = int(vitality.hp) <= 0
+    if destroyed:
+        destroy_deployed_drone(
+            sim,
+            drone_eid,
+            source_eid=source_eid,
+            reason="collision",
+            damage_kind=str(damage_kind or "collision"),
+            damage_amount=final_damage,
+            overkill_amount=max(0, final_damage - previous_hp),
+        )
+    return {
+        "damage": int(final_damage),
+        "raw_damage": int(raw_damage),
+        "armor_absorb": round(float(armor_absorb), 3),
+        "hp_before": int(previous_hp),
+        "hp": int(max(0, getattr(vitality, "hp", 0) or 0)),
+        "destroyed": bool(destroyed),
+    }
 
 
 def destroy_deployed_drone(
@@ -562,6 +675,81 @@ class DroneSystem(System):
         ))
         return {"ok": False, "reason": str(reason or "blocked").strip().lower() or "blocked"}
 
+    def _collide_with_vehicle(self, controller_eid, drone_eid, state, vehicle_prop, x, y, z):
+        battery_before = int(max(0, getattr(state, "battery_charge", 0) or 0))
+        state.battery_charge = max(0, battery_before - DRONE_MOVE_BATTERY_COST)
+        state.source_metadata["battery_charge"] = int(state.battery_charge)
+        state.last_command = "move"
+        vehicle_impact_raw = _drone_vehicle_impact_raw(state)
+        drone_impact_raw = _drone_self_impact_raw(state, vehicle_prop)
+
+        vehicle_result = apply_physical_property_damage(
+            self.sim,
+            vehicle_prop,
+            vehicle_impact_raw,
+            damage_kind="drone_collision",
+            weapon_id="drone",
+            source_eid=controller_eid,
+            x=int(x),
+            y=int(y),
+            z=int(z),
+        )
+        drone_result = apply_deployed_drone_collision_damage(
+            self.sim,
+            drone_eid,
+            drone_impact_raw,
+            source_eid=controller_eid,
+            damage_kind="drone_vehicle_collision",
+            weapon_id="vehicle",
+            x=int(x),
+            y=int(y),
+            z=int(z),
+        )
+        chassis_class = str(getattr(state, "chassis_class", "") or "").strip().upper()
+        self.sim.emit(Event(
+            "drone_vehicle_collision",
+            eid=controller_eid,
+            controller_eid=controller_eid,
+            drone_eid=drone_eid,
+            chassis_class=chassis_class or None,
+            vehicle_id=vehicle_prop.get("id"),
+            vehicle_name=vehicle_label(vehicle_prop),
+            drone_damage=int(drone_result.get("damage", 0) or 0),
+            drone_hull=int(drone_result.get("hp", 0) or 0),
+            drone_destroyed=bool(drone_result.get("destroyed")),
+            vehicle_damage=int(vehicle_result.get("damage", 0) or 0),
+            vehicle_condition=int(vehicle_result.get("integrity", 0) or 0),
+            vehicle_broken=bool(vehicle_result.get("broken")),
+            battery_charge=int(state.battery_charge),
+            battery_charge_max=int(getattr(state, "battery_charge_max", 0) or 0),
+            x=int(x),
+            y=int(y),
+            z=int(z),
+        ))
+        self.sim.emit(Event(
+            "noise",
+            source_eid=controller_eid,
+            x=int(x),
+            y=int(y),
+            z=int(z),
+            radius=5,
+            cause="drone_vehicle_collision",
+            drone_eid=drone_eid,
+            vehicle_id=vehicle_prop.get("id"),
+        ))
+        return {
+            "ok": False,
+            "acted": True,
+            "reason": "vehicle_collision",
+            "drone_damage": int(drone_result.get("damage", 0) or 0),
+            "drone_destroyed": bool(drone_result.get("destroyed")),
+            "vehicle_damage": int(vehicle_result.get("damage", 0) or 0),
+            "vehicle_broken": bool(vehicle_result.get("broken")),
+            "x": int(x),
+            "y": int(y),
+            "z": int(z),
+        }
+
     def move_drone(self, controller_eid, drone_eid, dx, dy):
         step = _cardinal_step(dx, dy)
         if step is None:
@@ -605,6 +793,18 @@ class DroneSystem(System):
                 for prop in mechanical_devices_at(self.sim, target_x, target_y, target_z)
             ) else "known_trap"
             return self._movement_blocked(controller_eid, drone_eid, reason, x=target_x, y=target_y, z=target_z, dx=dx, dy=dy)
+
+        vehicle_prop = _vehicle_property_at(self.sim, target_x, target_y, target_z)
+        if vehicle_prop is not None:
+            return self._collide_with_vehicle(
+                controller_eid,
+                drone_eid,
+                state,
+                vehicle_prop,
+                target_x,
+                target_y,
+                target_z,
+            )
 
         old_x = int(pos.x)
         old_y = int(pos.y)
@@ -756,7 +956,7 @@ class DroneSystem(System):
 
         if command == "move":
             result = self.move_drone(controller_eid, drone_eid, dx, dy)
-            if bool(result.get("ok")):
+            if bool(result.get("ok")) or bool(result.get("acted")):
                 state.source_metadata["procedure_skip_tick"] = int(getattr(self.sim, "tick", 0) or 0)
                 if consume_turn:
                     self.sim.turn_advance_requested = True

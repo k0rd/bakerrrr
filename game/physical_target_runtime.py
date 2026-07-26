@@ -174,6 +174,8 @@ def _vehicle_durability_loss(raw_damage, damage_kind, weapon_id):
         return max(3, int(math.ceil(raw_damage / 8.0)))
     if "demolition" in tags:
         return max(2, int(math.ceil(raw_damage / 8.0)))
+    if kind == "impact" or "collision" in kind:
+        return max(1, int(math.ceil(raw_damage / 14.0))) if raw_damage > 0 else 0
     if "melee" in tags or kind == "melee":
         if not (tags & {"axe", "blunt", "club", "hammer", "pry", "utility"}):
             return 0

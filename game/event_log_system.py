@@ -552,6 +552,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("drone_picked_up", self.on_drone_picked_up)
         self.sim.events.subscribe("drone_moved", self.on_drone_moved)
         self.sim.events.subscribe("drone_move_blocked", self.on_drone_move_blocked)
+        self.sim.events.subscribe("drone_vehicle_collision", self.on_drone_vehicle_collision)
         self.sim.events.subscribe("drone_destroyed", self.on_drone_destroyed)
         self.sim.events.subscribe("drone_command_opened", self.on_drone_command_opened)
         self.sim.events.subscribe("drone_command_blocked", self.on_drone_command_blocked)
@@ -4993,6 +4994,33 @@ class EventLogSystem(System):
         else:
             message = messages.get(reason, f"{drone_label} cannot move there.")
         _log_player_feedback(self.sim, message, kind="interaction")
+
+    def on_drone_vehicle_collision(self, event):
+        controller_eid = event.data.get("controller_eid", event.data.get("eid"))
+        drone_label = self._event_drone_label(event)
+        vehicle_name = str(event.data.get("vehicle_name", "") or "").strip() or "a vehicle"
+        if controller_eid == self.player_eid:
+            drone_damage = _int_or_default(event.data.get("drone_damage"), 0)
+            vehicle_damage = _int_or_default(event.data.get("vehicle_damage"), 0)
+            pieces = []
+            if drone_damage > 0:
+                pieces.append(f"drone hull -{drone_damage}")
+            if vehicle_damage > 0:
+                pieces.append(f"vehicle condition -{vehicle_damage}")
+            suffix = f" ({', '.join(pieces)})" if pieces else ""
+            _log_player_feedback(
+                self.sim,
+                f"{drone_label} collides with {vehicle_name}{suffix}.",
+                kind="danger",
+            )
+            return
+        if not self._player_can_perceive_event_position(event):
+            return
+        self._log(
+            f"{drone_label} collides with {vehicle_name}.",
+            channel="general",
+            priority="normal",
+        )
 
     def on_drone_destroyed(self, event):
         owner_eid = event.data.get("owner_eid")
