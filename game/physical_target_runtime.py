@@ -116,7 +116,21 @@ def weapon_targetable_property_at(sim, x, y, z=0):
         if property_is_weapon_targetable(prop):
             candidates.append(prop)
     if not candidates:
-        # Small regression/test simulations may not expose the optimized index.
+        # An empty bucket in a complete index is an authoritative miss.  Do not
+        # turn every empty projectile-path cell into a scan of every property in
+        # a city.  Raw legacy/test fixtures may still populate ``properties``
+        # directly; their missing property-order entries identify that the
+        # runtime index is incomplete and retain the compatibility scan below.
+        property_order = getattr(sim, "property_order", None)
+        index_complete = (
+            isinstance(anchor_index, dict)
+            and isinstance(properties, dict)
+            and isinstance(property_order, dict)
+            and len(property_order) == len(properties)
+        )
+        if index_complete:
+            return None
+
         for prop in tuple(properties.values()):
             if not property_is_weapon_targetable(prop):
                 continue
