@@ -36,11 +36,14 @@ from game.vehicle_motion import (
     clamp_vehicle_speed,
     local_route_accessible_at as _vehicle_route_accessible_at,
     rotate_vehicle_heading,
+    set_vehicle_heading,
     set_vehicle_speed,
+    sync_vehicle_property_heading,
     sync_vehicle_property_position,
     try_vehicle_step,
     vehicle_heading_label,
     vehicle_heading_tuple,
+    vehicle_property_heading,
     vehicle_is_usable,
     vehicle_local_block_reason as _vehicle_local_block_reason_for,
     vehicle_medium_for_property,
@@ -733,6 +736,7 @@ class PlayerTravelRuntime:
                 return False
 
         state.set_active_vehicle(vehicle_id, tick=self.sim.tick)
+        set_vehicle_heading(state, *vehicle_property_heading(vehicle_prop), tick=self.sim.tick)
         state.set_in_vehicle(True, tick=self.sim.tick)
         state.medium = medium
         set_vehicle_speed(state, 0, tick=self.sim.tick)
@@ -794,6 +798,8 @@ class PlayerTravelRuntime:
             )
 
         self._set_zoom_mode(eid=eid, pos=pos, mode="city")
+        if vehicle_prop and state:
+            sync_vehicle_property_heading(vehicle_prop, state)
         if state:
             state.set_in_vehicle(False, tick=self.sim.tick)
             set_vehicle_speed(state, 0, tick=self.sim.tick)

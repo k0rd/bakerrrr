@@ -4040,6 +4040,26 @@ class ServiceMenuSystem(System):
             return_to="floor" if casino_host_style(prop) == "floor" else "service_menu",
         )
 
+    def _handoff_casino_floor_service(self, prop, option_id):
+        """Execute a casino floor-service row through the canonical service menu."""
+        if not isinstance(prop, dict):
+            title, lines = self._stale_service_option_lines(option_id)
+            self._close_casino_ui()
+            self._present_service_result(title, lines)
+            return
+        pos = self._position_for(self.player_eid)
+        if pos is None:
+            return
+        options, storefront_service = self._service_menu_options(self.player_eid, prop, pos)
+        self._close_casino_ui()
+        self._open_service_menu(prop, options, storefront_service=storefront_service)
+        self.on_service_menu_execute_request(Event(
+            "service_menu_execute_request",
+            eid=self.player_eid,
+            property_id=prop.get("id"),
+            option_id=option_id,
+        ))
+
     def _open_service_menu(self, prop, options, storefront_service=None):
         state = self._dialog_ui_state()
         self._clear_pending_service_result()
@@ -6225,6 +6245,7 @@ class ServiceMenuSystem(System):
         if bool(casino_state.get("open")):
             option_id = str(event.data.get("option_id", "") or "").strip().lower()
             property_id = event.data.get("property_id") or casino_state.get("property_id")
+            casino_mode = str(casino_state.get("mode", "") or "").strip().lower()
             service = str(casino_state.get("service", "") or "").strip().lower()
             if not option_id or not property_id:
                 return
@@ -6290,6 +6311,9 @@ class ServiceMenuSystem(System):
                     self._start_casino_round(prop, service, wager)
                 return
             if isinstance(prop, dict) and self._handle_active_casino_option(prop, option_id):
+                return
+            if casino_mode == "services":
+                self._handoff_casino_floor_service(prop, option_id)
                 return
 
         state = self._dialog_ui_state()

@@ -128,6 +128,7 @@ from game.organization_response import OrganizationResponseSystem
 from game.organization_practice_evolution import OrganizationPracticeEvolutionSystem
 from game.organization_supply import OrganizationSupplySystem
 from game.corporate_expansion_runtime import CorporateExpansionSystem
+from game.corporate_occupation_runtime import CorporateOccupationSystem
 from game.gang_enterprise_runtime import GangEnterpriseSystem
 from game.civic_trade_posse_runtime import CivicTradePosseSystem
 from game.criminal_drive_system import CriminalDriveSystem
@@ -685,6 +686,7 @@ def _register_runtime_systems(sim, view, player):
     run_pressure_system = RunPressureSystem(sim, player)
     organization_practice_evolution_system = OrganizationPracticeEvolutionSystem(sim)
     corporate_expansion_system = CorporateExpansionSystem(sim)
+    corporate_occupation_system = CorporateOccupationSystem(sim, player)
     gang_enterprise_system = GangEnterpriseSystem(sim)
     civic_trade_posse_system = CivicTradePosseSystem(sim)
     organization_supply_system = OrganizationSupplySystem(sim)
@@ -762,6 +764,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(run_pressure_system, 60)
     _live_timeskip_stride(organization_practice_evolution_system, 600)
     _live_timeskip_stride(corporate_expansion_system, 600)
+    _live_timeskip_stride(corporate_occupation_system, 120)
     _live_timeskip_stride(gang_enterprise_system, 600)
     _live_timeskip_stride(civic_trade_posse_system, 600)
     _live_timeskip_stride(organization_supply_system, 600)
@@ -852,6 +855,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(run_pressure_system)
     sim.register_system(organization_practice_evolution_system)
     sim.register_system(corporate_expansion_system)
+    sim.register_system(corporate_occupation_system)
     sim.register_system(gang_enterprise_system)
     sim.register_system(civic_trade_posse_system)
     sim.register_system(organization_supply_system)

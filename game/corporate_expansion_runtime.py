@@ -13,6 +13,10 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game.components import OrganizationProfile, PlayerAssets
+from game.corporate_presence import (
+    refresh_all_corporate_neighborhood_presence,
+    refresh_corporate_neighborhood_presence,
+)
 from game.organizations import (
     ensure_organization_diplomacy_state,
     ensure_property_organization,
@@ -595,6 +599,19 @@ def apply_corporate_expansion_action(sim, corporate_org_eid, prop, *, action_kin
         source_event="corporate_expansion",
     )
     action = _record_expansion_action(sim, corporate_org_eid, prop, action_kind=action_kind, status=status, target_read=target_read, visible_cue=visible_cue)
+    chunk = _metadata(prop).get("chunk")
+    if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+        try:
+            chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+        except (AttributeError, TypeError, ValueError):
+            chunk = None
+    if isinstance(chunk, (tuple, list)) and len(chunk) >= 2:
+        refresh_corporate_neighborhood_presence(
+            sim,
+            corporate_org_eid,
+            (int(chunk[0]), int(chunk[1])),
+            materialize=True,
+        )
     return {
         "ok": True,
         "action": action,
@@ -762,6 +779,7 @@ class CorporateExpansionSystem(System):
             return
         self._next_tick = now + self.refresh_interval
         advance_corporate_expansion(self.sim, limit=1)
+        refresh_all_corporate_neighborhood_presence(self.sim, materialize=True)
 
 
 __all__ = [

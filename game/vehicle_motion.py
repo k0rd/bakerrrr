@@ -154,10 +154,36 @@ def clamp_vehicle_speed(vehicle_prop, speed):
 
 
 def vehicle_heading_tuple(state):
+    if isinstance(state, (tuple, list)) and len(state) >= 2:
+        return normalize_vehicle_heading(state[0], state[1])
     state = ensure_vehicle_motion_state(state)
     if state is None:
         return 0, -1
     return normalize_vehicle_heading(getattr(state, "heading_dx", 0), getattr(state, "heading_dy", -1))
+
+
+def vehicle_property_heading(vehicle_prop):
+    if not _property_is_vehicle(vehicle_prop):
+        return 0, -1
+    metadata = _property_metadata(vehicle_prop)
+    return normalize_vehicle_heading(
+        metadata.get("vehicle_heading_dx", metadata.get("heading_dx", 0)),
+        metadata.get("vehicle_heading_dy", metadata.get("heading_dy", -1)),
+    )
+
+
+def sync_vehicle_property_heading(vehicle_prop, state=None, *, dx=0, dy=-1):
+    if not _property_is_vehicle(vehicle_prop):
+        return 0, -1
+    if state is not None:
+        heading_dx, heading_dy = vehicle_heading_tuple(state)
+    else:
+        heading_dx, heading_dy = normalize_vehicle_heading(dx, dy)
+    metadata = _property_metadata(vehicle_prop)
+    metadata["vehicle_heading_dx"] = int(heading_dx)
+    metadata["vehicle_heading_dy"] = int(heading_dy)
+    metadata["vehicle_heading"] = VEHICLE_HEADING_LABELS.get((heading_dx, heading_dy), "N")
+    return int(heading_dx), int(heading_dy)
 
 
 def set_vehicle_heading(state, dx, dy, tick=0):

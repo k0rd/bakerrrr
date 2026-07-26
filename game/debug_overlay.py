@@ -21,6 +21,8 @@ from game.organization_presence import format_property_org_presence
 from game.organization_production import organization_production_profile
 from game.organization_reputation import organization_snapshot, top_organization_snapshots
 from game.organization_supply import organization_supply_rows, organization_supply_summary
+from game.corporate_presence import corporate_neighborhood_presence_rows
+from game.corporate_occupation_runtime import corporate_occupation_rows
 from game.property_access import property_access_controller, property_access_level, property_status_text
 from game.property_runtime import (
     controller_credential_short_label,
@@ -201,6 +203,53 @@ def organization_summary_rows(sim, *, current_prop=None):
     current_presence = format_property_org_presence(sim, current_prop, include_primary=True) if current_prop else ""
     if current_presence:
         rows.append(f"Presence: {current_presence}")
+    current_chunk = None
+    if isinstance(current_prop, dict):
+        metadata = current_prop.get("metadata") if isinstance(current_prop.get("metadata"), dict) else {}
+        chunk = metadata.get("chunk")
+        if isinstance(chunk, (tuple, list)) and len(chunk) >= 2:
+            current_chunk = (int(chunk[0]), int(chunk[1]))
+        elif hasattr(sim, "chunk_coords"):
+            current_chunk = sim.chunk_coords(int(current_prop.get("x", 0)), int(current_prop.get("y", 0)))
+    if current_chunk is None:
+        active_chunk = getattr(sim, "active_chunk_coord", None)
+        if isinstance(active_chunk, (tuple, list)) and len(active_chunk) >= 2:
+            current_chunk = (int(active_chunk[0]), int(active_chunk[1]))
+    footprint_rows = corporate_neighborhood_presence_rows(sim, chunk=current_chunk) if current_chunk is not None else ()
+    for footprint in footprint_rows[:2]:
+        rows.append(
+            f"Corporate footprint: {footprint.get('corporate_org_name', 'Corporation')} | "
+            f"{str(footprint.get('tier_label', 'foothold')).lower()} | "
+            f"anchors {len(tuple(footprint.get('anchor_property_ids', ()) or ()))} | "
+            f"branded fixtures {len(tuple(footprint.get('branded_fixture_ids', ()) or ()))}"
+        )
+    occupation_rows = corporate_occupation_rows(sim, chunk=current_chunk) if current_chunk is not None else ()
+    for occupation in occupation_rows[:2]:
+        doctrine = dict(occupation.get("doctrine") or {})
+        sensors = tuple(occupation.get("sensor_property_ids", ()) or ())
+        live_sensors = 0
+        for property_id in sensors:
+            prop = getattr(sim, "properties", {}).get(property_id)
+            metadata = prop.get("metadata", {}) if isinstance(prop, dict) else {}
+            if (
+                isinstance(metadata, dict)
+                and bool(metadata.get("corporate_surveillance_active", True))
+                and bool(metadata.get("fixture_usable", True))
+                and not bool(metadata.get("fixture_broken"))
+            ):
+                live_sensors += 1
+        player_eid = getattr(sim, "player_eid", None)
+        player_scrutiny = dict(
+            (occupation.get("scrutiny") or {}).get(str(player_eid), {}) or {}
+        ) if player_eid is not None else {}
+        rows.append(
+            f"Corporate control: {occupation.get('corporate_org_name', 'Corporation')} | "
+            f"{doctrine.get('label', 'occupation')} | "
+            f"tier {int(occupation.get('effective_tier', 0) or 0)}/{int(occupation.get('raw_tier', 0) or 0)} | "
+            f"optics {live_sensors}/{len(sensors)} | "
+            f"disruption {float(occupation.get('disruption', 0.0) or 0.0):.2f}"
+            + (f" | scrutiny {player_scrutiny.get('action')}" if player_scrutiny.get("action") else "")
+        )
     current_property_id = str((current_prop or {}).get("id", "") or "").strip()
     current_supply = organization_supply_rows(
         sim,

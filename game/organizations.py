@@ -7852,16 +7852,26 @@ def organization_pressure_summary(row):
     if not isinstance(row, dict):
         return None
     stance = _normalize_diplomacy_stance(row.get("stance"))
-    title = ORGANIZATION_DIPLOMACY_PRESSURE_TITLES.get(stance, "Org Pressure")
+    pressure_kind = _text(row.get("pressure_kind"))
+    corporate_titles = {
+        "corporate_foothold": "Corporate Foothold",
+        "corporate_branded_corridor": "Branded Corridor",
+        "corporate_advertising_hub": "Advertising Saturation",
+        "corporate_managed_enclave": "Managed Enclave",
+    }
+    title = corporate_titles.get(pressure_kind, ORGANIZATION_DIPLOMACY_PRESSURE_TITLES.get(stance, "Org Pressure"))
     visible_cue = _text(row.get("visible_cue")) or _pressure_visible_cue_for_stance(stance, row.get("reason_tags", ()))
     summary = f"{visible_cue}"
-    action = ORGANIZATION_DIPLOMACY_PRESSURE_ACTIONS.get(stance, "ask around, read the posture, or move on")
+    if pressure_kind in corporate_titles:
+        action = "matching branch signs and sponsored infrastructure repeat across the neighborhood"
+    else:
+        action = ORGANIZATION_DIPLOMACY_PRESSURE_ACTIONS.get(stance, "ask around, read the posture, or move on")
     return {
         "title": title,
         "summary": summary,
         "action": action,
         "stance": stance,
-        "pressure_kind": _text(row.get("pressure_kind")),
+        "pressure_kind": pressure_kind,
         "confidence": max(0.0, min(1.0, _safe_float(row.get("confidence"), default=0.0))),
     }
 

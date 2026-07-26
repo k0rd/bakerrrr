@@ -13,6 +13,8 @@ from game.appearance_loadout import (
     tattoo_service_metadata,
 )
 from game.components import Inventory, NPCSocial, PlayerAssets, Position, VehicleState
+from game.corporate_occupation_runtime import corporate_trade_terms_for_property
+from game.corporate_presence import corporate_branded_item_metadata
 from game.cultivation_runtime import seed_packet_metadata
 from game.drone_distribution import drone_distribution_metadata, drone_store_item_pool
 from game.wire_distribution import (
@@ -2424,6 +2426,7 @@ class TradeSystem(System):
         market_profile = store_supply_profile(self.sim, prop)
         practice = self._trade_practice_bundle(prop)
         practice_modifiers = dict(practice.get("effect_modifiers", {}))
+        occupation_terms = corporate_trade_terms_for_property(self.sim, prop)
         rng = random.Random(f"{self.sim.seed}:store:{prop['id']}:cycle:{cycle_index}")
         weight_mults = _metadata_weight_mults(metadata)
         owner_stocked_entries = self._owner_stocked_entries(state)
@@ -2432,6 +2435,7 @@ class TradeSystem(System):
             metadata.get("trade_supply_note", ""),
             metadata.get("covert_hint", ""),
             practice.get("note_text", ""),
+            occupation_terms.get("note", ""),
         )
         practice_stock_mult = self._trade_modifier_mult(practice_modifiers, "trade_stock_mult", default=1.0, low=0.5, high=2.0)
         practice_buy_price_mult = self._trade_modifier_mult(practice_modifiers, "trade_buy_price_mult", default=1.0, low=0.75, high=1.4)
@@ -2486,13 +2490,20 @@ class TradeSystem(System):
                 ),
             )
         )
-        trade_stock_mult = max(0.25, _metadata_float(metadata, "trade_stock_mult", 1.0) * practice_stock_mult)
+        trade_stock_mult = max(
+            0.25,
+            _metadata_float(metadata, "trade_stock_mult", 1.0)
+            * practice_stock_mult
+            * float(occupation_terms.get("stock_mult", 1.0) or 1.0),
+        )
         markup_profile = _player_business_markup_profile(prop)
         markup_mult = max(0.5, float(markup_profile.get("buy_mult", 1.0) or 1.0))
-        buy_mult_lo = max(0.5, buy_mult_lo * markup_mult * practice_buy_price_mult)
-        buy_mult_hi = max(buy_mult_lo, buy_mult_hi * markup_mult * practice_buy_price_mult)
-        sell_ratio = max(0.1, min(0.9, sell_ratio * practice_sell_ratio_mult))
-        unlisted_sell_ratio = max(0.1, min(0.85, unlisted_sell_ratio * practice_sell_ratio_mult))
+        occupation_buy_mult = float(occupation_terms.get("buy_price_mult", 1.0) or 1.0)
+        occupation_sell_mult = float(occupation_terms.get("sell_ratio_mult", 1.0) or 1.0)
+        buy_mult_lo = max(0.5, buy_mult_lo * markup_mult * practice_buy_price_mult * occupation_buy_mult)
+        buy_mult_hi = max(buy_mult_lo, buy_mult_hi * markup_mult * practice_buy_price_mult * occupation_buy_mult)
+        sell_ratio = max(0.1, min(0.9, sell_ratio * practice_sell_ratio_mult * occupation_sell_mult))
+        unlisted_sell_ratio = max(0.1, min(0.85, unlisted_sell_ratio * practice_sell_ratio_mult * occupation_sell_mult))
 
         for item_id in item_ids:
             item_def = ITEM_CATALOG.get(item_id)
@@ -2533,6 +2544,13 @@ class TradeSystem(System):
                 item_catalog=ITEM_CATALOG,
                 sim=self.sim,
                 source_property=prop,
+            )
+            entry_metadata = corporate_branded_item_metadata(
+                self.sim,
+                prop,
+                item_id,
+                entry_metadata,
+                seed_token=seed_token,
             )
             bias = item_market_bias(item_id, market_profile)
             pressure_bias = item_trade_pressure_bias(self.sim, prop, item_id)
@@ -2585,6 +2603,7 @@ class TradeSystem(System):
         state["supply_note"] = _join_notes(market_profile.get("store_note", ""), extra_supply_note)
         state["family_profile"] = str(market_profile.get("family_profile", "")).strip()
         state["pressure_note"] = str(market_profile.get("pressure_note", "")).strip()
+        state["corporate_occupation"] = dict(occupation_terms)
         state["entries"] = entries
         state["last_refresh_tick"] = self.sim.tick
         if self._actor_owns_property(self.player_eid, prop):

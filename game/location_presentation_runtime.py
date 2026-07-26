@@ -794,6 +794,26 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
                 infrastructure_target.get("name", infrastructure_target.get("id", "property"))
             ).strip() or "property"
             bits.append("target:" + target_name)
+    corporate_branding = metadata.get("corporate_branding")
+    if isinstance(corporate_branding, dict) and bool(metadata.get("corporate_branding_active", True)):
+        brand = str(corporate_branding.get("brand", "") or "").strip()
+        tier_label = str(corporate_branding.get("tier_label", "") or "").strip()
+        campaign_kind = str(corporate_branding.get("campaign_kind", "") or "").strip().replace("_", " ")
+        if brand:
+            bits.append(f"brand:{brand}")
+        if tier_label:
+            bits.append(f"footprint:{tier_label}")
+        if campaign_kind:
+            bits.append(f"campaign:{campaign_kind}")
+    corporate_occupation = metadata.get("corporate_occupation")
+    if isinstance(corporate_occupation, dict):
+        doctrine_label = str(
+            corporate_occupation.get("doctrine_label", "corporate control") or "corporate control"
+        ).strip().lower()
+        public_read = str(corporate_occupation.get("public_read", "") or "").strip()
+        bits.append(f"control:{doctrine_label}")
+        if public_read:
+            bits.append(public_read)
     bits.append(f"owner:{owner_text}")
     access = _evaluate_property_access(sim, viewer_eid, prop, x=x, y=y, z=z)
     access_text = access.access_level
@@ -864,7 +884,7 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
         bits.append("services:" + ",".join(services))
 
     display_description = str(metadata.get("display_description", "") or "").strip()
-    if kind == "asset" and display_description:
+    if kind in {"asset", "fixture"} and display_description:
         bits.append(display_description)
 
     if access.standing_reason and access.standing_reason not in {"none", "open_business", "public_space"}:

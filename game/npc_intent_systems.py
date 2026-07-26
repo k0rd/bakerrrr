@@ -250,6 +250,7 @@ from game.vehicle_motion import (
     local_route_accessible_at as _vehicle_route_accessible_at,
     set_vehicle_heading as _set_vehicle_heading,
     set_vehicle_speed as _set_vehicle_speed,
+    sync_vehicle_property_heading as _sync_vehicle_property_heading,
     sync_vehicle_property_position as _sync_vehicle_property_position,
     try_vehicle_step as _try_vehicle_step,
     vehicle_heading_label as _vehicle_heading_label,
@@ -5750,6 +5751,8 @@ class NPCInvestigateSystem(System):
         vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
         vehicle_prop = _active_vehicle_property_for_state(self.sim, state)
         _set_vehicle_speed(state, 0, tick=getattr(self.sim, "tick", 0))
+        if _property_is_vehicle(vehicle_prop):
+            _sync_vehicle_property_heading(vehicle_prop, state)
         state.set_in_vehicle(False, tick=getattr(self.sim, "tick", 0))
         if _property_is_vehicle(vehicle_prop) and pos is not None:
             _sync_vehicle_property_position(self.sim, vehicle_prop, int(pos.x), int(pos.y), int(pos.z))
@@ -6174,8 +6177,10 @@ class NPCInvestigateSystem(System):
         state = self.sim.ecs.get(VehicleState).get(eid)
         if state is not None:
             _set_vehicle_speed(state, 0, tick=getattr(self.sim, "tick", 0))
-            state.set_in_vehicle(False, tick=getattr(self.sim, "tick", 0))
             vehicle_prop = _active_vehicle_property_for_state(self.sim, state)
+            if _property_is_vehicle(vehicle_prop):
+                _sync_vehicle_property_heading(vehicle_prop, state)
+            state.set_in_vehicle(False, tick=getattr(self.sim, "tick", 0))
             if _property_is_vehicle(vehicle_prop):
                 _sync_vehicle_property_position(self.sim, vehicle_prop, int(pos.x), int(pos.y), int(pos.z))
         vehicle_id = str(getattr(ai, "vehicle_commute_vehicle_id", "") or "").strip()

@@ -270,6 +270,8 @@ from game.vehicle_motion import (
     ensure_vehicle_motion_state,
     vehicle_heading_glyph,
     vehicle_heading_label,
+    vehicle_heading_tuple,
+    vehicle_property_heading,
 )
 
 
@@ -971,16 +973,24 @@ def _appearance_with_effect(*args, **kwargs):
     return _facade()._appearance_with_effect(*args, **kwargs)
 
 def _vehicle_appearance_with_heading(appearance, state):
-    state = ensure_vehicle_motion_state(state)
     if appearance is None or state is None:
         return appearance
+    if isinstance(state, (tuple, list)):
+        heading = vehicle_heading_tuple(state)
+        headlights_on = True
+    else:
+        state = ensure_vehicle_motion_state(state)
+        if state is None:
+            return appearance
+        heading = vehicle_heading_tuple(state)
+        headlights_on = bool(getattr(state, "headlights_on", True))
     effects = tuple(getattr(appearance, "effects", ()) or ())
-    if not bool(getattr(state, "headlights_on", True)):
+    if not headlights_on:
         effects = tuple(dict.fromkeys(effects + ("vehicle_headlights_off",)))
     return replace(
         appearance,
-        glyph=vehicle_heading_glyph(state),
-        semantic_id=f"property_vehicle_heading_{vehicle_heading_label(state).lower()}",
+        glyph=vehicle_heading_glyph(heading),
+        semantic_id=f"property_vehicle_heading_{vehicle_heading_label(heading).lower()}",
         effects=effects,
     )
 
@@ -3664,6 +3674,8 @@ class RenderSystem(System):
                     prop,
                     active_quest_target=active_quest_target,
                 )
+                if str(prop.get("kind", "") or "").strip().lower() == "vehicle":
+                    appearance = _vehicle_appearance_with_heading(appearance, vehicle_property_heading(prop))
                 if (
                     str(prop.get("kind", "") or "").strip().lower() != "vehicle"
                     and _tile_prefers_feature_legend(self.sim, tile, display_pos[0], display_pos[1], active_z)

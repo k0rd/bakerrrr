@@ -46,7 +46,7 @@ _DIALOGUE_KNOWLEDGE_DOMAINS = (
 _DIALOGUE_COMPETENCE_TIERS = ("none", "rumor", "familiar", "skilled")
 _DIALOGUE_COMPETENCE_RANK = {name: index for index, name in enumerate(_DIALOGUE_COMPETENCE_TIERS)}
 _RAPPORT_REACTION_TOPICS = {"rapport", "check_in", "day_feel", "job_feel", "roots", "off_shift", "care_about", "read_player"}
-_MISSTEP_REACTION_TOPICS = {"pry", "insult", "weird"}
+_MISSTEP_REACTION_TOPICS = {"pry", "provoke", "intimidate", "insult", "weird"}
 _SOCIAL_ACCESS_REACTION_TOPICS = {"contacts", "introduction", "vouch"}
 _DEEP_REACTION_TOPICS = {"care_about", "read_player"}
 _REFLECTIVE_REACTION_TOPICS = {"job_feel", "roots"}
@@ -61,7 +61,14 @@ _POSITIVE_RELATIONSHIP_EPISODES = {
     "offered_introduction",
     "offered_vouch",
 }
-_NEGATIVE_RELATIONSHIP_EPISODES = {"warned_me_off", "i_pushed_too_far", "i_insulted_them"}
+_NEGATIVE_RELATIONSHIP_EPISODES = {
+    "warned_me_off",
+    "i_pushed_too_far",
+    "i_pried_into_them",
+    "i_provoked_them",
+    "i_threatened_them",
+    "i_insulted_them",
+}
 
 
 def _text(value, default=""):
@@ -854,6 +861,8 @@ def _social_reaction_allowed(topic_id, outcome_key, context, rapport_shape):
 
     if outcome_key in {"warm", "rebuff"}:
         return True
+    if topic_id in {"provoke", "intimidate"} and outcome_key in {"open", "reserved"}:
+        return True
 
     context = context if isinstance(context, dict) else {}
     rapport_shape = rapport_shape if isinstance(rapport_shape, dict) else {}
@@ -874,7 +883,7 @@ def _social_reaction_allowed(topic_id, outcome_key, context, rapport_shape):
         return social_standing >= 0.54 or _text(rapport_shape.get("day_mood", "")).lower() in {"light", "warm"}
 
     if outcome_key == "reserved":
-        if topic_id in _DEEP_REACTION_TOPICS or topic_id in {"pry", "insult"}:
+        if topic_id in _DEEP_REACTION_TOPICS or topic_id in {"pry", "provoke", "intimidate", "insult"}:
             return True
         return privacy >= 0.62 or tone in {"wary", "guarded"} or pressure_tier == "high"
 
@@ -960,6 +969,25 @@ def _social_reaction_candidates(topic_id, outcome_key, rapport_shape, context):
             candidates.append("{npc_subject_cap} lets out a quiet laugh.")
         elif outcome_key == "rebuff":
             candidates.append("{npc_subject_cap} looks at you like the question curdled on contact.")
+    elif topic_id == "provoke":
+        if outcome_key == "open":
+            candidates.extend((
+                "{npc_subject_cap} meets your eyes and lets the politeness drop.",
+                "{npc_possessive_adj_cap} mouth tightens before {npc_subject} answers.",
+            ))
+        elif outcome_key in {"reserved", "rebuff"}:
+            candidates.append("{npc_subject_cap} recognizes the bait and goes still.")
+    elif topic_id == "intimidate":
+        if outcome_key == "open":
+            candidates.extend((
+                "{npc_subject_cap} glances for an exit before answering.",
+                "{npc_possessive_adj_cap} shoulders tighten.",
+            ))
+        elif outcome_key in {"reserved", "rebuff"}:
+            candidates.extend((
+                "{npc_subject_cap} settles into {npc_possessive_adj} stance.",
+                "{npc_subject_cap} looks past you toward the room.",
+            ))
 
     if playfulness >= 0.68 and outcome_key in {"warm", "open"}:
         candidates.append("{npc_subject_cap} lets out a quiet laugh.")

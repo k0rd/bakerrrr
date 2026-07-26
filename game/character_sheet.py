@@ -19,6 +19,7 @@ from game.appearance_loadout import appearance_slot_rows, player_appearance_summ
 from game.flora_runtime import load_flora_catalog
 from game.human_identity import normalize_gender_identity, pronoun_display_text
 from game.herbal_chemistry_runtime import (
+    known_improvised_methods_for_actor,
     known_plant_traits_for_actor,
     known_recipes_for_actor,
     load_herbal_recipe_catalog,
@@ -169,6 +170,7 @@ def _sheet_source_label(value):
 
 def _known_recipe_lines(sim, player_eid):
     known_recipes = known_recipes_for_actor(sim, player_eid)
+    known_methods = known_improvised_methods_for_actor(sim, player_eid)
     known_mechanical = known_mechanical_recipes_for_actor(sim, player_eid)
     known_traits = known_plant_traits_for_actor(sim, player_eid)
     catalog = load_herbal_recipe_catalog()
@@ -176,7 +178,10 @@ def _known_recipe_lines(sim, player_eid):
 
     lines = [
         "RECIPES",
-        f"Known recipes {len(known_recipes) + len(known_mechanical)} | Plant affinities {len(known_traits)}",
+        (
+            f"Known recipes {len(known_recipes) + len(known_mechanical)} | "
+            f"Improvised methods {len(known_methods)} | Plant affinities {len(known_traits)}"
+        ),
         "",
         "HERBAL MEDICINE",
     ]
@@ -205,6 +210,38 @@ def _known_recipe_lines(sim, player_eid):
                 lines.append(f"{_sheet_title_label(recipe_id)}: recipe data missing | {source_kind}")
     else:
         lines.append("No herbal recipes learned yet.")
+
+    lines.extend(["", "IMPROVISED METHODS"])
+    if known_methods:
+        method_rows = []
+        for signature, knowledge in known_methods.items():
+            if not isinstance(knowledge, dict):
+                continue
+            component_names = tuple(
+                str(value or "").strip()
+                for value in tuple(knowledge.get("component_names", ()) or ())
+                if str(value or "").strip()
+            )
+            output_name = str(knowledge.get("output_name") or "Improvised Herbal Blend").strip() or "Improvised Herbal Blend"
+            learned_tick = int(knowledge.get("learned_tick", 0) or 0)
+            method_rows.append((learned_tick, "+".join(component_names).lower(), str(signature), component_names, output_name, knowledge))
+        for _learned_tick, _name_key, _signature, component_names, output_name, knowledge in sorted(method_rows):
+            ingredients = " + ".join(component_names) or "Unknown plant materials"
+            mix_count = max(1, int(knowledge.get("mix_count", 1) or 1))
+            preparation_methods = tuple(
+                _sheet_text_label(value, fallback="")
+                for value in tuple(knowledge.get("preparation_methods", ()) or ())
+                if _sheet_text_label(value, fallback="")
+            )
+            suffix_bits = []
+            if preparation_methods:
+                suffix_bits.append("/".join(preparation_methods))
+            if mix_count > 1:
+                suffix_bits.append(f"mixed {mix_count}x")
+            suffix = f" | {' | '.join(suffix_bits)}" if suffix_bits else ""
+            lines.append(f"{ingredients} -> {output_name}{suffix}")
+    else:
+        lines.append("No useful improvised methods recorded yet.")
 
     lines.extend(["", "MECHANICAL DEVICES"])
     mechanical_catalog = load_mechanical_recipe_catalog()

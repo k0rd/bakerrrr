@@ -494,6 +494,11 @@ class EventLogSystem(System):
         self.sim.events.subscribe("organization_supply_agreement_created", self.on_organization_supply_agreement_created)
         self.sim.events.subscribe("organization_supply_delivery", self.on_organization_supply_delivery)
         self.sim.events.subscribe("organization_supply_disrupted", self.on_organization_supply_disrupted)
+        self.sim.events.subscribe("corporate_neighborhood_presence_changed", self.on_corporate_neighborhood_presence_changed)
+        self.sim.events.subscribe("corporate_scrutiny_changed", self.on_corporate_scrutiny_changed)
+        self.sim.events.subscribe("corporate_occupation_disrupted", self.on_corporate_occupation_disrupted)
+        self.sim.events.subscribe("corporate_sensor_restored", self.on_corporate_sensor_restored)
+        self.sim.events.subscribe("corporate_security_detail_deployed", self.on_corporate_security_detail_deployed)
         self.sim.events.subscribe("hunting_carcass_harvested", self.on_hunting_carcass_harvested)
         self.sim.events.subscribe("hunting_carcass_blocked", self.on_hunting_carcass_blocked)
         self.sim.events.subscribe("flora_harvested", self.on_flora_harvested)
@@ -3042,6 +3047,8 @@ class EventLogSystem(System):
         recipe_name = str(event.data.get("recipe_name") or "recipe").strip() or "recipe"
         credits = int(event.data.get("credits_spent", 0) or 0)
         text = f"You turned {count} plant material{'s' if count != 1 else ''} into {output_name} using {recipe_name}."
+        if bool(event.data.get("improvised_method_was_new")):
+            text += " Method recorded in Recipes."
         if credits > 0:
             text = f"You paid {credits} cr and " + text[0].lower() + text[1:]
         _log_player_feedback(self.sim, text, kind="craft")
@@ -6167,6 +6174,113 @@ class EventLogSystem(System):
             priority="high",
             dedupe_window=20,
             dedupe_key=f"supply-disrupted:{event.data.get('agreement_id')}",
+        )
+
+    def on_corporate_neighborhood_presence_changed(self, event):
+        chunk = event.data.get("chunk")
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if player_pos is None or tuple(self.sim.chunk_coords(int(player_pos.x), int(player_pos.y))) != (int(chunk[0]), int(chunk[1])):
+            return
+        brand = str(event.data.get("brand", event.data.get("organization_name", "A corporation")) or "A corporation").strip()
+        tier_key = str(event.data.get("tier_key", "foothold") or "foothold").strip().lower()
+        if tier_key == "managed_enclave":
+            text = f"[CORP] {brand} has made the neighborhood read like a managed enclave."
+        elif tier_key == "advertising_hub":
+            text = f"[CORP] {brand} advertising now repeats across the neighborhood."
+        elif tier_key == "branded_corridor":
+            text = f"[CORP] {brand} colors are spreading along the block."
+        else:
+            text = f"[CORP] {brand} has established a visible foothold here."
+        self._log(
+            text,
+            channel="mission",
+            priority="normal",
+            dedupe_window=120,
+            dedupe_key=f"corporate-presence:{event.data.get('organization_eid')}:{chunk[0]}:{chunk[1]}:{tier_key}",
+        )
+
+    def _corporate_event_is_local(self, event):
+        if event.data.get("eid") == self.player_eid:
+            return True
+        chunk = event.data.get("chunk")
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if player_pos is None or not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return self._player_can_perceive_event_position(event)
+        return tuple(self.sim.chunk_coords(int(player_pos.x), int(player_pos.y))) == (
+            int(chunk[0]),
+            int(chunk[1]),
+        )
+
+    def on_corporate_scrutiny_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        brand = str(
+            event.data.get("brand", event.data.get("organization_name", "Corporate security"))
+            or "Corporate security"
+        ).strip()
+        action = str(event.data.get("action", "watch") or "watch").strip().lower()
+        if action == "deny_entry":
+            text = f"[CORP] {brand} security has your description; branch doors are closing."
+            priority = "high"
+        elif action == "deny_service":
+            text = f"[CORP] {brand} counters have your description; service is drying up."
+            priority = "high"
+        else:
+            text = f"[CORP] {brand} street optics hold on you as you cross the block."
+            priority = "normal"
+        self._log(
+            text,
+            channel="alerts",
+            priority=priority,
+            dedupe_window=80,
+            dedupe_key=f"corporate-scrutiny:{event.data.get('organization_eid')}:{action}",
+        )
+
+    def on_corporate_occupation_disrupted(self, event):
+        if not self._corporate_event_is_local(event):
+            return
+        brand = str(event.data.get("organization_name", "Corporate") or "Corporate").strip()
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        if reason in {"sensor_blinded", "sensor_destroyed"}:
+            text = f"[CORP] One layer of {brand} surveillance goes dark across the block."
+        else:
+            text = f"[CORP] {brand}'s grip on the block slips."
+        self._log(
+            text,
+            channel="alerts",
+            priority="normal",
+            dedupe_window=30,
+            dedupe_key=f"corporate-disruption:{event.data.get('organization_eid')}:{reason}",
+        )
+
+    def on_corporate_sensor_restored(self, event):
+        if not self._corporate_event_is_local(event):
+            return
+        label = str(event.data.get("property_name", "corporate street optic") or "corporate street optic").strip()
+        self._log(
+            f"[CORP] Contractors bring {label} back online.",
+            channel="world",
+            priority="normal",
+            dedupe_window=80,
+            dedupe_key=f"corporate-sensor-restored:{event.data.get('property_id')}",
+        )
+
+    def on_corporate_security_detail_deployed(self, event):
+        if not self._corporate_event_is_local(event):
+            return
+        brand = str(event.data.get("organization_name", "Corporate") or "Corporate").strip()
+        if str(event.data.get("force_style", "") or "").strip().lower() == "contractor_screen":
+            text = f"[CORP] Plain-clothes contractors begin orbiting a {brand} principal."
+        else:
+            text = f"[CORP] {brand} security takes position around one of its principals."
+        self._log(
+            text,
+            channel="world",
+            priority="normal",
+            dedupe_window=120,
+            dedupe_key=f"corporate-security-detail:{event.data.get('organization_eid')}:{event.data.get('principal_eid')}",
         )
 
     def on_business_scene_posture_started(self, event):

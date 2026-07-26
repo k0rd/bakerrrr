@@ -362,7 +362,13 @@ def ensure_herbal_state(sim):
         sim.herbal_known_plant_traits = {}
     if not isinstance(getattr(sim, "herbal_known_recipes", None), dict):
         sim.herbal_known_recipes = {}
-    return sim.herbal_known_plant_traits, sim.herbal_known_recipes
+    if not isinstance(getattr(sim, "herbal_known_improvised_methods", None), dict):
+        sim.herbal_known_improvised_methods = {}
+    return (
+        sim.herbal_known_plant_traits,
+        sim.herbal_known_recipes,
+        sim.herbal_known_improvised_methods,
+    )
 
 
 def _genetics_bias_terms(data):
@@ -923,13 +929,18 @@ def herbal_ingredient_display_name(item_id, plant_name):
 
 
 def known_plant_traits_for_actor(sim, eid):
-    known_traits, _known_recipes = ensure_herbal_state(sim)
+    known_traits, _known_recipes, _known_methods = ensure_herbal_state(sim)
     return dict(known_traits.get(_actor_key(eid), {}) or {})
 
 
 def known_recipes_for_actor(sim, eid):
-    _known_traits, known_recipes = ensure_herbal_state(sim)
+    _known_traits, known_recipes, _known_methods = ensure_herbal_state(sim)
     return dict(known_recipes.get(_actor_key(eid), {}) or {})
+
+
+def known_improvised_methods_for_actor(sim, eid):
+    _known_traits, _known_recipes, known_methods = ensure_herbal_state(sim)
+    return copy.deepcopy(dict(known_methods.get(_actor_key(eid), {}) or {}))
 
 
 def plant_trait_known(sim, eid, plant_id):
@@ -941,7 +952,7 @@ def learn_plant_trait(sim, eid, plant_id, *, source_kind="recipe"):
     class_id = plant_chemistry_class(sim, plant_id)
     if not plant_id or not class_id:
         return False
-    known_traits, _known_recipes = ensure_herbal_state(sim)
+    known_traits, _known_recipes, _known_methods = ensure_herbal_state(sim)
     actor_key = _actor_key(eid)
     rows = known_traits.setdefault(actor_key, {})
     was_new = plant_id not in rows
@@ -973,7 +984,7 @@ def learn_herbal_recipe(sim, eid, recipe_id, *, source_kind="recipe_sale", revea
     recipe_id = _key(recipe_id)
     if recipe_id not in recipes:
         return None
-    _known_traits, known_recipes = ensure_herbal_state(sim)
+    _known_traits, known_recipes, _known_methods = ensure_herbal_state(sim)
     actor_key = _actor_key(eid)
     rows = known_recipes.setdefault(actor_key, {})
     was_new = recipe_id not in rows
@@ -986,6 +997,92 @@ def learn_herbal_recipe(sim, eid, recipe_id, *, source_kind="recipe_sale", revea
         recipe = recipes[recipe_id]
         revealed = tuple(_reveal_recipe_plants(sim, eid, recipe, prop=prop, limit=max(1, int(recipe.get("component_count", 2) or 2))))
     return {"recipe": recipes[recipe_id], "was_new": was_new, "revealed_plants": revealed}
+
+
+def remember_improvised_herbal_method(
+    sim,
+    eid,
+    component_payload,
+    *,
+    output_item_id,
+    output_name,
+    preparation_method="",
+    item_quality="",
+    result_read="",
+):
+    """Remember one useful non-catalogue plant formula for an actor."""
+    components = []
+    for raw in tuple(component_payload or ()):
+        if not isinstance(raw, Mapping):
+            continue
+        plant_id = _key(raw.get("plant_id"))
+        item_id = _key(raw.get("item_id"))
+        class_id = _key(raw.get("chemistry_class"))
+        traits = tuple(
+            dict.fromkeys(
+                _key(trait)
+                for trait in tuple(raw.get("secondary_traits", ()) or ())
+                if _key(trait) in SECONDARY_TRAITS
+            )
+        )
+        plant_name = str(raw.get("plant_name") or plant_id.replace("_", " ") or "").strip()
+        if plant_name and item_id in HERBAL_INGREDIENT_ITEM_IDS:
+            component_name = herbal_ingredient_display_name(item_id, plant_name)
+        else:
+            component_name = item_display_name(item_id or plant_id, item_catalog=ITEM_CATALOG)
+        identity = ":".join((plant_id or "-", item_id or "-", class_id or "-", ",".join(traits) or "-"))
+        components.append({
+            "identity": identity,
+            "plant_id": plant_id,
+            "plant_name": plant_name,
+            "item_id": item_id,
+            "component_name": component_name,
+            "chemistry_class": class_id,
+            "secondary_traits": list(traits),
+        })
+    components.sort(key=lambda row: (str(row.get("component_name", "")).lower(), str(row.get("identity", ""))))
+    if len(components) < 2:
+        return None
+
+    signature = "|".join(sorted(str(row.get("identity", "")) for row in components))
+    _known_traits, _known_recipes, known_methods = ensure_herbal_state(sim)
+    actor_rows = known_methods.setdefault(_actor_key(eid), {})
+    existing = actor_rows.get(signature)
+    row = dict(existing) if isinstance(existing, Mapping) else {}
+    now = _safe_int(getattr(sim, "tick", 0), 0)
+    was_new = signature not in actor_rows
+    if "learned_tick" not in row:
+        row["learned_tick"] = now
+    row.update({
+        "signature": signature,
+        "component_names": [str(component.get("component_name", "")) for component in components],
+        "component_plants": [str(component.get("plant_id", "")) for component in components],
+        "component_classes": [str(component.get("chemistry_class", "")) for component in components],
+        "component_secondary_traits": [list(component.get("secondary_traits", ())) for component in components],
+        "output_item_id": _key(output_item_id),
+        "output_name": str(output_name or "improvised herbal blend").strip() or "improvised herbal blend",
+        "last_mixed_tick": now,
+        "mix_count": max(0, _safe_int(row.get("mix_count"), 0)) + 1,
+        "source_kind": "experiment",
+    })
+    method = _key(preparation_method)
+    methods = [
+        _key(value)
+        for value in tuple(row.get("preparation_methods", ()) or ())
+        if _key(value)
+    ]
+    if method and method not in methods:
+        methods.append(method)
+    if methods:
+        row["preparation_methods"] = methods
+    quality = _key(item_quality)
+    if quality:
+        row["last_item_quality"] = quality
+    read = str(result_read or "").strip()
+    if read:
+        row["result_read"] = read
+    actor_rows[signature] = row
+    return {"signature": signature, "was_new": was_new, "method": copy.deepcopy(row)}
 
 
 def _plants_near_actor(sim, eid, radius=12):
@@ -2013,6 +2110,20 @@ def craft_herbal_medicine(
         result["discovered_recipe"] = bool(discovered_recipe)
         if diluted_target_recipe is not None:
             result["target_recipe_id"] = diluted_target_recipe["id"]
+    if experiment_result == "useful":
+        remembered = remember_improvised_herbal_method(
+            sim,
+            eid,
+            component_payload,
+            output_item_id=output_item_id,
+            output_name=item_display_name(output_item_id, metadata=output_metadata, item_catalog=ITEM_CATALOG),
+            preparation_method=output_metadata.get("preparation_method"),
+            item_quality=output_metadata.get("item_quality"),
+            result_read=output_metadata.get("herbal_result_read"),
+        )
+        if remembered:
+            result["improvised_method_signature"] = remembered.get("signature")
+            result["improvised_method_was_new"] = bool(remembered.get("was_new"))
     if emit_event:
         sim.emit(Event("herbal_medicine_crafted", eid=eid, **result))
     return result

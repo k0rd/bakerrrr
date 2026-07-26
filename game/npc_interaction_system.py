@@ -145,6 +145,7 @@ from game.cult_runtime import (
     mark_cult_known,
     player_knows_cult,
 )
+from game.corporate_occupation_runtime import corporate_labor_terms_for_property, corporate_lived_dialogue_context
 from game.outfit_impression import (
     apply_visible_outfit_social_offset,
     visible_outfit_impression,
@@ -470,6 +471,7 @@ class NPCInteractionSystem(System):
         "opportunities",
         "attention",
         "contacts",
+        "corporate_presence",
         "where_place",
         "hire",
         "fire",
@@ -485,7 +487,7 @@ class NPCInteractionSystem(System):
         "apologize",
         "leave",
     }
-    MISSTEP_TOPICS = ("weird", "pry", "insult")
+    MISSTEP_TOPICS = ("weird", "pry", "provoke", "intimidate", "insult")
     RARE_FEATURE_TEACHING_CHANCE = 0.02
     RARE_FEATURE_TEACHING_LINES = (
         "No clean work from me. Strange thing, though: more than thirty original plants grow out here, and careful hands can crossbreed them into new seed.",
@@ -506,6 +508,8 @@ class NPCInteractionSystem(System):
         "job_feel",
         "routine",
         "workplace",
+        "corporate_presence",
+        "corporate_pull",
         "services",
         "local_economy",
         "store_buy_policy",
@@ -549,6 +553,7 @@ class NPCInteractionSystem(System):
         "security",
         "owner",
         "organization",
+        "corporate_cost",
         "cult",
         "supervisor",
         "people",
@@ -582,6 +587,8 @@ class NPCInteractionSystem(System):
         "fire",
         "insult",
         "pry",
+        "provoke",
+        "intimidate",
         "weird",
         "backup_kill",
         "contract",
@@ -6815,6 +6822,7 @@ class NPCInteractionSystem(System):
         add_premium("commute", factors.get("commute_burden_units", 0))
         add_premium("career_change", factors.get("career_change_units", 0))
         add_premium("role_fit", factors.get("role_fit_units", 0))
+        add_premium("corporate_labor", factors.get("corporate_labor_units", 0))
         add_premium("local_pressure", factors.get("pressure_units", 0))
         if bool(factors.get("spoiled_partner_preference")):
             add_premium("spoiled_partner", 2)
@@ -6829,6 +6837,7 @@ class NPCInteractionSystem(System):
             "partner_roots": 9,
             "family_roots": 8,
             "career_change": 7,
+            "corporate_labor": 7,
             "commute": 6,
             "current_pay": 5,
             "job_attachment": 4,
@@ -6967,6 +6976,9 @@ class NPCInteractionSystem(System):
             heat_penalty += 0.006
             pressure_units = 1 + (1 if bravery < 0.34 else 0)
 
+        corporate_labor = corporate_labor_terms_for_property(self.sim, target_prop)
+        corporate_labor_units = max(0, int(corporate_labor.get("premium_units", 0) or 0))
+
         lifestyle_credit = 0
         if commute_delta is not None and int(commute_delta) >= 8:
             lifestyle_credit += 1 + (1 if int(commute_delta) >= 20 else 0)
@@ -7006,6 +7018,8 @@ class NPCInteractionSystem(System):
             "role_fit_label": role_fit_label,
             "role_fit_units": int(role_fit_units),
             "pressure_units": int(pressure_units),
+            "corporate_labor_units": int(corporate_labor_units),
+            "corporate_labor_brand": str(corporate_labor.get("brand", "") or "").strip(),
             "lifestyle_credit": int(lifestyle_credit),
             "loyalty": round(float(loyalty), 3),
             "discipline": round(float(discipline), 3),
@@ -7097,6 +7111,11 @@ class NPCInteractionSystem(System):
                 "With the block this hot, showing up for a shift carries extra risk.",
                 "There is enough trouble around here that I need the risk priced in.",
                 "Work is one thing; working through this much pressure is another.",
+            ),
+            "corporate_labor": (
+                f"{str(factors.get('corporate_labor_brand', 'The corporation') or 'The corporation')} is pulling dependable workers toward its own counters.",
+                f"{str(factors.get('corporate_labor_brand', 'The corporation') or 'The corporation')} has pushed the going rate up around here.",
+                f"Competing with {str(factors.get('corporate_labor_brand', 'the corporate operation') or 'the corporate operation')} costs more on this block.",
             ),
         }
         if reason == "social_roots" and root_relation == "coworker":
@@ -7535,6 +7554,12 @@ class NPCInteractionSystem(System):
             if referenced_place_prop else ""
         )
         organization = self._organization_snapshot(npc_eid, occupation, workplace_prop)
+        corporate_lived = corporate_lived_dialogue_context(
+            self.sim,
+            npc_eid,
+            workplace_prop=workplace_prop,
+            current_prop=current_prop,
+        )
         bond = bond if bond is not None else self._bond_snapshot(npc_eid)
         rapport = self._conversation_rapport()
         person_entry = self._player_person_contact_entry(npc_eid)
@@ -7968,6 +7993,18 @@ class NPCInteractionSystem(System):
             "coworker_names": tuple(organization.get("coworker_names", ()) or ()),
             "coworker_count": int(organization.get("coworker_count", 0) or 0),
             "organization_member_count": int(organization.get("member_count", 0) or 0),
+            "corporate_lived_context": dict(corporate_lived) if isinstance(corporate_lived, dict) else {},
+            "corporate_lived_available": bool((corporate_lived or {}).get("available")),
+            "corporate_presence_here": bool((corporate_lived or {}).get("local_here")),
+            "corporate_brand": str((corporate_lived or {}).get("brand", "") or "").strip(),
+            "corporate_doctrine_label": str((corporate_lived or {}).get("doctrine_label", "") or "").strip(),
+            "corporate_viewpoint": str((corporate_lived or {}).get("viewpoint", "local") or "local").strip().lower(),
+            "corporate_stance": str((corporate_lived or {}).get("stance", "conflicted") or "conflicted").strip().lower(),
+            "corporate_public_read": str((corporate_lived or {}).get("public_read", "") or "").strip(),
+            "corporate_benefit": str((corporate_lived or {}).get("benefit", "") or "").strip(),
+            "corporate_benefit_alt": str((corporate_lived or {}).get("benefit_alt", "") or "").strip(),
+            "corporate_cost": str((corporate_lived or {}).get("cost", "") or "").strip(),
+            "corporate_cost_alt": str((corporate_lived or {}).get("cost_alt", "") or "").strip(),
             "home_name": str(home_prop.get("name", home_prop.get("id", "home"))).strip() if home_prop else "",
             "workplace_name": str(workplace_prop.get("name", workplace_prop.get("id", "place"))).strip() if workplace_prop else "",
             "workplace_here": workplace_here,
@@ -8831,6 +8868,79 @@ class NPCInteractionSystem(System):
             return f"No bigger outfit than {workplace_name} that I know."
         return ""
 
+    def _corporate_presence_read(self, context):
+        if not isinstance(context, dict) or not context.get("corporate_lived_available"):
+            return ""
+        brand = str(context.get("corporate_brand", "") or "").strip() or "The corporation"
+        public_read = str(context.get("corporate_public_read", "") or "").strip().rstrip(".")
+        if public_read:
+            return f"{brand} has enough ground here that {public_read}."
+        return f"{brand} has enough ground here that its signs, terms, and security shape the block."
+
+    def _resolve_corporate_dialogue_topic(self, context, topic_id, *, ask_count):
+        topic_id = str(topic_id or "").strip().lower()
+        stance = str(context.get("corporate_stance", "conflicted") or "conflicted").strip().lower()
+        viewpoint = str(context.get("corporate_viewpoint", "local") or "local").strip().lower()
+        if stance not in {"loyal", "conflicted", "critical"}:
+            stance = "conflicted"
+
+        if topic_id == "corporate_presence":
+            read = self._corporate_presence_read(context)
+            if not read:
+                return {"npc_lines": ["Their signs do not carry enough weight here for me to give you a clean answer."]}
+            if viewpoint in {"member", "affiliate"} and stance != "critical":
+                bank_id = "corporate_presence_member"
+            elif stance == "critical":
+                bank_id = "corporate_presence_critical"
+            else:
+                bank_id = "corporate_presence_conflicted"
+            return {
+                "npc_lines": [
+                    self._say(
+                        bank_id,
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                        corporate_presence_read=read,
+                    )
+                ]
+            }
+
+        fact_key = "benefit" if topic_id == "corporate_pull" else "cost"
+        if ask_count > 1 and str(context.get(f"corporate_{fact_key}_alt", "") or "").strip():
+            fact_key = f"{fact_key}_alt"
+        fact = str(context.get(f"corporate_{fact_key}", "") or "").strip()
+        if not fact:
+            return {"npc_lines": ["I do not have a clean read on that part of their presence."]}
+        fact_lc = _dialogue_lower_start(fact)
+        if topic_id == "corporate_pull":
+            bank_id = f"corporate_pull_{stance}"
+            return {
+                "npc_lines": [
+                    self._say(
+                        bank_id,
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                        corporate_benefit=fact,
+                        corporate_benefit_lc=fact_lc,
+                    )
+                ]
+            }
+        bank_id = f"corporate_cost_{stance}"
+        return {
+            "npc_lines": [
+                self._say(
+                    bank_id,
+                    context,
+                    topic_id=topic_id,
+                    count=ask_count,
+                    corporate_cost=fact,
+                    corporate_cost_lc=fact_lc,
+                )
+            ]
+        }
+
     def _supervisor_summary(self, context):
         organization_role = str(context.get("organization_role", "")).strip().lower()
         supervisor_eid = context.get("supervisor_eid")
@@ -9132,12 +9242,25 @@ class NPCInteractionSystem(System):
             return ""
         kind = str(anchor.get("kind", "") or "").strip().lower()
         tone = str(context.get("tone", "neutral") or "neutral").strip().lower() or "neutral"
-        if kind in {"warned_me_off", "i_pushed_too_far", "i_insulted_them"} and not has_direct_history:
+        if kind in {
+            "warned_me_off",
+            "i_pushed_too_far",
+            "i_pried_into_them",
+            "i_provoked_them",
+            "i_threatened_them",
+            "i_insulted_them",
+        } and not has_direct_history:
             return ""
         if kind == "warned_me_off":
             return "We have had this talk before. Keep it cleaner this time."
         if kind == "i_pushed_too_far":
             return "Last time you pushed too far. Do not make me drag us back there."
+        if kind == "i_pried_into_them":
+            return "Last time you dug something personal out of me. I remember the cost of that answer."
+        if kind == "i_provoked_them":
+            return "Last time you needled me until I stopped being polite. Do not expect a blank slate."
+        if kind == "i_threatened_them":
+            return "You threatened me last time. Choose your next words carefully."
         if kind == "i_insulted_them":
             return "Last time you took a cheap shot. I have not misplaced that."
         if kind == "offered_vouch":
@@ -9177,6 +9300,12 @@ class NPCInteractionSystem(System):
             return "Quieter than the last time we crossed paths, which suits me."
         if kind == "i_pushed_too_far":
             return "Better than the last conversation ended, and I would like to keep it that way."
+        if kind == "i_pried_into_them":
+            return "Guarded. Last time I answered more than you had earned."
+        if kind == "i_provoked_them":
+            return "Calmer than when you came looking for a reaction."
+        if kind == "i_threatened_them":
+            return "Still remembering that you thought a threat was a conversation."
         if kind == "i_insulted_them":
             return "Steadier than the mood you caught me in last time."
         return "Still upright. That counts."
@@ -9190,7 +9319,14 @@ class NPCInteractionSystem(System):
         if outcome not in {"open", "warm", "reserved", "rebuff"}:
             outcome = ""
         kind = str(anchor.get("kind", "") or "").strip().lower()
-        if kind in {"warned_me_off", "i_pushed_too_far", "i_insulted_them"}:
+        if kind in {
+            "warned_me_off",
+            "i_pushed_too_far",
+            "i_pried_into_them",
+            "i_provoked_them",
+            "i_threatened_them",
+            "i_insulted_them",
+        }:
             if topic_id in {"read_player", "care_about"}:
                 return "We are not talking on a blank slate."
             if topic_id in {"contacts", "introduction", "vouch"} and outcome in {"reserved", "rebuff"}:
@@ -11953,11 +12089,23 @@ class NPCInteractionSystem(System):
             return total_asked >= 2
         if topic_id == "pry":
             return total_asked >= 3 or missteps >= 1 or tone == "wary"
+        if topic_id == "provoke":
+            return total_asked >= 2 or missteps >= 1 or tone == "wary"
+        if topic_id == "intimidate":
+            return total_asked >= 2 or missteps >= 1 or tone == "wary"
         if topic_id == "insult":
             return total_asked >= 4 or self._dialogue_topic_count(npc_eid, "pry") > 0 or missteps >= 1 or tone == "wary"
         return False
 
-    def _emit_dialogue_offended(self, npc_eid, *, context_id, perceived, offense_score):
+    def _emit_dialogue_offended(
+        self,
+        npc_eid,
+        *,
+        context_id,
+        perceived,
+        offense_score,
+        violence_eligible=False,
+    ):
         if npc_eid is None or perceived <= 0.0 or offense_score <= 0:
             return
         self.sim.emit(Event(
@@ -11969,7 +12117,88 @@ class NPCInteractionSystem(System):
             offense_score=int(offense_score),
             offense_tier=_offense_tier(offense_score),
             perceived=round(float(perceived), 3),
+            violence_eligible=bool(violence_eligible),
         ))
+
+    def _negative_dialogue_disclosure_line(self, context, tactic, *, ask_count=1):
+        """Return the concrete thing a risky social tactic managed to uncover."""
+        tactic = str(tactic or "").strip().lower()
+        prompt = str(context.get("selected_player_prompt_text", "") or "").strip().lower()
+
+        if tactic == "pry":
+            if "worry" in prompt or "quiet" in prompt:
+                return self._concern_summary(context)
+            if "trust" in prompt:
+                leads = list(context.get("social_leads", ()) or ())
+                if leads:
+                    return self._social_lead_sentence(leads[0])
+                return self._rapport_relationship_notes(context).get("note", "")
+            if "understood" in prompt:
+                return self._rapport_care_note(context)
+            if "off the record" in prompt:
+                return self._rapport_roots_note(context) or self._rapport_job_note(context)
+            if "changed your mind" in prompt:
+                return self._rapport_relationship_notes(context).get("note", "")
+            options = (
+                self._rapport_care_note(context),
+                self._rapport_roots_note(context),
+                self._rapport_job_note(context),
+                self._concern_summary(context),
+            )
+            options = tuple(str(line or "").strip() for line in options if str(line or "").strip())
+            return self._cycled_dialogue_line(options, ask_count) if options else ""
+
+        if tactic == "provoke":
+            return str(self._rapport_relationship_notes(context).get("note", "") or "").strip()
+
+        if tactic != "intimidate":
+            return ""
+
+        local_source = str(context.get("local_source", "") or "").strip().lower()
+        if local_source == "scene_event":
+            self._learn_scene_followup(context, source="npc_dialogue_intimidation")
+            return (
+                str(context.get("scene_detail_line", "") or "").strip()
+                or str(context.get("detail_line", "") or "").strip()
+                or str(context.get("scene_local_line", "") or "").strip()
+            )
+        if local_source == "opportunity":
+            quality = self._dialogue_pressure_intel_quality(context, "intimidate")
+            summary = self._opportunity_summary(context, quality=quality)
+            detail = (
+                self._cycled_dialogue_line(
+                    self._opportunity_angle_lines(context, quality=quality, include_final_operation=False),
+                    max(1, int(ask_count)),
+                )
+                or self._cycled_dialogue_line(
+                    self._opportunity_risk_lines(context, quality=quality, include_final_operation=False),
+                    max(1, int(ask_count)),
+                )
+                or summary
+            )
+            self._learn_dialogue_opportunity(
+                context,
+                source="npc_dialogue_intimidation",
+                confidence_mult=float(quality.get("confidence_mult", 1.0)),
+            )
+            if summary:
+                self.sim.emit(Event(
+                    "dialogue_opportunity_hint",
+                    eid=self.player_eid,
+                    npc_eid=context.get("npc_eid"),
+                    summary=summary,
+                    detail=detail,
+                ))
+            return str(detail or summary or "").strip()
+        if local_source == "rumor":
+            return (
+                str(context.get("detail_line", "") or "").strip()
+                or str(context.get("rumor_line", "") or "").strip()
+            )
+        return (
+            str(context.get("detail_line", "") or "").strip()
+            or self._concern_summary(context)
+        )
 
     def _resolve_social_misstep(self, context, tactic, *, ask_count=1):
         tactic = str(tactic or "").strip().lower()
@@ -11983,8 +12212,9 @@ class NPCInteractionSystem(System):
         bravery = float(getattr(npc_traits, "bravery", 0.5))
         trust = float(bond.get("trust", 0.0))
         closeness = float(bond.get("closeness", 0.0))
-        (_perception, conversation, _streetwise), _ = self._player_social_axes()
+        (_perception, conversation, streetwise), _ = self._player_social_axes()
         conversation = float(conversation)
+        streetwise = float(streetwise)
 
         total_asked = self._dialogue_total_topics_asked(npc_eid)
         misstep_count = max(0, self._dialogue_misstep_count(npc_eid) - 1)
@@ -12056,6 +12286,83 @@ class NPCInteractionSystem(System):
                 close_dialog = True
                 perceived = 0.78
                 offense_score = 28
+        elif tactic == "provoke":
+            score = 0.18
+            score += (conversation / 10.0) * 0.14
+            score += (streetwise / 10.0) * 0.1
+            score += bravery * 0.18
+            score -= discipline * 0.26
+            score += trust * 0.08
+            score -= closeness * 0.05
+            score -= float(misstep_count) * 0.12
+            if tone == "wary":
+                score -= 0.04
+            if pressure_tier == "high":
+                score -= 0.05
+            if score >= 0.47:
+                bank_id = "provoke_soft"
+                outcome = "soft"
+                trust_delta = -0.025
+                closeness_delta = -0.015
+                perceived = 0.56
+                offense_score = 18
+            elif score >= 0.25:
+                bank_id = "provoke_wary"
+                outcome = "wary"
+                trust_delta = -0.055
+                closeness_delta = -0.03
+                perceived = 0.76
+                offense_score = 28
+            else:
+                bank_id = "provoke_fail"
+                outcome = "fail"
+                trust_delta = -0.09
+                closeness_delta = -0.055
+                close_dialog = True
+                perceived = 0.94
+                offense_score = 38
+        elif tactic == "intimidate":
+            safety = float(getattr(context.get("npc_needs") or NPCNeeds(), "safety", 70.0) or 70.0)
+            score = 0.3
+            score += (conversation / 10.0) * 0.08
+            score += (streetwise / 10.0) * 0.24
+            score -= bravery * 0.32
+            score -= discipline * 0.2
+            score -= float(misstep_count) * 0.12
+            if safety < 40.0:
+                score += min(0.12, (40.0 - safety) / 180.0)
+            if str(context.get("role_id", "") or "").strip().lower() in {
+                "guard",
+                "detective",
+                "inspector",
+                "investigator",
+                "ranger",
+            }:
+                score -= 0.16
+            if score >= 0.46:
+                bank_id = "intimidate_soft"
+                outcome = "soft"
+                trust_delta = -0.06
+                closeness_delta = -0.035
+                close_dialog = True
+                perceived = 0.84
+                offense_score = 34
+            elif score >= 0.22:
+                bank_id = "intimidate_wary"
+                outcome = "wary"
+                trust_delta = -0.09
+                closeness_delta = -0.05
+                close_dialog = True
+                perceived = 0.94
+                offense_score = 46
+            else:
+                bank_id = "intimidate_fail"
+                outcome = "fail"
+                trust_delta = -0.13
+                closeness_delta = -0.075
+                close_dialog = True
+                perceived = 1.0
+                offense_score = 62
         else:
             score -= 0.18
             if score >= 0.68:
@@ -12087,6 +12394,13 @@ class NPCInteractionSystem(System):
             ask_count=ask_count,
             outcome=outcome,
         ) or self._say(bank_id, context, topic_id=tactic, count=ask_count)
+        disclosure = ""
+        if outcome == "soft" and tactic in {"pry", "provoke", "intimidate"}:
+            disclosure = self._negative_dialogue_disclosure_line(
+                context,
+                tactic,
+                ask_count=ask_count,
+            )
         self._shift_dialogue_bond(
             npc_eid,
             trust_delta=trust_delta,
@@ -12098,6 +12412,7 @@ class NPCInteractionSystem(System):
             context_id=f"dialogue_{tactic}",
             perceived=perceived,
             offense_score=offense_score,
+            violence_eligible=(tactic == "intimidate"),
         )
         if close_dialog and offense_score >= 24:
             self._activate_dialogue_refusal(
@@ -12106,12 +12421,48 @@ class NPCInteractionSystem(System):
                 perceived=perceived,
                 offense_score=offense_score,
             )
-        if tactic == "pry" and outcome in {"wary", "fail"}:
+        if tactic == "pry":
             self._remember_player_relationship_episode(
                 npc_eid,
-                kind="i_pushed_too_far",
+                kind="i_pried_into_them" if outcome == "soft" else "i_pushed_too_far",
                 valence="negative",
-                summary="You pushed too far and they closed up.",
+                summary=(
+                    "You pried into something personal and they answered."
+                    if outcome == "soft"
+                    else "You pushed too far and they closed up."
+                ),
+                source_topic=tactic,
+                relation_kind=(context.get("bond") or {}).get("kind"),
+                standing=float(context.get("contact_standing", 0.0) or 0.0),
+                met_directly=bool(context.get("met_directly")),
+                benefits={"known_name"} if self._player_knows_person_name(npc_eid) else (),
+            )
+        elif tactic == "provoke":
+            self._remember_player_relationship_episode(
+                npc_eid,
+                kind="i_provoked_them",
+                valence="negative",
+                summary=(
+                    "You provoked them into telling you what they really thought."
+                    if outcome == "soft"
+                    else "You tried to provoke them and made the relationship worse."
+                ),
+                source_topic=tactic,
+                relation_kind=(context.get("bond") or {}).get("kind"),
+                standing=float(context.get("contact_standing", 0.0) or 0.0),
+                met_directly=bool(context.get("met_directly")),
+                benefits={"known_name"} if self._player_knows_person_name(npc_eid) else (),
+            )
+        elif tactic == "intimidate":
+            self._remember_player_relationship_episode(
+                npc_eid,
+                kind="i_threatened_them",
+                valence="negative",
+                summary=(
+                    "You threatened them into giving you local information."
+                    if outcome == "soft"
+                    else "You threatened them and they refused to yield."
+                ),
                 source_topic=tactic,
                 relation_kind=(context.get("bond") or {}).get("kind"),
                 standing=float(context.get("contact_standing", 0.0) or 0.0),
@@ -12131,7 +12482,7 @@ class NPCInteractionSystem(System):
                 benefits={"known_name"} if self._player_knows_person_name(npc_eid) else (),
             )
         return {
-            "npc_lines": [line],
+            "npc_lines": [text for text in (line, disclosure) if str(text or "").strip()],
             "close": bool(close_dialog),
             "social_misstep": tactic,
             "social_outcome": outcome,
@@ -13027,6 +13378,13 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "organization" and not self._organization_summary(context):
                 continue
+            if topic_id == "corporate_presence" and not (
+                context.get("corporate_lived_available")
+                and context.get("corporate_presence_here")
+            ):
+                continue
+            if topic_id in {"corporate_pull", "corporate_cost"} and not context.get("corporate_lived_available"):
+                continue
             if topic_id == "supervisor" and not self._supervisor_summary(context):
                 continue
             if topic_id == "coworkers" and not self._coworker_summary(context):
@@ -13700,6 +14058,8 @@ class NPCInteractionSystem(System):
                     )
                 ]
             }
+        if topic_id in {"corporate_presence", "corporate_pull", "corporate_cost"}:
+            return self._resolve_corporate_dialogue_topic(context, topic_id, ask_count=ask_count)
         if topic_id == "supervisor":
             summary = self._supervisor_summary(context)
             bank_id = "supervisor" if summary else "supervisor_none"

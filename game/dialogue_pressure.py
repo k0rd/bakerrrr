@@ -22,9 +22,17 @@ TOPIC_FAMILIES = {
     "off_shift": "rapport",
     "care_about": "rapport",
     "read_player": "rapport",
+    "weird": "social_friction",
+    "pry": "social_friction",
+    "provoke": "social_friction",
+    "intimidate": "social_friction",
+    "insult": "social_friction",
     # Workplace / organization
     "workplace": "workplace",
     "organization": "workplace",
+    "corporate_presence": "workplace",
+    "corporate_pull": "workplace",
+    "corporate_cost": "workplace",
     "supervisor": "workplace",
     "coworkers": "workplace",
     "people": "workplace",
@@ -145,7 +153,7 @@ def repeated_topic_label(base_label, *, topic_id="", repeat_slot=0, ask_count=0,
     else:
         verb = "Ask again"
 
-    if topic_id in {"weird", "pry", "insult"}:
+    if topic_id in {"weird", "pry", "provoke", "intimidate", "insult"}:
         return label
     if verb == "Keep pushing":
         return f"Keep pushing: {stem}."

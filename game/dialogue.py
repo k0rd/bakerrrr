@@ -22,6 +22,9 @@ TOPIC_ORDER = (
     "object_meaning",
     "workplace",
     "organization",
+    "corporate_presence",
+    "corporate_pull",
+    "corporate_cost",
     "cult",
     "supervisor",
     "coworkers",
@@ -107,6 +110,8 @@ TOPIC_ORDER = (
     "attention",
     "weird",
     "pry",
+    "provoke",
+    "intimidate",
     "insult",
     "contacts",
     "introduction",
@@ -209,7 +214,22 @@ TOPIC_DEFS = {
     "organization": {
         "label": "Who do you work for?",
         "root": False,
-        "unlocks": ("supervisor", "coworkers", "people"),
+        "unlocks": ("supervisor", "coworkers", "people", "corporate_pull", "corporate_cost"),
+    },
+    "corporate_presence": {
+        "label": "What's the corporation doing around here?",
+        "root": True,
+        "unlocks": ("corporate_pull", "corporate_cost"),
+    },
+    "corporate_pull": {
+        "label": "Why do people choose them?",
+        "root": False,
+        "unlocks": ("services", "service_work"),
+    },
+    "corporate_cost": {
+        "label": "What does their presence cost people?",
+        "root": False,
+        "unlocks": (),
     },
     "cult": {
         "label": "What's that circle about?",
@@ -710,6 +730,16 @@ TOPIC_DEFS = {
     },
     "pry": {
         "label": "What's your interest here, anyway? [hostile]",
+        "root": False,
+        "unlocks": (),
+    },
+    "provoke": {
+        "label": "Needle them for an honest reaction. [hostile]",
+        "root": False,
+        "unlocks": (),
+    },
+    "intimidate": {
+        "label": "Pressure them for local information. [threat]",
         "root": False,
         "unlocks": (),
     },
@@ -1329,6 +1359,24 @@ PLAYER_TOPIC_BANKS = {
         "Who are you tied in with there?",
         "Whose outfit is {workplace_name}?",
         "Are you working for somebody there, or is it your show?",
+    ),
+    "corporate_presence": (
+        "What's {corporate_brand} doing to this block?",
+        "How much of this neighborhood belongs to {corporate_brand} now?",
+        "What's changed since {corporate_brand} moved in?",
+        "How does {corporate_brand} make itself felt around here?",
+    ),
+    "corporate_pull": (
+        "What makes {corporate_brand} worth dealing with?",
+        "Why do people choose {corporate_brand}?",
+        "What's the part of the {corporate_brand} pitch that actually works?",
+        "If I walked into their side of the block, what would I go there for?",
+    ),
+    "corporate_cost": (
+        "What's the part {corporate_brand} leaves out of the pitch?",
+        "Who pays for {corporate_brand} taking more ground?",
+        "What goes wrong once {corporate_brand} has enough control?",
+        "What's the real cost of dealing with {corporate_brand}?",
     ),
     "supervisor": (
         "So who calls the shots there?",
@@ -2084,6 +2132,130 @@ PLAYER_TOPIC_BANKS = {
             ),
         },
     ),
+    "provoke": (
+        {
+            "text": "Drop the polite act. What do you actually think of me?",
+            "npc_soft": (
+                "Fine. You asked for the part people usually soften.",
+                "Alright. No manners around it, then.",
+            ),
+            "npc_wary": (
+                "You do not get honesty by trying to start a fight.",
+                "I have a read on you. That does not mean you get to drag it out of me.",
+            ),
+            "npc_fail": (
+                "What I think is that this conversation is over.",
+                "You wanted a reaction. You can have the door closing.",
+            ),
+        },
+        {
+            "text": "Come on. Say the part you're swallowing.",
+            "npc_soft": (
+                "You really want the unsanded version? Fine.",
+                "Alright. You pulled at it, so here it is.",
+            ),
+            "npc_wary": (
+                "Do not mistake restraint for fear of saying it.",
+                "I am swallowing it because this was almost a civil conversation.",
+            ),
+            "npc_fail": (
+                "The part I was swallowing was goodbye.",
+                "Keep pushing for a reaction somewhere else.",
+            ),
+        },
+        {
+            "text": "You keep looking at me like you have something to say.",
+            "npc_soft": (
+                "I do. Since you insist, I will be plain.",
+                "That look had a reason. Listen carefully.",
+            ),
+            "npc_wary": (
+                "A look is not an invitation to pick a fight.",
+                "Maybe I was deciding whether this conversation was worth the trouble.",
+            ),
+            "npc_fail": (
+                "I have something to say: leave me alone.",
+                "I was looking for the end of this conversation. Found it.",
+            ),
+        },
+        {
+            "text": "Let's hear what you say when you're not hiding behind manners.",
+            "npc_soft": (
+                "Manners were doing you a favor, but fine.",
+                "You want it without the soft edges. Alright.",
+            ),
+            "npc_wary": (
+                "Manners are the only reason you still have a conversation.",
+                "You are confusing self-control with something you can peel away.",
+            ),
+            "npc_fail": (
+                "Without manners? Get out of my face.",
+                "There. No manners: we are done.",
+            ),
+        },
+    ),
+    "intimidate": (
+        {
+            "text": "Stop wasting my time. Tell me what is happening around here.",
+            "npc_soft": (
+                "Fine. Take the answer and get out of my face.",
+                "Alright. You want something useful, listen once.",
+            ),
+            "npc_wary": (
+                "You do not get to order information out of me.",
+                "That tone is buying you nothing but attention.",
+            ),
+            "npc_fail": (
+                "Threaten somebody else. We are done.",
+                "You picked the wrong person to lean on.",
+            ),
+        },
+        {
+            "text": "You can answer now, or we can make this difficult.",
+            "npc_soft": (
+                "You have your answer. Do not make me see you twice.",
+                "Fine. One answer, and then you leave me alone.",
+            ),
+            "npc_wary": (
+                "It already got difficult when you said that.",
+                "Careful. You are turning a question into an incident.",
+            ),
+            "npc_fail": (
+                "Try to make it difficult. See who arrives first.",
+                "No. Now everybody nearby gets to remember your face.",
+            ),
+        },
+        {
+            "text": "Give me something useful before I decide you're part of the problem.",
+            "npc_soft": (
+                "Take this and keep me out of whatever comes next.",
+                "Fine. Here is the useful part. Then we are finished.",
+            ),
+            "npc_wary": (
+                "Your decisions do not make me part of anything.",
+                "You are making yourself the problem right now.",
+            ),
+            "npc_fail": (
+                "Decide whatever you like from farther away.",
+                "That was a threat. I am treating it like one.",
+            ),
+        },
+        {
+            "text": "I asked nicely enough. Start talking.",
+            "npc_soft": (
+                "Fine. Hear it once, because there will not be a second time.",
+                "Alright. This is the answer you get for that tone.",
+            ),
+            "npc_wary": (
+                "No, you started demanding. Those are different things.",
+                "You can ask, or you can threaten. You do not get to call both polite.",
+            ),
+            "npc_fail": (
+                "You are done asking me anything.",
+                "Conversation over. Keep the threat to yourself.",
+            ),
+        },
+    ),
     "insult": (
         {
             "text": "You have the dramatic presence of a damp sandwich.",
@@ -2160,6 +2332,36 @@ PLAYER_TOPIC_BANKS = {
                 "No. We are done after that one.",
             ),
         },
+        {
+            "text": "You mistake being difficult for being important.",
+            "npc_soft": (
+                "That one had a point buried under the cheapness.",
+                "Maybe. You still said it like somebody looking for a bruise.",
+            ),
+            "npc_wary": (
+                "You came over here just to make yourself feel taller?",
+                "That was precise enough to be deliberate. Watch yourself.",
+            ),
+            "npc_fail": (
+                "You are not important enough to keep listening to.",
+                "Take your little diagnosis and leave.",
+            ),
+        },
+        {
+            "text": "I can see why people stop telling you the truth.",
+            "npc_soft": (
+                "That is a sharp line from somebody who barely knows me.",
+                "Maybe there is a splinter of truth in it. Do not get comfortable.",
+            ),
+            "npc_wary": (
+                "You do not know enough about me to swing that cleanly.",
+                "That sounded rehearsed. It still landed badly.",
+            ),
+            "npc_fail": (
+                "Here is the truth: I am done talking to you.",
+                "Congratulations. You just stopped the conversation yourself.",
+            ),
+        },
     ),
     "bodyguard_stand_down": (
         "I'm standing you down from this detail.",
@@ -2187,6 +2389,8 @@ PLAYER_CONNECTIVE_SHIFT_PREFIXES = (
 PLAYER_CONNECTIVE_SKIP_TOPICS = {
     "weird",
     "pry",
+    "provoke",
+    "intimidate",
     "insult",
     "trade",
     "street_appraise",
@@ -3554,6 +3758,60 @@ DIALOGUE_BANKS = {
         "No letterhead. No patch. Just people asking for things.",
         "If there is an outfit, nobody gave me the shirt.",
     ),
+    "corporate_presence_member": (
+        "{corporate_presence_read} I work inside that reach, so I see the useful side of it too.",
+        "{corporate_presence_read} From inside the outfit, it feels more ordinary than the street makes it sound.",
+        "{corporate_presence_read} That is real, but so are the shifts and stocked counters behind the signs.",
+        "{corporate_presence_read} They call it consistency. People outside the company use sharper words.",
+    ),
+    "corporate_presence_conflicted": (
+        "{corporate_presence_read} Some people call that stability. Some call it a hand around the block's throat.",
+        "{corporate_presence_read} It solves enough daily problems that people tolerate what comes attached.",
+        "{corporate_presence_read} The useful part and the ugly part arrived in the same trucks.",
+        "{corporate_presence_read} Nobody agrees whether that counts as improvement, but everybody adjusts to it.",
+    ),
+    "corporate_presence_critical": (
+        "{corporate_presence_read} They make the block depend on them, then point at the dependence as proof they belong.",
+        "{corporate_presence_read} The signs came first. The pressure behind them took longer to show.",
+        "{corporate_presence_read} It looks tidy until you ask what happened to the choices that used to be here.",
+        "{corporate_presence_read} They are buying convenience with everybody else's room to refuse.",
+    ),
+    "corporate_pull_loyal": (
+        "{corporate_benefit} That kind of reliability is why people sign on.",
+        "{corporate_benefit} You can sneer at the logo after your shift still pays.",
+        "{corporate_benefit} For plenty of people, that is not a sales pitch. It is the practical answer.",
+        "{corporate_benefit} It is easier to judge the bargain when you are not the one who needs it.",
+    ),
+    "corporate_pull_conflicted": (
+        "{corporate_benefit} I understand why people take the offer, even knowing what comes with it.",
+        "The honest pitch? {corporate_benefit_lc} That solves a real problem for people.",
+        "{corporate_benefit} Useful is not the same as harmless, but it is still useful.",
+        "{corporate_benefit} That is how they get more than fear out of a neighborhood.",
+    ),
+    "corporate_pull_critical": (
+        "If you want the part that works, {corporate_benefit_lc} I cannot blame people for needing that.",
+        "{corporate_benefit} A trap works better when the bait is something people genuinely need.",
+        "{corporate_benefit} That is a real advantage, even if I hate who gets to ration it.",
+        "People go because {corporate_benefit_lc} The logo does not make that need imaginary.",
+    ),
+    "corporate_cost_loyal": (
+        "{corporate_cost} I will not pretend that never lands hard, but the rules are not hidden.",
+        "The hard edge is this: {corporate_cost_lc} People decide whether the rest is worth it.",
+        "{corporate_cost} That is the trade, not some secret rot I can expose for you.",
+        "{corporate_cost} I think the order is worth the edge, but I know where the edge is.",
+    ),
+    "corporate_cost_conflicted": (
+        "The part they leave out is simple: {corporate_cost_lc}",
+        "{corporate_cost} You feel that part after the convenient pieces have already settled in.",
+        "{corporate_cost} Most people notice it. Fewer can afford to do anything about it.",
+        "The bargain turns when {corporate_cost_lc}",
+    ),
+    "corporate_cost_critical": (
+        "{corporate_cost} That is not an accident. It is how the grip tightens.",
+        "Start with this: {corporate_cost_lc} Then ask who still gets a real choice.",
+        "{corporate_cost} They call the result efficiency once nobody can afford to refuse it.",
+        "The clean signs hide the dirty part: {corporate_cost_lc}",
+    ),
     "cult_member": (
         "{cult_name} asks for {cult_devotion}. Dress is {cult_uniform}. Meetings are not for every passerby.",
         "The circle keeps to {cult_devotion}. If you wear {cult_uniform}, they expect you to mean it.",
@@ -4314,6 +4572,36 @@ DIALOGUE_BANKS = {
         "Too personal. We are done here.",
         "Back off. That question closes the door.",
         "No. Ask somebody else if you want to pry.",
+    ),
+    "provoke_soft": (
+        "Fine. You wanted the honest version.",
+        "Alright. No manners around it, then.",
+        "You pulled for a reaction. Listen carefully.",
+    ),
+    "provoke_wary": (
+        "You do not get honesty by trying to start a fight.",
+        "Do not mistake restraint for fear of saying it.",
+        "You are pushing for something you may not enjoy hearing.",
+    ),
+    "provoke_fail": (
+        "You wanted a reaction. You can have the conversation ending.",
+        "Keep pushing for a fight somewhere else.",
+        "What I think is that you should leave me alone.",
+    ),
+    "intimidate_soft": (
+        "Fine. Take the answer and leave me out of what comes next.",
+        "One answer. Then you get out of my face.",
+        "Listen once, because there will not be a second time.",
+    ),
+    "intimidate_wary": (
+        "You do not get to order information out of me.",
+        "That tone is buying you nothing but attention.",
+        "Careful. You are turning a question into an incident.",
+    ),
+    "intimidate_fail": (
+        "You picked the wrong person to threaten.",
+        "No. Now everybody nearby gets to remember your face.",
+        "That was a threat. I am treating it like one.",
     ),
     "insult_soft": (
         "Cute. I will pretend you thought that sounded better.",
@@ -5302,6 +5590,14 @@ def topic_label(topic_id, context=None):
         if context.get("workplace_here"):
             return "Who's the outfit behind this place?"
         return f"Who's the outfit behind {context['workplace_name']}?"
+    if topic_id == "corporate_presence" and context.get("corporate_brand"):
+        return f"What's {context['corporate_brand']} doing to this block?"
+    if topic_id == "corporate_pull" and context.get("corporate_brand"):
+        return f"Why do people choose {context['corporate_brand']}?"
+    if topic_id == "corporate_cost" and context.get("corporate_brand"):
+        if context.get("corporate_presence_here"):
+            return f"What's the real cost of having {context['corporate_brand']} here?"
+        return f"What's the real cost of dealing with {context['corporate_brand']}?"
     if topic_id == "cult" and context.get("cult_name"):
         return f"What's {context['cult_name']} asking from people?"
     if topic_id == "cult":
@@ -5514,6 +5810,10 @@ def topic_label(topic_id, context=None):
         return "Ask something weird."
     if topic_id == "pry":
         return "Get a little too personal."
+    if topic_id == "provoke":
+        return "Needle them for an honest reaction."
+    if topic_id == "intimidate":
+        return "Pressure them for local information."
     if topic_id == "insult":
         tone = str(context.get("tone", "neutral")).strip().lower()
         if tone in {"wary", "guarded"}:
