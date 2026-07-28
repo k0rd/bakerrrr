@@ -789,7 +789,11 @@ def build_debug_overlay(
                     f"Ambience {str(ambient_context.get('phase', '-'))}/{str(ambient_context.get('biome', '-'))} "
                     f"{str(ambient_context.get('terrain', '-'))} | {'inside' if ambient_context.get('indoors') else 'outside'} | "
                     f"water {float(ambient_context.get('water', 0.0)) * 100.0:.0f}% / "
-                    f"fire {float(ambient_context.get('campfire', 0.0)) * 100.0:.0f}% | {ambient_text}"
+                    f"fire {float(ambient_context.get('campfire', 0.0)) * 100.0:.0f}% / "
+                    f"crowd {int(ambient_context.get('crowd_count', 0))} / "
+                    f"engine {'on' if ambient_context.get('engine') else 'off'} "
+                    f"{int(ambient_context.get('vehicle_speed', 0))}/{int(ambient_context.get('vehicle_top_speed', 0))} | "
+                    f"{ambient_text}"
                 ),
                 (
                     f"Environment scans {int(audio.get('environment_sample_count', 0))} | last/max "

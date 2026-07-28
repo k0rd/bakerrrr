@@ -29,13 +29,38 @@ OPEN_RUN_BEATS = 16
 OPEN_RUN_DURATION = OPEN_RUN_BEATS * (60.0 / OPEN_RUN_BPM)
 ENVIRONMENT_SAMPLE_INTERVAL = 0.35
 ENVIRONMENT_FADE_SECONDS = 0.65
+AMBIENT_ATTACK_SECONDS_BY_GROUP = {
+    "water": 2.25,
+    "engine": 0.16,
+}
+AMBIENT_RELEASE_SECONDS_BY_GROUP = {
+    "engine": 0.12,
+}
 AMBIENT_CHANNEL_INDEX = {
     "water": 1,
     "campfire": 2,
     "time": 3,
     "biome": 4,
+    "crowd": 5,
+    "engine": 6,
 }
 RESERVED_CHANNEL_COUNT = 1 + len(AMBIENT_CHANNEL_INDEX)
+CROWD_CHATTER_RADIUS = 7
+CROWD_CHATTER_MIN_NPCS = 4
+GLASS_AUDIBLE_RADIUS = 10
+EXPLOSION_MIN_AUDIBLE_RADIUS = 14
+ENVIRONMENT_DIRTY_EVENTS = {
+    "player_moved",
+    "vehicle_entered",
+    "vehicle_exited",
+    "vehicle_action_blocked",
+    "vehicle_local_controlled",
+    "vehicle_local_moved",
+}
+WORLD_SOUND_EVENTS = {
+    "structure_broken",
+    "explosion_triggered",
+}
 
 
 @dataclass(frozen=True)
@@ -204,6 +229,62 @@ def _work(duration: float, sample_rate: int) -> list[float]:
     return samples
 
 
+def _gunfire(duration: float, sample_rate: int) -> list[float]:
+    """A compact double report: dry pop, short body, then a lighter second pop."""
+
+    samples = _blank(duration, sample_rate)
+    for index, (start, scale) in enumerate(((0.0, 1.0), (0.108, 0.82))):
+        _add_noise(
+            samples,
+            sample_rate=sample_rate,
+            start=start,
+            duration=0.052,
+            amplitude=0.44 * scale,
+            seed=56 + index,
+            color="high",
+            attack=0.001,
+            release=0.034,
+            decay=6.8,
+        )
+        _add_tone(
+            samples,
+            sample_rate=sample_rate,
+            start=start,
+            duration=0.082,
+            frequency=218.0 - index * 17.0,
+            end_frequency=94.0 - index * 8.0,
+            amplitude=0.30 * scale,
+            shape="soft_square",
+            attack=0.001,
+            release=0.052,
+            decay=5.0,
+        )
+        _add_tone(
+            samples,
+            sample_rate=sample_rate,
+            start=start + 0.006,
+            duration=0.105,
+            frequency=86.0 - index * 6.0,
+            end_frequency=48.0,
+            amplitude=0.18 * scale,
+            attack=0.002,
+            release=0.068,
+            decay=4.2,
+        )
+    _add_noise(samples, sample_rate=sample_rate, start=0.19, duration=0.11, amplitude=0.038, seed=58, color="low", attack=0.012, release=0.07, decay=3.8)
+    return samples
+
+
+def _flora_sparkle(duration: float, sample_rate: int) -> list[float]:
+    """Two quiet glassy flecks, intentionally short of a magical flourish."""
+
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.018, duration=0.048, amplitude=0.020, seed=59, color="high", attack=0.008, release=0.028, decay=3.8)
+    _add_tone(samples, sample_rate=sample_rate, start=0.018, duration=0.14, frequency=987.77, end_frequency=1_046.5, amplitude=0.047, shape="triangle", attack=0.018, release=0.075, decay=2.6)
+    _add_tone(samples, sample_rate=sample_rate, start=0.082, duration=0.13, frequency=1_318.51, end_frequency=1_395.0, amplitude=0.034, attack=0.022, release=0.072, decay=2.8)
+    return samples
+
+
 def _impact(duration: float, sample_rate: int) -> list[float]:
     samples = _blank(duration, sample_rate)
     _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.14, amplitude=0.26, seed=61, color="low", release=0.06, decay=5.5)
@@ -217,6 +298,41 @@ def _danger(duration: float, sample_rate: int) -> list[float]:
     for start, base in ((0.0, 78.0), (0.31, 73.0)):
         _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.31, frequency=base, end_frequency=base * 0.91, amplitude=0.25, attack=0.012, release=0.11, decay=1.8)
         _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.25, frequency=base * 2.0, end_frequency=base * 1.82, amplitude=0.11, shape="triangle", attack=0.008, release=0.09, decay=2.2)
+    return samples
+
+
+def _tire_squeal(duration: float, sample_rate: int) -> list[float]:
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.43, amplitude=0.17, seed=71, color="high", attack=0.018, release=0.15, decay=0.55)
+    _add_tone(samples, sample_rate=sample_rate, start=0.006, duration=0.42, frequency=1_540.0, end_frequency=830.0, amplitude=0.13, shape="soft_square", attack=0.025, release=0.16, decay=0.8)
+    _add_tone(samples, sample_rate=sample_rate, start=0.015, duration=0.38, frequency=2_310.0, end_frequency=1_245.0, amplitude=0.038, shape="triangle", attack=0.032, release=0.15, decay=1.0)
+    return samples
+
+
+def _breaking_glass(duration: float, sample_rate: int) -> list[float]:
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.16, amplitude=0.30, seed=81, color="high", attack=0.001, release=0.10, decay=4.4)
+    _add_noise(samples, sample_rate=sample_rate, start=0.055, duration=0.37, amplitude=0.075, seed=82, color="high", attack=0.008, release=0.19, decay=2.1)
+    shards = (
+        (0.012, 2_280.0, 0.105),
+        (0.047, 3_420.0, 0.085),
+        (0.091, 2_760.0, 0.075),
+        (0.144, 4_180.0, 0.058),
+        (0.211, 3_090.0, 0.050),
+        (0.284, 2_510.0, 0.040),
+    )
+    for index, (start, frequency, amplitude) in enumerate(shards):
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.16 + (index % 2) * 0.045, frequency=frequency, end_frequency=frequency * 0.72, amplitude=amplitude, shape="triangle", attack=0.002, release=0.105, decay=3.4)
+    return samples
+
+
+def _explosion(duration: float, sample_rate: int) -> list[float]:
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.72, amplitude=0.40, seed=91, color="low", attack=0.001, release=0.30, decay=3.0)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.31, amplitude=0.34, seed=92, color="white", attack=0.001, release=0.17, decay=5.8)
+    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=0.67, frequency=88.0, end_frequency=31.0, amplitude=0.43, shape="soft_square", attack=0.001, release=0.29, decay=2.8)
+    _add_tone(samples, sample_rate=sample_rate, start=0.018, duration=0.48, frequency=47.0, end_frequency=28.0, amplitude=0.29, attack=0.003, release=0.24, decay=2.2)
+    _add_noise(samples, sample_rate=sample_rate, start=0.29, duration=0.59, amplitude=0.075, seed=93, color="low", attack=0.025, release=0.30, decay=2.4)
     return samples
 
 
@@ -259,10 +375,10 @@ def _open_run_sketch(duration: float, sample_rate: int) -> list[float]:
 
 def _ambient_water(duration: float, sample_rate: int) -> list[float]:
     samples = _blank(duration, sample_rate)
-    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.105, seed=401, color="low", attack=0.22, release=0.24)
-    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.022, seed=402, color="high", attack=0.28, release=0.28)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.105, seed=401, color="low", attack=0.72, release=0.24)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.022, seed=402, color="high", attack=0.86, release=0.28)
     for index, start in enumerate((0.46, 1.58, 2.31)):
-        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.32, frequency=196.0 + (index * 24.0), end_frequency=154.0 + (index * 18.0), amplitude=0.026, attack=0.055, release=0.17, decay=1.6)
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.42, frequency=196.0 + (index * 24.0), end_frequency=154.0 + (index * 18.0), amplitude=0.026, attack=0.16, release=0.17, decay=1.6)
     return samples
 
 
@@ -337,14 +453,78 @@ def _ambient_biome_underground(duration: float, sample_rate: int) -> list[float]
     return samples
 
 
+def _ambient_crowd_chatter(duration: float, sample_rate: int) -> list[float]:
+    """Low nonverbal voice texture for a nearby gathering, not canned speech."""
+
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.026, seed=491, color="low", attack=0.30, release=0.32)
+    voices = (
+        (0.22, 0.46, 174.0),
+        (0.61, 0.34, 226.0),
+        (0.94, 0.51, 193.0),
+        (1.38, 0.40, 248.0),
+        (1.72, 0.48, 166.0),
+        (2.13, 0.37, 213.0),
+        (2.49, 0.52, 184.0),
+        (2.96, 0.32, 236.0),
+    )
+    for index, (start, voice_duration, base) in enumerate(voices):
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=voice_duration, frequency=base, end_frequency=base * (1.04 if index % 2 else 0.96), amplitude=0.028, shape="soft_square", attack=0.055, release=0.11, decay=0.5)
+        _add_tone(samples, sample_rate=sample_rate, start=start + 0.018, duration=voice_duration * 0.82, frequency=base * 2.35, end_frequency=base * 2.18, amplitude=0.009, attack=0.065, release=0.12, decay=0.8)
+    return samples
+
+
+def _combustion_engine(
+    duration: float,
+    sample_rate: int,
+    *,
+    base_frequency: float,
+    pulse_interval: float,
+    seed: int,
+) -> list[float]:
+    """A small, rough engine loop whose pulse rate rises with vehicle speed."""
+
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.060, seed=seed, color="low", attack=0.045, release=0.055)
+    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=duration, frequency=base_frequency, amplitude=0.105, shape="soft_square", attack=0.040, release=0.050)
+    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=duration, frequency=base_frequency * 2.03, amplitude=0.044, shape="triangle", attack=0.045, release=0.055)
+    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=duration, frequency=base_frequency * 3.01, amplitude=0.018, attack=0.050, release=0.060)
+    pulse_index = 0
+    start = 0.055
+    while start < duration - 0.10:
+        scale = 0.92 + (0.08 if pulse_index % 3 == 0 else 0.0)
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.075, frequency=base_frequency * 0.91, end_frequency=base_frequency * 0.66, amplitude=0.105 * scale, shape="soft_square", attack=0.004, release=0.045, decay=3.2)
+        _add_noise(samples, sample_rate=sample_rate, start=start, duration=0.052, amplitude=0.050 * scale, seed=seed + 1 + pulse_index, color="low", attack=0.003, release=0.034, decay=4.0)
+        pulse_index += 1
+        start += pulse_interval
+    return samples
+
+
+def _ambient_engine_idle(duration: float, sample_rate: int) -> list[float]:
+    return _combustion_engine(duration, sample_rate, base_frequency=43.0, pulse_interval=0.235, seed=501)
+
+
+def _ambient_engine_cruise(duration: float, sample_rate: int) -> list[float]:
+    return _combustion_engine(duration, sample_rate, base_frequency=61.0, pulse_interval=0.145, seed=521)
+
+
+def _ambient_engine_fast(duration: float, sample_rate: int) -> list[float]:
+    return _combustion_engine(duration, sample_rate, base_frequency=79.0, pulse_interval=0.098, seed=541)
+
+
 CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
-    CueDefinition("footstep", 0.14, _footstep, gain=0.62, cooldown=0.055),
+    CueDefinition("footstep", 0.14, _footstep, gain=0.56, cooldown=0.055),
     CueDefinition("door", 0.24, _door, gain=0.74, cooldown=0.08),
     CueDefinition("pickup", 0.17, _pickup, gain=0.72, cooldown=0.06),
     CueDefinition("transaction", 0.18, _transaction, gain=0.72, cooldown=0.12),
     CueDefinition("work", 0.29, _work, gain=0.74, cooldown=0.15),
+    CueDefinition("gunfire", 0.32, _gunfire, gain=0.86, cooldown=0.055),
+    CueDefinition("flora_sparkle", 0.24, _flora_sparkle, gain=0.62, cooldown=0.16),
     CueDefinition("impact", 0.23, _impact, gain=0.88, cooldown=0.08),
     CueDefinition("danger", 0.68, _danger, gain=0.82, cooldown=1.0),
+    CueDefinition("tire_squeal", 0.48, _tire_squeal, gain=0.66, cooldown=0.24),
+    CueDefinition("breaking_glass", 0.55, _breaking_glass, gain=0.76, cooldown=0.10),
+    CueDefinition("explosion", 0.90, _explosion, gain=0.92, cooldown=0.12),
     CueDefinition("open_run_sketch", OPEN_RUN_DURATION, _open_run_sketch, gain=0.62, loop=True, bus="music"),
     CueDefinition("ambient_water", 2.8, _ambient_water, gain=0.30, loop=True, bus="ambient"),
     CueDefinition("ambient_campfire", 2.8, _ambient_campfire, gain=0.34, loop=True, bus="ambient"),
@@ -355,6 +535,10 @@ CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
     CueDefinition("ambient_biome_wilderness", 2.8, _ambient_biome_wilderness, gain=0.23, loop=True, bus="ambient"),
     CueDefinition("ambient_biome_coastal", 2.8, _ambient_biome_coastal, gain=0.22, loop=True, bus="ambient"),
     CueDefinition("ambient_biome_underground", 2.8, _ambient_biome_underground, gain=0.22, loop=True, bus="ambient"),
+    CueDefinition("ambient_crowd_chatter", 3.4, _ambient_crowd_chatter, gain=0.38, loop=True, bus="ambient"),
+    CueDefinition("ambient_engine_idle", 2.0, _ambient_engine_idle, gain=0.30, loop=True, bus="ambient"),
+    CueDefinition("ambient_engine_cruise", 2.0, _ambient_engine_cruise, gain=0.31, loop=True, bus="ambient"),
+    CueDefinition("ambient_engine_fast", 2.0, _ambient_engine_fast, gain=0.32, loop=True, bus="ambient"),
 )
 
 AMBIENT_CUE_BY_GROUP: dict[str, tuple[str, ...]] = {
@@ -368,6 +552,8 @@ AMBIENT_CUE_BY_GROUP: dict[str, tuple[str, ...]] = {
         "ambient_biome_coastal",
         "ambient_biome_underground",
     ),
+    "crowd": ("ambient_crowd_chatter",),
+    "engine": ("ambient_engine_idle", "ambient_engine_cruise", "ambient_engine_fast"),
 }
 
 EVENT_CUE_MAP: dict[str, str] = {
@@ -380,8 +566,16 @@ EVENT_CUE_MAP: dict[str, str] = {
     "street_buy_transaction": "transaction",
     "mechanical_device_crafted": "work",
     "herbal_medicine_crafted": "work",
+    "weapon_fired": "gunfire",
+    "flora_crossbred": "flora_sparkle",
     "entity_damaged": "impact",
     "combat_overlay_entered": "danger",
+    "vehicle_fast_turn": "tire_squeal",
+}
+
+WORLD_EVENT_CUE_MAP: dict[str, str] = {
+    "structure_broken": "breaking_glass",
+    "explosion_triggered": "explosion",
 }
 
 
@@ -436,6 +630,8 @@ def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
         raise AssertionError("cue names must be unique")
     if set(EVENT_CUE_MAP.values()) - set(names):
         raise AssertionError("an action event references an unknown cue")
+    if set(WORLD_EVENT_CUE_MAP.values()) - set(names):
+        raise AssertionError("a world event references an unknown cue")
     music_loops = tuple(cue for cue in cues if cue.definition.bus == "music" and cue.definition.loop)
     if len(music_loops) != 1:
         raise AssertionError("the runtime must have exactly one music loop")
@@ -475,8 +671,8 @@ def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
         largest_peak = max(largest_peak, audible_peak)
 
     bytes_per_second = cues[0].sample_rate * cues[0].channel_count * SAMPLE_WIDTH if cues else 1
-    if total_pcm > bytes_per_second * 40:
-        raise AssertionError("the cached bank exceeded its forty-second PCM budget")
+    if total_pcm > bytes_per_second * 52:
+        raise AssertionError("the cached bank exceeded its fifty-two-second PCM budget")
     return {
         "cue_count": len(cues),
         "total_pcm_bytes": total_pcm,
@@ -509,6 +705,50 @@ def _player_position(sim, player_eid):
         return None
 
 
+def _active_combustion_vehicle_context(sim, player_eid) -> dict[str, object]:
+    context = {
+        "active": False,
+        "speed": 0,
+        "top_speed": 0,
+        "medium": "",
+        "vehicle_id": "",
+    }
+    try:
+        from game.components import VehicleState
+        from game.property_runtime import property_metadata, vehicle_fuel_values
+        from game.vehicle_motion import active_vehicle_property, vehicle_medium_for_property, vehicle_top_speed
+
+        state = sim.ecs.get(VehicleState).get(player_eid)
+        if state is None or not bool(getattr(state, "in_vehicle", False)):
+            return context
+        prop = active_vehicle_property(sim, state)
+        if not isinstance(prop, dict):
+            return context
+        metadata = property_metadata(prop)
+        explicit_powertrain = str(
+            metadata.get("powertrain")
+            or metadata.get("propulsion")
+            or metadata.get("engine_type")
+            or ""
+        ).strip().lower()
+        non_combustion = {"electric", "ev", "pedal", "human", "sail", "wind"}
+        fuel, fuel_capacity = vehicle_fuel_values(prop)
+        if explicit_powertrain in non_combustion or int(fuel_capacity) <= 0 or int(fuel) <= 0:
+            return context
+        if not bool(metadata.get("vehicle_usable", True)) or int(metadata.get("durability", 1) or 0) <= 0:
+            return context
+        top_speed = max(1, int(vehicle_top_speed(prop)))
+        return {
+            "active": True,
+            "speed": max(0, min(top_speed, int(getattr(state, "speed", 0) or 0))),
+            "top_speed": top_speed,
+            "medium": str(vehicle_medium_for_property(prop) or "land"),
+            "vehicle_id": str(prop.get("id", "") or ""),
+        }
+    except (AttributeError, TypeError, ValueError):
+        return context
+
+
 def _biome_key(area_type: str, terrain: str, z: int) -> str:
     if int(z) < 0:
         return "underground"
@@ -521,6 +761,48 @@ def _biome_key(area_type: str, terrain: str, z: int) -> str:
     if terrain in {"forest", "hills", "marsh", "plains"}:
         return "wilderness"
     return "frontier"
+
+
+def _nearby_human_npc_count(sim, player_eid, x: int, y: int, z: int) -> int:
+    try:
+        from game.components import AI, CreatureIdentity, Position, Vitality
+        from game.human_identity import is_human_identity
+
+        ais = sim.ecs.get(AI)
+        identities = sim.ecs.get(CreatureIdentity)
+        positions = sim.ecs.get(Position)
+        vitalities = sim.ecs.get(Vitality)
+    except (AttributeError, TypeError):
+        return 0
+
+    nearby_reader = getattr(sim, "entity_ids_in_radius", None)
+    if callable(nearby_reader):
+        try:
+            candidates = tuple(nearby_reader(x, y, z, CROWD_CHATTER_RADIUS) or ())
+        except (AttributeError, TypeError, ValueError):
+            candidates = ()
+    else:
+        candidates = tuple(positions)
+
+    count = 0
+    for eid in candidates:
+        if eid == player_eid or eid not in ais:
+            continue
+        pos = positions.get(eid)
+        identity = identities.get(eid)
+        if pos is None or identity is None or not is_human_identity(identity):
+            continue
+        vitality = vitalities.get(eid)
+        if vitality is not None and bool(getattr(vitality, "downed", False)):
+            continue
+        try:
+            distance = abs(int(pos.x) - x) + abs(int(pos.y) - y)
+            same_floor = int(pos.z) == z
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if same_floor and distance <= CROWD_CHATTER_RADIUS:
+            count += 1
+    return count
 
 
 def sample_environment_context(sim, player_eid, *, descriptor=None) -> dict[str, object]:
@@ -536,6 +818,12 @@ def sample_environment_context(sim, player_eid, *, descriptor=None) -> dict[str,
             "terrain": "urban",
             "water": 0.0,
             "campfire": 0.0,
+            "crowd": 0.0,
+            "crowd_count": 0,
+            "engine": False,
+            "vehicle_speed": 0,
+            "vehicle_top_speed": 0,
+            "vehicle_medium": "",
             "indoors": False,
         }
 
@@ -597,6 +885,14 @@ def sample_environment_context(sim, player_eid, *, descriptor=None) -> dict[str,
                 continue
             campfire_strength = max(campfire_strength, (8 - min(8, distance)) / 8.0)
 
+    crowd_count = _nearby_human_npc_count(sim, player_eid, x, y, z)
+    if crowd_count < CROWD_CHATTER_MIN_NPCS:
+        crowd_strength = 0.0
+    else:
+        crowd_strength = min(1.0, 0.40 + ((crowd_count - CROWD_CHATTER_MIN_NPCS) * 0.15))
+
+    vehicle_context = _active_combustion_vehicle_context(sim, player_eid)
+
     return {
         "available": True,
         "phase": phase,
@@ -605,6 +901,13 @@ def sample_environment_context(sim, player_eid, *, descriptor=None) -> dict[str,
         "terrain": terrain,
         "water": round(max(0.0, min(1.0, water_strength)), 3),
         "campfire": round(max(0.0, min(1.0, campfire_strength)), 3),
+        "crowd": round(max(0.0, min(1.0, crowd_strength)), 3),
+        "crowd_count": int(crowd_count),
+        "engine": bool(vehicle_context.get("active")),
+        "vehicle_speed": int(vehicle_context.get("speed", 0) or 0),
+        "vehicle_top_speed": int(vehicle_context.get("top_speed", 0) or 0),
+        "vehicle_medium": str(vehicle_context.get("medium", "") or ""),
+        "vehicle_id": str(vehicle_context.get("vehicle_id", "") or ""),
         "indoors": indoors,
         "position": (x, y, z),
     }
@@ -693,7 +996,7 @@ class PygameAudioRuntime:
         self.bank_bytes = int(stats["total_pcm_bytes"])
         self._definitions = {cue.definition.name: cue.definition for cue in cues}
 
-        pygame.mixer.set_num_channels(max(16, pygame.mixer.get_num_channels()))
+        pygame.mixer.set_num_channels(max(20, pygame.mixer.get_num_channels()))
         pygame.mixer.set_reserved(RESERVED_CHANNEL_COUNT)
         self._music_channel = pygame.mixer.Channel(0)
         self._ambient_channels = {
@@ -704,7 +1007,7 @@ class PygameAudioRuntime:
             cue.definition.name: pygame.mixer.Sound(file=io.BytesIO(cue.wav))
             for cue in cues
         }
-        for event_type in EVENT_CUE_MAP:
+        for event_type in EVENT_CUE_MAP.keys() | WORLD_SOUND_EVENTS | ENVIRONMENT_DIRTY_EVENTS:
             sim.events.subscribe(event_type, self.on_event)
         sim.events.subscribe("quit_requested", self.on_quit_requested)
 
@@ -730,18 +1033,81 @@ class PygameAudioRuntime:
             return data.get("player_eid") == self.player_eid
         return data.get("eid") == self.player_eid
 
-    def on_event(self, event) -> None:
-        if not self.enabled or not self._event_is_for_player(event):
+    def _event_proximity_scale(self, event, audible_radius: int) -> float:
+        pos = _player_position(self.sim, self.player_eid)
+        if pos is None:
+            return 0.0
+        data = event.data
+        try:
+            event_x = int(data["x"])
+            event_y = int(data["y"])
+            event_z = int(data.get("z", 0))
+        except (KeyError, TypeError, ValueError):
+            return 1.0 if data.get("source_eid") == self.player_eid else 0.0
+        if int(pos.z) != event_z:
+            return 0.0
+        radius = max(1, int(audible_radius))
+        distance = abs(int(pos.x) - event_x) + abs(int(pos.y) - event_y)
+        if distance > radius:
+            return 0.0
+        return max(0.18, min(1.0, 1.0 - (distance / float(radius + 1))))
+
+    def _play_world_event(self, event) -> None:
+        cue_name = WORLD_EVENT_CUE_MAP.get(event.type)
+        if event.type == "structure_broken":
+            surface = str(event.data.get("surface_kind", "") or "").strip().lower()
+            aperture = str(event.data.get("aperture_kind", "") or "").strip().lower()
+            if surface != "window" and "window" not in aperture:
+                return
+            volume_scale = self._event_proximity_scale(event, GLASS_AUDIBLE_RADIUS)
+        elif event.type == "explosion_triggered":
+            active_vehicle_id = str(self._ambient_context.get("vehicle_id", "") or "")
+            exploded_vehicle_id = str(
+                event.data.get("vehicle_id")
+                or event.data.get("source_property_id")
+                or ""
+            )
+            if active_vehicle_id and exploded_vehicle_id == active_vehicle_id:
+                self._environment_dirty = True
+            try:
+                blast_radius = max(0, int(event.data.get("radius", 0) or 0))
+            except (TypeError, ValueError):
+                blast_radius = 0
+            audible_radius = max(EXPLOSION_MIN_AUDIBLE_RADIUS, min(28, blast_radius * 4))
+            volume_scale = self._event_proximity_scale(event, audible_radius)
+        else:
             return
-        if event.type == "player_moved":
+        if not cue_name or volume_scale <= 0.0:
+            return
+        self.event_counts[event.type] += 1
+        self.play(cue_name, source_event=event.type, volume_scale=volume_scale)
+
+    def on_event(self, event) -> None:
+        if not self.enabled:
+            return
+        if event.type in WORLD_SOUND_EVENTS:
+            self._play_world_event(event)
+            return
+        is_player_event = self._event_is_for_player(event)
+        if event.type in ENVIRONMENT_DIRTY_EVENTS and is_player_event:
             self._environment_dirty = True
+        if not is_player_event:
+            return
         cue_name = EVENT_CUE_MAP.get(event.type)
         if not cue_name:
             return
         self.event_counts[event.type] += 1
         self.play(cue_name, source_event=event.type)
 
-    def play(self, cue_name: str, *, source_event: str = "manual") -> bool:
+    def _find_sfx_channel(self):
+        num_channels = int(self.pygame.mixer.get_num_channels())
+        for index in range(RESERVED_CHANNEL_COUNT, num_channels):
+            channel = self.pygame.mixer.Channel(index)
+            if not channel.get_busy():
+                return channel
+        return None
+
+    def play(self, cue_name: str, *, source_event: str = "manual", volume_scale: float = 1.0) -> bool:
         if not self.enabled:
             return False
         definition = self._definitions.get(str(cue_name))
@@ -753,12 +1119,12 @@ class PygameAudioRuntime:
         if received_at - last_played < float(definition.cooldown):
             self.suppressed_count += 1
             return False
-        channel = self.pygame.mixer.find_channel(force=False)
+        channel = self._find_sfx_channel()
         if channel is None:
             self.no_channel_count += 1
             self._trace(f"no free channel: event={source_event} cue={definition.name}")
             return False
-        channel.set_volume(self.master_volume * float(definition.gain))
+        channel.set_volume(min(1.0, self.master_volume * float(definition.gain) * max(0.0, min(1.0, float(volume_scale)))))
         channel.play(sound)
         submitted_at = time.perf_counter()
         submit_ms = (submitted_at - received_at) * 1_000.0
@@ -821,6 +1187,10 @@ class PygameAudioRuntime:
         indoors = bool(context.get("indoors"))
         water = float(context.get("water", 0.0) or 0.0)
         campfire = float(context.get("campfire", 0.0) or 0.0)
+        crowd = float(context.get("crowd", 0.0) or 0.0)
+        engine_active = bool(context.get("engine"))
+        vehicle_speed = max(0, int(context.get("vehicle_speed", 0) or 0))
+        vehicle_top_speed = max(1, int(context.get("vehicle_top_speed", 1) or 1))
         outside_scale = 0.28 if indoors else 1.0
         if biome == "underground":
             outside_scale = 0.18
@@ -831,11 +1201,20 @@ class PygameAudioRuntime:
         biome_cue = f"ambient_biome_{biome}"
         if biome_cue not in self._definitions:
             biome_cue = "ambient_biome_frontier"
+        if vehicle_speed <= 0:
+            engine_cue = "ambient_engine_idle"
+        elif vehicle_speed >= max(3, int(math.ceil(vehicle_top_speed * 0.72))):
+            engine_cue = "ambient_engine_fast"
+        else:
+            engine_cue = "ambient_engine_cruise"
+        engine_level = min(1.0, 0.58 + (0.42 * vehicle_speed / float(vehicle_top_speed)))
         return {
             "water": ("ambient_water" if water > 0.01 else "", water * outside_scale),
             "campfire": ("ambient_campfire" if campfire > 0.01 else "", campfire * (0.45 if indoors else 1.0)),
             "time": (time_cue, time_level * outside_scale),
             "biome": (biome_cue, 1.0 if biome == "underground" else (0.36 if indoors else 1.0)),
+            "crowd": ("ambient_crowd_chatter" if crowd > 0.01 else "", crowd),
+            "engine": (engine_cue if engine_active else "", engine_level if engine_active else 0.0),
         }
 
     def _start_ambient_cue(self, group: str, cue_name: str) -> None:
@@ -852,7 +1231,6 @@ class PygameAudioRuntime:
     def _apply_ambient_fades(self, now: float, *, immediate: bool = False) -> None:
         elapsed = max(0.0, min(0.25, float(now) - float(self._last_ambient_update_at)))
         self._last_ambient_update_at = float(now)
-        step = 1.0 if immediate else elapsed / ENVIRONMENT_FADE_SECONDS
         for group in AMBIENT_CHANNEL_INDEX:
             desired_cue, desired_level = self._ambient_desired.get(group, ("", 0.0))
             desired_level = max(0.0, min(1.0, float(desired_level)))
@@ -877,9 +1255,13 @@ class PygameAudioRuntime:
 
             current_level = float(self._ambient_levels.get(group, 0.0))
             if current_level < target:
-                current_level = min(target, current_level + step)
+                attack_seconds = AMBIENT_ATTACK_SECONDS_BY_GROUP.get(group, ENVIRONMENT_FADE_SECONDS)
+                attack_step = 1.0 if immediate else elapsed / max(0.01, float(attack_seconds))
+                current_level = min(target, current_level + attack_step)
             elif current_level > target:
-                current_level = max(target, current_level - step)
+                release_seconds = AMBIENT_RELEASE_SECONDS_BY_GROUP.get(group, ENVIRONMENT_FADE_SECONDS)
+                release_step = 1.0 if immediate else elapsed / max(0.01, float(release_seconds))
+                current_level = max(target, current_level - release_step)
             self._ambient_levels[group] = current_level
 
             definition = self._definitions.get(current_cue)
@@ -915,8 +1297,8 @@ class PygameAudioRuntime:
             self.environment_sample_count += 1
             self.last_environment_sample_ms = sample_ms
             self.max_environment_sample_ms = max(self.max_environment_sample_ms, sample_ms)
-            previous_signature = tuple(self._ambient_context.get(key) for key in ("phase", "biome", "water", "campfire", "indoors"))
-            next_signature = tuple(context.get(key) for key in ("phase", "biome", "water", "campfire", "indoors"))
+            previous_signature = tuple(self._ambient_context.get(key) for key in ("phase", "biome", "water", "campfire", "crowd_count", "engine", "vehicle_speed", "indoors"))
+            next_signature = tuple(context.get(key) for key in ("phase", "biome", "water", "campfire", "crowd_count", "engine", "vehicle_speed", "indoors"))
             self._ambient_context = context
             self._ambient_desired = self._environment_targets(context)
             self._environment_dirty = False
@@ -928,6 +1310,8 @@ class PygameAudioRuntime:
                     f"phase={context.get('phase')} biome={context.get('biome')} "
                     f"water={float(context.get('water', 0.0)):.2f} "
                     f"campfire={float(context.get('campfire', 0.0)):.2f} "
+                    f"crowd={int(context.get('crowd_count', 0))} "
+                    f"engine={bool(context.get('engine'))}:{int(context.get('vehicle_speed', 0))} "
                     f"indoors={bool(context.get('indoors'))} scan={sample_ms:.2f}ms"
                 )
         self._apply_ambient_fades(now, immediate=immediate)
@@ -1023,7 +1407,9 @@ class PygameAudioRuntime:
 
 
 __all__ = [
+    "AMBIENT_ATTACK_SECONDS_BY_GROUP",
     "AMBIENT_CUE_BY_GROUP",
+    "AMBIENT_RELEASE_SECONDS_BY_GROUP",
     "CUE_DEFINITIONS",
     "DEFAULT_CHANNEL_COUNT",
     "DEFAULT_MIXER_BUFFER",
@@ -1033,6 +1419,7 @@ __all__ = [
     "OPEN_RUN_DURATION",
     "PygameAudioRuntime",
     "RenderedCue",
+    "WORLD_EVENT_CUE_MAP",
     "build_cues",
     "sample_environment_context",
     "validate_cues",

@@ -335,6 +335,23 @@ class PlayerTravelRuntime:
         data.update(payload)
         self.sim.emit(Event(event_type, **data))
 
+    def _emit_fast_vehicle_turn(self, eid, pos, vehicle_prop, state, *, turn, speed_before):
+        if not turn or int(speed_before) < 2:
+            return
+        if vehicle_medium_for_property(vehicle_prop) != "land":
+            return
+        self._emit_vehicle_motion_event(
+            "vehicle_fast_turn",
+            eid,
+            vehicle_prop,
+            state,
+            turn=int(turn),
+            speed_before=int(speed_before),
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        )
+
     def _can_enter_quick_travel_from_local_vehicle(self, eid, pos):
         state = self._vehicle_state_for(eid)
         vehicle_prop = self._active_vehicle_property(eid)
@@ -478,6 +495,14 @@ class PlayerTravelRuntime:
         discrete_top_speed = min(2, vehicle_top_speed(vehicle_prop))
         old_speed = max(0, min(discrete_top_speed, int(getattr(state, "speed", 0) or 0)))
         set_vehicle_speed(state, old_speed, tick=self.sim.tick, vehicle_prop=vehicle_prop)
+        self._emit_fast_vehicle_turn(
+            eid,
+            pos,
+            vehicle_prop,
+            state,
+            turn=turn,
+            speed_before=old_speed,
+        )
         move_dx = 0
         move_dy = 0
         move_steps = 0
@@ -545,6 +570,14 @@ class PlayerTravelRuntime:
 
         old_speed = clamp_vehicle_speed(vehicle_prop, getattr(state, "speed", 0))
         set_vehicle_speed(state, old_speed, tick=self.sim.tick, vehicle_prop=vehicle_prop)
+        self._emit_fast_vehicle_turn(
+            eid,
+            pos,
+            vehicle_prop,
+            state,
+            turn=turn,
+            speed_before=old_speed,
+        )
         move_dx = 0
         move_dy = 0
         move_steps = 0

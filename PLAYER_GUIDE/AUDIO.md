@@ -1,26 +1,13 @@
 # Sound And Music
 
-The pygame version of Bakerrrr generates its current sound effects, ambient
-layers, and music when the game starts. No external sound pack is required.
+Bakerrrr's soundscape is meant to be discovered during play. It responds to what
+happens and where you are, while the music leaves room for the world around you.
+The pygame version generates its audio when the game starts, so no external
+sound pack is required.
 
-Action sounds confirm things that actually happened. Successful movement,
-opening or closing a door, picking something up, completing a transaction,
-finishing craft work, taking damage, and entering combat each have a small cue.
-Blocked movement and failed actions stay quiet.
+## Volume And Muting
 
-The background changes with the world around you:
-
-- water becomes clearer as you approach it;
-- nearby campfires add a restrained crackle;
-- dawn and daytime sound different from dusk and night;
-- city, frontier, wilderness, coast, and underground areas carry different low
-  tones;
-- outdoor ambience becomes quieter when you step inside.
-
-The music is deliberately sparse so local sounds can come through between its
-notes.
-There is not an in-game volume menu yet. For a source checkout, set an option
-before launching:
+There is not an in-game volume menu yet. Set an option before launching:
 
 ```bash
 BAKERRRR_AUDIO_VOLUME=0.5 python3 main.py       # lower everything
@@ -34,3 +21,15 @@ BAKERRRR_AUDIO=0 python3 main.py                # mute all game audio
 Master volume accepts values from `0.0` to `1.0`. Music and ambience multipliers
 accept values up to `2.0`, though final playback is still limited to the mixer's
 safe maximum.
+
+## If Playback Crackles Or Skips
+
+Try a larger audio buffer:
+
+```bash
+BAKERRRR_AUDIO_BUFFER=1024 python3 main.py
+```
+
+This gives a busy machine more protection against interrupted playback, at the
+cost of a little extra response delay. A short pause while launching is normal:
+the audio is generated once at startup and then reused during play.
