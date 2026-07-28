@@ -428,6 +428,17 @@ class PropertyActionRuntime:
 
         if is_open:
             success, reason = _door_close_attempt(self.sim, eid, x, y, z)
+            if success:
+                self.sim.emit(Event(
+                    "door_interacted",
+                    eid=eid,
+                    x=x,
+                    y=y,
+                    z=z,
+                    open=False,
+                    reason=reason,
+                    property_id=(prop or {}).get("id") if isinstance(prop, dict) else None,
+                ))
             _log_player_feedback(
                 self.sim,
                 _door_action_text(reason, opening=False),
@@ -443,6 +454,17 @@ class PropertyActionRuntime:
             z,
             allow_override=False,
         )
+        if success:
+            self.sim.emit(Event(
+                "door_interacted",
+                eid=eid,
+                x=x,
+                y=y,
+                z=z,
+                open=True,
+                reason=reason,
+                property_id=(prop or {}).get("id") if isinstance(prop, dict) else None,
+            ))
         if not success and str(reason or "").strip().lower() in {"locked_property", "closed_property", "door_access_denied"}:
             knock = _door_knock_attempt(
                 self.sim,

@@ -41,6 +41,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "events",
     "systems",
     "mutators",
+    "audio_runtime",
     "appearance",
     "npc_social_dynamics_system",
     "mechanical_device_system",

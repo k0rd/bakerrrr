@@ -206,6 +206,7 @@ from game.systems import (
 )
 from game.weapons import roll_weapon_instance
 from ui.pygame_view import PygameView
+from ui.procedural_audio import PygameAudioRuntime
 
 
 _PLAYER_IDENTITY_OPTIONS = (
@@ -697,10 +698,20 @@ def _register_runtime_systems(sim, view, player):
     log_system = EventLogSystem(sim, player)
     render_system = RenderSystem(sim, view, player, hud_lines=10)
     render_system.runtime_tag = "render"
+    audio_runtime = None
+    pygame_module = getattr(view, "pygame", None)
+    if pygame_module is not None:
+        audio_runtime = PygameAudioRuntime(
+            sim,
+            pygame_module,
+            player,
+            mixer_buffer=getattr(view, "audio_mixer_buffer", 512),
+        )
     sim.item_system = item_system
     sim.item_action_system = item_system.item_actions
     sim.site_service_system = site_service_system
     sim.trade_system = trade_system
+    sim.audio_runtime = audio_runtime
 
     _live_timeskip_stride(combat_pacing_system, 0)
     _live_timeskip_stride(situation_read_system, 0)
@@ -890,6 +901,13 @@ def _request_session_quit(sim, *, source="input"):
         pass
 
 
+def _observe_audio_frame(sim, elapsed_seconds, *, phase="play"):
+    audio_runtime = getattr(sim, "audio_runtime", None)
+    observe = getattr(audio_runtime, "observe_frame", None)
+    if callable(observe):
+        observe(elapsed_seconds, phase=phase)
+
+
 def _run_loop(sim, view, character_name):
     set_active_debug_sim(sim)
     frame_seconds = 1.0 / 20.0
@@ -969,6 +987,8 @@ def _run_loop(sim, view, character_name):
                 _request_session_quit(sim, source="window_close")
                 break
             elapsed = time.perf_counter() - frame_start
+            _observe_audio_frame(sim, elapsed, phase="live_timeskip")
+            elapsed = time.perf_counter() - frame_start
             if elapsed < float(LIVE_TIMESKIP_MIN_YIELD_SECONDS):
                 time.sleep(float(LIVE_TIMESKIP_MIN_YIELD_SECONDS) - elapsed)
             continue
@@ -986,6 +1006,8 @@ def _run_loop(sim, view, character_name):
             _request_session_quit(sim, source="window_close")
             break
 
+        elapsed = time.perf_counter() - frame_start
+        _observe_audio_frame(sim, elapsed, phase="play")
         elapsed = time.perf_counter() - frame_start
         sleep_for = frame_seconds - elapsed
         if sleep_for > 0:

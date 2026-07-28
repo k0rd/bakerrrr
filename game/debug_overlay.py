@@ -758,6 +758,58 @@ def build_debug_overlay(
         ),
     ])
 
+    audio_runtime = getattr(sim, "audio_runtime", None)
+    audio_snapshot_fn = getattr(audio_runtime, "snapshot", None)
+    if callable(audio_snapshot_fn):
+        audio = audio_snapshot_fn()
+        lines.extend(["", _section_header_line("Audio", color="property_service")])
+        if not bool(audio.get("enabled")):
+            lines.append(f"Disabled | {str(audio.get('reason', 'unavailable')).strip() or 'unavailable'}")
+        else:
+            cue_counts = dict(audio.get("cue_counts") or {})
+            cue_text = ", ".join(f"{name} {count}" for name, count in cue_counts.items()) or "none yet"
+            ambient_context = dict(audio.get("ambient_context") or {})
+            ambient_levels = dict(audio.get("ambient_levels") or {})
+            ambient_text = ", ".join(
+                f"{name} {float(level) * 100.0:.0f}%"
+                for name, level in ambient_levels.items()
+            ) or "none"
+            lines.extend([
+                (
+                    f"Mixer {int(audio.get('sample_rate', 0))} Hz / {int(audio.get('channel_count', 0))}ch | "
+                    f"buffer {int(audio.get('mixer_buffer', 0))} ({float(audio.get('nominal_buffer_ms', 0.0)):.1f} ms nominal) | "
+                    f"music {'busy' if audio.get('music_playing') else 'stopped'} x{float(audio.get('music_volume', 0.0)):.2f}"
+                ),
+                (
+                    f"Bank {float(audio.get('bank_bytes', 0)) / 1024.0:.1f} KiB / generated {float(audio.get('generation_ms', 0.0)):.1f} ms | "
+                    f"ambience {int(audio.get('busy_ambient_channels', 0))}/{int(audio.get('ambient_channel_count', 0))} | "
+                    f"sfx {int(audio.get('busy_sfx_channels', 0))}/{int(audio.get('sfx_channel_count', 0))} busy"
+                ),
+                (
+                    f"Ambience {str(ambient_context.get('phase', '-'))}/{str(ambient_context.get('biome', '-'))} "
+                    f"{str(ambient_context.get('terrain', '-'))} | {'inside' if ambient_context.get('indoors') else 'outside'} | "
+                    f"water {float(ambient_context.get('water', 0.0)) * 100.0:.0f}% / "
+                    f"fire {float(ambient_context.get('campfire', 0.0)) * 100.0:.0f}% | {ambient_text}"
+                ),
+                (
+                    f"Environment scans {int(audio.get('environment_sample_count', 0))} | last/max "
+                    f"{float(audio.get('last_environment_sample_ms', 0.0)):.3f}/"
+                    f"{float(audio.get('max_environment_sample_ms', 0.0)):.3f} ms | "
+                    f"layer switches {int(audio.get('ambient_switch_count', 0))}"
+                ),
+                (
+                    f"Submits {int(audio.get('submit_count', 0))} | suppressed {int(audio.get('suppressed_count', 0))} | "
+                    f"no-channel {int(audio.get('no_channel_count', 0))} | submit last/max "
+                    f"{float(audio.get('last_submit_ms', 0.0)):.3f}/{float(audio.get('max_submit_ms', 0.0)):.3f} ms"
+                ),
+                (
+                    f"Frames >50 ms {int(audio.get('late_frame_count', 0))} | >100 ms {int(audio.get('severe_frame_count', 0))} | "
+                    f"work last/max {float(audio.get('last_frame_ms', 0.0)):.1f}/{float(audio.get('max_frame_ms', 0.0)):.1f} ms | "
+                    f"phase {str(audio.get('last_lag_phase', '') or '-')}"
+                ),
+                f"Cues {cue_text}",
+            ])
+
     organization_lines = organization_summary_rows(sim, current_prop=prop)
     lines.extend([
         "",

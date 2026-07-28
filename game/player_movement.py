@@ -674,6 +674,21 @@ class PlayerMovementRuntime:
             ))
             return
 
+        current_pos = self.sim.ecs.get(Position).get(eid)
+        if current_pos is not None:
+            self.sim.emit(Event(
+                "player_moved",
+                eid=eid,
+                origin_x=origin_x,
+                origin_y=origin_y,
+                origin_z=origin_z,
+                x=int(current_pos.x),
+                y=int(current_pos.y),
+                z=int(current_pos.z),
+                dx=int(dx),
+                dy=int(dy),
+            ))
+
         self.clear_stakeout(eid=eid, reason="move")
         self.emit_move_access_offense(
             eid=eid,
@@ -690,7 +705,6 @@ class PlayerMovementRuntime:
             self.sim.ecs.get(Position).get(eid),
             had_cover=had_cover,
         )
-        current_pos = self.sim.ecs.get(Position).get(eid)
         if current_pos is not None:
             visits = self.action_system._overworld_visit_state_for(eid)
             for chunk in (

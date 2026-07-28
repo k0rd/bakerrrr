@@ -117,6 +117,10 @@ _INPUT_DEBUG_DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 _PYGAME_TEXT_CONTRAST_ENV = "BAKERRRR_PYGAME_TEXT_CONTRAST_MIN"
 _PYGAME_TEXT_CONTRAST_MIN = 3.8
 _PYGAME_TEXT_BACKGROUND = (0, 0, 0)
+_PYGAME_AUDIO_RATE_ENV = "BAKERRRR_AUDIO_RATE"
+_PYGAME_AUDIO_BUFFER_ENV = "BAKERRRR_AUDIO_BUFFER"
+_PYGAME_AUDIO_DEFAULT_RATE = 22_050
+_PYGAME_AUDIO_DEFAULT_BUFFER = 512
 
 
 def _resource_path(*parts):
@@ -146,6 +150,10 @@ def _env_float(name, default, *, minimum=None, maximum=None):
     return value
 
 
+def _env_int(name, default, *, minimum=None, maximum=None):
+    return int(round(_env_float(name, default, minimum=minimum, maximum=maximum)))
+
+
 class PygameView:
     """Grid-based pygame view implementing the same drawing/input surface as CursesView.
 
@@ -163,6 +171,25 @@ class PygameView:
             raise RuntimeError("pygame backend requested but pygame is not installed") from exc
 
         self.pygame = pygame
+        self.audio_mixer_rate = _env_int(
+            _PYGAME_AUDIO_RATE_ENV,
+            _PYGAME_AUDIO_DEFAULT_RATE,
+            minimum=8_000,
+            maximum=48_000,
+        )
+        requested_audio_buffer = _env_int(
+            _PYGAME_AUDIO_BUFFER_ENV,
+            _PYGAME_AUDIO_DEFAULT_BUFFER,
+            minimum=128,
+            maximum=4_096,
+        )
+        self.audio_mixer_buffer = 1 << (max(128, requested_audio_buffer) - 1).bit_length()
+        pygame.mixer.pre_init(
+            self.audio_mixer_rate,
+            size=-16,
+            channels=2,
+            buffer=self.audio_mixer_buffer,
+        )
         pygame.init()
         pygame.font.init()
 
