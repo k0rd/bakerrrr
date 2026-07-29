@@ -778,7 +778,14 @@ def build_debug_overlay(
                 (
                     f"Mixer {int(audio.get('sample_rate', 0))} Hz / {int(audio.get('channel_count', 0))}ch | "
                     f"buffer {int(audio.get('mixer_buffer', 0))} ({float(audio.get('nominal_buffer_ms', 0.0)):.1f} ms nominal) | "
-                    f"music {'busy' if audio.get('music_playing') else 'stopped'} x{float(audio.get('music_volume', 0.0)):.2f}"
+                    f"music {str(audio.get('music_state', 'off'))} x{float(audio.get('music_volume', 0.0)):.2f} | "
+                    f"theme {str(audio.get('music_theme', '-'))}"
+                ),
+                (
+                    f"Music bursts {int(audio.get('music_burst_count', 0))} | "
+                    f"cue {str(audio.get('music_current_cue') or audio.get('music_last_cue') or '-')} | "
+                    f"rest remaining/last {float(audio.get('music_rest_remaining_seconds', 0.0)):.0f}/"
+                    f"{float(audio.get('music_rest_seconds', 0.0)):.0f}s"
                 ),
                 (
                     f"Bank {float(audio.get('bank_bytes', 0)) / 1024.0:.1f} KiB / generated {float(audio.get('generation_ms', 0.0)):.1f} ms | "

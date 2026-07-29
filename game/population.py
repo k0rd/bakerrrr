@@ -45,7 +45,12 @@ from game.components import (
 from game.economy import chunk_economy_profile, pick_career_for_workplace
 from game.ecology_registry import native_fauna_profiles
 from game.fauna_genetics import apply_animal_genome_expression, founder_animal_genome
-from game.appearance_loadout import cosmetic_variant_metadata, is_appearance_item, seed_npc_appearance_from_description
+from game.appearance_loadout import (
+    cosmetic_variant_metadata,
+    equip_appearance_item,
+    is_appearance_item,
+    seed_npc_appearance_from_description,
+)
 from game.drone_distribution import drone_distribution_metadata
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot, world_distributed_item_pool
 from game.human_identity import seed_human_identity_profile
@@ -53,6 +58,7 @@ from game.npc_names import generate_human_personal_name, human_descriptor
 from game.npc_relationships import seed_relationship_from_home_bond
 from game.organizations import ensure_property_organization, sync_actor_organization_affiliations
 from game.property_access import STOREFRONT_ARCHETYPE_HINTS, property_is_open, property_is_public, property_is_storefront, world_hour
+from game.profession_loadouts import NPC_PROFESSION_LOADOUTS_BY_ARCHETYPE
 from game.property_runtime import property_is_vehicle, vehicle_fuel_values
 from game.skills import seed_skill_profile
 from game.system_support.npc_behavior_runtime import behavior_profile_for_spawn
@@ -1167,13 +1173,13 @@ def _spawn(sim, *components):
     return eid
 
 
-def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
+def _add_item_instance(sim, eid, item_id, quantity=1, owner_tag="npc"):
     inventory = sim.ecs.get(Inventory).get(eid)
     if not inventory:
-        return False
+        return ""
     item_def = ITEM_CATALOG.get(item_id)
     if not item_def:
-        return False
+        return ""
     metadata = {"ambient_spawn": True}
     if is_appearance_item(item_id, item_catalog=ITEM_CATALOG):
         metadata.update(cosmetic_variant_metadata(
@@ -1183,7 +1189,7 @@ def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
             sim=sim,
         ))
         metadata["ambient_spawn"] = True
-    added, _instance_id = inventory.add_item(
+    added, instance_id = inventory.add_item(
         item_id=item_id,
         quantity=int(max(1, quantity)),
         stack_max=item_def.get("stack_max", 1),
@@ -1192,7 +1198,19 @@ def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
         owner_tag=owner_tag,
         metadata=metadata,
     )
-    return bool(added)
+    return str(instance_id or "") if added else ""
+
+
+def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
+    return bool(
+        _add_item_instance(
+            sim,
+            eid,
+            item_id,
+            quantity=quantity,
+            owner_tag=owner_tag,
+        )
+    )
 
 
 NPC_WALLET_DISTRICT_MULTS = {
@@ -2445,6 +2463,11 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
     return ("street_ration", "protein_wrap", "spark_brew", "calm_patch", "city_pass_token", "scratch_ticket", "energy_bar", "bottled_water", "fruit_cup", "meal_voucher", "lucky_charm", "electrolyte_drink")
 
 
+def _profession_inventory_profile(workplace_prop=None, home_prop=None):
+    archetype = _property_archetype(workplace_prop or home_prop)
+    return dict(NPC_PROFESSION_LOADOUTS_BY_ARCHETYPE.get(archetype, {}))
+
+
 def _weapon_use_profile_for(role):
     role = str(role or "").strip().lower()
     if role == "guard":
@@ -2652,18 +2675,31 @@ def _seed_npc_inventory(sim, eid, rng, role, workplace_prop=None, home_prop=None
     report_device_item_id = _report_device_item_for_npc(role, workplace_prop=workplace_prop, home_prop=home_prop)
     if report_device_item_id in ITEM_CATALOG:
         _give_item(sim, eid, report_device_item_id, quantity=1)
-    archetype = _property_archetype(workplace_prop or home_prop)
-    if archetype == "butcher_shop" and rng.random() < 0.34:
-        _give_item(sim, eid, "butcher_apron", quantity=1)
-    elif archetype in {"herbalist_shop", "herbalist_camp"}:
-        if rng.random() < 0.34:
-            _give_item(sim, eid, "botany_apron", quantity=1)
-        # These are working tools, not flavor loot: without them generated
-        # herbalists can recognize plants but cannot cut, scrape, or turn their
-        # own harvest into circulating experimental knowledge.
-        _give_item(sim, eid, "pruning_shears", quantity=1)
-        _give_item(sim, eid, "mortar_kit", quantity=1)
+
+    profession_profile = _profession_inventory_profile(
+        workplace_prop=workplace_prop,
+        home_prop=home_prop,
+    )
+    profession_instances = {}
+    for item_id, quantity in tuple(profession_profile.get("items", ()) or ()):
+        instance_id = _add_item_instance(sim, eid, item_id, quantity=quantity)
+        if instance_id:
+            profession_instances[str(item_id)] = str(instance_id)
+    worn_item_id = str(profession_profile.get("worn_item_id", "") or "").strip()
+    worn_instance_id = profession_instances.get(worn_item_id, "")
+    if worn_instance_id:
+        equip_appearance_item(
+            sim,
+            eid,
+            worn_instance_id,
+            preferred_slot="outer",
+            record_fashion=False,
+        )
+
     pool = [item_id for item_id in _inventory_pool_for(role, workplace_prop=workplace_prop, home_prop=home_prop) if item_id in ITEM_CATALOG]
+    inventory = sim.ecs.get(Inventory).get(eid)
+    if inventory is not None:
+        pool = [item_id for item_id in pool if inventory.find(item_id=item_id) is None]
     if pool:
         _give_item(sim, eid, rng.choice(pool), quantity=1)
         if rng.random() < 0.28:

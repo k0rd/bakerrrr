@@ -34,6 +34,9 @@ from game.components import (
     WeaponLoadout,
 )
 from game.appearance_loadout import (
+    cosmetic_variant_metadata,
+    equip_appearance_item,
+    is_appearance_item,
     mark_inventory_instance_worn,
     seed_player_starting_outfit,
     stow_cosmetic_outer_for_armor,
@@ -50,6 +53,7 @@ from game.organizations import (
     seed_property_organization_defaults,
 )
 from game.population import seed_chunk_items, spawn_chunk_npcs, spawn_chunk_special_population
+from game.profession_loadouts import NORMAL_START_LOADOUT_IDS, NORMAL_START_LOADOUTS
 from game.property_access import COMMON_AREA_ROOM_KINDS, default_site_services_for_archetype
 from game.property_keys import ensure_actor_has_property_key, ensure_property_lock
 from game.quick_travel_ramps import generate_quick_travel_ramp_records
@@ -87,6 +91,7 @@ class NormalRunBootstrapProfile:
     vehicle_seed_chance: float = 0.42
     bootstrap_player_opportunity_intel: bool = False
     objective_visible: bool = False
+    starter_loadout_ids: tuple[str, ...] = NORMAL_START_LOADOUT_IDS
     street_kit_base: tuple[tuple[str, int], ...] = (
         ("street_ration", 1),
         ("bottled_water", 2),
@@ -130,6 +135,8 @@ class NormalRunBootstrapResult:
     local_note: str
     pressure_note: str
     starter_vehicle_seeded: bool
+    starter_loadout_id: str
+    starter_loadout_items: tuple[tuple[str, int], ...]
     street_kit_items: tuple[tuple[str, int], ...]
     starter_wallet_credits: int
     starter_bank_credits: int
@@ -856,22 +863,76 @@ def _seed_world_items(sim, property_records):
     return int(seed_chunk_items(sim, chunk, property_records))
 
 
-def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
+def _add_item(sim, eid, item_id, quantity=1, owner_tag="npc", metadata=None):
     inventory = sim.ecs.get(Inventory).get(eid)
     if not inventory:
-        return False
+        return ""
     item_def = ITEM_CATALOG.get(item_id)
     if not item_def:
-        return False
-    return inventory.add_item(
+        return ""
+    added, instance_id = inventory.add_item(
         item_id=item_id,
         quantity=quantity,
         stack_max=item_def.get("stack_max", 1),
         instance_factory=sim.new_item_instance_id,
         owner_eid=eid,
         owner_tag=owner_tag,
-        metadata={"starter_item": True},
-    )[0]
+        metadata=dict(metadata or {"starter_item": True}),
+    )
+    return str(instance_id or "") if added else ""
+
+
+def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc", metadata=None):
+    return bool(
+        _add_item(
+            sim,
+            eid,
+            item_id,
+            quantity=quantity,
+            owner_tag=owner_tag,
+            metadata=metadata,
+        )
+    )
+
+
+def _normal_start_loadout_choices(profile):
+    choices = []
+    for raw_id in tuple(getattr(profile, "starter_loadout_ids", ()) or ()):
+        loadout_id = str(raw_id or "").strip().lower()
+        if loadout_id == "street" or loadout_id in NORMAL_START_LOADOUTS:
+            if loadout_id not in choices:
+                choices.append(loadout_id)
+    return tuple(choices) or ("street",)
+
+
+def _pick_normal_start_loadout(profile, rng):
+    return str(rng.choice(_normal_start_loadout_choices(profile)))
+
+
+def _give_normal_start_loadout_item(sim, eid, loadout_id, item_id, quantity=1):
+    metadata = {
+        "starter_item": True,
+        "starter_loadout_id": str(loadout_id),
+    }
+    if is_appearance_item(item_id, item_catalog=ITEM_CATALOG):
+        metadata.update(
+            cosmetic_variant_metadata(
+                item_id,
+                seed_token=f"normal-start:{sim.seed}:{eid}:{loadout_id}:{item_id}",
+                item_catalog=ITEM_CATALOG,
+                sim=sim,
+            )
+        )
+        metadata["starter_item"] = True
+        metadata["starter_loadout_id"] = str(loadout_id)
+    return _add_item(
+        sim,
+        eid,
+        item_id,
+        quantity=quantity,
+        owner_tag="player",
+        metadata=metadata,
+    )
 
 
 def _starter_int_range(rng, bounds, *, minimum=0):
@@ -1394,27 +1455,72 @@ def bootstrap_normal_run(
         if isinstance(profile, dict) and profile
     }
 
-    street_kit_items = list(profile.street_kit_base)
-    if profile.street_kit_variants:
-        street_kit_items.append(run_rng.choice(profile.street_kit_variants))
-    for item_id, quantity in street_kit_items:
-        _give_item(sim, player, item_id, quantity=quantity, owner_tag="player")
+    starter_loadout_id = _pick_normal_start_loadout(profile, run_rng)
+    street_kit_items = []
+    starter_loadout_items = []
+    worn_item_instances = {}
+    if starter_loadout_id == "street":
+        street_kit_items = list(profile.street_kit_base)
+        if profile.street_kit_variants:
+            street_kit_items.append(run_rng.choice(profile.street_kit_variants))
+        loadout_item_rows = tuple(street_kit_items)
+        loadout_profile = {}
+    else:
+        loadout_profile = dict(NORMAL_START_LOADOUTS.get(starter_loadout_id, {}))
+        loadout_item_rows = tuple(loadout_profile.get("items", ()) or ())
+
+    for item_id, quantity in loadout_item_rows:
+        instance_id = _give_normal_start_loadout_item(
+            sim,
+            player,
+            starter_loadout_id,
+            item_id,
+            quantity=quantity,
+        )
+        if instance_id:
+            starter_loadout_items.append((str(item_id), int(quantity)))
+            worn_item_instances[str(item_id)] = str(instance_id)
+
+    worn_item_id = str(loadout_profile.get("worn_item_id", "") or "").strip()
+    worn_instance_id = worn_item_instances.get(worn_item_id, "")
+    if worn_instance_id:
+        equip_appearance_item(
+            sim,
+            player,
+            worn_instance_id,
+            preferred_slot="outer",
+            record_fashion=False,
+        )
 
     starter_weapon_id = ""
-    if profile.starter_melee_weapon_pool and run_rng.random() < float(profile.starter_melee_weapon_chance):
-        rolled_weapon = str(run_rng.choice(profile.starter_melee_weapon_pool) or "").strip()
-        if _give_starter_weapon(sim, player, rolled_weapon, owner_tag="player"):
+    if starter_loadout_id == "street":
+        if profile.starter_melee_weapon_pool and run_rng.random() < float(profile.starter_melee_weapon_chance):
+            rolled_weapon = str(run_rng.choice(profile.starter_melee_weapon_pool) or "").strip()
+            if _give_starter_weapon(sim, player, rolled_weapon, owner_tag="player"):
+                starter_weapon_id = rolled_weapon
+        elif profile.starter_firearm_pool and run_rng.random() < float(profile.starter_firearm_chance):
+            rolled_weapon = str(run_rng.choice(profile.starter_firearm_pool) or "").strip()
+            if _give_starter_weapon(sim, player, rolled_weapon, owner_tag="player"):
+                starter_weapon_id = rolled_weapon
+    else:
+        rolled_weapon = str(loadout_profile.get("weapon_id", "") or "").strip()
+        if rolled_weapon and _give_starter_weapon(sim, player, rolled_weapon, owner_tag="player"):
             starter_weapon_id = rolled_weapon
-    elif profile.starter_firearm_pool and run_rng.random() < float(profile.starter_firearm_chance):
-        rolled_weapon = str(run_rng.choice(profile.starter_firearm_pool) or "").strip()
-        if _give_starter_weapon(sim, player, rolled_weapon, owner_tag="player"):
-            starter_weapon_id = rolled_weapon
+    if starter_weapon_id:
+        starter_loadout_items.append((starter_weapon_id, 1))
 
     starter_armor_item_id = ""
-    if profile.starter_armor_pool and run_rng.random() < float(profile.starter_armor_chance):
-        rolled_armor = str(run_rng.choice(profile.starter_armor_pool) or "").strip()
-        if _give_starter_armor(sim, player, rolled_armor, owner_tag="player"):
+    if starter_loadout_id == "street":
+        if profile.starter_armor_pool and run_rng.random() < float(profile.starter_armor_chance):
+            rolled_armor = str(run_rng.choice(profile.starter_armor_pool) or "").strip()
+            if _give_starter_armor(sim, player, rolled_armor, owner_tag="player"):
+                starter_armor_item_id = rolled_armor
+    else:
+        rolled_armor = str(loadout_profile.get("armor_item_id", "") or "").strip()
+        if rolled_armor and _give_starter_armor(sim, player, rolled_armor, owner_tag="player"):
             starter_armor_item_id = rolled_armor
+    if starter_armor_item_id:
+        starter_loadout_items.append((starter_armor_item_id, 1))
 
     vehicle = None
     if run_rng.random() < float(profile.vehicle_seed_chance):
@@ -1446,6 +1552,11 @@ def bootstrap_normal_run(
         "gender_identity": str(player_identity.gender_identity or "nonbinary"),
         "start_chunk": {"cx": int(sim.active_chunk["cx"]), "cy": int(sim.active_chunk["cy"])},
         "starter_vehicle_seeded": bool(vehicle),
+        "starter_loadout_id": starter_loadout_id,
+        "starter_loadout_items": [
+            {"item_id": str(item_id).strip().lower(), "quantity": int(quantity)}
+            for item_id, quantity in starter_loadout_items
+        ],
         "starter_wallet_credits": int(starter_wallet_credits),
         "starter_bank_credits": int(starter_bank_credits),
         "bootstrap_player_opportunity_intel": bool(profile.bootstrap_player_opportunity_intel),
@@ -1470,6 +1581,11 @@ def bootstrap_normal_run(
         local_note=local_note,
         pressure_note=pressure_note,
         starter_vehicle_seeded=bool(vehicle),
+        starter_loadout_id=str(starter_loadout_id),
+        starter_loadout_items=tuple(
+            (str(item_id), int(quantity))
+            for item_id, quantity in starter_loadout_items
+        ),
         street_kit_items=tuple((str(item_id), int(quantity)) for item_id, quantity in street_kit_items),
         starter_wallet_credits=int(starter_wallet_credits),
         starter_bank_credits=int(starter_bank_credits),

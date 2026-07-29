@@ -5,6 +5,11 @@ happens and where you are, while the music leaves room for the world around you.
 The pygame version generates its audio when the game starts, so no external
 sound pack is required.
 
+Music arrives in short passages separated by long quiet stretches. A run keeps
+a musical sense of where and how it began, while travel can occasionally bring
+the character of a new place forward. Sound effects and the surrounding world
+continue normally while the music rests.
+
 ## Volume And Muting
 
 There is not an in-game volume menu yet. Set an option before launching:

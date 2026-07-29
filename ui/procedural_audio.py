@@ -27,6 +27,21 @@ DEFAULT_MIXER_BUFFER = 512
 OPEN_RUN_BPM = 92
 OPEN_RUN_BEATS = 16
 OPEN_RUN_DURATION = OPEN_RUN_BEATS * (60.0 / OPEN_RUN_BPM)
+MUSIC_SILENCE_MIN_SECONDS = 150.0
+MUSIC_SILENCE_MAX_SECONDS = 300.0
+MUSIC_HOME_CUE_NAMES = (
+    "home_theme_brief",
+    "home_theme_roam",
+    "home_theme_wide",
+)
+MUSIC_BIOME_CUE_BY_KEY = {
+    "city": "biome_theme_city",
+    "frontier": "biome_theme_frontier",
+    "wilderness": "biome_theme_wilderness",
+    "coastal": "biome_theme_coastal",
+    "underground": "biome_theme_underground",
+}
+MUSIC_CUE_NAMES = MUSIC_HOME_CUE_NAMES + tuple(MUSIC_BIOME_CUE_BY_KEY.values())
 ENVIRONMENT_SAMPLE_INTERVAL = 0.35
 ENVIRONMENT_FADE_SECONDS = 0.65
 AMBIENT_ATTACK_SECONDS_BY_GROUP = {
@@ -190,10 +205,20 @@ def _add_noise(
 
 
 def _footstep(duration: float, sample_rate: int) -> list[float]:
+    """A soft heel-and-gravel crunch with no hard, glassy pitched click."""
+
     samples = _blank(duration, sample_rate)
-    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.09, amplitude=0.16, seed=11, color="low", release=0.04, decay=4.5)
-    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=0.105, frequency=118.0, end_frequency=72.0, amplitude=0.19, release=0.05, decay=4.0)
-    _add_noise(samples, sample_rate=sample_rate, start=0.055, duration=0.055, amplitude=0.055, seed=12, color="high", release=0.025, decay=4.0)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.13, amplitude=0.13, seed=11, color="low", attack=0.004, release=0.060, decay=2.7)
+    _add_noise(samples, sample_rate=sample_rate, start=0.008, duration=0.105, amplitude=0.050, seed=12, color="white", attack=0.006, release=0.052, decay=2.0)
+    gravel = (
+        (0.018, 0.029, 0.070),
+        (0.041, 0.024, 0.052),
+        (0.064, 0.032, 0.061),
+        (0.091, 0.027, 0.044),
+    )
+    for index, (start, grain_duration, amplitude) in enumerate(gravel):
+        _add_noise(samples, sample_rate=sample_rate, start=start, duration=grain_duration, amplitude=amplitude, seed=13 + index, color="high", attack=0.003, release=grain_duration * 0.62, decay=2.6)
+    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=0.115, frequency=72.0, end_frequency=46.0, amplitude=0.065, attack=0.004, release=0.060, decay=3.0)
     return samples
 
 
@@ -301,11 +326,16 @@ def _danger(duration: float, sample_rate: int) -> list[float]:
     return samples
 
 
-def _tire_squeal(duration: float, sample_rate: int) -> list[float]:
+def _tire_scrub(duration: float, sample_rate: int) -> list[float]:
+    """Restrained dusty tire scrub; duration is supplied by the cached variant."""
+
     samples = _blank(duration, sample_rate)
-    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.43, amplitude=0.17, seed=71, color="high", attack=0.018, release=0.15, decay=0.55)
-    _add_tone(samples, sample_rate=sample_rate, start=0.006, duration=0.42, frequency=1_540.0, end_frequency=830.0, amplitude=0.13, shape="soft_square", attack=0.025, release=0.16, decay=0.8)
-    _add_tone(samples, sample_rate=sample_rate, start=0.015, duration=0.38, frequency=2_310.0, end_frequency=1_245.0, amplitude=0.038, shape="triangle", attack=0.032, release=0.15, decay=1.0)
+    body = max(0.10, float(duration) - 0.025)
+    release = min(0.12, max(0.065, body * 0.38))
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=body, amplitude=0.105, seed=71 + int(round(duration * 100)), color="high", attack=0.022, release=release, decay=0.8)
+    _add_noise(samples, sample_rate=sample_rate, start=0.008, duration=body * 0.92, amplitude=0.080, seed=72 + int(round(duration * 100)), color="low", attack=0.020, release=release, decay=1.0)
+    _add_tone(samples, sample_rate=sample_rate, start=0.012, duration=body * 0.88, frequency=930.0, end_frequency=610.0, amplitude=0.040, shape="triangle", attack=0.030, release=release, decay=1.2)
+    _add_tone(samples, sample_rate=sample_rate, start=0.020, duration=body * 0.78, frequency=1_390.0, end_frequency=920.0, amplitude=0.010, attack=0.035, release=release, decay=1.4)
     return samples
 
 
@@ -336,40 +366,77 @@ def _explosion(duration: float, sample_rate: int) -> list[float]:
     return samples
 
 
-def _open_run_sketch(duration: float, sample_rate: int) -> list[float]:
-    """Four sparse bars honoring the existing 92 BPM ``open_run`` brief."""
+_MUSIC_STYLE_SPECS = {
+    "city": {"root": 65.41, "scale": (0, 3, 5, 7, 10), "bpm": 96.0, "brightness": 1.00},
+    "frontier": {"root": 73.42, "scale": (0, 2, 5, 7, 9), "bpm": 92.0, "brightness": 0.82},
+    "wilderness": {"root": 65.41, "scale": (0, 4, 7, 9, 12), "bpm": 86.0, "brightness": 0.68},
+    "coastal": {"root": 73.42, "scale": (0, 2, 7, 9, 14), "bpm": 84.0, "brightness": 0.72},
+    "underground": {"root": 55.00, "scale": (0, 3, 5, 7, 10), "bpm": 78.0, "brightness": 0.48},
+}
 
+
+def _music_note_count(beat_count: int, *, armed: bool) -> int:
+    bar_notes = math.ceil(max(4, int(beat_count)) / 4.0) * 3
+    melody_step = 1 if armed else 2
+    melody_notes = math.ceil(max(4, int(beat_count)) / melody_step) * 2
+    bass_notes = max(4, int(round(max(4, int(beat_count)) * 0.375)))
+    return int(bar_notes + melody_notes + bass_notes)
+
+
+def _run_theme_passage(
+    duration: float,
+    sample_rate: int,
+    *,
+    style_key: str,
+    armed: bool,
+    variant: int,
+    beat_count: int,
+) -> list[float]:
+    """One coherent passage shaped by the run's home or a visited biome."""
+
+    spec = _MUSIC_STYLE_SPECS.get(style_key, _MUSIC_STYLE_SPECS["frontier"])
+    root = float(spec["root"])
+    scale = tuple(int(value) for value in spec["scale"])
+    brightness = float(spec["brightness"])
+    beat_count = max(4, int(beat_count))
+    beat = float(duration) / float(beat_count)
     samples = _blank(duration, sample_rate)
-    beat = 60.0 / OPEN_RUN_BPM
-    for beat_index, base in ((0, 73.42), (4, 65.41), (8, 77.78), (12, 73.42)):
-        start = beat_index * beat
-        _add_tone(samples, sample_rate=sample_rate, start=start, duration=beat * 2.3, frequency=base, amplitude=0.09, attack=0.035, release=0.28, decay=2.0)
-        _add_tone(samples, sample_rate=sample_rate, start=start, duration=beat * 1.55, frequency=base * 2.0, amplitude=0.045, shape="triangle", attack=0.025, release=0.24, decay=2.5)
-        _add_tone(samples, sample_rate=sample_rate, start=start, duration=beat * 1.1, frequency=base * 4.0, amplitude=0.026, shape="triangle", attack=0.018, release=0.20, decay=3.0)
+    rng = random.Random(f"run-theme:{style_key}:{int(bool(armed))}:{variant}:{beat_count}")
 
-    plucks = (
-        (0.50, 293.66),
-        (2.75, 220.00),
-        (4.50, 261.63),
-        (7.00, 220.00),
-        (8.50, 311.13),
-        (10.75, 261.63),
-        (12.50, 293.66),
-        (14.75, 220.00),
-    )
-    for index, (beat_index, frequency) in enumerate(plucks):
-        start = beat_index * beat
-        _add_tone(samples, sample_rate=sample_rate, start=start, duration=beat * 0.58, frequency=frequency, amplitude=0.105, shape="triangle", release=0.12, decay=4.2)
-        _add_tone(samples, sample_rate=sample_rate, start=start, duration=beat * 0.42, frequency=frequency * 2.003, amplitude=0.026, release=0.09, decay=5.0)
-        _add_noise(samples, sample_rate=sample_rate, start=start, duration=0.026, amplitude=0.018, seed=100 + index, color="high", release=0.012, decay=6.0)
+    def degree_frequency(degree: int, octave: int = 0) -> float:
+        semitones = scale[int(degree) % len(scale)] + (12 * int(octave))
+        return root * (2.0 ** (semitones / 12.0))
 
-    for index, beat_index in enumerate((0.0, 3.0, 6.0, 8.0, 11.0, 14.0)):
-        start = beat_index * beat
-        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.19, frequency=94.0, end_frequency=48.0, amplitude=0.105, release=0.07, decay=3.8)
-        _add_noise(samples, sample_rate=sample_rate, start=start, duration=0.065, amplitude=0.035, seed=200 + index, color="low", release=0.028, decay=5.0)
+    bar_count = math.ceil(beat_count / 4.0)
+    for bar_index in range(bar_count):
+        start = bar_index * 4.0 * beat
+        base = degree_frequency((bar_index + variant) % len(scale))
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=beat * 2.55, frequency=base, amplitude=0.070 + (0.012 if armed else 0.0), shape="soft_square" if style_key == "city" or armed else "sine", attack=0.040, release=beat * 0.54, decay=1.7)
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=beat * 1.85, frequency=base * 2.0, amplitude=0.037 * brightness, shape="triangle", attack=0.030, release=beat * 0.46, decay=2.2)
+        _add_tone(samples, sample_rate=sample_rate, start=start + beat * 0.12, duration=beat * 1.15, frequency=base * 4.0, amplitude=0.018 * brightness, shape="triangle", attack=0.025, release=beat * 0.34, decay=2.8)
 
-    for index, beat_index in enumerate((1.5, 5.5, 9.5, 13.5)):
-        _add_noise(samples, sample_rate=sample_rate, start=beat_index * beat, duration=0.052, amplitude=0.028, seed=300 + index, color="high", release=0.025, decay=6.0)
+    melody_step = 1 if armed else 2
+    melody_index = 0
+    melody_beat = 0.50 + (0.25 if style_key == "city" else 0.0)
+    while melody_beat < beat_count - 0.45:
+        degree = rng.randrange(len(scale))
+        frequency = degree_frequency(degree, octave=2)
+        start = melody_beat * beat
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=beat * (0.44 if armed else 0.58), frequency=frequency, amplitude=(0.088 if armed else 0.073) * brightness, shape="triangle", attack=0.012, release=beat * 0.22, decay=3.6)
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=beat * 0.34, frequency=frequency * 2.002, amplitude=(0.020 if armed else 0.015) * brightness, attack=0.010, release=beat * 0.18, decay=4.3)
+        _add_noise(samples, sample_rate=sample_rate, start=start, duration=0.024, amplitude=0.012 * brightness, seed=610 + (variant * 100) + melody_index, color="high", release=0.012, decay=5.0)
+        melody_index += 1
+        melody_beat += melody_step
+
+    bass_count = max(4, int(round(beat_count * 0.375)))
+    for bass_index in range(bass_count):
+        start = (bass_index * beat_count / float(bass_count)) * beat
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.20, frequency=root * (1.34 if armed else 1.18), end_frequency=root * 0.64, amplitude=0.105 if armed else 0.080, shape="soft_square" if armed else "sine", attack=0.004, release=0.075, decay=3.5)
+        _add_noise(samples, sample_rate=sample_rate, start=start, duration=0.062, amplitude=0.032 if armed else 0.022, seed=710 + (variant * 100) + bass_index, color="low", release=0.030, decay=4.5)
+
+    accent_step = 2 if style_key == "city" or armed else 4
+    for accent_index, accent_beat in enumerate(range(1, beat_count, accent_step)):
+        _add_noise(samples, sample_rate=sample_rate, start=(accent_beat + 0.5) * beat, duration=0.043, amplitude=(0.024 if armed else 0.015) * brightness, seed=810 + (variant * 100) + accent_index, color="high", attack=0.006, release=0.025, decay=5.2)
     return samples
 
 
@@ -512,7 +579,94 @@ def _ambient_engine_fast(duration: float, sample_rate: int) -> list[float]:
     return _combustion_engine(duration, sample_rate, base_frequency=79.0, pulse_interval=0.098, seed=541)
 
 
-CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
+TIRE_SCRUB_CUE_NAMES = (
+    "tire_scrub_short",
+    "tire_scrub_medium",
+    "tire_scrub_long",
+)
+
+
+DEFAULT_MUSIC_PROFILE = {
+    "home_biome": "frontier",
+    "armed": False,
+    "home_passage_beats": (12, 16, 20),
+    "theme_seed": "default-frontier",
+    "label": "frontier home",
+}
+
+
+def _music_bpm(style_key: str, *, armed: bool) -> float:
+    spec = _MUSIC_STYLE_SPECS.get(style_key, _MUSIC_STYLE_SPECS["frontier"])
+    return float(spec["bpm"]) + (10.0 if armed else 0.0)
+
+
+def _music_passage_builder(*, style_key: str, armed: bool, variant: int, beat_count: int):
+    def build(duration: float, sample_rate: int) -> list[float]:
+        return _run_theme_passage(
+            duration,
+            sample_rate,
+            style_key=style_key,
+            armed=armed,
+            variant=variant,
+            beat_count=beat_count,
+        )
+
+    return build
+
+
+def _music_cue_definitions(profile: dict[str, object]) -> tuple[CueDefinition, ...]:
+    profile = dict(profile or DEFAULT_MUSIC_PROFILE)
+    home_biome = str(profile.get("home_biome", "frontier") or "frontier")
+    if home_biome not in _MUSIC_STYLE_SPECS:
+        home_biome = "frontier"
+    armed = bool(profile.get("armed"))
+    home_beats = tuple(int(value) for value in profile.get("home_passage_beats", (12, 16, 20)))
+    if len(home_beats) != len(MUSIC_HOME_CUE_NAMES):
+        home_beats = (12, 16, 20)
+
+    definitions = []
+    home_bpm = _music_bpm(home_biome, armed=armed)
+    for variant, (cue_name, beat_count) in enumerate(zip(MUSIC_HOME_CUE_NAMES, home_beats)):
+        definitions.append(CueDefinition(
+            cue_name,
+            max(4, beat_count) * (60.0 / home_bpm),
+            _music_passage_builder(
+                style_key=home_biome,
+                armed=armed,
+                variant=variant,
+                beat_count=max(4, beat_count),
+            ),
+            gain=0.58 if armed else 0.55,
+            loop=False,
+            bus="music",
+        ))
+
+    representative_beats = {
+        "city": 12,
+        "frontier": 12,
+        "wilderness": 12,
+        "coastal": 12,
+        "underground": 12,
+    }
+    for variant, (biome, cue_name) in enumerate(MUSIC_BIOME_CUE_BY_KEY.items(), start=10):
+        beat_count = representative_beats[biome]
+        definitions.append(CueDefinition(
+            cue_name,
+            beat_count * (60.0 / _music_bpm(biome, armed=False)),
+            _music_passage_builder(
+                style_key=biome,
+                armed=False,
+                variant=variant,
+                beat_count=beat_count,
+            ),
+            gain=0.52,
+            loop=False,
+            bus="music",
+        ))
+    return tuple(definitions)
+
+
+SFX_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
     CueDefinition("footstep", 0.14, _footstep, gain=0.56, cooldown=0.055),
     CueDefinition("door", 0.24, _door, gain=0.74, cooldown=0.08),
     CueDefinition("pickup", 0.17, _pickup, gain=0.72, cooldown=0.06),
@@ -522,10 +676,14 @@ CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
     CueDefinition("flora_sparkle", 0.24, _flora_sparkle, gain=0.62, cooldown=0.16),
     CueDefinition("impact", 0.23, _impact, gain=0.88, cooldown=0.08),
     CueDefinition("danger", 0.68, _danger, gain=0.82, cooldown=1.0),
-    CueDefinition("tire_squeal", 0.48, _tire_squeal, gain=0.66, cooldown=0.24),
+    CueDefinition("tire_scrub_short", 0.18, _tire_scrub, gain=0.48, cooldown=0.30),
+    CueDefinition("tire_scrub_medium", 0.27, _tire_scrub, gain=0.47, cooldown=0.30),
+    CueDefinition("tire_scrub_long", 0.36, _tire_scrub, gain=0.46, cooldown=0.30),
     CueDefinition("breaking_glass", 0.55, _breaking_glass, gain=0.76, cooldown=0.10),
     CueDefinition("explosion", 0.90, _explosion, gain=0.92, cooldown=0.12),
-    CueDefinition("open_run_sketch", OPEN_RUN_DURATION, _open_run_sketch, gain=0.62, loop=True, bus="music"),
+)
+
+AMBIENT_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
     CueDefinition("ambient_water", 2.8, _ambient_water, gain=0.30, loop=True, bus="ambient"),
     CueDefinition("ambient_campfire", 2.8, _ambient_campfire, gain=0.34, loop=True, bus="ambient"),
     CueDefinition("ambient_day", 3.5, _ambient_day, gain=0.27, loop=True, bus="ambient"),
@@ -539,6 +697,12 @@ CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
     CueDefinition("ambient_engine_idle", 2.0, _ambient_engine_idle, gain=0.30, loop=True, bus="ambient"),
     CueDefinition("ambient_engine_cruise", 2.0, _ambient_engine_cruise, gain=0.31, loop=True, bus="ambient"),
     CueDefinition("ambient_engine_fast", 2.0, _ambient_engine_fast, gain=0.32, loop=True, bus="ambient"),
+)
+
+CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
+    SFX_CUE_DEFINITIONS
+    + _music_cue_definitions(DEFAULT_MUSIC_PROFILE)
+    + AMBIENT_CUE_DEFINITIONS
 )
 
 AMBIENT_CUE_BY_GROUP: dict[str, tuple[str, ...]] = {
@@ -570,13 +734,30 @@ EVENT_CUE_MAP: dict[str, str] = {
     "flora_crossbred": "flora_sparkle",
     "entity_damaged": "impact",
     "combat_overlay_entered": "danger",
-    "vehicle_fast_turn": "tire_squeal",
+}
+
+EVENT_CUE_VARIANTS: dict[str, tuple[str, ...]] = {
+    "vehicle_fast_turn": TIRE_SCRUB_CUE_NAMES,
 }
 
 WORLD_EVENT_CUE_MAP: dict[str, str] = {
     "structure_broken": "breaking_glass",
     "explosion_triggered": "explosion",
 }
+
+
+def _tire_scrub_cue_name(event_data: dict[str, object], sequence: int) -> str:
+    try:
+        speed = max(2, int(event_data.get("speed_before", 2) or 2))
+    except (TypeError, ValueError):
+        speed = 2
+    try:
+        turn = int(event_data.get("turn", 0) or 0)
+    except (TypeError, ValueError):
+        turn = 0
+    options = TIRE_SCRUB_CUE_NAMES[:2] if speed <= 2 else TIRE_SCRUB_CUE_NAMES[1:]
+    offset = 1 if turn > 0 else 0
+    return options[(max(0, int(sequence)) + offset) % len(options)]
 
 
 def _pcm_bytes(samples: Iterable[float], channel_count: int) -> tuple[bytes, float]:
@@ -605,11 +786,17 @@ def build_cues(
     *,
     sample_rate: int = DEFAULT_SAMPLE_RATE,
     channel_count: int = DEFAULT_CHANNEL_COUNT,
+    music_profile: dict[str, object] | None = None,
 ) -> tuple[RenderedCue, ...]:
     sample_rate = max(8_000, int(sample_rate))
     channel_count = max(1, min(2, int(channel_count)))
     rendered = []
-    for definition in CUE_DEFINITIONS:
+    definitions = (
+        SFX_CUE_DEFINITIONS
+        + _music_cue_definitions(music_profile or DEFAULT_MUSIC_PROFILE)
+        + AMBIENT_CUE_DEFINITIONS
+    )
+    for definition in definitions:
         samples = definition.builder(definition.duration, sample_rate)
         pcm, peak = _pcm_bytes(samples, channel_count)
         rendered.append(RenderedCue(
@@ -630,11 +817,20 @@ def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
         raise AssertionError("cue names must be unique")
     if set(EVENT_CUE_MAP.values()) - set(names):
         raise AssertionError("an action event references an unknown cue")
+    variant_names = {
+        name
+        for cue_names in EVENT_CUE_VARIANTS.values()
+        for name in cue_names
+    }
+    if variant_names - set(names):
+        raise AssertionError("an action event variant references an unknown cue")
     if set(WORLD_EVENT_CUE_MAP.values()) - set(names):
         raise AssertionError("a world event references an unknown cue")
-    music_loops = tuple(cue for cue in cues if cue.definition.bus == "music" and cue.definition.loop)
-    if len(music_loops) != 1:
-        raise AssertionError("the runtime must have exactly one music loop")
+    music_cues = tuple(cue for cue in cues if cue.definition.bus == "music")
+    if tuple(cue.definition.name for cue in music_cues) != MUSIC_CUE_NAMES:
+        raise AssertionError("the cached music passage family drifted")
+    if any(cue.definition.loop for cue in music_cues):
+        raise AssertionError("music passages must be one-shot bursts")
     ambient_names = {
         name
         for names in AMBIENT_CUE_BY_GROUP.values()
@@ -642,8 +838,8 @@ def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
     }
     if ambient_names != {cue.definition.name for cue in cues if cue.definition.bus == "ambient"}:
         raise AssertionError("ambient cue groups drifted from the cached bank")
-    if any(not cue.definition.loop for cue in cues if cue.definition.bus in {"music", "ambient"}):
-        raise AssertionError("music and ambience cues must be loopable")
+    if any(not cue.definition.loop for cue in cues if cue.definition.bus == "ambient"):
+        raise AssertionError("ambience cues must be loopable")
 
     total_pcm = 0
     largest_peak = 0
@@ -671,8 +867,8 @@ def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
         largest_peak = max(largest_peak, audible_peak)
 
     bytes_per_second = cues[0].sample_rate * cues[0].channel_count * SAMPLE_WIDTH if cues else 1
-    if total_pcm > bytes_per_second * 52:
-        raise AssertionError("the cached bank exceeded its fifty-two-second PCM budget")
+    if total_pcm > bytes_per_second * 130:
+        raise AssertionError("the cached bank exceeded its one-hundred-thirty-second PCM budget")
     return {
         "cue_count": len(cues),
         "total_pcm_bytes": total_pcm,
@@ -761,6 +957,44 @@ def _biome_key(area_type: str, terrain: str, z: int) -> str:
     if terrain in {"forest", "hills", "marsh", "plains"}:
         return "wilderness"
     return "frontier"
+
+
+def music_profile_for_run(sim, player_eid, *, descriptor=None) -> dict[str, object]:
+    """Choose the run's musical home once from its starting player and place."""
+
+    pos = _player_position(sim, player_eid)
+    z = int(getattr(pos, "z", 0) or 0) if pos is not None else 0
+    descriptor = descriptor if isinstance(descriptor, dict) else {}
+    active_chunk = getattr(sim, "active_chunk", None)
+    district = active_chunk.get("district", {}) if isinstance(active_chunk, dict) else {}
+    if not isinstance(district, dict):
+        district = {}
+    area_type = str(descriptor.get("area_type", district.get("area_type", "frontier")) or "frontier")
+    terrain = str(descriptor.get("terrain", district.get("terrain", "plains")) or "plains")
+    home_biome = _biome_key(area_type, terrain, z)
+
+    armed = False
+    try:
+        from game.components import WeaponLoadout
+
+        loadout = sim.ecs.get(WeaponLoadout).get(player_eid)
+        weapon_ids = tuple(getattr(loadout, "weapon_ids", ()) or ()) if loadout is not None else ()
+        current_weapon = loadout.current_weapon() if loadout is not None and hasattr(loadout, "current_weapon") else getattr(loadout, "equipped_weapon_id", None)
+        armed = bool(weapon_ids or current_weapon)
+    except (AttributeError, TypeError):
+        armed = False
+
+    theme_seed = f"{getattr(sim, 'seed', 0)}:music-home:{player_eid}:{home_biome}:{int(armed)}"
+    rng = random.Random(theme_seed)
+    home_passage_beats = tuple(sorted(rng.sample((12, 16, 20, 24), 3)))
+    label = f"{'armed ' if armed else ''}{home_biome} home"
+    return {
+        "home_biome": home_biome,
+        "armed": armed,
+        "home_passage_beats": home_passage_beats,
+        "theme_seed": theme_seed,
+        "label": label,
+    }
 
 
 def _nearby_human_npc_count(sim, player_eid, x: int, y: int, z: int) -> int:
@@ -964,6 +1198,16 @@ class PygameAudioRuntime:
         self._sounds = {}
         self._music_channel = None
         self._music_playing = False
+        self._music_schedule_enabled = False
+        self._music_burst_count = 0
+        self._music_burst_counts = Counter()
+        self._music_current_cue = ""
+        self._music_last_cue = ""
+        self._music_last_biome = ""
+        self._music_next_at = math.inf
+        self._music_last_silence_seconds = 0.0
+        self._music_profile = dict(DEFAULT_MUSIC_PROFILE)
+        self._music_rng = random.Random("bakerrrr-music-default")
         self._ambient_channels = {}
         self._ambient_current = {group: "" for group in AMBIENT_CHANNEL_INDEX}
         self._ambient_levels = {group: 0.0 for group in AMBIENT_CHANNEL_INDEX}
@@ -989,8 +1233,20 @@ class PygameAudioRuntime:
             self.disabled_reason = f"unsupported mixer format {mixer_init}"
             return
 
+        self._music_profile = music_profile_for_run(
+            self.sim,
+            self.player_eid,
+            descriptor=self._descriptor_for_player(),
+        )
+        self._music_last_biome = str(self._music_profile.get("home_biome", "frontier") or "frontier")
+        self._music_rng = random.Random(f"{self._music_profile.get('theme_seed', 'default')}:schedule")
+
         started = time.perf_counter()
-        cues = build_cues(sample_rate=self.sample_rate, channel_count=self.channel_count)
+        cues = build_cues(
+            sample_rate=self.sample_rate,
+            channel_count=self.channel_count,
+            music_profile=self._music_profile,
+        )
         stats = validate_cues(cues)
         self.generation_ms = (time.perf_counter() - started) * 1_000.0
         self.bank_bytes = int(stats["total_pcm_bytes"])
@@ -1007,7 +1263,7 @@ class PygameAudioRuntime:
             cue.definition.name: pygame.mixer.Sound(file=io.BytesIO(cue.wav))
             for cue in cues
         }
-        for event_type in EVENT_CUE_MAP.keys() | WORLD_SOUND_EVENTS | ENVIRONMENT_DIRTY_EVENTS:
+        for event_type in EVENT_CUE_MAP.keys() | EVENT_CUE_VARIANTS.keys() | WORLD_SOUND_EVENTS | ENVIRONMENT_DIRTY_EVENTS:
             sim.events.subscribe(event_type, self.on_event)
         sim.events.subscribe("quit_requested", self.on_quit_requested)
 
@@ -1093,11 +1349,17 @@ class PygameAudioRuntime:
             self._environment_dirty = True
         if not is_player_event:
             return
-        cue_name = EVENT_CUE_MAP.get(event.type)
+        sequence = int(self.event_counts.get(event.type, 0))
+        cooldown_key = None
+        if event.type == "vehicle_fast_turn":
+            cue_name = _tire_scrub_cue_name(event.data, sequence)
+            cooldown_key = "tire_scrub"
+        else:
+            cue_name = EVENT_CUE_MAP.get(event.type)
         if not cue_name:
             return
         self.event_counts[event.type] += 1
-        self.play(cue_name, source_event=event.type)
+        self.play(cue_name, source_event=event.type, cooldown_key=cooldown_key)
 
     def _find_sfx_channel(self):
         num_channels = int(self.pygame.mixer.get_num_channels())
@@ -1107,15 +1369,23 @@ class PygameAudioRuntime:
                 return channel
         return None
 
-    def play(self, cue_name: str, *, source_event: str = "manual", volume_scale: float = 1.0) -> bool:
+    def play(
+        self,
+        cue_name: str,
+        *,
+        source_event: str = "manual",
+        volume_scale: float = 1.0,
+        cooldown_key: str | None = None,
+    ) -> bool:
         if not self.enabled:
             return False
         definition = self._definitions.get(str(cue_name))
         sound = self._sounds.get(str(cue_name))
-        if definition is None or sound is None or definition.loop:
+        if definition is None or sound is None or definition.bus != "sfx":
             return False
         received_at = time.perf_counter()
-        last_played = self._last_played_at.get(definition.name, -10_000.0)
+        playback_key = str(cooldown_key or definition.name)
+        last_played = self._last_played_at.get(playback_key, -10_000.0)
         if received_at - last_played < float(definition.cooldown):
             self.suppressed_count += 1
             return False
@@ -1128,7 +1398,7 @@ class PygameAudioRuntime:
         channel.play(sound)
         submitted_at = time.perf_counter()
         submit_ms = (submitted_at - received_at) * 1_000.0
-        self._last_played_at[definition.name] = submitted_at
+        self._last_played_at[playback_key] = submitted_at
         self.cue_counts[definition.name] += 1
         self.submit_count += 1
         self.last_submit_ms = submit_ms
@@ -1137,22 +1407,82 @@ class PygameAudioRuntime:
             self._trace(f"slow submit {submit_ms:.2f}ms: event={source_event} cue={definition.name}")
         return True
 
+    def _choose_music_cue(self) -> str:
+        home_biome = str(self._music_profile.get("home_biome", "frontier") or "frontier")
+        current_biome = str(self._ambient_context.get("biome", home_biome) or home_biome)
+        biome_changed = current_biome != self._music_last_biome
+        away_from_home = current_biome != home_biome
+        representative_due = away_from_home and (
+            biome_changed or (self._music_burst_count > 0 and self._music_burst_count % 3 == 0)
+        )
+        self._music_last_biome = current_biome
+        if representative_due:
+            return MUSIC_BIOME_CUE_BY_KEY.get(current_biome, MUSIC_BIOME_CUE_BY_KEY["frontier"])
+
+        choices = list(MUSIC_HOME_CUE_NAMES)
+        cue_name = str(self._music_rng.choice(choices))
+        if len(choices) > 1 and cue_name == self._music_last_cue:
+            cue_name = choices[(choices.index(cue_name) + 1) % len(choices)]
+        return cue_name
+
+    def _play_music_burst(self) -> bool:
+        if not self.enabled or self._music_channel is None or not self._music_schedule_enabled:
+            return False
+        cue_name = self._choose_music_cue()
+        definition = self._definitions.get(cue_name)
+        sound = self._sounds.get(cue_name)
+        if definition is None or sound is None or definition.bus != "music":
+            return False
+        self._music_channel.set_volume(min(1.0, self.master_volume * self.music_volume * float(definition.gain)))
+        self._music_channel.play(sound, loops=0, fade_ms=180)
+        self._music_playing = True
+        self._music_current_cue = cue_name
+        self._music_last_cue = cue_name
+        self._music_next_at = math.inf
+        self._music_burst_count += 1
+        self._music_burst_counts[cue_name] += 1
+        self._trace(
+            f"music burst {cue_name} ({definition.duration:.1f}s); "
+            f"home={self._music_profile.get('label', 'run')}"
+        )
+        return True
+
     def start_music(self) -> bool:
         if not self.enabled or self._music_channel is None:
             return False
-        definition = self._definitions.get("open_run_sketch")
-        sound = self._sounds.get("open_run_sketch")
-        if definition is None or sound is None:
+        self._music_schedule_enabled = True
+        if self._music_channel.get_busy():
+            return True
+        self._music_next_at = 0.0
+        return self._play_music_burst()
+
+    def update_music(self, *, now: float | None = None) -> bool:
+        if not self.enabled or not self._music_schedule_enabled or self._music_channel is None:
             return False
-        self._music_channel.set_volume(min(1.0, self.master_volume * self.music_volume * float(definition.gain)))
-        self._music_channel.play(sound, loops=-1, fade_ms=350)
-        self._music_playing = True
-        return True
+        now = time.perf_counter() if now is None else float(now)
+        if self._music_playing:
+            if self._music_channel.get_busy():
+                return False
+            self._music_playing = False
+            self._music_current_cue = ""
+            self._music_last_silence_seconds = self._music_rng.uniform(
+                MUSIC_SILENCE_MIN_SECONDS,
+                MUSIC_SILENCE_MAX_SECONDS,
+            )
+            self._music_next_at = now + self._music_last_silence_seconds
+            self._trace(f"music resting {self._music_last_silence_seconds:.0f}s")
+            return False
+        if now < self._music_next_at:
+            return False
+        return self._play_music_burst()
 
     def stop_music(self, *, fade_ms: int = 250) -> None:
+        self._music_schedule_enabled = False
+        self._music_next_at = math.inf
         if self._music_channel is not None:
             self._music_channel.fadeout(max(0, int(fade_ms)))
         self._music_playing = False
+        self._music_current_cue = ""
 
     def _descriptor_for_player(self) -> dict[str, object]:
         pos = _player_position(self.sim, self.player_eid)
@@ -1330,6 +1660,7 @@ class PygameAudioRuntime:
     def observe_frame(self, elapsed_seconds: float, *, phase: str = "play") -> None:
         observer_started = time.perf_counter()
         self.refresh_environment()
+        self.update_music()
         observer_seconds = time.perf_counter() - observer_started
         elapsed_ms = max(0.0, (float(elapsed_seconds) + observer_seconds) * 1_000.0)
         self.frame_count += 1
@@ -1365,9 +1696,29 @@ class PygameAudioRuntime:
             for index in range(RESERVED_CHANNEL_COUNT, num_channels)
         )
         buffer_ms = (self.mixer_buffer / max(1, self.sample_rate)) * 1_000.0
+        music_busy = bool(self._music_playing and self._music_channel and self._music_channel.get_busy())
+        if not self._music_schedule_enabled:
+            music_state = "off"
+            music_rest_remaining = 0.0
+        elif music_busy:
+            music_state = "playing"
+            music_rest_remaining = 0.0
+        else:
+            music_state = "resting"
+            music_rest_remaining = max(0.0, float(self._music_next_at) - time.perf_counter()) if math.isfinite(self._music_next_at) else 0.0
         return {
             "enabled": True,
-            "music_playing": bool(self._music_playing and self._music_channel and self._music_channel.get_busy()),
+            "music_playing": music_busy,
+            "music_state": music_state,
+            "music_theme": str(self._music_profile.get("label", "run") or "run"),
+            "music_home_biome": str(self._music_profile.get("home_biome", "frontier") or "frontier"),
+            "music_armed_start": bool(self._music_profile.get("armed")),
+            "music_current_cue": self._music_current_cue,
+            "music_last_cue": self._music_last_cue,
+            "music_burst_count": self._music_burst_count,
+            "music_burst_counts": dict(sorted(self._music_burst_counts.items())),
+            "music_rest_seconds": round(self._music_last_silence_seconds, 1),
+            "music_rest_remaining_seconds": round(music_rest_remaining, 1),
             "sample_rate": self.sample_rate,
             "channel_count": self.channel_count,
             "mixer_buffer": self.mixer_buffer,
@@ -1411,16 +1762,25 @@ __all__ = [
     "AMBIENT_CUE_BY_GROUP",
     "AMBIENT_RELEASE_SECONDS_BY_GROUP",
     "CUE_DEFINITIONS",
+    "DEFAULT_MUSIC_PROFILE",
     "DEFAULT_CHANNEL_COUNT",
     "DEFAULT_MIXER_BUFFER",
     "DEFAULT_SAMPLE_RATE",
     "EVENT_CUE_MAP",
+    "EVENT_CUE_VARIANTS",
+    "MUSIC_BIOME_CUE_BY_KEY",
+    "MUSIC_CUE_NAMES",
+    "MUSIC_HOME_CUE_NAMES",
+    "MUSIC_SILENCE_MAX_SECONDS",
+    "MUSIC_SILENCE_MIN_SECONDS",
     "OPEN_RUN_BPM",
     "OPEN_RUN_DURATION",
     "PygameAudioRuntime",
     "RenderedCue",
+    "TIRE_SCRUB_CUE_NAMES",
     "WORLD_EVENT_CUE_MAP",
     "build_cues",
+    "music_profile_for_run",
     "sample_environment_context",
     "validate_cues",
 ]
