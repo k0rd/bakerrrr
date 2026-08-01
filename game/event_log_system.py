@@ -497,6 +497,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("corporate_neighborhood_presence_changed", self.on_corporate_neighborhood_presence_changed)
         self.sim.events.subscribe("corporate_scrutiny_changed", self.on_corporate_scrutiny_changed)
         self.sim.events.subscribe("corporate_occupation_disrupted", self.on_corporate_occupation_disrupted)
+        self.sim.events.subscribe("organization_war_contribution", self.on_organization_war_contribution)
         self.sim.events.subscribe("corporate_sensor_restored", self.on_corporate_sensor_restored)
         self.sim.events.subscribe("corporate_security_detail_deployed", self.on_corporate_security_detail_deployed)
         self.sim.events.subscribe("hunting_carcass_harvested", self.on_hunting_carcass_harvested)
@@ -2953,6 +2954,12 @@ class EventLogSystem(System):
             return
         if reason == "picked":
             _log_player_feedback(self.sim, "That plant has already been recently harvested.", kind="craft")
+            return
+        if reason == "working_filter_bed":
+            _log_player_feedback(self.sim, "The mushrooms are laid as a working filter bed. You leave them intact.", kind="craft")
+            return
+        if reason == "tended_fungal_bed":
+            _log_player_feedback(self.sim, "These mushrooms have been deliberately left intact. You leave them as they are.", kind="craft")
             return
         if reason == "no_tool":
             _log_player_feedback(self.sim, f"You need the right tool to {method} {plant_name}.", kind="craft")
@@ -6283,6 +6290,38 @@ class EventLogSystem(System):
             dedupe_key=f"corporate-disruption:{event.data.get('organization_eid')}:{reason}",
         )
 
+    def on_organization_war_contribution(self, event):
+        if event.data.get("actor_eid") != self.player_eid:
+            return
+        organization_name = str(
+            event.data.get("beneficiary_org_name", "the local side") or "the local side"
+        ).strip()
+        property_name = str(event.data.get("property_name", "the contested line") or "the contested line").strip()
+        contribution_kind = str(event.data.get("contribution_kind", "front support") or "front support").strip().lower()
+        action = {
+            "front_combat_support": "Your intervention changes the posture",
+            "occupation_disruption": "The disrupted corporate grip changes the posture",
+            "relay_sabotage": "The damaged relay changes the signal fight",
+            "route_asset_sabotage": "The damaged access asset changes the route fight",
+            "remediation_asset_sabotage": "The damaged line asset changes the remediation fight",
+            "reprisal_asset_sabotage": "The damaged local asset changes the reprisal line",
+            "front_asset_sabotage": "The damaged front asset changes the posture",
+        }.get(contribution_kind, "Your intervention changes the posture")
+        if bool(event.data.get("observed")):
+            text = f"[FRONT] {action} at {property_name}; {organization_name}'s watch saw who moved it."
+        else:
+            text = f"[FRONT] {action} at {property_name} toward {organization_name}, but their watch did not see who moved it."
+        self._log(
+            text,
+            channel="alerts",
+            priority="normal",
+            dedupe_window=24,
+            dedupe_key=(
+                f"organization-war-contribution:{event.data.get('front_id')}:"
+                f"{contribution_kind}:{bool(event.data.get('observed'))}"
+            ),
+        )
+
     def on_corporate_sensor_restored(self, event):
         if not self._corporate_event_is_local(event):
             return
@@ -6807,6 +6846,14 @@ class EventLogSystem(System):
         channel = str(event.data.get("channel", "social") or "").strip().lower() or "social"
         priority = str(event.data.get("priority", "low") or "").strip().lower() or "low"
         dedupe_key = f"npc-socialized:{topic or tone}:{summary.lower() or npc_eid}"
+
+        if player_pos is not None and bool(event.data.get("level_local", False)):
+            same_level = any(
+                pos is not None and int(pos.z) == int(player_pos.z)
+                for pos in (npc_pos, partner_pos)
+            )
+            if not same_level:
+                return
 
         visible = False
         for pos in (npc_pos, partner_pos):

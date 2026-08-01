@@ -1955,6 +1955,37 @@ class PygameView:
             if kind == "flower_cluster":
                 self.pygame.draw.line(overlay, stem, (px // 2, px - 2), (max(3, px // 3), max(4, px // 2)), stem_w)
                 self.pygame.draw.line(overlay, stem, (px // 2, px - 2), (px - max(4, px // 3), max(4, px // 2)), stem_w)
+        elif kind in {"fungus", "accumulator", "indicator"}:
+            stem_w = max(1, px // 22)
+            base_y = px - max(2, px // 7)
+            if kind in {"accumulator", "indicator"}:
+                self.pygame.draw.circle(
+                    overlay,
+                    (frame[0], frame[1], frame[2], 38 if kind == "accumulator" else 28),
+                    (px // 2, px // 2),
+                    max(5, px // 2 if kind == "accumulator" else px // 3),
+                )
+            cap_specs = (
+                (px // 3, px // 2, max(4, px // 4), max(2, px // 8)),
+                (px - px // 3, max(3, px // 3), max(5, px // 3), max(2, px // 7)),
+            )
+            for cx, cy, cap_w, cap_h in cap_specs:
+                self.pygame.draw.line(overlay, stem, (cx, base_y), (cx, cy + cap_h // 2), stem_w)
+                cap_rect = self.pygame.Rect(cx - cap_w // 2, cy, cap_w, cap_h)
+                self.pygame.draw.ellipse(overlay, (frame[0], frame[1], frame[2], 184), cap_rect)
+                self.pygame.draw.arc(overlay, soft, cap_rect, 3.35, 5.95, max(1, px // 24))
+                if kind == "accumulator":
+                    self.pygame.draw.line(
+                        overlay,
+                        deep,
+                        (cx, cy + 1),
+                        (cx + max(1, cap_w // 5), cy + cap_h - 1),
+                        max(1, px // 26),
+                    )
+            if kind == "accumulator":
+                self.pygame.draw.circle(overlay, deep, (px // 2, base_y), max(1, px // 16))
+            elif kind == "indicator":
+                self.pygame.draw.circle(overlay, soft, (px // 2, base_y), max(1, px // 18))
         elif kind in {"moss", "lichen"}:
             base_h = max(3, px // 4)
             self.pygame.draw.ellipse(overlay, (frame[0], frame[1], frame[2], 100), (2, px - base_h - 1, px - 4, base_h + 1))
@@ -8296,6 +8327,9 @@ class PygameView:
         if semantic_key in {"hazard_smoke", "smoke_choke"} or color_key == "hazard_smoke":
             self._draw_smoke_overlay(x, y, color=color or "hazard_smoke", attrs=attrs)
             return "hazard_smoke"
+        if semantic_key == "hazard_contamination" or color_key == "contaminant_electrochemical":
+            self._draw_water_overlay(x, y, color=color or "contaminant_electrochemical", attrs=attrs)
+            return "hazard_contamination"
         if glyph != " " and color_key.startswith("floor_"):
             self._draw_district_floor_overlay(
                 x,

@@ -6592,6 +6592,31 @@
     "legal_status": "legal",
     "effects": []
   },
+  "mushroom_caps": {
+    "name": "Mushroom Caps",
+    "glyph": "*",
+    "stack_max": 12,
+    "tags": [
+      "consumable",
+      "food",
+      "plant_material",
+      "fungus",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "hunger",
+        "delta": 11
+      },
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 2
+      }
+    ]
+  },
   "leaf_clippings": {
     "name": "Leaf Clippings",
     "glyph": ",",

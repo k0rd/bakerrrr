@@ -86,6 +86,7 @@ from game.population import (
     work_shift_active,
 )
 from game.organizations import organization_profile
+from game.organization_war import actor_war_order_intent
 from game.npc_relationships import (
     maybe_progress_relationship_after_socialized as _maybe_progress_relationship_after_socialized,
     record_homicide_social_ripples as _record_homicide_social_ripples,
@@ -2369,6 +2370,10 @@ class NPCWillSystem(System):
         "rendezvousing_crew",
         "seeking_criminal_affiliation",
         "soliciting_player",
+        "war_advancing",
+        "war_holding",
+        "war_mobilizing",
+        "war_retreating",
     }
 
     def __init__(self, sim):
@@ -2657,6 +2662,8 @@ class NPCWillSystem(System):
         state = str(getattr(ai, "state", "") or "").strip().lower()
         if state in {"protecting", "seeking_safety", "chasing"}:
             return 4
+        if state in {"war_advancing", "war_holding", "war_mobilizing", "war_retreating"}:
+            return 4
         if state in {"reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property"}:
             return 6
         if state in {"seeking_medical_aid", "seeking_safe_spot", "seeking_shelter"}:
@@ -2674,13 +2681,13 @@ class NPCWillSystem(System):
         if scope == "full":
             return max(2, min(delay, 12))
         if scope == "warm":
-            if state in {"protecting", "chasing", "seeking_safety", "reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property"}:
+            if state in {"protecting", "chasing", "seeking_safety", "reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property", "war_advancing", "war_holding", "war_mobilizing", "war_retreating"}:
                 return max(90, delay)
             return max(240, delay)
         if scope == "compressed":
             if state in {"seeking_medical_aid", "seeking_safe_spot", "seeking_shelter"}:
                 return max(120, delay)
-            if state in {"protecting", "chasing", "seeking_safety", "reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property"}:
+            if state in {"protecting", "chasing", "seeking_safety", "reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property", "war_advancing", "war_holding", "war_mobilizing", "war_retreating"}:
                 return max(120, delay)
             return max(300, delay)
         return 300
@@ -3151,6 +3158,26 @@ class NPCWillSystem(System):
                     will.intent = "surrendered"
                 will.last_tick = self.sim.tick
                 continue
+
+            # Organization war remains an explicit order layer, not a passive
+            # membership hostility rule. Immediate self-preservation still
+            # outranks the assignment; otherwise a live order owns this will
+            # decision until it is completed or recalled.
+            if not npc_emergency_active(self.sim, eid):
+                war_intent = actor_war_order_intent(self.sim, eid)
+                if isinstance(war_intent, dict) and war_intent.get("intent"):
+                    self._set_intent(
+                        eid,
+                        ai,
+                        will,
+                        str(war_intent.get("intent")),
+                        float(war_intent.get("score", 88.0) or 88.0),
+                        war_intent.get("target"),
+                        war_intent.get("target_eid"),
+                    )
+                    _mark_actor_urgent(self.sim, eid, family="move", reason="organization_war_order", ttl_ticks=18)
+                    _schedule_actor_due(self.sim, eid, "move", delay_ticks=0, reason="organization_war_order")
+                    continue
 
             wildlife = wildlife_behaviors.get(eid)
             if str(getattr(ai, "role", "") or "").strip().lower() == "wildlife" and wildlife:
@@ -4800,6 +4827,10 @@ class NPCInvestigateSystem(System):
         "socializing": 3,
         "shopping": 3,
         "resting": 4,
+        "war_advancing": 1,
+        "war_holding": 2,
+        "war_mobilizing": 2,
+        "war_retreating": 1,
     }
     MOVING_STATES = {
         "investigating",
@@ -4835,6 +4866,10 @@ class NPCInvestigateSystem(System):
         "socializing",
         "shopping",
         "resting",
+        "war_advancing",
+        "war_holding",
+        "war_mobilizing",
+        "war_retreating",
     }
     BONUS_MOVE_STATES = {
         "chasing",
@@ -4846,6 +4881,7 @@ class NPCInvestigateSystem(System):
         "helping_victim",
         "warning",
         "evading_authority",
+        "war_retreating",
     }
     REPLAN_ON_NO_PATH_STATES = {
         "scavenging",
@@ -4865,6 +4901,9 @@ class NPCInvestigateSystem(System):
         "socializing",
         "shopping",
         "resting",
+        "war_advancing",
+        "war_mobilizing",
+        "war_retreating",
     }
 
     def __init__(self, sim):
@@ -7207,6 +7246,12 @@ class NPCInvestigateSystem(System):
                         ai.state = "idle"
                         ai.target = None
                         ai.target_eid = None
+                elif ai.state in {"war_advancing", "war_holding", "war_mobilizing", "war_retreating"}:
+                    # Arrival is a decision point for the durable order: cross
+                    # a real access fixture, acquire contact, hold, or finish
+                    # the retreat on the next will pulse.
+                    _mark_actor_urgent(self.sim, eid, family="will", reason="organization_war_arrival", ttl_ticks=12)
+                    _schedule_actor_due(self.sim, eid, "will", delay_ticks=0, reason="organization_war_arrival")
                 elif ai.state in {"working", "lounging", "socializing"}:
                     if ai.state == "working":
                         service_claim = _mark_service_job_claim_arrival(self.sim, eid, pos)
@@ -7229,12 +7274,12 @@ class NPCInvestigateSystem(System):
                     # Arrived at roam tile; clear target so will system picks a new one.
                     _clear_opportunity_active_target(self.sim, eid, ai.state)
                     ai.target = None
-                elif ai.state not in {"protecting", "resting", "following", "holding"}:
+                elif ai.state not in {"protecting", "resting", "following", "holding", "war_advancing", "war_holding", "war_mobilizing", "war_retreating"}:
                     _clear_opportunity_active_target(self.sim, eid, ai.state)
                     ai.state = "idle"
                     ai.target = None
                     ai.target_eid = None
-                arrival_cooldown = hold_cooldown if ai.state in {"resting", "protecting", "following", "holding", "seeking_safety"} else 1
+                arrival_cooldown = hold_cooldown if ai.state in {"resting", "protecting", "following", "holding", "seeking_safety", "war_advancing", "war_holding", "war_mobilizing", "war_retreating"} else 1
                 if live_timeskip_active and ai.state == "seeking_safety":
                     arrival_cooldown = max(int(arrival_cooldown), 6)
                 if throttle:
@@ -7561,6 +7606,13 @@ class NPCInvestigateSystem(System):
                         source_domain=(chatter or {}).get("source_domain", ""),
                         confidence_hint=(chatter or {}).get("confidence_hint", 0.0),
                         property_lead_kind=(chatter or {}).get("property_lead_kind", ""),
+                        culture_key=(chatter or {}).get("culture_key", ""),
+                        culture_word=(chatter or {}).get("culture_word", ""),
+                        war_id=(chatter or {}).get("war_id"),
+                        war_front_id=(chatter or {}).get("front_id", ""),
+                        organization_eid=(chatter or {}).get("organization_eid"),
+                        opponent_org_eid=(chatter or {}).get("opponent_org_eid"),
+                        level_local=bool((chatter or {}).get("level_local", False)),
                     ))
                     ai.state = "idle"
                     ai.target = None

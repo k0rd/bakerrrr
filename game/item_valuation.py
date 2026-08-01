@@ -91,6 +91,7 @@ CORE_ITEM_BASE_VALUES = {
     "butcher_apron": 48,
     "botany_apron": 48,
     "fresh_blossoms": 6,
+    "mushroom_caps": 7,
     "leaf_clippings": 5,
     "moss_scrapings": 6,
     "vine_cuttings": 5,

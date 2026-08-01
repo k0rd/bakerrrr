@@ -14,6 +14,7 @@ from game.organizations import local_protective_pressure_snapshot
 from game.property_runtime import property_display_position, property_focus_position, property_metadata
 from game.quiet_maintenance_runtime import quiet_maintenance_status
 from game.systems_business_reputation import property_business_reputation_snapshot, property_supports_business_reputation
+from game.underground_culture import culture_profile_for_property
 
 
 PLACE_MOOD_FIELD_KEYS = (
@@ -1019,6 +1020,7 @@ def ambient_ritual_snapshot(sim, prop, *, mood=None, scene=None, pulse=None):
     category = _category_for(prop, pulse=pulse, scene=scene)
     phase = _slug(_scene_or_pulse_value("event_phase", scene=scene, pulse=pulse))
     prop_name = _prop_name(prop)
+    culture = culture_profile_for_property(sim, prop)
 
     candidates = []
     if category in {"retail", "hospitality", "finance", "office"} or phase in {"opening", "reset_scramble", "table_turnover"}:
@@ -1201,6 +1203,84 @@ def ambient_ritual_snapshot(sim, prop, *, mood=None, scene=None, pulse=None):
             detail_line=f"The plant care at {prop_name} makes the place feel handled, not just used.",
             log_text=f"Someone tends a small plant at {prop_name}.",
             tags=("care", "calm"),
+            bias=0.05,
+        ))
+    ancestral_word = _text(culture.get("ancestral_word")).capitalize()
+    if ancestral_word:
+        ritual_mode = _slug(culture.get("ritual_mode")) or "heelbeat"
+        culture_hour = _scene_or_pulse_value("hour", scene=scene, pulse=pulse, default="")
+        culture_rng = random.Random(
+            f"{getattr(sim, 'seed', 0)}:ancestral-ritual:{_prop_id(prop)}:{culture_hour}:{phase}"
+        )
+        culture_score = 0.64 if culture_rng.random() < 0.3 else 0.18
+        ritual_shapes = {
+            "heelbeat": (
+                "heelbeat call",
+                "a familiar call lands with two practiced heel strikes",
+                "watch the answering step or leave the rhythm room",
+                "Scuffed Heel Marks",
+            ),
+            "turnstep": (
+                "turnstep call",
+                "a familiar call cuts through a quick half-turn and planted step",
+                "watch the turn settle or give it room",
+                "Turnworn Floor",
+            ),
+            "handbeat": (
+                "handbeat call",
+                "a familiar call lands inside a short palm rhythm",
+                "listen for the answering beat or let it pass",
+                "Handbeat Rail",
+            ),
+            "shoulder_sway": (
+                "sway call",
+                "a familiar call pulls a small shoulder-sway through the room",
+                "watch the sway answer or keep moving",
+                "Swayworn Edge",
+            ),
+            "stomp_circle": (
+                "stomp call",
+                "a familiar call is answered by a hard step at the circle's edge",
+                "watch the circle answer or stay beyond it",
+                "Stompworn Ring",
+            ),
+            "cross_step": (
+                "cross-step call",
+                "a familiar call folds into a quick crossing step",
+                "watch the crossing step or leave a clear edge",
+                "Crossed Step Marks",
+            ),
+            "palm_rhythm": (
+                "palm-call rhythm",
+                "a familiar call rides a muted rhythm against the nearest hard edge",
+                "listen for the return or let the rhythm pass",
+                "Rhythm-Worn Rail",
+            ),
+            "half_turn": (
+                "half-turn call",
+                "a familiar call is punctuated by a half-turn and a planted foot",
+                "watch the turn answer or give it room",
+                "Half-Turn Scuff",
+            ),
+        }
+        ritual_label, ritual_summary, ritual_action, fixture_name = ritual_shapes.get(
+            ritual_mode,
+            ritual_shapes["heelbeat"],
+        )
+        candidates.append(_ritual_candidate(
+            "ancestral_step",
+            ritual_label,
+            f"{ancestral_word} rings out; {ritual_summary}",
+            ritual_action,
+            fixture_name,
+            "ritual_ancestral_step",
+            "~",
+            "ritual_violet",
+            culture_score + (0.06 if mood_kind in {"warm", "loyal", "softened"} else 0.0),
+            actor_line=f"{ancestral_word}! The old beat still fits.",
+            detail_line=f"At {prop_name}, the call and answering step fit together like an old habit.",
+            log_text=f"Someone calls {ancestral_word} and marks a practiced step at {prop_name}.",
+            tags=("culture", "social"),
             bias=0.05,
         ))
 

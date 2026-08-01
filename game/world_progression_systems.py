@@ -81,6 +81,11 @@ from game.final_operation import (
     try_fail_final_operation,
 )
 from game.flora_runtime import ensure_chunk_flora
+from game.contamination_runtime import (
+    BLACKWASH_PROFILE,
+    ensure_underground_remediation_flora,
+    materialize_contamination_release,
+)
 from game.items import (
     ITEM_CATALOG,
     apply_item_durability_loss,
@@ -580,6 +585,14 @@ class WorldStreamingSystem(System):
             return None
         spec = normalized[0]
         self._ensure_property_anchor(spec["x"], spec["y"], spec["z"])
+        if str(spec.get("profile", "") or "").strip().lower() == BLACKWASH_PROFILE:
+            return materialize_contamination_release(
+                self.sim,
+                spec,
+                key=key,
+                linked_property_id=linked_property_id,
+                records=records,
+            )
         metadata = _environment_hazard_asset_metadata(
             spec,
             key=key,
@@ -959,6 +972,7 @@ class WorldStreamingSystem(System):
                         for spec in tuple(plan.get("ambient_hazard_spawns", ()) or ())
                         if isinstance(spec, dict)
                     ],
+                    "settled_sediment": dict(plan.get("settled_sediment", {}) or {}),
                     "purchase_cost": 0,
                     "finance_services": [],
                     "site_services": [],
@@ -1129,6 +1143,7 @@ class WorldStreamingSystem(System):
                     for spec in tuple(underground_network.get("ambient_hazard_spawns", ()) or ())
                     if isinstance(spec, dict)
                 ],
+                "settled_sediment": dict(underground_network.get("settled_sediment", {}) or {}),
                 "route_code": str(underground_network.get("route_code", "") or "").strip() or None,
                 "route_destinations": list(route_destinations),
                 "layout_variant": str(underground_network.get("layout_variant", "") or "").strip() or None,
@@ -1408,6 +1423,11 @@ class WorldStreamingSystem(System):
             self._ensure_chunk_properties(loaded_cx, loaded_cy)
             self._ensure_chunk_population(loaded_cx, loaded_cy)
             ensure_chunk_flora(
+                self.sim,
+                loaded_data.get("chunk", loaded_data) if isinstance(loaded_data, dict) else loaded_data,
+                property_records=self.sim.chunk_property_records.get((loaded_cx, loaded_cy), ()),
+            )
+            ensure_underground_remediation_flora(
                 self.sim,
                 loaded_data.get("chunk", loaded_data) if isinstance(loaded_data, dict) else loaded_data,
                 property_records=self.sim.chunk_property_records.get((loaded_cx, loaded_cy), ()),

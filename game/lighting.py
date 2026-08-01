@@ -61,6 +61,14 @@ LIGHT_COLOR_PROFILES = {
     "emergency_red": {"rgb": (255, 62, 70), "priority": 4, "pulse": "emergency"},
     "underground_green": {"rgb": (94, 226, 168), "priority": 1, "pulse": ""},
     "ritual_violet": {"rgb": (168, 116, 255), "priority": 2, "pulse": "slow"},
+    "accumulator_glow": {"rgb": (112, 244, 190), "priority": 2, "pulse": ""},
+    "accumulator_glow_seaglass": {"rgb": (104, 236, 200), "priority": 2, "pulse": ""},
+    "accumulator_glow_soft_green": {"rgb": (128, 240, 178), "priority": 2, "pulse": ""},
+    "indicator_glow_amber": {"rgb": (238, 198, 108), "priority": 1, "pulse": ""},
+    "indicator_glow_blue": {"rgb": (106, 204, 238), "priority": 1, "pulse": ""},
+    "indicator_glow_green": {"rgb": (138, 222, 126), "priority": 1, "pulse": ""},
+    "indicator_glow_violet": {"rgb": (190, 148, 236), "priority": 1, "pulse": ""},
+    "indicator_glow_rose": {"rgb": (232, 144, 184), "priority": 1, "pulse": ""},
 }
 
 _FIXTURE_LIGHT_PROFILE_HINTS = {
@@ -684,6 +692,63 @@ def _authored_fixture_light_sources(sim, clock):
     return sources
 
 
+def _bioluminescent_flora_light_sources(sim):
+    bounds = _loaded_property_bounds(sim)
+    patches = getattr(sim, "flora_patches", None)
+    if not isinstance(patches, dict):
+        return []
+    luminous_ids = getattr(sim, "bioluminescent_flora_ids", None)
+    if not isinstance(luminous_ids, set):
+        luminous_ids = {
+            str(record_id)
+            for record_id, record in patches.items()
+            if isinstance(record, dict) and bool(record.get("bioluminescent"))
+        }
+        sim.bioluminescent_flora_ids = luminous_ids
+
+    sources = []
+    for record_id in sorted(tuple(luminous_ids)):
+        record = patches.get(record_id)
+        if not isinstance(record, dict) or not bool(record.get("bioluminescent")):
+            luminous_ids.discard(record_id)
+            continue
+        absorbed = max(0.0, _float_or_default(record.get("absorbed_toxin_load"), 0.0))
+        signal_strength = max(0.0, _float_or_default(record.get("bioluminescent_signal_strength"), 0.0))
+        if absorbed <= 0.0 and signal_strength <= 0.0:
+            continue
+        radius = max(1, min(4, _int_or_default(record.get("bioluminescent_radius"), 2)))
+        if not _property_in_loaded_bounds(record, bounds, margin=radius):
+            continue
+        try:
+            x = int(record.get("x"))
+            y = int(record.get("y"))
+            z = int(record.get("z", 0))
+        except (TypeError, ValueError):
+            continue
+        emission = max(absorbed, signal_strength)
+        intensity = _clamp_unit(record.get("bioluminescent_intensity", 0.2 + (emission * 0.1)))
+        profile_name, profile = _profile_row(
+            record.get("bioluminescent_light_profile"),
+            default_profile="accumulator_glow",
+        )
+        sources.append({
+            "x": x,
+            "y": y,
+            "z": z,
+            "radius": radius,
+            "intensity": intensity,
+            "kind": "bioluminescent_flora",
+            "building_id": _structure_building_id(sim, x, y, z),
+            "property_id": None,
+            "flora_id": record_id,
+            "light_profile": profile_name,
+            "light_color": list(profile["rgb"]),
+            "light_pulse": str(profile.get("pulse", "") or ""),
+            "light_priority": int(profile["priority"]),
+        })
+    return sources
+
+
 def _aperture_light_sources(sim, clock):
     phase = str(clock.get("phase", "day")).strip().lower() or "day"
     bounds = _loaded_property_bounds(sim)
@@ -877,6 +942,15 @@ def _local_light_sources(sim, clock=None):
         _active_power_cut_cache_key(sim, tick=clock.get("tick", getattr(sim, "tick", 0))),
         _active_fire_cache_key(sim),
         _active_vehicle_light_cache_key(sim),
+        tuple(sorted(
+            (
+                str(record_id),
+                round(_float_or_default((getattr(sim, "flora_patches", {}).get(record_id) or {}).get("absorbed_toxin_load"), 0.0), 3),
+                round(_float_or_default((getattr(sim, "flora_patches", {}).get(record_id) or {}).get("bioluminescent_signal_strength"), 0.0), 3),
+                str((getattr(sim, "flora_patches", {}).get(record_id) or {}).get("bioluminescent_light_profile", "")),
+            )
+            for record_id in tuple(getattr(sim, "bioluminescent_flora_ids", ()) or ())
+        )),
     )
     if tuple(state.get("source_cache_key", ())) == cache_key:
         cached = state.get("local_light_sources", ())
@@ -884,14 +958,16 @@ def _local_light_sources(sim, clock=None):
             return tuple(cached)
 
     vehicle_sources = tuple(_vehicle_headlight_sources(sim))
+    flora_sources = tuple(_bioluminescent_flora_light_sources(sim))
     if str(clock.get("phase", "day")).strip().lower() not in _LIGHT_PHASES:
-        sources = tuple(_fire_light_sources(sim) + list(vehicle_sources))
+        sources = tuple(_fire_light_sources(sim) + list(vehicle_sources) + list(flora_sources))
     else:
         sources = tuple(
             _authored_fixture_light_sources(sim, clock)
             + _aperture_light_sources(sim, clock)
             + _fire_light_sources(sim)
             + list(vehicle_sources)
+            + list(flora_sources)
         )
 
     state["source_cache_key"] = cache_key

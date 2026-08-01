@@ -64,6 +64,18 @@ CROWD_CHATTER_RADIUS = 7
 CROWD_CHATTER_MIN_NPCS = 4
 GLASS_AUDIBLE_RADIUS = 10
 EXPLOSION_MIN_AUDIBLE_RADIUS = 14
+WILDERNESS_DAY_CICADA_BOUT_STARTS = (0.08,)
+WILDERNESS_NIGHT_CRICKET_CLUSTER_STARTS = (0.07,)
+AMBIENT_ONE_SHOT_REST_SECONDS_BY_CUE = {
+    "ambient_water": (5.2, 6.0),
+    "ambient_campfire": (5.2, 6.0),
+    "ambient_biome_wilderness_day": (18.0, 42.0),
+    "ambient_biome_wilderness_night": (14.0, 36.0),
+}
+AMBIENT_ONE_SHOT_INITIAL_DELAY_SECONDS_BY_CUE = {
+    "ambient_biome_wilderness_day": (2.0, 8.0),
+    "ambient_biome_wilderness_night": (2.0, 8.0),
+}
 ENVIRONMENT_DIRTY_EVENTS = {
     "player_moved",
     "vehicle_entered",
@@ -205,20 +217,20 @@ def _add_noise(
 
 
 def _footstep(duration: float, sample_rate: int) -> list[float]:
-    """A soft heel-and-gravel crunch with no hard, glassy pitched click."""
+    """A damped heel-and-gravel crunch with no hard, glassy contact."""
 
     samples = _blank(duration, sample_rate)
-    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.13, amplitude=0.13, seed=11, color="low", attack=0.004, release=0.060, decay=2.7)
-    _add_noise(samples, sample_rate=sample_rate, start=0.008, duration=0.105, amplitude=0.050, seed=12, color="white", attack=0.006, release=0.052, decay=2.0)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.13, amplitude=0.115, seed=11, color="low", attack=0.010, release=0.072, decay=2.5)
+    _add_noise(samples, sample_rate=sample_rate, start=0.010, duration=0.105, amplitude=0.028, seed=12, color="white", attack=0.012, release=0.060, decay=1.8)
     gravel = (
-        (0.018, 0.029, 0.070),
-        (0.041, 0.024, 0.052),
-        (0.064, 0.032, 0.061),
-        (0.091, 0.027, 0.044),
+        (0.020, 0.032, 0.040),
+        (0.043, 0.028, 0.030),
+        (0.067, 0.035, 0.035),
+        (0.094, 0.030, 0.026),
     )
     for index, (start, grain_duration, amplitude) in enumerate(gravel):
-        _add_noise(samples, sample_rate=sample_rate, start=start, duration=grain_duration, amplitude=amplitude, seed=13 + index, color="high", attack=0.003, release=grain_duration * 0.62, decay=2.6)
-    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=0.115, frequency=72.0, end_frequency=46.0, amplitude=0.065, attack=0.004, release=0.060, decay=3.0)
+        _add_noise(samples, sample_rate=sample_rate, start=start, duration=grain_duration, amplitude=amplitude, seed=13 + index, color="white", attack=0.008, release=grain_duration * 0.76, decay=1.9)
+    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=0.118, frequency=70.0, end_frequency=45.0, amplitude=0.052, attack=0.010, release=0.070, decay=2.7)
     return samples
 
 
@@ -461,10 +473,7 @@ def _ambient_campfire(duration: float, sample_rate: int) -> list[float]:
 def _ambient_day(duration: float, sample_rate: int) -> list[float]:
     samples = _blank(duration, sample_rate)
     _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.019, seed=421, color="low", attack=0.28, release=0.30)
-    for index, start in enumerate((0.68, 2.54)):
-        base = 932.0 + index * 112.0
-        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.12, frequency=base, end_frequency=base * 1.19, amplitude=0.040, shape="sine", attack=0.018, release=0.06, decay=2.8)
-        _add_tone(samples, sample_rate=sample_rate, start=start + 0.14, duration=0.10, frequency=base * 1.08, end_frequency=base * 1.29, amplitude=0.031, attack=0.015, release=0.05, decay=3.1)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.006, seed=422, color="high", attack=0.42, release=0.44)
     return samples
 
 
@@ -473,8 +482,6 @@ def _ambient_night(duration: float, sample_rate: int) -> list[float]:
     _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.021, seed=431, color="low", attack=0.30, release=0.32)
     _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=duration, frequency=82.41, amplitude=0.035, attack=0.32, release=0.34)
     _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=duration, frequency=123.47, amplitude=0.018, shape="triangle", attack=0.36, release=0.36)
-    for index, start in enumerate((1.12, 1.30, 2.83, 3.01)):
-        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.065, frequency=1_640.0 + index * 41.0, amplitude=0.025, release=0.035, decay=3.8)
     return samples
 
 
@@ -495,11 +502,80 @@ def _ambient_biome_frontier(duration: float, sample_rate: int) -> list[float]:
     return samples
 
 
-def _ambient_biome_wilderness(duration: float, sample_rate: int) -> list[float]:
+def _ambient_biome_wilderness_day(duration: float, sample_rate: int) -> list[float]:
+    """One restrained daytime cicada bout for intermittent playback."""
+
     samples = _blank(duration, sample_rate)
-    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.031, seed=461, color="low", attack=0.28, release=0.30)
-    _add_tone(samples, sample_rate=sample_rate, start=0.38, duration=1.78, frequency=196.0, amplitude=0.030, attack=0.22, release=0.36)
-    _add_tone(samples, sample_rate=sample_rate, start=0.75, duration=1.44, frequency=293.66, amplitude=0.017, shape="triangle", attack=0.18, release=0.32)
+    for bout_index, start in enumerate(WILDERNESS_DAY_CICADA_BOUT_STARTS):
+        for pulse in range(18):
+            pulse_start = float(start) + (pulse * 0.036)
+            contour = math.sin(math.pi * (pulse + 1) / 19.0)
+            amplitude = 0.008 + (0.010 * contour)
+            frequency = 4_280.0 + ((pulse % 3) * 145.0)
+            _add_tone(
+                samples,
+                sample_rate=sample_rate,
+                start=pulse_start,
+                duration=0.046,
+                frequency=frequency,
+                end_frequency=frequency * 0.98,
+                amplitude=amplitude,
+                shape="soft_square",
+                attack=0.011,
+                release=0.017,
+                decay=0.5,
+                phase_offset=(bout_index + pulse) * 0.13,
+            )
+            _add_noise(
+                samples,
+                sample_rate=sample_rate,
+                start=pulse_start,
+                duration=0.040,
+                amplitude=amplitude * 0.34,
+                seed=462 + (bout_index * 40) + pulse,
+                color="high",
+                attack=0.010,
+                release=0.016,
+                decay=0.8,
+            )
+    return samples
+
+
+def _ambient_biome_wilderness_night(duration: float, sample_rate: int) -> list[float]:
+    """One small nighttime cricket cluster for intermittent playback."""
+
+    samples = _blank(duration, sample_rate)
+    for cluster_index, start in enumerate(WILDERNESS_NIGHT_CRICKET_CLUSTER_STARTS):
+        for chirp in range(3):
+            chirp_start = float(start) + (chirp * 0.145)
+            base = 3_080.0 + (chirp * 95.0)
+            _add_tone(
+                samples,
+                sample_rate=sample_rate,
+                start=chirp_start,
+                duration=0.060,
+                frequency=base,
+                end_frequency=base * 1.17,
+                amplitude=0.025 - (chirp * 0.002),
+                shape="sine",
+                attack=0.010,
+                release=0.032,
+                decay=1.8,
+                phase_offset=(cluster_index + chirp) * 0.17,
+            )
+            _add_tone(
+                samples,
+                sample_rate=sample_rate,
+                start=chirp_start + 0.012,
+                duration=0.040,
+                frequency=base * 1.42,
+                end_frequency=base * 1.31,
+                amplitude=0.009,
+                shape="triangle",
+                attack=0.008,
+                release=0.020,
+                decay=2.2,
+            )
     return samples
 
 
@@ -667,7 +743,7 @@ def _music_cue_definitions(profile: dict[str, object]) -> tuple[CueDefinition, .
 
 
 SFX_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
-    CueDefinition("footstep", 0.14, _footstep, gain=0.56, cooldown=0.055),
+    CueDefinition("footstep", 0.14, _footstep, gain=0.50, cooldown=0.055),
     CueDefinition("door", 0.24, _door, gain=0.74, cooldown=0.08),
     CueDefinition("pickup", 0.17, _pickup, gain=0.72, cooldown=0.06),
     CueDefinition("transaction", 0.18, _transaction, gain=0.72, cooldown=0.12),
@@ -684,13 +760,14 @@ SFX_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
 )
 
 AMBIENT_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
-    CueDefinition("ambient_water", 2.8, _ambient_water, gain=0.30, loop=True, bus="ambient"),
-    CueDefinition("ambient_campfire", 2.8, _ambient_campfire, gain=0.34, loop=True, bus="ambient"),
+    CueDefinition("ambient_water", 2.8, _ambient_water, gain=0.30, loop=False, bus="ambient"),
+    CueDefinition("ambient_campfire", 2.8, _ambient_campfire, gain=0.34, loop=False, bus="ambient"),
     CueDefinition("ambient_day", 3.5, _ambient_day, gain=0.27, loop=True, bus="ambient"),
     CueDefinition("ambient_night", 3.5, _ambient_night, gain=0.26, loop=True, bus="ambient"),
     CueDefinition("ambient_biome_city", 2.8, _ambient_biome_city, gain=0.22, loop=True, bus="ambient"),
     CueDefinition("ambient_biome_frontier", 2.8, _ambient_biome_frontier, gain=0.23, loop=True, bus="ambient"),
-    CueDefinition("ambient_biome_wilderness", 2.8, _ambient_biome_wilderness, gain=0.23, loop=True, bus="ambient"),
+    CueDefinition("ambient_biome_wilderness_day", 0.82, _ambient_biome_wilderness_day, gain=0.23, loop=False, bus="ambient"),
+    CueDefinition("ambient_biome_wilderness_night", 0.54, _ambient_biome_wilderness_night, gain=0.23, loop=False, bus="ambient"),
     CueDefinition("ambient_biome_coastal", 2.8, _ambient_biome_coastal, gain=0.22, loop=True, bus="ambient"),
     CueDefinition("ambient_biome_underground", 2.8, _ambient_biome_underground, gain=0.22, loop=True, bus="ambient"),
     CueDefinition("ambient_crowd_chatter", 3.4, _ambient_crowd_chatter, gain=0.38, loop=True, bus="ambient"),
@@ -712,7 +789,8 @@ AMBIENT_CUE_BY_GROUP: dict[str, tuple[str, ...]] = {
     "biome": (
         "ambient_biome_city",
         "ambient_biome_frontier",
-        "ambient_biome_wilderness",
+        "ambient_biome_wilderness_day",
+        "ambient_biome_wilderness_night",
         "ambient_biome_coastal",
         "ambient_biome_underground",
     ),
@@ -737,7 +815,9 @@ EVENT_CUE_MAP: dict[str, str] = {
 }
 
 EVENT_CUE_VARIANTS: dict[str, tuple[str, ...]] = {
-    "vehicle_fast_turn": TIRE_SCRUB_CUE_NAMES,
+    # Tire scrubs remain cached for later tuning, but fast-turn routing is
+    # intentionally muted because a frequent steering cue can become grating.
+    # "vehicle_fast_turn": TIRE_SCRUB_CUE_NAMES,
 }
 
 WORLD_EVENT_CUE_MAP: dict[str, str] = {
@@ -838,9 +918,6 @@ def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
     }
     if ambient_names != {cue.definition.name for cue in cues if cue.definition.bus == "ambient"}:
         raise AssertionError("ambient cue groups drifted from the cached bank")
-    if any(not cue.definition.loop for cue in cues if cue.definition.bus == "ambient"):
-        raise AssertionError("ambience cues must be loopable")
-
     total_pcm = 0
     largest_peak = 0
     for cue in cues:
@@ -1212,6 +1289,10 @@ class PygameAudioRuntime:
         self._ambient_current = {group: "" for group in AMBIENT_CHANNEL_INDEX}
         self._ambient_levels = {group: 0.0 for group in AMBIENT_CHANNEL_INDEX}
         self._ambient_desired = {group: ("", 0.0) for group in AMBIENT_CHANNEL_INDEX}
+        self._ambient_one_shot_next_at = {group: math.inf for group in AMBIENT_CHANNEL_INDEX}
+        self._ambient_rng = random.Random(
+            f"{getattr(sim, 'seed', 0)}:ambient-schedule:{player_eid}"
+        )
         self._ambient_context: dict[str, object] = {"available": False}
         self._environment_dirty = True
         self._next_environment_sample_at = 0.0
@@ -1528,7 +1609,11 @@ class PygameAudioRuntime:
         time_level = {"dawn": 0.78, "day": 1.0, "dusk": 0.82, "night": 1.0}.get(phase, 1.0)
         if biome == "underground":
             time_level = 0.10
-        biome_cue = f"ambient_biome_{biome}"
+        if biome == "wilderness":
+            wilderness_period = "night" if phase in {"dusk", "night"} else "day"
+            biome_cue = f"ambient_biome_wilderness_{wilderness_period}"
+        else:
+            biome_cue = f"ambient_biome_{biome}"
         if biome_cue not in self._definitions:
             biome_cue = "ambient_biome_frontier"
         if vehicle_speed <= 0:
@@ -1547,13 +1632,42 @@ class PygameAudioRuntime:
             "engine": (engine_cue if engine_active else "", engine_level if engine_active else 0.0),
         }
 
-    def _start_ambient_cue(self, group: str, cue_name: str) -> None:
+    def _play_ambient_one_shot(self, group: str, cue_name: str, now: float) -> None:
         channel = self._ambient_channels.get(group)
         sound = self._sounds.get(cue_name)
-        if channel is None or sound is None:
+        definition = self._definitions.get(cue_name)
+        if channel is None or sound is None or definition is None:
+            return
+        channel.play(sound, loops=0, fade_ms=90)
+        rest_min, rest_max = AMBIENT_ONE_SHOT_REST_SECONDS_BY_CUE.get(
+            cue_name,
+            (6.0, 12.0),
+        )
+        rest_seconds = self._ambient_rng.uniform(float(rest_min), float(rest_max))
+        self._ambient_one_shot_next_at[group] = (
+            float(now) + float(definition.duration) + rest_seconds
+        )
+
+    def _start_ambient_cue(self, group: str, cue_name: str, now: float) -> None:
+        channel = self._ambient_channels.get(group)
+        sound = self._sounds.get(cue_name)
+        definition = self._definitions.get(cue_name)
+        if channel is None or sound is None or definition is None:
             return
         channel.set_volume(0.0)
-        channel.play(sound, loops=-1, fade_ms=90)
+        if definition.loop:
+            channel.play(sound, loops=-1, fade_ms=90)
+            self._ambient_one_shot_next_at[group] = math.inf
+        else:
+            initial_delay = AMBIENT_ONE_SHOT_INITIAL_DELAY_SECONDS_BY_CUE.get(cue_name)
+            if initial_delay is None:
+                self._play_ambient_one_shot(group, cue_name, now)
+            else:
+                delay_min, delay_max = initial_delay
+                self._ambient_one_shot_next_at[group] = float(now) + self._ambient_rng.uniform(
+                    float(delay_min),
+                    float(delay_max),
+                )
         self._ambient_current[group] = cue_name
         self._ambient_levels[group] = 0.0
         self.ambient_switch_count += 1
@@ -1573,13 +1687,14 @@ class PygameAudioRuntime:
                 channel.stop()
                 self._ambient_current[group] = ""
                 self._ambient_levels[group] = 0.0
+                self._ambient_one_shot_next_at[group] = math.inf
                 current_cue = ""
 
             if current_cue and current_cue != desired_cue:
                 target = 0.0
             else:
                 if not current_cue and desired_cue:
-                    self._start_ambient_cue(group, desired_cue)
+                    self._start_ambient_cue(group, desired_cue, now)
                     current_cue = desired_cue
                 target = desired_level if current_cue == desired_cue else 0.0
 
@@ -1601,15 +1716,19 @@ class PygameAudioRuntime:
             if current_cue and current_cue != desired_cue and current_level <= 0.001:
                 channel.stop()
                 self._ambient_current[group] = ""
+                self._ambient_one_shot_next_at[group] = math.inf
                 if desired_cue:
-                    self._start_ambient_cue(group, desired_cue)
+                    self._start_ambient_cue(group, desired_cue, now)
                     if immediate:
                         self._ambient_levels[group] = desired_level
                         definition = self._definitions.get(desired_cue)
                         gain = float(definition.gain) if definition is not None else 0.0
                         channel.set_volume(min(1.0, self.master_volume * self.ambient_volume * gain * desired_level))
             elif current_cue and current_cue == desired_cue and not channel.get_busy():
-                channel.play(self._sounds[current_cue], loops=-1, fade_ms=90)
+                if definition is not None and definition.loop:
+                    channel.play(self._sounds[current_cue], loops=-1, fade_ms=90)
+                elif now >= float(self._ambient_one_shot_next_at.get(group, math.inf)):
+                    self._play_ambient_one_shot(group, current_cue, now)
 
     def refresh_environment(self, *, force: bool = False, immediate: bool = False) -> bool:
         if not self.enabled or not self.ambience_requested:
@@ -1652,6 +1771,7 @@ class PygameAudioRuntime:
             channel.fadeout(max(0, int(fade_ms)))
             self._ambient_current[group] = ""
             self._ambient_levels[group] = 0.0
+            self._ambient_one_shot_next_at[group] = math.inf
 
     def on_quit_requested(self, _event) -> None:
         self.stop_music(fade_ms=120)

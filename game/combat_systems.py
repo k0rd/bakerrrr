@@ -56,6 +56,7 @@ from game.physical_target_runtime import (
     weapon_targetable_property_at,
 )
 from game.npc_emergency_runtime import npc_emergency_active
+from game.organizations import actor_org_memberships
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import (
     _apply_downed_actor_state,
@@ -1539,6 +1540,20 @@ class WeaponSystem(System):
                     p2p_bonus = bonus_chips * 20
                     dropped_items.append({"item_id": "credstick_chip", "quantity": bonus_chips})
 
+            target_organization_eids = tuple(
+                sorted({
+                    int(row.get("organization_eid"))
+                    for row in actor_org_memberships(self.sim, eid, active_only=True)
+                    if row.get("organization_eid") is not None
+                })
+            )
+            source_organization_eids = tuple(
+                sorted({
+                    int(row.get("organization_eid"))
+                    for row in actor_org_memberships(self.sim, source_eid, active_only=True)
+                    if row.get("organization_eid") is not None
+                })
+            ) if source_eid is not None else ()
             self.sim.remove_entity(eid)
             self.sim.emit(Event(
                 "npc_killed",
@@ -1555,6 +1570,8 @@ class WeaponSystem(System):
                 npc_credits=npc_credits,
                 p2p_bonus=p2p_bonus,
                 animal_payload=animal_payload,
+                target_organization_eids=target_organization_eids,
+                source_organization_eids=source_organization_eids,
             ))
 
     def _explode(self, projectile, x, y, z):

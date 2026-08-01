@@ -29,6 +29,7 @@ UNDERGROUND_HAZARD_ROWS = (
     ("steam_leak", "Steam Leak", 4.0),
     ("foul_drain", "Foul Drain", 3.0),
 )
+SPENT_CELL_BLACKWASH_ROW = ("spent_cell_blackwash", "Spent-cell Blackwash", 0.0)
 
 UTILITY_CORRIDOR_ARCHETYPES = {
     "bank",
@@ -60,6 +61,16 @@ STORM_DRAIN_ARCHETYPES = {
     "recycling_plant",
     "soup_kitchen",
     "tenement",
+    "warehouse",
+}
+ELECTROCHEMICAL_WASTE_SOURCE_ARCHETYPES = {
+    "data_center",
+    "factory",
+    "freight_depot",
+    "lab",
+    "machine_shop",
+    "recycling_plant",
+    "server_hub",
     "warehouse",
 }
 
@@ -436,6 +447,73 @@ def _is_drain_friendly_district(district):
     return terrain in {"shore", "industrial_waste", "waterfront"}
 
 
+def _underground_hazard_rows(district, *, site_kind="", source_archetype=""):
+    """Return local hazard weights; exposed industrial seepage stays rare."""
+
+    district = district if isinstance(district, dict) else {}
+    district_type = _text(district.get("district_type")).lower()
+    site_kind = _text(site_kind).lower()
+    source_archetype = _text(source_archetype).lower()
+    blackwash_weight = 0.0
+    if district_type in {"corporate", "industrial"} and site_kind in {
+        UTILITY_CORRIDOR_KIND,
+        STORM_DRAIN_KIND,
+        ACCESS_TUNNEL_NETWORK_KIND,
+    }:
+        blackwash_weight += 0.32
+    if source_archetype in ELECTROCHEMICAL_WASTE_SOURCE_ARCHETYPES and site_kind in {
+        UTILITY_CORRIDOR_KIND,
+        STORM_DRAIN_KIND,
+    }:
+        blackwash_weight += 0.16
+    if blackwash_weight <= 0.0:
+        return UNDERGROUND_HAZARD_ROWS
+    return UNDERGROUND_HAZARD_ROWS + ((
+        SPENT_CELL_BLACKWASH_ROW[0],
+        SPENT_CELL_BLACKWASH_ROW[1],
+        round(blackwash_weight, 3),
+    ),)
+
+
+def _settled_underground_sediment(district, *, seed_token=""):
+    """Describe passive sediment history without creating an active source."""
+
+    district = district if isinstance(district, dict) else {}
+    district_type = _text(district.get("district_type")).lower() or "city"
+    rng = random.Random(f"{seed_token}:settled_underground_sediment")
+    baseline = {
+        "corporate": 0.18,
+        "industrial": 0.22,
+        "slums": 0.16,
+        "transport": 0.13,
+        "downtown": 0.12,
+    }.get(district_type, 0.1)
+    load = max(0.04, min(0.32, baseline + rng.uniform(-0.025, 0.035)))
+    if load >= 0.2:
+        band = "burdened"
+        appearance = "dark sediment lies in the seams, stippled with dull metallic grit"
+    elif load >= 0.13:
+        band = "noticeable"
+        appearance = "fine sediment gathers along the low edges with occasional metallic flecks"
+    else:
+        band = "trace"
+        appearance = "a thin settled line marks where old runoff once stood"
+    electrochemical_trace = max(0.01, min(0.24, load * (0.72 if district_type in {"corporate", "industrial"} else 0.34)))
+    return {
+        "kind": "settled_underground_sediment",
+        "load": round(load, 3),
+        "load_band": band,
+        "signatures": {
+            "urban_runoff": round(load, 3),
+            "spent_drone_cell_trace": round(electrochemical_trace, 3),
+        },
+        "appearance": appearance,
+        "active_source": False,
+        "self_propagating": False,
+        "mobility": "disturbance_only",
+    }
+
+
 def _underpass_hazard_specs(
     *,
     chunk_x,
@@ -447,6 +525,10 @@ def _underpass_hazard_specs(
     axis_min,
     axis_max,
     reserved_axes,
+    hazard_rows=None,
+    contamination_origin_name="",
+    contamination_source_archetype="",
+    contamination_source_context="",
 ):
     candidates = [
         int(axis)
@@ -471,7 +553,7 @@ def _underpass_hazard_specs(
 
     specs = []
     for axis in sorted(selected_axes):
-        picked = _weighted_choice(rng, UNDERGROUND_HAZARD_ROWS)
+        picked = _weighted_choice(rng, hazard_rows or UNDERGROUND_HAZARD_ROWS)
         if not picked:
             continue
         profile_id, label, _weight = picked
@@ -481,13 +563,24 @@ def _underpass_hazard_specs(
         else:
             x = int(axis)
             y = int(fixed_axis)
-        specs.append({
+        spec = {
             "name": str(label).strip() or "Hazard",
             "x": x,
             "y": y,
             "z": int(tunnel_z),
             "profile": str(profile_id).strip().lower() or "live_wire",
-        })
+        }
+        if str(profile_id).strip().lower() == "spent_cell_blackwash":
+            spec.update({
+                "contamination_origin": str(source_building_id).strip() or None,
+                "contamination_origin_name": _text(contamination_origin_name) or None,
+                "contamination_source_archetype": _text(contamination_source_archetype).lower() or None,
+                "contamination_source_context": _text(contamination_source_context).lower() or "underground_discharge",
+                "contamination_load": 3.0,
+                "technology_grade": 1.0,
+                "resident_remediation_eligible": True,
+            })
+        specs.append(spec)
     return tuple(specs)
 
 
@@ -1049,6 +1142,10 @@ def _metro_underpass_plan(
         "ambient_wildlife_spawns": wildlife_spawns,
         "ambient_hazard_profile": "transit_hazards" if hazard_sites else "",
         "ambient_hazard_spawns": hazard_sites,
+        "settled_sediment": _settled_underground_sediment(
+            chunk.get("district", {}) if isinstance(chunk.get("district"), dict) else {},
+            seed_token=f"{chunk_x}:{chunk_y}:{source_building_id}:metro_underpass",
+        ),
         "cache_sites": cache_sites,
         "service_sites": service_sites,
         "footprint": footprint,
@@ -1232,6 +1329,12 @@ def _generic_corridor_plan(
     else:
         return None
 
+    source_archetype = _text(building.get("archetype")).lower()
+    hazard_rows = _underground_hazard_rows(
+        chunk.get("district", {}) if isinstance(chunk.get("district"), dict) else {},
+        site_kind=kind,
+        source_archetype=source_archetype,
+    )
     site_name = f"{building_name} {site_label}"
     plan_building_id = f"{source_building_id}:{site_suffix}"
     footprint_excluded_cells = ()
@@ -1290,6 +1393,10 @@ def _generic_corridor_plan(
                 int(encounter_axis),
                 *(int(axis_value) for axis_value in wildlife_axes),
             },
+            hazard_rows=hazard_rows,
+            contamination_origin_name=building_name,
+            contamination_source_archetype=source_archetype,
+            contamination_source_context=f"{kind}_discharge",
         )
         branch_surface = _surface_exit_aligned_horizontal(
             int(tunnel_start[0]),
@@ -1352,6 +1459,10 @@ def _generic_corridor_plan(
                     int(branch_cache_x),
                     int(branch_encounter_x),
                 },
+                hazard_rows=hazard_rows,
+                contamination_origin_name=building_name,
+                contamination_source_archetype=source_archetype,
+                contamination_source_context=f"{kind}_discharge",
             ))
             branch_return = {
                 "name": "Service Hatch",
@@ -1429,6 +1540,10 @@ def _generic_corridor_plan(
                 int(encounter_axis),
                 *(int(axis_value) for axis_value in wildlife_axes),
             },
+            hazard_rows=hazard_rows,
+            contamination_origin_name=building_name,
+            contamination_source_archetype=source_archetype,
+            contamination_source_context=f"{kind}_discharge",
         )
         branch_surface = _surface_exit_aligned_vertical(
             int(cache_axis),
@@ -1491,6 +1606,10 @@ def _generic_corridor_plan(
                     int(branch_cache_y),
                     int(branch_encounter_y),
                 },
+                hazard_rows=hazard_rows,
+                contamination_origin_name=building_name,
+                contamination_source_archetype=source_archetype,
+                contamination_source_context=f"{kind}_discharge",
             ))
             branch_return = {
                 "name": "Service Hatch",
@@ -1542,6 +1661,7 @@ def _generic_corridor_plan(
         "building_id": plan_building_id,
         "source_building_id": source_building_id,
         "source_building_name": building_name,
+        "source_archetype": source_archetype or None,
         "anchor": {"x": int(anchor_x), "y": int(anchor_y), "z": int(tunnel_z)},
         "z": int(tunnel_z),
         "floors": 1,
@@ -1552,6 +1672,10 @@ def _generic_corridor_plan(
         "ambient_wildlife_spawns": wildlife_spawns,
         "ambient_hazard_profile": "transit_hazards" if hazard_sites else "",
         "ambient_hazard_spawns": hazard_sites,
+        "settled_sediment": _settled_underground_sediment(
+            chunk.get("district", {}) if isinstance(chunk.get("district"), dict) else {},
+            seed_token=f"{chunk_x}:{chunk_y}:{source_building_id}:{kind}",
+        ),
         "cache_sites": cache_sites,
         "service_sites": service_sites,
         "footprint": footprint,
@@ -2046,15 +2170,28 @@ def chunk_underground_network_plan(
     hazard_point = next((cell for cell in content_pool if cell not in reserved), None)
     hazard_sites = ()
     if hazard_point is not None:
-        hazard_row = _weighted_choice(rng, UNDERGROUND_HAZARD_ROWS)
+        hazard_row = _weighted_choice(
+            rng,
+            _underground_hazard_rows(district, site_kind=ACCESS_TUNNEL_NETWORK_KIND),
+        )
         if hazard_row:
-            hazard_sites = ({
+            hazard_spec = {
                 "name": str(hazard_row[1]),
                 "x": int(hazard_point[0]),
                 "y": int(hazard_point[1]),
                 "z": UNDERGROUND_NETWORK_Z,
                 "profile": str(hazard_row[0]),
-            },)
+            }
+            if str(hazard_row[0]).strip().lower() == "spent_cell_blackwash":
+                hazard_spec.update({
+                    "contamination_origin_name": _text(district.get("settlement_name")) or "corporate runoff",
+                    "contamination_source_archetype": "distributed_corporate_manufacturing",
+                    "contamination_source_context": "access_tunnel_runoff",
+                    "contamination_load": 2.4,
+                    "technology_grade": 1.0,
+                    "resident_remediation_eligible": True,
+                })
+            hazard_sites = (hazard_spec,)
 
     destination_labels = ["west service way", "east service way", "north access tunnel", "south access tunnel"]
     destination_labels.extend(
@@ -2101,6 +2238,10 @@ def chunk_underground_network_plan(
         } for point in wildlife_points),
         "ambient_hazard_profile": "network_hazards" if hazard_sites else "",
         "ambient_hazard_spawns": hazard_sites,
+        "settled_sediment": _settled_underground_sediment(
+            district,
+            seed_token=f"{world_seed}:{chunk_x}:{chunk_y}:underground_network",
+        ),
         "cache_sites": ({
             "name": "Tunnel Cache" if profile["cache"] != "contraband_light" else "Wrapped Handoff Cache",
             "x": int(cache_point[0]),

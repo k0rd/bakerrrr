@@ -262,6 +262,7 @@ PROPERTY_FIXTURE_SEMANTICS = {
     "campfire_ring": "prop_campfire_ring",
     "way_marker": "infra_way_marker",
     "underground_route_marker": "infra_way_marker",
+    "electrochemical_waste_hazard": "hazard_contamination",
     "storm_siren": "infra_siren",
     "solar_rig": "infra_solar",
     "notice_board": "prop_notice_board",

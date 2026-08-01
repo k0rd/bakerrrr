@@ -109,6 +109,42 @@ ENVIRONMENT_HAZARD_PROFILES = {
         },
         "player_note": "Foul drain vapor turns your stomach.",
     },
+    "spent_cell_blackwash": {
+        "name": "Spent-cell Blackwash",
+        "fixture_type": "electrochemical_waste_hazard",
+        "glyph": "=",
+        "color": "contaminant_electrochemical",
+        "damage": 3,
+        "damage_kind": "toxic_exposure",
+        "status": "electrochemical_exposure",
+        "duration": 28,
+        "cooldown_ticks": 15,
+        "modifiers": {
+            "move_speed_mult": -0.12,
+            "ranged_accuracy_mult": -0.1,
+            "energy_tick_delta": -0.1,
+            "safety_tick_delta": -0.16,
+            "toxicity_tick_delta": 0.12,
+        },
+        "immediate_needs": {
+            "safety": -5.2,
+            "energy": -2.2,
+        },
+        "contaminant": {
+            "class": "heavy_metals",
+            "family": "electrochemical_waste",
+            "signature": "spent_drone_cell_blackwash",
+            "source_process": "drone_battery_refining_and_recovery",
+            "persistence": "sediment_bound",
+            "mobility": "waterborne",
+            "bioreactive": True,
+        },
+        "display_description": (
+            "Black slurry seeps through split, serial-marked drone-cell shells, "
+            "leaving an oily green-gold edge along the low concrete."
+        ),
+        "player_note": "Oily blackwash bites at your skin and leaves a metallic taste.",
+    },
 }
 
 
@@ -169,6 +205,23 @@ def normalize_environment_hazard_specs(source, *, fallback_z=0):
             "z": z,
             "profile": profile_id,
             "name": str(spec.get("name", profile.get("name", "Hazard"))).strip() or str(profile.get("name", "Hazard")).strip() or "Hazard",
+            **{
+                key: spec.get(key)
+                for key in (
+                    "contamination_origin",
+                    "contamination_origin_name",
+                    "contamination_source_archetype",
+                    "contamination_source_context",
+                    "contamination_load",
+                    "technology_grade",
+                    "manufacturing_efficiency",
+                    "release_reason",
+                    "release_id",
+                    "source_eid",
+                    "resident_remediation_eligible",
+                )
+                if spec.get(key) not in (None, "")
+            },
         })
     return tuple(normalized)
 
@@ -201,6 +254,31 @@ def environment_hazard_asset_metadata(spec, *, key, linked_property_id=None):
         },
         "chunk": key,
     }
+    description = str(profile.get("display_description", "") or "").strip()
+    if description:
+        metadata["display_description"] = description
+    contaminant = profile.get("contaminant")
+    if isinstance(contaminant, dict) and contaminant:
+        metadata["contaminant"] = dict(contaminant)
+        metadata["contaminant_class"] = str(contaminant.get("class", "") or "").strip().lower() or None
+        metadata["contaminant_family"] = str(contaminant.get("family", "") or "").strip().lower() or None
+        metadata["contaminant_signature"] = str(contaminant.get("signature", "") or "").strip().lower() or None
+        metadata["contaminant_bioreactive"] = bool(contaminant.get("bioreactive"))
+    for field in (
+        "contamination_origin",
+        "contamination_origin_name",
+        "contamination_source_archetype",
+        "contamination_source_context",
+        "contamination_load",
+        "technology_grade",
+        "manufacturing_efficiency",
+        "release_reason",
+        "release_id",
+        "source_eid",
+        "resident_remediation_eligible",
+    ):
+        if spec.get(field) not in (None, ""):
+            metadata[field] = spec.get(field)
     if linked_property_id:
         metadata["linked_property_id"] = str(linked_property_id)
     return metadata

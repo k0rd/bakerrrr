@@ -65,6 +65,7 @@ WORLD_PALETTE: tuple[WorldPaletteRow, ...] = (
     _row("terrain_burned", (78, 72, 62), 238, "black", attrs=("dim",), tags=("terrain", "burned")),
     _row("terrain_rock", (156, 158, 160), 245, "white", tags=("terrain", "rock")),
     _row("terrain_water", (78, 162, 218), 117, "cyan", attrs=("bold",), tags=("terrain", "water")),
+    _row("contaminant_electrochemical", (142, 158, 66), 143, "green", attrs=("bold",), tags=("contaminant", "electrochemical", "toxic")),
     _row("terrain_salt", (226, 216, 184), 223, "yellow", attrs=("bold",), tags=("terrain", "salt")),
     _row("terrain_road", (202, 182, 106), 186, "yellow", tags=("terrain", "road")),
     _row("terrain_trail", (178, 126, 92), 173, "magenta", tags=("terrain", "trail")),
@@ -94,6 +95,14 @@ WORLD_PALETTE: tuple[WorldPaletteRow, ...] = (
     _row("flora_young", (98, 188, 112), 78, "green", attrs=("bold",), tags=("flora", "cultivated", "young")),
     _row("flora_withered", (150, 118, 72), 137, "yellow", attrs=("dim",), tags=("flora", "cultivated", "withered")),
     _row("flora_spent", (122, 108, 86), 101, "yellow", attrs=("dim",), tags=("flora", "spent")),
+    _row("flora_accumulator_glow", (112, 244, 190), 86, "cyan", attrs=("bold",), tags=("flora", "fungus", "bioluminescent")),
+    _row("flora_accumulator_glow_seaglass", (104, 236, 200), 86, "cyan", attrs=("bold",), tags=("flora", "fungus", "bioluminescent")),
+    _row("flora_accumulator_glow_soft_green", (128, 240, 178), 120, "green", attrs=("bold",), tags=("flora", "fungus", "bioluminescent")),
+    _row("flora_indicator_glow_amber", (238, 198, 108), 220, "yellow", attrs=("bold",), tags=("flora", "fungus", "bioluminescent", "indicator")),
+    _row("flora_indicator_glow_blue", (106, 204, 238), 117, "cyan", attrs=("bold",), tags=("flora", "fungus", "bioluminescent", "indicator")),
+    _row("flora_indicator_glow_green", (138, 222, 126), 114, "green", attrs=("bold",), tags=("flora", "fungus", "bioluminescent", "indicator")),
+    _row("flora_indicator_glow_violet", (190, 148, 236), 183, "magenta", attrs=("bold",), tags=("flora", "fungus", "bioluminescent", "indicator")),
+    _row("flora_indicator_glow_rose", (232, 144, 184), 211, "magenta", attrs=("bold",), tags=("flora", "fungus", "bioluminescent", "indicator")),
 )
 
 _ROWS_BY_KEY = {row.key: row for row in WORLD_PALETTE}

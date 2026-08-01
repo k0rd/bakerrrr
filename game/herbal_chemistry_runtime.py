@@ -94,6 +94,7 @@ HERBAL_INGREDIENT_DISPLAY_PARTS = {
     "leaf_clippings": "Clippings",
     "moss_scrapings": "Scrapings",
     "vine_cuttings": "Cuttings",
+    "mushroom_caps": "Caps",
 }
 INGREDIENT_ITEM_BY_FORM = {
     "flower": "fresh_blossoms",
@@ -104,6 +105,7 @@ INGREDIENT_ITEM_BY_FORM = {
     "moss": "moss_scrapings",
     "lichen": "moss_scrapings",
     "vine": "vine_cuttings",
+    "fungus": "mushroom_caps",
 }
 HARVEST_METHOD_BY_FORM = {
     "flower": "pluck",
@@ -114,6 +116,7 @@ HARVEST_METHOD_BY_FORM = {
     "vine": "cut",
     "moss": "scrape",
     "lichen": "scrape",
+    "fungus": "pluck",
 }
 DIRECT_CUT_TOOL_IDS = {"field_knife", "trail_machete", "pruning_shears", "shiv_knife"}
 DIRECT_SCRAPE_TOOL_IDS = DIRECT_CUT_TOOL_IDS | {"pocket_multitool"}
@@ -446,9 +449,13 @@ def _weighted_choice(rng, rows):
 def _herbal_flora_catalog(sim):
     """Compose authored and live flora while preserving the loader test seam."""
 
-    catalog = {plant_id: dict(row) for plant_id, row in load_flora_catalog().items()}
+    catalog = {
+        plant_id: dict(row)
+        for plant_id, row in load_flora_catalog().items()
+        if bool(row.get("herbal_pool_allowed", True))
+    }
     for plant_id, profile in ensure_dynamic_flora_profiles(sim).items():
-        if isinstance(profile, dict):
+        if isinstance(profile, dict) and bool(profile.get("herbal_pool_allowed", True)):
             catalog[_key(plant_id)] = dict(profile)
     return catalog
 
@@ -1260,6 +1267,7 @@ def _nearest_flora_matching(
     exact_direction=False,
     harvestable=None,
     exhausted_only=False,
+    locked_only=False,
 ):
     target = None
     if exact_direction and isinstance(preferred_dir, tuple) and len(preferred_dir) >= 2:
@@ -1270,6 +1278,8 @@ def _nearest_flora_matching(
     rows = []
     for record in getattr(sim, "flora_patches", {}).values() if isinstance(getattr(sim, "flora_patches", None), dict) else ():
         if not isinstance(record, dict):
+            continue
+        if locked_only and not bool(record.get("harvest_locked")):
             continue
         is_harvestable = flora_patch_harvestable(record)
         normalized = normalize_flora_harvest_state(record)
@@ -1327,6 +1337,20 @@ def nearest_exhausted_flora(sim, x, y, z=0, *, radius=1, preferred_dir=None, exa
     )
 
 
+def nearest_locked_flora(sim, x, y, z=0, *, radius=1, preferred_dir=None, exact_direction=False):
+    return _nearest_flora_matching(
+        sim,
+        x,
+        y,
+        z,
+        radius=radius,
+        preferred_dir=preferred_dir,
+        exact_direction=exact_direction,
+        harvestable=False,
+        locked_only=True,
+    )
+
+
 def _harvest_units(record, tool):
     form = str(record.get("growth_form", "") or "").strip().lower()
     base = 1
@@ -1367,6 +1391,15 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         sim.emit(Event("flora_harvest_blocked", eid=eid, flora_id=flora_id, reason="no_flora"))
         return False
     record = normalize_flora_harvest_state(record)
+    if bool(record.get("harvest_locked")):
+        sim.emit(Event(
+            "flora_harvest_blocked",
+            eid=eid,
+            flora_id=record.get("id"),
+            plant_name=record.get("name"),
+            reason=str(record.get("harvest_lock_reason") or "working_filter_bed"),
+        ))
+        return False
     if not flora_patch_harvestable(record):
         sim.emit(Event("flora_harvest_blocked", eid=eid, flora_id=record.get("id"), plant_name=record.get("name"), reason="picked"))
         return False
@@ -1384,7 +1417,7 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
             reason="no_tool",
         ))
         return False
-    item_id = INGREDIENT_ITEM_BY_FORM.get(form, "leaf_clippings")
+    item_id = _key(record.get("harvest_item_id")) or INGREDIENT_ITEM_BY_FORM.get(form, "leaf_clippings")
     plant_id = _key(record.get("plant_id"))
     class_id = _key(record.get("chemistry_class")) or plant_chemistry_class(sim, plant_id)
     secondary_traits = tuple(
@@ -1438,6 +1471,15 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         "harvested_tick": _safe_int(getattr(sim, "tick", 0), 0),
         "legal_status": "legal",
     }
+    for key in (
+        "ecology_origin",
+        "environmental_morph",
+        "environmental_reaction",
+        "contamination_property_id",
+        "contaminant_signature",
+    ):
+        if record.get(key) not in (None, ""):
+            metadata[key] = record.get(key)
     if isinstance(record.get("genetics"), Mapping):
         metadata["genetics"] = copy.deepcopy(dict(record.get("genetics") or {}))
     metadata["display_name"] = herbal_ingredient_display_name(item_id, metadata["source_plant_name"])

@@ -2338,6 +2338,10 @@ class OrganizationProfile:
         # live inside this profile too, but are not an in-fiction fact known to
         # the organization unless another system explicitly discovers them.
         self.production_profile = {}
+        # Optional culture shared by community members.  This is separate from
+        # operational OrganizationVocabulary: generated slang is social color,
+        # not a source of actionable instructions or discovered knowledge.
+        self.culture_profile = {}
 
 
 class OrganizationAffiliations:

@@ -125,6 +125,7 @@ from game.vehicles import (
 from game.opportunities import evaluate_opportunity_board, seed_run_opportunities
 from game.organization_reputation import OrganizationReputationSystem
 from game.organization_response import OrganizationResponseSystem
+from game.organization_war import OrganizationWarSystem
 from game.organization_practice_evolution import OrganizationPracticeEvolutionSystem
 from game.organization_supply import OrganizationSupplySystem
 from game.corporate_expansion_runtime import CorporateExpansionSystem
@@ -165,6 +166,7 @@ from game.fauna_breeding import FaunaBreedingSystem
 from game.combat_systems import NPCItemUseSystem, NPCWeaponSystem, StatusEffectSystem, WeaponSystem
 from game.npc_emergency_runtime import NPCEmergencyActionSystem
 from game.environment_hazard_system import EnvironmentalHazardSystem
+from game.contamination_runtime import ContaminationSystem
 from game.fire_system import FireSystem
 from game.aerosol_trap_runtime import AerosolTrapSystem
 from game.mechanical_device_runtime import MechanicalDeviceSystem
@@ -636,6 +638,7 @@ def _register_runtime_systems(sim, view, player):
     stealth_system = StealthSystem(sim, player)
     creature_hazard_system = CreatureHazardSystem(sim, player)
     environmental_hazard_system = EnvironmentalHazardSystem(sim)
+    contamination_system = ContaminationSystem(sim)
     fire_system = FireSystem(sim)
     vehicle_explosion_system = VehicleExplosionSystem(sim)
     aerosol_trap_system = AerosolTrapSystem(sim)
@@ -693,6 +696,7 @@ def _register_runtime_systems(sim, view, player):
     organization_supply_system = OrganizationSupplySystem(sim)
     organization_reputation_system = OrganizationReputationSystem(sim, player)
     organization_response_system = OrganizationResponseSystem(sim, player)
+    organization_war_system = OrganizationWarSystem(sim)
     final_operation_system = FinalOperationSystem(sim, player)
     run_epilogue_system = RunEpilogueLedgerSystem(sim, player)
     log_system = EventLogSystem(sim, player)
@@ -733,6 +737,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(observed_incident_response_system, 10)
     _live_timeskip_stride(observed_incident_dispatch_system, 10)
     _live_timeskip_stride(lighting_system, 0)
+    _live_timeskip_stride(contamination_system, 0)
     _live_timeskip_stride(vehicle_explosion_system, 1)
     _live_timeskip_stride(mechanical_device_system, 1)
     _live_timeskip_stride(property_system, 20)
@@ -781,6 +786,9 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(organization_supply_system, 600)
     _live_timeskip_stride(organization_reputation_system, 60)
     _live_timeskip_stride(organization_response_system, 60)
+    # Mobilization remains a loaded-actor concern even during live time skip;
+    # the system keeps its heavier tension/cooling sync on its own 600t gate.
+    _live_timeskip_stride(organization_war_system, 30)
     _live_timeskip_stride(final_operation_system, 60)
     _live_timeskip_stride(run_epilogue_system, 120)
     _live_timeskip_stride(visibility_system, 10)
@@ -815,6 +823,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(lighting_system)
     sim.register_system(creature_hazard_system)
     sim.register_system(environmental_hazard_system)
+    sim.register_system(contamination_system)
     sim.register_system(fire_system)
     sim.register_system(vehicle_explosion_system)
     sim.register_system(aerosol_trap_system)
@@ -872,6 +881,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(organization_supply_system)
     sim.register_system(organization_reputation_system)
     sim.register_system(organization_response_system)
+    sim.register_system(organization_war_system)
     sim.register_system(final_operation_system)
     sim.register_system(run_epilogue_system)
     sim.register_system(visibility_system)

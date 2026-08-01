@@ -5326,6 +5326,7 @@ def speaker_style(
     tone="neutral",
     empathy=0.5,
     discipline=0.5,
+    culture_profile=None,
 ):
     area_type = str(area_type or "city").strip().lower() or "city"
     district_type = str(district_type or "unknown").strip().lower() or "unknown"
@@ -5333,6 +5334,12 @@ def speaker_style(
     tone = str(tone or "neutral").strip().lower() or "neutral"
     empathy = _safe_float(empathy, 0.5)
     discipline = _safe_float(discipline, 0.5)
+    culture_profile = culture_profile if isinstance(culture_profile, dict) else {}
+    culture_lexemes = culture_profile.get("lexemes", {})
+    culture_lexemes = culture_lexemes if isinstance(culture_lexemes, dict) else {}
+    culture_key = str(culture_profile.get("culture_key", "") or "").strip()
+    culture_greeting = str(culture_lexemes.get("greeting", "") or "").strip().capitalize()
+    culture_farewell = str(culture_lexemes.get("farewell", "") or "").strip().capitalize()
 
     role_profile = _style_profile(ROLE_STYLE_HINTS, role_id)
     district_profile = _style_profile(DISTRICT_STYLE_HINTS, district_type)
@@ -5384,6 +5391,7 @@ def speaker_style(
         "role_id": role_id,
         "tone": tone,
         "voice_quality": voice_quality,
+        "culture_key": culture_key,
         "usage_weights": usage_weights,
         "lead_ins": _tuple_merge(
             register_profile.get("lead_ins"),
@@ -5414,6 +5422,8 @@ def speaker_style(
             district_profile.get("farewell_tags"),
             register_profile.get("farewell_tags"),
         ),
+        "culture_greetings": (f"{culture_greeting}.",) if culture_greeting else (),
+        "culture_farewells": (culture_farewell,) if culture_farewell else (),
     }
     return merged
 
@@ -5457,8 +5467,10 @@ def style_dialogue_line(text, *, seed, npc_eid, bank_id, topic_id="", count=0, s
     district_type = str(style_profile.get("district_type", "")).strip().lower()
     area_type = str(style_profile.get("area_type", "")).strip().lower()
     role_id = str(style_profile.get("role_id", "")).strip().lower()
+    culture_key = str(style_profile.get("culture_key", "")).strip().lower()
     rng = random.Random(
-        f"{seed}:dialogue-style:{npc_eid}:{bank_key}:{topic_id}:{count}:{district_type}:{area_type}:{role_id}"
+        f"{seed}:dialogue-style:{npc_eid}:{bank_key}:{topic_id}:{count}:"
+        f"{district_type}:{area_type}:{role_id}:{culture_key}"
     )
     result = text
 
@@ -5468,11 +5480,15 @@ def style_dialogue_line(text, *, seed, npc_eid, bank_id, topic_id="", count=0, s
     idioms = tuple(style_profile.get("idioms", ()) or ())
     local_terms = tuple(style_profile.get("local_terms", ()) or ())
     farewell_tags = tuple(style_profile.get("farewell_tags", ()) or ()) or catch_phrases
+    culture_greetings = tuple(style_profile.get("culture_greetings", ()) or ())
+    culture_farewells = tuple(style_profile.get("culture_farewells", ()) or ())
     usage_weights = style_profile.get("usage_weights", {})
     if not isinstance(usage_weights, dict):
         usage_weights = {}
 
     candidates = []
+    if bank_key.startswith("greet_") and culture_greetings:
+        candidates.append(("culture_greeting", culture_greetings, 0.72))
     if bank_key in STYLE_LEAD_IN_BANKS and lead_ins:
         candidates.append(("lead_in", lead_ins, _style_weight(usage_weights, "lead_in", 0.65)))
     if bank_key in STYLE_ADDRESS_BANKS and address_terms:
@@ -5488,12 +5504,14 @@ def style_dialogue_line(text, *, seed, npc_eid, bank_id, topic_id="", count=0, s
             candidates.append(("local_term", local_terms, _style_weight(usage_weights, "local_term", 0.05)))
     if bank_key in STYLE_SOFT_TEXTURE_BANKS:
         candidates.append(("none", (), _style_weight(usage_weights, "quiet", 0.75)))
+    if bank_key == "farewell" and culture_farewells:
+        candidates.append(("culture_farewell", culture_farewells, 0.55))
 
     style_kind, phrases = _weighted_style_choice(rng, candidates)
     if not style_kind or style_kind == "none":
         return result
     phrase = phrases[rng.randrange(len(phrases))] if phrases else ""
-    if style_kind == "lead_in":
+    if style_kind in {"lead_in", "culture_greeting"}:
         result = _prepend_phrase(result, phrase)
     elif style_kind == "address":
         result = _with_address(result, phrase)

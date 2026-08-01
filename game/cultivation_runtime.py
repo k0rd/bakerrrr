@@ -348,7 +348,9 @@ def seed_packet_metadata(sim, *, plant_id=None, seed_token="", source_kind="stoc
         plant_id = _key(plant_id)
         rng = random.Random(f"{getattr(sim, 'seed', 0)}:seed-packet:{seed_token or plant_id or 'stock'}")
         if not plant_id or plant_id not in catalog:
-            rows = tuple(catalog.values())
+            rows = tuple(row for row in catalog.values() if bool(row.get("cultivation_allowed", True)))
+            if not rows:
+                return {}
             weights = []
             rarity_mult = {"common": 10, "uncommon": 5, "rare": 1}
             for row in rows:
@@ -434,6 +436,8 @@ def _source_from_entry(sim, entry):
     if not plant_id:
         return None
     row = _plant_row_for_sim(sim, plant_id)
+    if not bool(row.get("cultivation_allowed", True)):
+        return None
     growth_form = _key(metadata.get("growth_form") or row.get("growth_form"), "flower")
     secondary_traits = tuple(metadata.get("secondary_traits") or row.get("secondary_traits", ()) or ())
     if not secondary_traits:
@@ -946,6 +950,9 @@ def _source_is_pollen(source):
 
 def _flora_live_for_crossbreed(sim, record):
     if not isinstance(record, Mapping):
+        return False
+    row = _plant_row_for_sim(sim, _key(record.get("plant_id")))
+    if not bool(record.get("crossbreed_allowed", row.get("crossbreed_allowed", True))):
         return False
     stage = _key(record.get("stage"), "mature")
     if stage in FAILED_STAGES or stage in EXHAUSTED_FLORA_STAGES:
@@ -1915,7 +1922,10 @@ def npc_try_gardener_action(sim, eid):
         return False
     rng = random.Random(f"{getattr(sim, 'seed', 0)}:npc-gardener:{eid}:{chunk}:{now // 2400}")
     catalog = flora_catalog_for_sim(sim)
-    plant = rng.choice(tuple(catalog.values()))
+    plantable = tuple(row for row in catalog.values() if bool(row.get("cultivation_allowed", True)))
+    if not plantable:
+        return False
+    plant = rng.choice(plantable)
     source = _source_from_entry(sim, {
         "item_id": SEED_PACKET_ITEM_ID,
         "instance_id": f"npc-starter:{eid}:{now}",

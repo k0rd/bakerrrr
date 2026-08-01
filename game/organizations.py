@@ -1348,6 +1348,8 @@ def _ensure_profile_state(profile):
     profile.relations = [_normalize_relation_row(row) for row in raw_relations if isinstance(row, dict)]
     raw_production_profile = getattr(profile, "production_profile", None)
     profile.production_profile = dict(raw_production_profile) if isinstance(raw_production_profile, dict) else {}
+    raw_culture_profile = getattr(profile, "culture_profile", None)
+    profile.culture_profile = dict(raw_culture_profile) if isinstance(raw_culture_profile, dict) else {}
     _refresh_profile_site_caches(profile)
     # Profiles enter through this normalizer after creation/load. Runtime
     # mutation helpers below already write normalized rows and maintain the

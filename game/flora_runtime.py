@@ -14,13 +14,17 @@ from pathlib import Path
 
 from engine.events import Event
 from game.content_warnings import warn_content_fallback
-from game.flora_genetics import normalize_flora_genetics
+from game.flora_genetics import (
+    fungal_mutation_glow_color,
+    normalize_flora_genetics,
+    preroll_fungal_mutation_glow,
+)
 from game.json_metadata import split_object_document
 
 
 FLORA_PATH = Path(__file__).resolve().parent / "flora.json"
 
-VALID_GROWTH_FORMS = frozenset(("flower", "grass", "reed", "moss", "lichen", "vine", "shrub", "fern"))
+VALID_GROWTH_FORMS = frozenset(("flower", "grass", "reed", "moss", "lichen", "vine", "shrub", "fern", "fungus"))
 VALID_GLYPHS = frozenset((",", "'", ";", "*"))
 RARITY_BASE_WEIGHTS = {
     "common": 12.0,
@@ -39,6 +43,7 @@ DEFAULT_GLYPH_BY_FORM = {
     "vine": ";",
     "shrub": "*",
     "fern": ",",
+    "fungus": "*",
 }
 
 DEFAULT_RENDER_KEY_BY_FORM = {
@@ -50,6 +55,7 @@ DEFAULT_RENDER_KEY_BY_FORM = {
     "vine": "flora_vine",
     "shrub": "flora_shrub",
     "fern": "flora_shrub",
+    "fungus": "flora_flower_white",
 }
 
 CITY_DISTRICTS = frozenset(("downtown", "corporate", "residential", "entertainment", "industrial", "slums", "military"))
@@ -78,6 +84,7 @@ SPREAD_STATES_BY_FORM = {
     "reed": ("rooted", "rooted"),
     "shrub": ("rooted", "rooted"),
     "fern": ("rooted", "rooted"),
+    "fungus": ("rooted", "rooted"),
 }
 DEFAULT_HARVEST_LIMIT_BY_FORM = {
     "flower": 1,
@@ -88,6 +95,7 @@ DEFAULT_HARVEST_LIMIT_BY_FORM = {
     "vine": 2,
     "shrub": 2,
     "fern": 2,
+    "fungus": 1,
 }
 PARTIAL_HARVEST_STAGE_BY_FORM = {
     "reed": "clipped",
@@ -110,6 +118,7 @@ FLORA_REGROWTH_HOURS_BY_FORM = {
     "flower": 18,
     "shrub": 24,
     "lichen": 30,
+    "fungus": 16,
 }
 FLORA_REGROWTH_RARITY_MULTIPLIER = {
     "common": 1.0,
@@ -291,6 +300,10 @@ def _normalize_flora_row(plant_id, raw):
         "harvest_potential": _normalize_dict(raw.get("harvest_potential")),
         "crossbreed_tags": _normalize_string_tuple(raw.get("crossbreed_tags")),
         "spread_profile": _normalize_dict(raw.get("spread_profile")),
+        "wild_spawn": bool(raw.get("wild_spawn", True)),
+        "cultivation_allowed": bool(raw.get("cultivation_allowed", True)),
+        "crossbreed_allowed": bool(raw.get("crossbreed_allowed", True)),
+        "herbal_pool_allowed": bool(raw.get("herbal_pool_allowed", True)),
     }
     row["genetics"] = normalize_flora_genetics(plant_key, row, seed=0)
     return row
@@ -582,6 +595,8 @@ def _plant_weight_for_context(row, *, area_key, district_type, terrain_key):
 def _select_plant(catalog, rng, *, area_key, district_type, terrain_key):
     rows = []
     for row in catalog.values():
+        if not bool(row.get("wild_spawn", True)):
+            continue
         weight = _plant_weight_for_context(row, area_key=area_key, district_type=district_type, terrain_key=terrain_key)
         if weight > 0:
             rows.append((row, weight))
@@ -686,6 +701,8 @@ def normalize_flora_harvest_state(record):
 
 def flora_patch_harvestable(record):
     if not isinstance(record, dict):
+        return False
+    if bool(record.get("harvest_locked")):
         return False
     row = normalize_flora_harvest_state(record)
     stage = _str_key(row.get("stage"))
@@ -1067,6 +1084,9 @@ def _flora_record_id(cx, cy, cluster_index, tile_index):
 def _make_flora_record(row, *, cx, cy, x, y, z, cluster_index, tile_index, rng, spread_direction=None):
     variant_seed = rng.randrange(1, 2**31 - 1)
     spread_state = _spread_state_for(row, tile_index)
+    genetics = dict(row.get("genetics", {}) or {})
+    if _str_key(row.get("growth_form")) == "fungus":
+        genetics = preroll_fungal_mutation_glow(genetics, seed=variant_seed)
     record = {
         "id": _flora_record_id(cx, cy, cluster_index, tile_index),
         "plant_id": row["id"],
@@ -1086,8 +1106,12 @@ def _make_flora_record(row, *, cx, cy, x, y, z, cluster_index, tile_index, rng, 
         "cluster_id": f"flora:{int(cx)}:{int(cy)}:{int(cluster_index)}",
         "tags": list(row.get("tags", ())),
         "rarity": row.get("rarity", "common"),
-        "genetics": dict(row.get("genetics", {}) or {}),
+        "genetics": genetics,
         "harvest_potential": dict(row.get("harvest_potential", {}) or {}),
+        "wild_spawn": bool(row.get("wild_spawn", True)),
+        "cultivation_allowed": bool(row.get("cultivation_allowed", True)),
+        "crossbreed_allowed": bool(row.get("crossbreed_allowed", True)),
+        "herbal_pool_allowed": bool(row.get("herbal_pool_allowed", True)),
     }
     return normalize_flora_harvest_state(record)
 
@@ -1106,8 +1130,21 @@ def register_flora_patch(sim, record):
         genetics_row = dict(catalog_row or normalized)
         genetics_row["genetics"] = genetics or catalog_row.get("genetics", {}) if isinstance(catalog_row, dict) else genetics
         normalized["genetics"] = normalize_flora_genetics(normalized.get("plant_id") or normalized.get("id"), genetics_row, seed=0)
+    if _str_key(normalized.get("growth_form")) == "fungus":
+        normalized["genetics"] = preroll_fungal_mutation_glow(
+            normalized.get("genetics"),
+            seed=normalized.get("variant_seed") or record_id,
+        )
     register_dynamic_flora_profile(sim, normalized)
     patches[record_id] = dict(normalized)
+    luminous_ids = getattr(sim, "bioluminescent_flora_ids", None)
+    if not isinstance(luminous_ids, set):
+        luminous_ids = set()
+        sim.bioluminescent_flora_ids = luminous_ids
+    if bool(normalized.get("bioluminescent")):
+        luminous_ids.add(record_id)
+    else:
+        luminous_ids.discard(record_id)
     chunk = record.get("chunk")
     if isinstance(chunk, (tuple, list)) and len(chunk) == 2:
         key = (int(chunk[0]), int(chunk[1]))
@@ -1115,6 +1152,26 @@ def register_flora_patch(sim, record):
         bucket.append(dict(normalized))
         chunk_records[key] = bucket
     return record_id
+
+
+def update_flora_patch(sim, record_id, updates):
+    patches, _chunk_records = ensure_flora_state(sim)
+    record_id = str(record_id or "").strip()
+    record = patches.get(record_id)
+    if not record_id or not isinstance(record, dict):
+        return None
+    updated = dict(record)
+    updated.update(dict(updates or {}))
+    _store_flora_record(sim, updated)
+    luminous_ids = getattr(sim, "bioluminescent_flora_ids", None)
+    if not isinstance(luminous_ids, set):
+        luminous_ids = set()
+        sim.bioluminescent_flora_ids = luminous_ids
+    if bool(updated.get("bioluminescent")):
+        luminous_ids.add(record_id)
+    else:
+        luminous_ids.discard(record_id)
+    return updated
 
 
 def ensure_chunk_flora(sim, chunk, *, property_records=None):
@@ -1233,12 +1290,17 @@ def flora_render_data(record, *, sim=None):
     exhausted = stage in EXHAUSTED_FLORA_STAGES or _safe_int(record.get("harvest_remaining"), 0) <= 0
     failed = stage in FAILED_FLORA_STAGES
     bloom_state = flora_bloom_state(sim, record)
+    environmental_morph = _str_key(record.get("environmental_morph"))
     if failed:
         semantic = "flora_withered"
     elif stage in {"seeded", "sprouting"}:
         semantic = "flora_seedling"
     elif stage == "young":
         semantic = "flora_young"
+    elif environmental_morph == "accumulator":
+        semantic = "flora_accumulator"
+    elif environmental_morph == "contaminant_indicator":
+        semantic = "flora_indicator"
     elif growth_form == "lichen":
         semantic = "flora_moss"
     elif growth_form == "flower" and bloom_state == "closed" and not exhausted:
@@ -1247,7 +1309,12 @@ def flora_render_data(record, *, sim=None):
         semantic = "flora_flower_night"
     else:
         semantic = f"flora_{growth_form}"
-    if failed:
+    if environmental_morph == "accumulator" and not failed:
+        color = _str_key(
+            record.get("bioluminescent_color_key"),
+            fungal_mutation_glow_color(record.get("genetics")),
+        )
+    elif failed:
         color = "flora_withered"
     elif stage in {"seeded", "sprouting"}:
         color = "flora_seedling"
@@ -1301,7 +1368,10 @@ def flora_look_text(records, *, sim=None):
         "vine": "vine",
         "shrub": "shrub",
         "fern": "fern",
+        "fungus": "mushrooms",
     }.get(form, "plants")
+    if _str_key(record.get("environmental_morph")) == "accumulator":
+        prefix = "tended accumulator bed"
     text = f"{prefix}: {name}"
     stage = _str_key(record.get("stage"))
     if stage == "seeded":
@@ -1332,4 +1402,7 @@ def flora_look_text(records, *, sim=None):
         text += f" creeping {direction}"
     if len(rows) > 1:
         text += f" +{len(rows) - 1}"
+    ecology_note = str(record.get("ecology_note", "") or "").strip()
+    if ecology_note:
+        text += f". {ecology_note}"
     return text

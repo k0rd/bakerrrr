@@ -23,6 +23,12 @@ from game.color_words import (
 GENETICS_SCHEMA_VERSION = 1
 DEFAULT_EFFECT_BUDGET = 4
 
+ACCUMULATOR_GLOW_COLOR_KEYS = (
+    "flora_accumulator_glow",
+    "flora_accumulator_glow_seaglass",
+    "flora_accumulator_glow_soft_green",
+)
+
 PARENT_ROLE_ANY = "any"
 PARENT_ROLE_SEED = "seed_parent"
 PARENT_ROLE_POLLEN = "pollen_parent"
@@ -106,7 +112,7 @@ EFFECT_TRAIT_COSTS = {
 }
 
 SHAPE_AXES = ("petal_shape", "blade_shape", "stem_shape", "leaf_shape", "habit", "texture")
-VALID_GROWTH_FORMS = frozenset(("flower", "grass", "reed", "moss", "lichen", "vine", "shrub", "fern"))
+VALID_GROWTH_FORMS = frozenset(("flower", "grass", "reed", "moss", "lichen", "vine", "shrub", "fern", "fungus"))
 VALID_GLYPHS = frozenset((",", "'", ";", "*"))
 DEFAULT_GLYPH_BY_FORM = {
     "flower": "'",
@@ -117,12 +123,14 @@ DEFAULT_GLYPH_BY_FORM = {
     "vine": ";",
     "shrub": "*",
     "fern": ",",
+    "fungus": "*",
 }
 DEFAULT_COLOR_WORD_BY_FORM = {
     "flower": "pink",
     "grass": "green",
     "reed": "olive",
     "moss": "moss",
+    "fungus": "cream",
     "lichen": "gray",
     "vine": "green",
     "shrub": "sage",
@@ -210,6 +218,35 @@ def _stable_unit(*parts) -> float:
 def _stable_hash(*parts, length=12) -> str:
     payload = "|".join(str(part) for part in parts).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[: max(4, int(length))]
+
+
+def preroll_fungal_mutation_glow(genetics, *, seed):
+    """Give one fungus a silent, stable accumulator-glow predisposition."""
+
+    genome = copy.deepcopy(dict(genetics or {})) if isinstance(genetics, Mapping) else {}
+    latent = copy.deepcopy(dict(genome.get("latent") or {})) if isinstance(genome.get("latent"), Mapping) else {}
+    color_key = _key(latent.get("accumulator_glow_color_key"))
+    if color_key not in ACCUMULATOR_GLOW_COLOR_KEYS:
+        token = _stable_hash(
+            seed,
+            genome.get("genome_id"),
+            "latent-accumulator-glow",
+            length=16,
+        )
+        color_key = ACCUMULATOR_GLOW_COLOR_KEYS[int(token, 16) % len(ACCUMULATOR_GLOW_COLOR_KEYS)]
+    latent["accumulator_glow_color_key"] = color_key
+    genome["latent"] = latent
+    return genome
+
+
+def fungal_mutation_glow_color(genetics):
+    """Read the latent hue without expressing it on an ordinary mushroom."""
+
+    if not isinstance(genetics, Mapping):
+        return ACCUMULATOR_GLOW_COLOR_KEYS[0]
+    latent = genetics.get("latent") if isinstance(genetics.get("latent"), Mapping) else {}
+    color_key = _key(latent.get("accumulator_glow_color_key"))
+    return color_key if color_key in ACCUMULATOR_GLOW_COLOR_KEYS else ACCUMULATOR_GLOW_COLOR_KEYS[0]
 
 
 def _normalize_source(value, default=PARENT_ROLE_CATALOG):

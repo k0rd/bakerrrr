@@ -146,6 +146,7 @@ from game.cult_runtime import (
     player_knows_cult,
 )
 from game.corporate_occupation_runtime import corporate_labor_terms_for_property, corporate_lived_dialogue_context
+from game.underground_culture import culture_profile_for_actor
 from game.outfit_impression import (
     apply_visible_outfit_social_offset,
     visible_outfit_impression,
@@ -7878,6 +7879,7 @@ class NPCInteractionSystem(System):
             tone=tone,
             empathy=getattr(npc_traits, "empathy", 0.5) if npc_traits else 0.5,
             discipline=getattr(npc_traits, "discipline", 0.5) if npc_traits else 0.5,
+            culture_profile=culture_profile_for_actor(self.sim, npc_eid),
         )
         object_dialogue = meaningful_object_dialogue_context(self.sim, npc_eid, viewer_eid=self.player_eid)
         object_meaning_phrase = self._object_meaning_phrase(

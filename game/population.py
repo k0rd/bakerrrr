@@ -62,6 +62,7 @@ from game.profession_loadouts import NPC_PROFESSION_LOADOUTS_BY_ARCHETYPE
 from game.property_runtime import property_is_vehicle, vehicle_fuel_values
 from game.skills import seed_skill_profile
 from game.system_support.npc_behavior_runtime import behavior_profile_for_spawn
+from game.underground_culture import assign_underground_culture_member
 from game.vehicle_motion import local_route_accessible_at, vehicle_top_speed
 from game.weapon_equipment_runtime import equip_linked_weapon_item
 
@@ -3446,6 +3447,7 @@ UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS = (
         "role": "worker",
         "career": "transit_maintenance",
         "assign_workplace": True,
+        "culture_member": False,
         "bonus_items": (("battery_pack", 1), ("transit_daypass", 1)),
     },
     {
@@ -3454,7 +3456,17 @@ UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS = (
         "role": "thief",
         "career": "scavenger",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("scrap_circuit", 1), ("energy_bar", 1)),
+    },
+    {
+        "profile_id": "underway_watch",
+        "weight": 1,
+        "role": "guard",
+        "career": "tunnel_watch",
+        "assign_workplace": False,
+        "culture_member": True,
+        "bonus_items": (("battery_pack", 1), ("energy_bar", 1)),
     },
     {
         "profile_id": "rail_runner",
@@ -3462,6 +3474,7 @@ UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS = (
         "role": "worker",
         "career": "transit_runner",
         "assign_workplace": True,
+        "culture_member": False,
         "bonus_items": (("city_pass_token", 1), ("transit_daypass", 1)),
     },
     {
@@ -3470,6 +3483,7 @@ UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS = (
         "role": "civilian",
         "career": "drifter",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("bottled_water", 1),),
     },
     {
@@ -3478,6 +3492,7 @@ UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS = (
         "role": "drunk",
         "career": "drifter",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("spark_brew", 1),),
     },
 )
@@ -3488,6 +3503,7 @@ UNDERGROUND_MAINTENANCE_ENCOUNTER_ROWS = (
         "role": "worker",
         "career": "utility_maintenance",
         "assign_workplace": True,
+        "culture_member": False,
         "bonus_items": (("battery_pack", 1), ("pocket_multitool", 1)),
     },
     {
@@ -3496,6 +3512,7 @@ UNDERGROUND_MAINTENANCE_ENCOUNTER_ROWS = (
         "role": "worker",
         "career": "service_runner",
         "assign_workplace": True,
+        "culture_member": False,
         "bonus_items": (("city_pass_token", 1),),
     },
     {
@@ -3504,6 +3521,7 @@ UNDERGROUND_MAINTENANCE_ENCOUNTER_ROWS = (
         "role": "civilian",
         "career": "maintenance",
         "assign_workplace": False,
+        "culture_member": False,
         "bonus_items": (("energy_bar", 1),),
     },
 )
@@ -3514,6 +3532,7 @@ UNDERGROUND_SCAVENGER_ENCOUNTER_ROWS = (
         "role": "thief",
         "career": "scavenger",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("scrap_circuit", 1), ("lockpick_kit", 1)),
     },
     {
@@ -3522,6 +3541,7 @@ UNDERGROUND_SCAVENGER_ENCOUNTER_ROWS = (
         "role": "civilian",
         "career": "scrapper",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("glass_bottle", 1), ("energy_bar", 1)),
     },
     {
@@ -3530,7 +3550,17 @@ UNDERGROUND_SCAVENGER_ENCOUNTER_ROWS = (
         "role": "thief",
         "career": "lookout",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("spark_brew", 1),),
+    },
+    {
+        "profile_id": "underway_watch",
+        "weight": 2,
+        "role": "guard",
+        "career": "tunnel_watch",
+        "assign_workplace": False,
+        "culture_member": True,
+        "bonus_items": (("battery_pack", 1), ("energy_bar", 1)),
     },
 )
 UNDERGROUND_SHELTER_ENCOUNTER_ROWS = (
@@ -3540,6 +3570,7 @@ UNDERGROUND_SHELTER_ENCOUNTER_ROWS = (
         "role": "civilian",
         "career": "drifter",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("bottled_water", 1),),
     },
     {
@@ -3548,6 +3579,7 @@ UNDERGROUND_SHELTER_ENCOUNTER_ROWS = (
         "role": "civilian",
         "career": "drifter",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("emergency_blanket", 1),),
     },
     {
@@ -3556,6 +3588,7 @@ UNDERGROUND_SHELTER_ENCOUNTER_ROWS = (
         "role": "drunk",
         "career": "drifter",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("cheap_whiskey", 1),),
     },
 )
@@ -3566,6 +3599,7 @@ UNDERGROUND_SHADY_ENCOUNTER_ROWS = (
         "role": "thief",
         "career": "dealer",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("black_market_stim", 1),),
     },
     {
@@ -3574,6 +3608,7 @@ UNDERGROUND_SHADY_ENCOUNTER_ROWS = (
         "role": "thief",
         "career": "runner",
         "assign_workplace": False,
+        "culture_member": True,
         "bonus_items": (("credstick_chip", 1),),
     },
     {
@@ -3582,6 +3617,7 @@ UNDERGROUND_SHADY_ENCOUNTER_ROWS = (
         "role": "drunk",
         "career": "partier",
         "assign_workplace": False,
+        "culture_member": False,
         "bonus_items": (("cocaine_bindle", 1),),
     },
 )
@@ -4552,6 +4588,8 @@ def _spawn_underground_transient_encounter(sim, chunk, prop, rng, *, economy_pro
     )
     for item_id, quantity in tuple(choice.get("bonus_items", ()) or ()):
         _give_item(sim, eid, str(item_id or "").strip().lower(), quantity=quantity)
+    if bool(choice.get("culture_member")):
+        assign_underground_culture_member(sim, eid, prop, chunk)
     return eid
 
 

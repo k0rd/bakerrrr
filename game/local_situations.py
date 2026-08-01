@@ -13,6 +13,11 @@ from game.economy import strongest_local_trade_pressure_for_property
 from game.incident_runtime import incident_record
 from game.meaningful_objects_runtime import meaningful_object_fixture_cue
 from game.organization_presence import format_visible_property_org_presence
+from game.organization_war import (
+    organization_war_front_rows,
+    organization_war_front_summary,
+    organization_war_order_rows,
+)
 from game.organizations import (
     local_protective_pressure_snapshot,
     organization_pressure_for_property,
@@ -260,6 +265,7 @@ _ROW_PRIORITY_BY_SOURCE = {
     "opportunity": 10,
     "world_event": 20,
     "reported_incident_hold": 30,
+    "organization_war": 25,
     "wire_probe": 35,
     "crime_plan": 40,
     "protective_pressure": 50,
@@ -444,6 +450,8 @@ def _row_urgency_priority(row):
     event_phase = _text((row or {}).get("event_phase")).lower()
     if source_kind == "reported_incident_hold" or event_phase in _HIGH_URGENCY_PHASES:
         return 0
+    if source_kind == "organization_war":
+        return 5
     if source_kind == "opportunity":
         return 10
     if (
@@ -470,6 +478,8 @@ def _row_dedupe_priority(row):
     event_phase = _text((row or {}).get("event_phase")).lower()
     if source_kind == "reported_incident_hold" or event_phase in _HIGH_URGENCY_PHASES:
         return 0
+    if source_kind == "organization_war":
+        return 3
     if source_kind == "opportunity":
         return 5
     if source_kind == "world_event":
@@ -1116,6 +1126,92 @@ def _row_from_organization_pressure(sim, prop, pressure, *, player_pos=None, pla
     }
 
 
+def _row_from_organization_war_front(sim, front, *, player_pos=None, player_eid=None):
+    if not isinstance(front, dict):
+        return None
+    summary = organization_war_front_summary(front)
+    if not isinstance(summary, dict):
+        return None
+    anchor_data = front.get("anchor") if isinstance(front.get("anchor"), dict) else {}
+    try:
+        anchor = (
+            int(anchor_data.get("x", 0)),
+            int(anchor_data.get("y", 0)),
+            int(anchor_data.get("z", 0)),
+        )
+    except (TypeError, ValueError):
+        return None
+    property_id = _text(anchor_data.get("property_id"))
+    prop = getattr(sim, "properties", {}).get(property_id)
+    property_name = _text(anchor_data.get("property_name")) or _property_name(prop)
+    orders = organization_war_order_rows(
+        sim,
+        war_id=front.get("war_id"),
+        front_id=front.get("front_id"),
+        active_only=True,
+    )
+    mobilized_count = len(orders)
+    incursion_count = sum(1 for row in orders if _text(row.get("order_kind")).lower() == "incursion")
+    engaged_count = sum(1 for row in orders if _text(row.get("status")).lower() == "engaged")
+    retreating_count = sum(1 for row in orders if _text(row.get("status")).lower() == "retreating")
+    summary_text = _text(summary.get("summary")) or "an organized conflict has a visible local line here"
+    if engaged_count:
+        summary_text += "; ordered watchers have made contact along the marked approach"
+    elif retreating_count:
+        summary_text += "; some of the ordered figures are pulling back toward the access route"
+    elif incursion_count >= 2:
+        summary_text += "; a small paired detail is moving through the access line while local watchers hold"
+    elif mobilized_count:
+        summary_text += "; a small local watch is holding the marked approach"
+    contributions = [
+        row
+        for row in tuple(front.get("contributions", ()) or ())
+        if isinstance(row, dict)
+    ]
+    if contributions:
+        recent = contributions[-1]
+        beneficiary_eid = recent.get("beneficiary_org_eid")
+        beneficiary_name = next((
+            _text(ref.get("organization_name"))
+            for ref in tuple(front.get("participants", ()) or ())
+            if isinstance(ref, dict) and ref.get("organization_eid") == beneficiary_eid
+        ), "")
+        if beneficiary_name:
+            summary_text += f"; recent intervention has shifted the local edge toward {beneficiary_name}"
+    return {
+        "scene_id": _text(front.get("front_id")) or f"organization_war:{front.get('war_id')}",
+        "property_id": property_id,
+        "property_name": property_name,
+        "title": _text(summary.get("title")) or "Organization War Front",
+        "summary": summary_text,
+        "action": _text(summary.get("action")) or "read the line, question people nearby, choose a side, or move on",
+        "event_phase": _text(front.get("war_status")).lower() or "active",
+        "scene_type": _text(front.get("front_kind")).lower() or "organization_war",
+        "traffic_state": _text(front.get("status")).lower() or "contested",
+        "community_tone": "war",
+        "source_kind": "organization_war",
+        "anchor": anchor,
+        "fixture_names": (),
+        "organization_presence": _text(summary.get("sides")),
+        "priority": _source_priority("organization_war"),
+        "war_id": front.get("war_id"),
+        "war_front_id": front.get("front_id"),
+        "war_front_kind": front.get("front_kind"),
+        "war_status": front.get("war_status"),
+        "war_heat": front.get("war_heat"),
+        "war_mobilized_count": mobilized_count,
+        "war_incursion_count": incursion_count,
+        "war_engaged_count": engaged_count,
+        "war_retreating_count": retreating_count,
+        "war_contribution_count": len(contributions),
+        "war_recent_beneficiary_org_eid": (
+            contributions[-1].get("beneficiary_org_eid") if contributions else None
+        ),
+        **_distance_fields(anchor, player_pos),
+        **_ownership_fields(sim, prop, player_eid=player_eid),
+    }
+
+
 def _wire_linked_property(sim, prop):
     linked_id = _text(property_linked_property_id(prop))
     if linked_id:
@@ -1294,6 +1390,36 @@ def local_situation_rows(sim, player_eid=None, *, limit=4, current_chunk_only=Tr
         rows.append(row)
 
     for row in cult_local_situation_rows(sim, player_pos=player_pos, player_eid=player_eid):
+        if current_chunk_only and not _same_chunk(sim, player_pos, row.get("anchor")):
+            continue
+        rows.append(row)
+
+    player_chunk = None
+    player_z = None
+    if player_pos is not None:
+        player_chunk = tuple(sim.chunk_coords(int(player_pos.x), int(player_pos.y)))
+        player_z = int(player_pos.z)
+    elif current_chunk_only:
+        active_chunk = getattr(sim, "active_chunk_coord", None)
+        if isinstance(active_chunk, (tuple, list)) and len(active_chunk) >= 2:
+            try:
+                player_chunk = (int(active_chunk[0]), int(active_chunk[1]))
+            except (TypeError, ValueError):
+                player_chunk = None
+    for front in organization_war_front_rows(
+        sim,
+        chunk=player_chunk if current_chunk_only else None,
+        z=player_z if current_chunk_only and player_z is not None else None,
+        active_only=False,
+    ):
+        row = _row_from_organization_war_front(
+            sim,
+            front,
+            player_pos=player_pos,
+            player_eid=player_eid,
+        )
+        if not row:
+            continue
         if current_chunk_only and not _same_chunk(sim, player_pos, row.get("anchor")):
             continue
         rows.append(row)
@@ -1617,6 +1743,20 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
     if incident_hold_row:
         candidates.append(incident_hold_row)
 
+    for front in organization_war_front_rows(
+        sim,
+        property_id=_text(prop.get("id")) if isinstance(prop, dict) else "",
+        active_only=False,
+    ):
+        war_row = _row_from_organization_war_front(
+            sim,
+            front,
+            player_pos=player_pos,
+            player_eid=viewer_eid,
+        )
+        if war_row:
+            candidates.append(war_row)
+
     wire_row = _wire_probe_row_for_property(
         sim,
         prop,
@@ -1681,6 +1821,7 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
     if _text(metadata.get("business_scene_id")) and row.get("source_kind") not in {
         "world_event",
         "reported_incident_hold",
+        "organization_war",
         "crime_plan",
         "protective_pressure",
     }:

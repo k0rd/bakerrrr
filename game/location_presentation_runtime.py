@@ -886,6 +886,10 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
     display_description = str(metadata.get("display_description", "") or "").strip()
     if kind in {"asset", "fixture"} and display_description:
         bits.append(display_description)
+    sediment = metadata.get("settled_sediment") if isinstance(metadata.get("settled_sediment"), dict) else {}
+    sediment_appearance = str(sediment.get("appearance", "") or "").strip()
+    if kind == "building" and int(prop.get("z", 0) or 0) < 0 and sediment_appearance:
+        bits.append(sediment_appearance)
 
     if access.standing_reason and access.standing_reason not in {"none", "open_business", "public_space"}:
         bits.append(f"standing:{access.standing_reason}")

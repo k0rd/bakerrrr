@@ -20,6 +20,8 @@ from game.property_runtime import (
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
 from game.system_support.entity_naming import _entity_display_name
 from game.system_support.social_knowledge_runtime import choose_social_knowledge_payload
+from game.underground_culture import culture_profile_for_actor, culture_social_expression
+from game.organization_war import war_chatter_payload_for_actor
 
 AI = _systems.AI
 CreatureIdentity = _systems.CreatureIdentity
@@ -111,6 +113,7 @@ class NPCSocialDynamicsSystem(System):
             tone=tone_key,
             empathy=getattr(traits, "empathy", 0.5),
             discipline=getattr(traits, "discipline", 0.5),
+            culture_profile=culture_profile_for_actor(self.sim, speaker_eid),
         )
 
     def _say_social(self, bank_id, speaker_eid, partner_eid, tone, *, topic_id="", salt="", **slots):
@@ -854,6 +857,32 @@ class NPCSocialDynamicsSystem(System):
             "confidence_hint": float(anchor.get("confidence", 0.5) or 0.5),
         }
 
+    def _culture_chatter_payload(self, speaker_eid, partner_eid, relation, tone):
+        speaker_culture = culture_profile_for_actor(self.sim, speaker_eid)
+        partner_culture = culture_profile_for_actor(self.sim, partner_eid)
+        culture_key = str(speaker_culture.get("culture_key", "") or "").strip()
+        if not culture_key or culture_key != str(partner_culture.get("culture_key", "") or "").strip():
+            return None
+        return culture_social_expression(
+            speaker_culture,
+            seed=getattr(self.sim, "seed", 0),
+            speaker_eid=speaker_eid,
+            partner_eid=partner_eid,
+            relation=relation,
+            tone=tone,
+            count=max(0, int(getattr(self.sim, "tick", 0) or 0) // 30),
+        ) or None
+
+    def _war_chatter_payload(self, speaker_eid, partner_eid, relation, tone):
+        return war_chatter_payload_for_actor(
+            self.sim,
+            speaker_eid,
+            partner_eid,
+            relation=relation,
+            tone=tone,
+            count=max(0, int(getattr(self.sim, "tick", 0) or 0) // 30),
+        )
+
     def _social_chatter_payload(self, speaker_eid, partner_eid, relation, tone):
         relation = str(relation or "friend").strip().lower() or "friend"
         opportunity_rows = self._social_opportunity_rows_for(speaker_eid, limit=5)
@@ -916,7 +945,13 @@ class NPCSocialDynamicsSystem(System):
             payload = builder(speaker_eid, partner_eid, tone)
             if payload:
                 return payload
+        payload = self._war_chatter_payload(speaker_eid, partner_eid, relation, tone)
+        if payload:
+            return payload
         payload = self._rumor_weather_chatter_payload(speaker_eid, partner_eid, tone)
+        if payload:
+            return payload
+        payload = self._culture_chatter_payload(speaker_eid, partner_eid, relation, tone)
         if payload:
             return payload
         return None
@@ -1466,6 +1501,27 @@ class EavesdropSystem(System):
             mention_count=int(mention.get("count", 0)),
         ))
 
+    def _handle_culture_expression(self, event, speaker_eid):
+        culture_key = str(event.data.get("culture_key", "") or "").strip()
+        culture_word = str(event.data.get("culture_word", "") or "").strip()
+        if not culture_key or not culture_word:
+            return
+        player_pos = self._player_pos()
+        speaker_pos = self.sim.ecs.get(Position).get(speaker_eid)
+        if player_pos is None or speaker_pos is None or int(player_pos.z) != int(speaker_pos.z):
+            return
+        state = self._state()
+        mention_key = f"{culture_key}:{culture_word.lower()}"
+        mention = self._note_mention(state.setdefault("culture_mentions", {}), mention_key, speaker_eid)
+        self.sim.emit(Event(
+            "underground_culture_expression_heard",
+            eid=self.player_eid,
+            npc_eid=speaker_eid,
+            culture_key=culture_key,
+            culture_word=culture_word,
+            mention_count=int(mention.get("count", 0)),
+        ))
+
     def _hidden_lead_kind_from_tip(self, tip_kind):
         tip_kind = str(tip_kind or "").strip().lower()
         if tip_kind == "behavior_tip_hidden_trade":
@@ -1544,6 +1600,8 @@ class EavesdropSystem(System):
             self._handle_opportunity_hint(event, speaker_eid)
         if property_id is not None and topic in {"schedule", "security", "illegal_goods"}:
             self._handle_property_hint(event, speaker_eid)
+        if topic == "culture_expression":
+            self._handle_culture_expression(event, speaker_eid)
 
     def on_npc_behavior_tip_shared(self, event):
         speaker_eid = event.data.get("source_eid")
