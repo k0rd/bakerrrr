@@ -28,7 +28,7 @@ The only dependancy is python and pygame-ce. Stand-alone compiled executables ar
 
 * The game includes a growing set of systemic features: procedural buildings and sites, multi-floor interiors, ownership and access rules, vehicles and fuel, services and trade, player business systems, finances, casino games, wildlife, lighting and visibility, noise, cover, weapons, combat, NPC investigation, social reactions, run objectives, opportunities, pressure, and a final-operation structure that gives the sandbox a larger arc.
 
-* One of the design goals is that play should feel like entering an existing society and learning how to move through it. Survive npc's version  You might observe routines, exploit business hours, use social cover, find services, go to the casino; hit big; then get too drunk and lose it all , drive across known routes, follow rumors, avoid witnesses, buy or steal items, interact with NPCs, manage heat, or pursue opportunities that eventually connect to a larger operation. Combat exists, but it is only one possible rupture in a much larger system of social and spatial consequences.
+* One of the design goals is that play should feel like entering an existing society and learning how to move through it. You might observe routines, exploit business hours, use social cover, find services, go to the casino; hit big; then get too drunk and lose it all , drive across known routes, follow rumors, avoid witnesses, buy or steal items, interact with NPCs, manage heat, or pursue opportunities that eventually connect to a larger operation. Combat exists, but it is only one possible rupture in a much larger system of social and spatial consequences.
 
 * The game is also full of what I can only call emergent weirdness — the kind that comes from systems colliding. Wildlife can appear near the player - brand new wildlife that the world has never seen can permanently be bred into existence while you were helping to make another species rare -for the profit in selling their hides. NPCs may react to animals. or hunters. or a sneaky thief taking cover from an out of control fire. Rumors can affect behavior. Properties can generate unexpected social situations. The world can produce little scenes that feel oddly alive precisely because they were not hand-authored as single-use scripted moments. Nothing at all is on rails. It's up to you to progress and take what you wish from the world. There is structure. There is guidance. You do not have to 
 
@@ -85,7 +85,7 @@ Normal use of the public code and content does not require access to private met
 
 Internal materials may be shared separately at maintainer discretion.
 
-thank u for checking out my game. it is in active ongoing development as of ```may 2026```. 
+thank u for checking out my game. it is in active ongoing development as of ```august 2026```. 
 ```if that date is far in the past, i may have lost my focus or my mind```.
 
 here are some early screenshots of the gui mode (it is a lot further along but they still capture the feel of the game
