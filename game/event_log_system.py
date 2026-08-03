@@ -2407,6 +2407,7 @@ class EventLogSystem(System):
         subject_id = str(event.data.get("subject_id", "") or "").strip()
         subject_name = str(event.data.get("subject_name", "") or "").strip()
         change_kind = str(event.data.get("change_kind", "updated") or "updated").strip().lower()
+        significance = str(event.data.get("significance", "major") or "major").strip().lower()
         hidden = bool(event.data.get("hidden"))
         bindings = None
         for system in tuple(getattr(self.sim, "systems", ()) or ()):
@@ -2444,16 +2445,11 @@ class EventLogSystem(System):
             verb = "record" if change_kind == "recorded" else "update"
             text = f"You {verb} {subject_name} in your {notebook_kind or 'notes'} {key_label}."
 
-        # Location knowledge is navigational state, not ambient flavor.  A real
-        # mutation can be as important as the first record: most notably, an
-        # existing place becoming anchored to an actual location.  The shared
-        # notebook seam already suppresses unchanged facts, so every location
-        # mutation can safely survive the default filter.
-        priority = (
-            "high"
-            if notebook_kind == "locations" or change_kind == "recorded"
-            else "normal"
-        )
+        # The shared notebook seam compares canonical before/after state and
+        # classifies whether the player's usable knowledge materially changed.
+        # Keep major changes in the default log regardless of notebook domain;
+        # retain minor refinements in All without presenting them as urgent.
+        priority = "high" if significance == "major" else "normal"
         self._log(
             text,
             channel="knowledge",
@@ -2502,6 +2498,12 @@ class EventLogSystem(System):
                 self.sim.log.add(f"Hidden lead filed from {source_item_name}: {property_name} added to {bucket} ({confidence}% confidence).")
                 return
             self.sim.log.add(f"Hidden lead filed: {property_name} added to {bucket} ({confidence}% confidence).")
+            return
+        if discovery_mode == "room_operations":
+            if source_item_name:
+                self.sim.log.add(f"Work route filed from {source_item_name}: {property_name} added to {bucket} ({confidence}% confidence).")
+                return
+            self.sim.log.add(f"Work route filed: {property_name} added to {bucket} ({confidence}% confidence).")
             return
         self.sim.log.add(f"Location noted: {property_name} added to {bucket} ({confidence}% confidence).")
 
@@ -2949,6 +2951,9 @@ class EventLogSystem(System):
         reason = str(event.data.get("reason", "blocked") or "blocked").strip().lower()
         plant_name = str(event.data.get("plant_name") or "the plant").strip() or "the plant"
         method = str(event.data.get("harvest_method") or "harvest").replace("_", " ").strip() or "harvest"
+        if reason == "no_inventory":
+            _log_player_feedback(self.sim, "You need a usable pack before you can harvest plants.", kind="craft")
+            return
         if reason == "no_flora":
             _log_player_feedback(self.sim, "No harvestable plant is close enough.", kind="craft")
             return
@@ -2995,14 +3000,16 @@ class EventLogSystem(System):
         reason = str(event.data.get("reason", "blocked") or "blocked").strip().lower()
         plant_name = str(event.data.get("plant_name") or "that plant").strip() or "that plant"
         container = str(event.data.get("container_kind") or "").replace("_", " ").strip()
-        if reason == "wrong_container":
+        if reason == "no_inventory":
+            _log_player_feedback(self.sim, f"You need a usable pack holding {plant_name} before you can plant it.", kind="craft")
+        elif reason == "wrong_container":
             _log_player_feedback(self.sim, f"{plant_name} will not take in a pot. Try a planter or suitable ground.", kind="craft")
         elif reason == "no_empty_pot":
             _log_player_feedback(self.sim, f"You need an empty plant pot for {plant_name}.", kind="craft")
         elif reason == "bad_ground":
             _log_player_feedback(self.sim, "That ground will not take a planting.", kind="craft")
         elif reason == "consume_failed":
-            _log_player_feedback(self.sim, f"{plant_name} would not leave your pack cleanly.", kind="craft")
+            _log_player_feedback(self.sim, f"The seed or cutting for {plant_name} is no longer available in your pack.", kind="craft")
         elif reason == "no_target":
             _log_player_feedback(self.sim, "Aim at a planter or open ground, or carry an empty plant pot.", kind="craft")
         else:
@@ -3017,7 +3024,12 @@ class EventLogSystem(System):
         output = str(event.data.get("output_item_name") or "hybrid seed packet").strip() or "hybrid seed packet"
         _log_player_feedback(
             self.sim,
-            f"You dust {target} with {pollen} and collect {output}.",
+            f"You brush {pollen} blossoms across {target}.",
+            kind="craft",
+        )
+        _log_player_feedback(
+            self.sim,
+            f"You collect {output}.",
             kind="craft",
         )
 
@@ -3026,7 +3038,11 @@ class EventLogSystem(System):
             return
         reason = str(event.data.get("reason", "blocked") or "blocked").strip().lower()
         target = str(event.data.get("target_name") or "that plant").strip() or "that plant"
-        if reason == "target_not_open":
+        if reason == "no_inventory":
+            _log_player_feedback(self.sim, "You need a usable pack before you can work with pollen.", kind="craft")
+        elif reason == "not_pollen":
+            _log_player_feedback(self.sim, "That material is not viable pollen for an assisted cross.", kind="craft")
+        elif reason == "target_not_open":
             _log_player_feedback(self.sim, f"{target} is not open enough to take pollen right now.", kind="craft")
         elif reason == "incompatible":
             _log_player_feedback(self.sim, f"The pollen will not take on {target}.", kind="craft")
@@ -3034,6 +3050,8 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{target} has no fertile blooms left.", kind="craft")
         elif reason == "inventory_full":
             _log_player_feedback(self.sim, "No room for the seed packet. Free up space and try again.", kind="craft")
+        elif reason == "consume_failed":
+            _log_player_feedback(self.sim, "The pollen is no longer available in your pack.", kind="craft")
         else:
             _log_player_feedback(self.sim, "That cross will not take right now.", kind="craft")
 
@@ -5049,7 +5067,12 @@ class EventLogSystem(System):
         if bool(event.data.get("battery_exploded")):
             suffix += " Its battery ruptures."
         if self.player_eid in {owner_eid, controller_eid, source_eid}:
-            _log_player_feedback(self.sim, f"{drone_label} is destroyed.{suffix}", kind="danger")
+            _log_player_feedback(
+                self.sim,
+                f"{drone_label} is destroyed.{suffix}",
+                kind="danger",
+                priority="critical",
+            )
             return
         if not self._player_can_perceive_event_position(event):
             return
@@ -5696,7 +5719,7 @@ class EventLogSystem(System):
             if reason == "place_trap":
                 return
             usage_kind = str(event.data.get("usage_kind", "") or "").strip().lower()
-            if usage_kind == "mechanical_craft":
+            if usage_kind in {"mechanical_craft", "flora_crossbreed", "flora_plant"}:
                 return
             if usage_kind == "mechanical_device":
                 action = str(event.data.get("reason", "") or "").strip().lower()

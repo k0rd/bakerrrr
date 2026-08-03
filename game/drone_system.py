@@ -335,7 +335,7 @@ def destroy_deployed_drone(
     battery_charge_max = int(max(0, _int(resolution.get("battery_charge_max"), 0)))
     removed = sim.remove_entity(drone_eid)
     if removed:
-        sim.emit(Event(
+        destroyed_event = Event(
             "drone_destroyed",
             drone_eid=drone_eid,
             source_eid=source_eid,
@@ -356,7 +356,7 @@ def destroy_deployed_drone(
             battery_item_id=battery_item_id,
             battery_charge=battery_charge,
             battery_charge_max=battery_charge_max,
-        ))
+        )
         if battery_exploded:
             sim.emit(Event(
                 "drone_battery_exploded",
@@ -372,6 +372,7 @@ def destroy_deployed_drone(
                 y=drop_y,
                 z=drop_z,
             ))
+        sim.emit(destroyed_event)
     return bool(removed)
 
 

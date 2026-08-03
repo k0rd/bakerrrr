@@ -24,6 +24,7 @@ SAMPLE_WIDTH = 2
 DEFAULT_SAMPLE_RATE = 22_050
 DEFAULT_CHANNEL_COUNT = 2
 DEFAULT_MIXER_BUFFER = 512
+MIN_MIXER_CHANNEL_COUNT = 24
 OPEN_RUN_BPM = 92
 OPEN_RUN_BEATS = 16
 OPEN_RUN_DURATION = OPEN_RUN_BEATS * (60.0 / OPEN_RUN_BPM)
@@ -319,6 +320,28 @@ def _flora_sparkle(duration: float, sample_rate: int) -> list[float]:
     _add_noise(samples, sample_rate=sample_rate, start=0.018, duration=0.048, amplitude=0.020, seed=59, color="high", attack=0.008, release=0.028, decay=3.8)
     _add_tone(samples, sample_rate=sample_rate, start=0.018, duration=0.14, frequency=987.77, end_frequency=1_046.5, amplitude=0.047, shape="triangle", attack=0.018, release=0.075, decay=2.6)
     _add_tone(samples, sample_rate=sample_rate, start=0.082, duration=0.13, frequency=1_318.51, end_frequency=1_395.0, amplitude=0.034, attack=0.022, release=0.072, decay=2.8)
+    return samples
+
+
+def _flora_plant_tinkle(duration: float, sample_rate: int) -> list[float]:
+    """A small descending glass gesture that settles rather than announces."""
+
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.016, duration=0.052, amplitude=0.016, seed=60, color="high", attack=0.010, release=0.030, decay=3.6)
+    _add_tone(samples, sample_rate=sample_rate, start=0.014, duration=0.17, frequency=1_318.51, end_frequency=1_174.66, amplitude=0.030, shape="triangle", attack=0.020, release=0.090, decay=2.5)
+    _add_tone(samples, sample_rate=sample_rate, start=0.072, duration=0.17, frequency=1_046.50, end_frequency=987.77, amplitude=0.037, shape="triangle", attack=0.022, release=0.090, decay=2.7)
+    _add_tone(samples, sample_rate=sample_rate, start=0.136, duration=0.13, frequency=783.99, end_frequency=698.46, amplitude=0.026, shape="triangle", attack=0.024, release=0.074, decay=2.9)
+    return samples
+
+
+def _flora_harvest_tinkle(duration: float, sample_rate: int) -> list[float]:
+    """A light rising gather gesture, related to but calmer than crossbreeding."""
+
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.012, duration=0.050, amplitude=0.017, seed=63, color="high", attack=0.008, release=0.030, decay=3.8)
+    _add_tone(samples, sample_rate=sample_rate, start=0.012, duration=0.15, frequency=783.99, end_frequency=880.00, amplitude=0.038, shape="triangle", attack=0.018, release=0.080, decay=2.7)
+    _add_tone(samples, sample_rate=sample_rate, start=0.074, duration=0.15, frequency=1_046.50, end_frequency=1_174.66, amplitude=0.032, shape="triangle", attack=0.020, release=0.080, decay=2.8)
+    _add_tone(samples, sample_rate=sample_rate, start=0.132, duration=0.13, frequency=1_395.00, end_frequency=1_567.98, amplitude=0.024, shape="triangle", attack=0.022, release=0.072, decay=3.0)
     return samples
 
 
@@ -750,6 +773,8 @@ SFX_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
     CueDefinition("work", 0.29, _work, gain=0.74, cooldown=0.15),
     CueDefinition("gunfire", 0.32, _gunfire, gain=0.86, cooldown=0.055),
     CueDefinition("flora_sparkle", 0.24, _flora_sparkle, gain=0.62, cooldown=0.16),
+    CueDefinition("flora_plant_tinkle", 0.28, _flora_plant_tinkle, gain=0.56, cooldown=0.16),
+    CueDefinition("flora_harvest_tinkle", 0.27, _flora_harvest_tinkle, gain=0.58, cooldown=0.16),
     CueDefinition("impact", 0.23, _impact, gain=0.88, cooldown=0.08),
     CueDefinition("danger", 0.68, _danger, gain=0.82, cooldown=1.0),
     CueDefinition("tire_scrub_short", 0.18, _tire_scrub, gain=0.48, cooldown=0.30),
@@ -810,6 +835,8 @@ EVENT_CUE_MAP: dict[str, str] = {
     "herbal_medicine_crafted": "work",
     "weapon_fired": "gunfire",
     "flora_crossbred": "flora_sparkle",
+    "flora_planted": "flora_plant_tinkle",
+    "flora_harvested": "flora_harvest_tinkle",
     "entity_damaged": "impact",
     "combat_overlay_entered": "danger",
 }
@@ -1333,7 +1360,7 @@ class PygameAudioRuntime:
         self.bank_bytes = int(stats["total_pcm_bytes"])
         self._definitions = {cue.definition.name: cue.definition for cue in cues}
 
-        pygame.mixer.set_num_channels(max(20, pygame.mixer.get_num_channels()))
+        pygame.mixer.set_num_channels(max(MIN_MIXER_CHANNEL_COUNT, pygame.mixer.get_num_channels()))
         pygame.mixer.set_reserved(RESERVED_CHANNEL_COUNT)
         self._music_channel = pygame.mixer.Channel(0)
         self._ambient_channels = {

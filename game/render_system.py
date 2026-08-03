@@ -2802,9 +2802,9 @@ class RenderSystem(System):
             configured_hud_lines,
             panels_open=blocking_panel_open,
         )
-        map_h = int(side_layout["map_h"])
+        map_view_h = int(side_layout["map_h"])
         hud_lines = int(side_layout["hud_lines"])
-        map_w = int(side_layout["map_w"])
+        map_view_w = int(side_layout["map_w"])
         side_layout_supported = bool(side_layout.get("supported"))
         side_rail_visible = bool(side_layout.get("rail_visible"))
         rail_x = int(side_layout.get("rail_x", screen_w))
@@ -2813,6 +2813,14 @@ class RenderSystem(System):
         hud_text_w = _view_text_wrap_width(self.view, hud_w)
         live_timeskip = getattr(self.sim, "live_timeskip", {})
         vision_scene = vision_scene_render_state(self.sim)
+        zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
+        try:
+            requested_world_magnification = int(getattr(self.view, "world_magnification", 1) or 1)
+        except (TypeError, ValueError):
+            requested_world_magnification = 1
+        requested_world_magnification = 2 if requested_world_magnification == 2 and zoom_mode != "overworld" else 1
+        map_w = max(1, (map_view_w + requested_world_magnification - 1) // requested_world_magnification)
+        map_h = max(1, (map_view_h + requested_world_magnification - 1) // requested_world_magnification)
 
         def _aim_lock_target_pos():
             if not isinstance(aim_lock_ui, dict) or not bool(aim_lock_ui.get("active")):
@@ -2876,9 +2884,23 @@ class RenderSystem(System):
                 self.view.draw_text(panel_x + 2, panel_y + 4, _clip(progress, body_w), color="default")
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, body_w), color="default")
             return
+        world_view_started = False
+        if requested_world_magnification > 1:
+            begin_world_view = getattr(self.view, "begin_world_view", None)
+            if callable(begin_world_view):
+                world_view_started = bool(begin_world_view(
+                    map_w,
+                    map_h,
+                    allocation_width_cells=map_view_w,
+                    allocation_height_cells=map_view_h,
+                ))
+        if not world_view_started:
+            requested_world_magnification = 1
+            map_w = map_view_w
+            map_h = map_view_h
+
         camera_x = (player_pos.x - (map_w // 2)) if player_pos else 0
         camera_y = (player_pos.y - (map_h // 2)) if player_pos else 0
-        zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
 
         def _overworld_anchor_chunk():
             active = _chunk_tuple(getattr(self.sim, "active_chunk_coord", None))
@@ -3995,6 +4017,13 @@ class RenderSystem(System):
                                 attrs=attrs,
                             )
             _draw_dream_residue_overlay()
+            if world_view_started:
+                end_world_view = getattr(self.view, "end_world_view", None)
+                if callable(end_world_view):
+                    end_world_view()
+                world_view_started = False
+            map_w = map_view_w
+            map_h = map_view_h
             residue = dream_residue_state(self.sim)
             residue_line = str((residue or {}).get("mood_line", "") or "").strip()
             if residue_line:
@@ -4668,8 +4697,8 @@ class RenderSystem(System):
         ):
             self._draw_action_menu(
                 action_menu_ui,
-                player_screen_x=int(player_pos.x) - int(camera_x),
-                player_screen_y=int(player_pos.y) - int(camera_y),
+                player_screen_x=(int(player_pos.x) - int(camera_x)) * requested_world_magnification,
+                player_screen_y=(int(player_pos.y) - int(camera_y)) * requested_world_magnification,
                 map_w=map_w,
                 map_h=map_h,
                 modal_theme=modal_theme,
@@ -4815,8 +4844,48 @@ class RenderSystem(System):
                 slot_line += f" | Sort {inventory_sort_label(inventory_ui.get('sort_mode', 'default'))}"
             self.view.draw_text(panel_x + 2, panel_y + 1, _clip(slot_line, body_w), color=self._theme_color(modal_theme, "muted"))
 
+            inspect_text = inventory_ui.get("inspect_text", "")
+            if panel_kind == "container" and note_text and not inspect_text:
+                inspect_text = note_text
+            if entries:
+                selected = entries[selected_index]
+                item_def = ITEM_CATALOG.get(selected["item_id"], {})
+                identified = item_is_identified_for_actor(self.sim, self.player_eid, selected, item_catalog=ITEM_CATALOG)
+                legal = item_def.get("legal_status", "legal") if identified else "unknown"
+                tags = ",".join(item_def.get("tags", [])[:3]) or "none"
+                inspect_name = item_display_name_for_actor(
+                    self.sim,
+                    self.player_eid,
+                    selected,
+                    item_catalog=ITEM_CATALOG,
+                )
+                if not inspect_text:
+                    if identified:
+                        inspect_text = _item_legend_line(
+                            selected["item_id"],
+                            f"{inspect_name} [{legal}] {tags}",
+                        )
+                    else:
+                        appraise_item_for_actor(self.sim, self.player_eid, selected, item_catalog=ITEM_CATALOG)
+                        inspect_text = _item_legend_line(
+                            selected["item_id"],
+                            item_unknown_inspect_text_for_actor(
+                                self.sim,
+                                self.player_eid,
+                                selected,
+                                item_catalog=ITEM_CATALOG,
+                            ),
+                        )
+            elif note_text:
+                inspect_text = inspect_text or note_text
+
+            inspect_max_lines = max(1, min(6, panel_h - 7))
+            inspect_lines = list(
+                _wrap_display_lines(inspect_text, body_w, max_lines=inspect_max_lines)
+                or [""]
+            )
             list_y = panel_y + 2
-            list_h = max(1, panel_h - 6)
+            list_h = max(1, panel_h - 5 - len(inspect_lines))
 
             start = 0
             if selected_index >= list_h:
@@ -4912,47 +4981,14 @@ class RenderSystem(System):
                     empty_label = f"({container_label.lower()} empty)" if container_view == "container" else "(pack empty)"
                 self.view.draw_text(panel_x + 2, list_y, _clip(empty_label, body_w))
 
-            inspect_text = inventory_ui.get("inspect_text", "")
-            if panel_kind == "container" and note_text and not inspect_text:
-                inspect_text = note_text
-            if entries:
-                selected = entries[selected_index]
-                item_def = ITEM_CATALOG.get(selected["item_id"], {})
-                identified = item_is_identified_for_actor(self.sim, self.player_eid, selected, item_catalog=ITEM_CATALOG)
-                legal = item_def.get("legal_status", "legal") if identified else "unknown"
-                tags = ",".join(item_def.get("tags", [])[:3]) or "none"
-                inspect_name = item_display_name_for_actor(
-                    self.sim,
-                    self.player_eid,
-                    selected,
-                    item_catalog=ITEM_CATALOG,
+            inspect_y = panel_y + panel_h - 2 - len(inspect_lines)
+            for line_offset, inspect_line in enumerate(inspect_lines):
+                self._draw_display_line(
+                    panel_x + 2,
+                    inspect_y + line_offset,
+                    inspect_line,
+                    body_cell_w,
                 )
-                if not inspect_text:
-                    if identified:
-                        inspect_text = _item_legend_line(
-                            selected["item_id"],
-                            f"{inspect_name} [{legal}] {tags}",
-                        )
-                    else:
-                        appraise_item_for_actor(self.sim, self.player_eid, selected, item_catalog=ITEM_CATALOG)
-                        inspect_text = _item_legend_line(
-                            selected["item_id"],
-                            item_unknown_inspect_text_for_actor(
-                                self.sim,
-                                self.player_eid,
-                                selected,
-                                item_catalog=ITEM_CATALOG,
-                            ),
-                        )
-            elif note_text:
-                inspect_text = inspect_text or note_text
-
-            self._draw_display_line(
-                panel_x + 2,
-                panel_y + panel_h - 3,
-                _clip_display_line(inspect_text, body_w),
-                body_cell_w,
-            )
             if panel_kind == "container":
                 hint = (
                     f"U transfer  Left/Right or Tab switch {container_label.lower()}/pack  "

@@ -128,6 +128,7 @@ from game.weapons import weapon_by_id
 THREAT_STATES = {"protecting", "investigating"}
 PEST_WILDLIFE_TAXONOMIES = frozenset({"insect", "arachnid"})
 MAJOR_WILDLIFE_TAXONOMIES = frozenset({"canine", "feline", "ungulate"})
+EXPLOSIVE_LIVING_DAMAGE_MULTIPLIER = 2.25
 
 
 class WeaponSystem(System):
@@ -1585,6 +1586,7 @@ class WeaponSystem(System):
         falloff = float(max(0.0, min(1.0, projectile.get("aoe_falloff", 0.5))))
         cover_penetration = float(max(0.0, min(1.0, projectile.get("cover_penetration", 0.0))))
         positions = self.sim.ecs.get(Position)
+        drones = self.sim.ecs.get(DroneState)
 
         hit_count = 0
         for target_eid, pos in tuple(positions.items()):
@@ -1599,6 +1601,12 @@ class WeaponSystem(System):
             dist_factor = dist / float(max(1, radius))
             damage_mult = max(0.2, 1.0 - (falloff * dist_factor))
             damage = int(max(1, round(base_damage * damage_mult)))
+            if drones.get(target_eid) is None:
+                living_damage_mult = float(max(
+                    1.0,
+                    projectile.get("living_damage_mult", EXPLOSIVE_LIVING_DAMAGE_MULTIPLIER),
+                ))
+                damage = int(max(1, round(damage * living_damage_mult)))
             hit = self._damage_entity(
                 target_eid=target_eid,
                 source_eid=source_eid,

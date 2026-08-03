@@ -1496,6 +1496,12 @@ class PlayerActionSystem(System):
                     "y": event.data.get("target_y"),
                     "z": event.data.get("target_z", pos.z),
                 }
+                target["perception_access"] = self.player_look.cursor_perception_access(
+                    eid,
+                    target["x"],
+                    target["y"],
+                    target["z"],
+                )
             if event.data.get("target_eid") is not None:
                 target["target_eid"] = event.data.get("target_eid")
             perform_tactical_read(

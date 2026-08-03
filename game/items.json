@@ -2685,6 +2685,27 @@
     "legal_status": "legal",
     "effects": []
   },
+  "operations_docket": {
+    "name": "Operations Docket",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "token",
+      "paper",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "description": "a live work docket tying this back-room operation to another real local site",
+    "effects": [],
+    "lead_profile": {
+      "lead_kind": "service_route",
+      "confidence": 0.72,
+      "discovery_mode": "room_operations",
+      "consume_on_use": true,
+      "hidden_on_learn": false,
+      "source_metadata_key": "target_property_id"
+    }
+  },
   "room_ledger_note": {
     "name": "Marked Ledger Note",
     "glyph": "=",

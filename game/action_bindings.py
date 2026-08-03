@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from ui.input_keys import KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP
 
 
-ACTION_BINDINGS_VERSION = 2
+ACTION_BINDINGS_VERSION = 3
 ACTION_MENU_KEY = ord("\t")
 PHYSICAL_INPUT_KINDS = frozenset({"key", "button", "axis", "hat"})
 CONTROLLER_DEADZONE = 0.35
@@ -92,6 +92,14 @@ class ActionSpec:
 ACTION_SPECS = (
     ActionSpec("action_menu", "Action menu", "system", (ACTION_MENU_KEY,), contexts=("local", "overworld"), rebindable=False, protected=True, menu=False),
     ActionSpec("help", "Help", "system", (ord("?"),), contexts=("local", "overworld"), rebindable=False, protected=True),
+    ActionSpec(
+        "toggle_world_magnification",
+        "World magnification",
+        "system",
+        (ord("="),),
+        contexts=("local",),
+        description="Toggle the local world view between 1x and 2x without resizing the interface.",
+    ),
     ActionSpec("look", "Look", "world", (ord("x"),), ({"kind": "button", "code": "dpad_left", "modifiers": ("right_trigger",)},), description="Open the look cursor."),
     ActionSpec("talk", "Talk", "world", (ord("/"),), ({"kind": "button", "code": "west", "modifiers": ("right_trigger",)},), description="Target someone to talk to."),
     ActionSpec("interact", "Interact", "world", (ord("'"),), ({"kind": "button", "code": "dpad_left", "modifiers": ("left_trigger",)}, {"kind": "button", "code": "south", "modifiers": ("left_trigger",)}), description="Target a nearby thing to use."),

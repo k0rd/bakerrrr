@@ -65,6 +65,66 @@ from game.system_support.entity_naming import (
 from game.system_support.interaction_ordering import _manhattan
 
 
+_REMEMBERED_TILE_LABELS_BY_SEMANTIC = {
+    "feature_breach": "breach opening",
+    "feature_door": "door",
+    "feature_window": "window",
+    "floor_building_fill": "building interior",
+    "terrain_block": "rough barrier",
+    "terrain_brush": "brush or ground cover",
+    "terrain_building_roof": "building roof",
+    "terrain_road": "road",
+    "terrain_rock": "rock outcrop",
+    "terrain_salt": "shore or salt flats",
+    "terrain_trail": "trail",
+    "terrain_water": "water",
+    "wall_building": "building wall",
+}
+
+_REMEMBERED_TILE_LABELS_BY_GLYPH = {
+    "#": "rough barrier",
+    ",": "brush or ground cover",
+    "^": "rock outcrop",
+    "~": "water",
+    "_": "shore or salt flats",
+    "=": "road",
+    '"': "window",
+    "'": "open door",
+    "+": "door",
+    "/": "breach opening",
+    ":": "stairs between floors",
+    ">": "stairs to higher floor",
+    "<": "stairs to lower floor",
+    "E": "elevator access",
+    ".": "open ground",
+}
+
+
+def _snapshot_value(snapshot, key, default=None):
+    if isinstance(snapshot, dict):
+        return snapshot.get(key, default)
+    return getattr(snapshot, key, default)
+
+
+def _remembered_tile_label(snapshot):
+    if snapshot is None:
+        return "mapped terrain"
+    glyph = str(_snapshot_value(snapshot, "glyph", "?") or "?")[:1]
+    semantic_id = str(_snapshot_value(snapshot, "semantic_id", "") or "").strip().lower()
+    color = str(_snapshot_value(snapshot, "color", "") or "").strip().lower()
+    if semantic_id == "feature_door" and glyph == "'":
+        return "open door"
+    if semantic_id == "transit":
+        return _REMEMBERED_TILE_LABELS_BY_GLYPH.get(glyph, "transit access")
+    if semantic_id in _REMEMBERED_TILE_LABELS_BY_SEMANTIC:
+        return _REMEMBERED_TILE_LABELS_BY_SEMANTIC[semantic_id]
+    if "building_roof" in semantic_id or "building_roof" in color:
+        return "building roof"
+    if color.startswith("floor_"):
+        return "open ground"
+    return _REMEMBERED_TILE_LABELS_BY_GLYPH.get(glyph, "mapped terrain")
+
+
 def _drone_look_detail_bits(sim, drone_eid, state):
     if state is None:
         return []
@@ -192,7 +252,8 @@ class PlayerLookRuntime:
         visibility = getattr(self.sim, "visibility_state", None)
         radius = 8
         if isinstance(visibility, dict):
-            radius = max(1, int(_int_or_default(visibility.get("player_radius", 8), 8)))
+            configured_radius = int(_int_or_default(visibility.get("player_radius", 8), 8))
+            radius = configured_radius if configured_radius > 0 else 8
         return bool(_shared_observer_can_see_position(
             self.sim,
             observer_eid=observer_eid,
@@ -205,12 +266,95 @@ class PlayerLookRuntime:
             radius=radius,
         ))
 
+    def cursor_perception_access(self, eid, x, y, z):
+        """Return the player's honest local access to one cursor coordinate."""
+
+        key = (int(x), int(y), int(z))
+        player_pos = self.sim.ecs.get(Position).get(eid)
+        if player_pos and key == (int(player_pos.x), int(player_pos.y), int(player_pos.z)):
+            return "visible"
+
+        state = getattr(self.sim, "visibility_state", None)
+        visible = state.get("player_visible", set()) if isinstance(state, dict) else set()
+        explored = state.get("player_explored", set()) if isinstance(state, dict) else set()
+        visible = visible if isinstance(visible, set) else set(visible or ())
+        explored = explored if isinstance(explored, set) else set(explored or ())
+        if key in visible:
+            return "visible"
+        if key in explored:
+            return "remembered"
+
+        # A freshly constructed simulation can receive an input before the
+        # first VisibilitySystem update. In that narrow case, use the same
+        # bounded LOS/radius calculation rather than treating live map truth as
+        # visible. Once the player visibility state has an origin it is the
+        # authority, including darkness-compressed sight radii.
+        state_origin = state.get("player_origin") if isinstance(state, dict) else None
+        state_player = state.get("player_eid") if isinstance(state, dict) else None
+        if state_origin is None or state_player is None:
+            if player_pos and self.observer_has_los_to_position(eid, key[0], key[1], key[2]):
+                return "visible"
+        return "unknown"
+
+    def _remember_visible_tile(self, eid, x, y, z, tile, *, revealed_building_id="", tile_label=""):
+        state = getattr(self.sim, "visibility_state", None)
+        if not isinstance(state, dict):
+            return None
+        appearance = self.sim.appearance.tile(
+            tile,
+            int(x),
+            int(y),
+            z=int(z),
+            revealed_building_id=revealed_building_id,
+        )
+        memory = state.get("player_tile_memory")
+        if not isinstance(memory, dict):
+            memory = {}
+            state["player_tile_memory"] = memory
+        key = (int(x), int(y), int(z))
+        memory[key] = appearance
+        labels = state.get("player_tile_label_memory")
+        if not isinstance(labels, dict):
+            labels = {}
+            state["player_tile_label_memory"] = labels
+        if str(tile_label or "").strip():
+            labels[key] = str(tile_label).strip()
+        return appearance
+
+    def _describe_remembered_city_cursor(self, x, y, z):
+        state = getattr(self.sim, "visibility_state", None)
+        memory = state.get("player_tile_memory", {}) if isinstance(state, dict) else {}
+        key = (int(x), int(y), int(z))
+        snapshot = memory.get(key) if isinstance(memory, dict) else None
+        labels = state.get("player_tile_label_memory", {}) if isinstance(state, dict) else {}
+        label = str(labels.get(key, "") or "").strip() if isinstance(labels, dict) else ""
+        label = label or _remembered_tile_label(snapshot)
+        chunk = self.sim.chunk_coords(int(x), int(y))
+        text = f"({int(x)},{int(y)},{int(z)}) remembered {label} chunk:{chunk}; live contents are out of sight."
+        if snapshot is None:
+            return _legend_line(text, glyph="?", color="human")
+        return _legend_line(
+            text,
+            glyph=str(_snapshot_value(snapshot, "glyph", "?") or "?")[:1],
+            color=_snapshot_value(snapshot, "color"),
+        )
+
     def describe_city_cursor(self, eid, x, y, z):
         x = int(x)
         y = int(y)
         z = int(z)
         if not self.sim.tilemap.in_bounds(x, y):
             return _legend_line(f"({x},{y},{z}) is out of bounds.", glyph="?", color="human")
+
+        perception_access = self.cursor_perception_access(eid, x, y, z)
+        if perception_access == "unknown":
+            return _legend_line(
+                f"({x},{y},{z}) is unknown; move or use a real sensor to reveal it.",
+                glyph="?",
+                color="human",
+            )
+        if perception_access == "remembered":
+            return self._describe_remembered_city_cursor(x, y, z)
 
         detail = self.sim.detail_for_xy(x, y)
         chunk = self.sim.chunk_coords(x, y)
@@ -234,6 +378,15 @@ class PlayerLookRuntime:
         else:
             walk_text = "walkable"
             tile_text = "open ground"
+        self._remember_visible_tile(
+            eid,
+            x,
+            y,
+            z,
+            tile,
+            revealed_building_id=revealed_building_id,
+            tile_label=tile_text,
+        )
         tile_text = hallucinated_tile_label(self.sim, eid, x, y, z, tile_text)
 
         bits = [f"({x},{y},{z}) {tile_text} {walk_text} chunk:{chunk}"]
@@ -440,7 +593,9 @@ class PlayerLookRuntime:
         look_state["x"] = x
         look_state["y"] = y
         look_state["z"] = z
-        if announce and purpose != "aim":
+        perception_access = self.cursor_perception_access(eid, x, y, z)
+        has_live_view = perception_access == "visible"
+        if announce and purpose != "aim" and has_live_view:
             discovered_prop = self.action_system._discovery_property_at(x, y, z)
             if discovered_prop:
                 self.action_system._remember_player_property_discovery(
@@ -449,15 +604,18 @@ class PlayerLookRuntime:
                     discovery_mode="sight",
                 )
         text = self.describe_city_cursor(eid=eid, x=x, y=y, z=z)
-        focus_read = build_focus_read(self.sim, eid, x, y, z, purpose=purpose)
+        focus_read = build_focus_read(self.sim, eid, x, y, z, purpose=purpose) if has_live_view else ""
         if purpose == "aim":
-            preview = self._manual_fire_preview(self.sim, eid=eid, x=x, y=y, z=z)
-            summary = str(preview.get("summary", "")).strip()
-            if summary:
-                text = self._line_with_suffix(text, f"  {summary}")
-            if focus_read:
-                text = self._line_with_suffix(text, f"  {focus_read}")
-        elif purpose == "inspect" and self.sim.detail_for_xy(x, y) != "unloaded":
+            if has_live_view:
+                preview = self._manual_fire_preview(self.sim, eid=eid, x=x, y=y, z=z)
+                summary = str(preview.get("summary", "")).strip()
+                if summary:
+                    text = self._line_with_suffix(text, f"  {summary}")
+                if focus_read:
+                    text = self._line_with_suffix(text, f"  {focus_read}")
+            else:
+                text = self._line_with_suffix(text, "  Aim: no current visual read.")
+        elif purpose == "inspect" and has_live_view and self.sim.detail_for_xy(x, y) != "unloaded":
             inspected_prop = _property_covering(self.sim, x, y, z)
             if isinstance(inspected_prop, dict):
                 record_area_warmth(
@@ -477,36 +635,33 @@ class PlayerLookRuntime:
                     )
             if focus_read:
                 text = self._line_with_suffix(text, f"  {focus_read}")
-        elif focus_read:
+        elif has_live_view and focus_read:
             text = self._line_with_suffix(text, f"  {focus_read}")
-        if purpose == "inspect":
-            visibility = getattr(self.sim, "visibility_state", None)
-            player_visible = visibility.get("player_visible", set()) if isinstance(visibility, dict) else set()
-            if (x, y, z) in set(player_visible or ()):
-                drone_states = self.sim.ecs.get(DroneState)
-                radio_drone_visible = False
-                for target_eid in self.sim.tilemap.entities_at(x, y, z):
-                    drone_state = drone_states.get(target_eid)
-                    if drone_state is None:
-                        continue
-                    if str(getattr(drone_state, "mode", "") or "").strip().lower() != "deployed":
-                        continue
-                    capabilities = set(drone_state_capabilities(drone_state, item_catalog=ITEM_CATALOG))
-                    if {"radio", "comms"} & capabilities:
-                        radio_drone_visible = True
-                        break
-                if radio_drone_visible:
-                    text = self._line_with_suffix(text, "  Wire: Shift+W opens the radio handshake.")
-                vehicle_visible = any(
-                    isinstance(prop, dict)
-                    and str(prop.get("kind", "") or "").strip().lower() == "vehicle"
-                    and int(prop.get("x", -999999)) == int(x)
-                    and int(prop.get("y", -999999)) == int(y)
-                    and int(prop.get("z", 0)) == int(z)
-                    for prop in getattr(self.sim, "properties", {}).values()
-                )
-                if vehicle_visible:
-                    text = self._line_with_suffix(text, "  Wire: Shift+W opens the local vehicle controller.")
+        if purpose == "inspect" and has_live_view:
+            drone_states = self.sim.ecs.get(DroneState)
+            radio_drone_visible = False
+            for target_eid in self.sim.tilemap.entities_at(x, y, z):
+                drone_state = drone_states.get(target_eid)
+                if drone_state is None:
+                    continue
+                if str(getattr(drone_state, "mode", "") or "").strip().lower() != "deployed":
+                    continue
+                capabilities = set(drone_state_capabilities(drone_state, item_catalog=ITEM_CATALOG))
+                if {"radio", "comms"} & capabilities:
+                    radio_drone_visible = True
+                    break
+            if radio_drone_visible:
+                text = self._line_with_suffix(text, "  Wire: Shift+W opens the radio handshake.")
+            vehicle_visible = any(
+                isinstance(prop, dict)
+                and str(prop.get("kind", "") or "").strip().lower() == "vehicle"
+                and int(prop.get("x", -999999)) == int(x)
+                and int(prop.get("y", -999999)) == int(y)
+                and int(prop.get("z", 0)) == int(z)
+                for prop in getattr(self.sim, "properties", {}).values()
+            )
+            if vehicle_visible:
+                text = self._line_with_suffix(text, "  Wire: Shift+W opens the local vehicle controller.")
         self.set_look_inspect_text(text)
         self.sim.emit(Event(
             "cursor_examined",
@@ -518,6 +673,7 @@ class PlayerLookRuntime:
             z=z,
             text=text,
             announce=announce,
+            perception_access=perception_access,
         ))
 
     def handle_scan_action(self, eid, pos, *, radius=8):

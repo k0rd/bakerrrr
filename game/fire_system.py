@@ -6,7 +6,7 @@ import random
 
 from engine.events import Event
 from engine.systems import System
-from game.components import Collider, NPCNeeds, Render, StatusEffects, Vitality
+from game.components import Collider, DroneState, NPCNeeds, Render, StatusEffects, Vitality
 from game.items import apply_item_fire_damage, item_display_name, split_item_stack_metadata
 from game.property_runtime import property_metadata
 from game.system_support.actor_runtime import _apply_downed_actor_state
@@ -568,7 +568,16 @@ class FireSystem(System):
         })
         return cache
 
-    def _apply_damage_to_entity(self, eid, pos, *, profile_id, property_id=None, property_name=""):
+    def _apply_damage_to_entity(
+        self,
+        eid,
+        pos,
+        *,
+        profile_id,
+        property_id=None,
+        property_name="",
+        intensity=1,
+    ):
         profile = environment_hazard_profile(profile_id)
         if not profile:
             return False
@@ -603,6 +612,13 @@ class FireSystem(System):
                 needs.social = _clamp(needs.social + _safe_float(immediate_needs.get("social"), 0.0))
 
         damage = max(0, _safe_int(profile.get("damage"), 0))
+        if self.sim.ecs.get(DroneState).get(eid) is None:
+            living_damage = max(0, _safe_int(profile.get("living_damage"), damage))
+            living_damage += max(0, _safe_int(intensity, 1) - 1) * max(
+                0,
+                _safe_int(profile.get("living_damage_per_intensity"), 0),
+            )
+            damage = max(damage, living_damage)
         old_hp = _safe_int(getattr(vitality, "hp", 0), 0)
         new_hp = max(0, old_hp - damage)
         actual_damage = max(0, old_hp - new_hp)
@@ -619,6 +635,7 @@ class FireSystem(System):
                 hazard_name=_text(profile.get("name")) or "Hazard",
                 hazard_note=environment_hazard_player_note(profile_id, name=property_name),
                 damage=actual_damage,
+                hazard_intensity=max(1, _safe_int(intensity, 1)),
                 x=int(pos[0]),
                 y=int(pos[1]),
                 z=int(pos[2]),
@@ -763,6 +780,7 @@ class FireSystem(System):
                             profile_id="open_flame",
                             property_id=cell.get("property_id"),
                             property_name=_text(cell.get("property_name")) or _text(cell.get("property_id")),
+                            intensity=fire_intensity,
                         )
                         cooldowns[key] = _safe_int(getattr(self.sim, "tick", 0), 0) + FIRE_DAMAGE_INTERVAL
                 elif smoke_intensity > 0:

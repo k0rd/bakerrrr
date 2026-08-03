@@ -395,6 +395,9 @@ class SkillProgressionSystem(System):
         if eid != self.player_eid:
             return
         mode = str(event.data.get("mode", "") or "").strip().lower()
+        perception_access = str(event.data.get("perception_access", "visible") or "visible").strip().lower()
+        if mode == "city" and perception_access != "visible":
+            return
         purpose = str(event.data.get("purpose", "inspect") or "inspect").strip().lower()
         x = event.data.get("x", event.data.get("cx", 0))
         y = event.data.get("y", event.data.get("cy", 0))
@@ -435,6 +438,9 @@ class SkillProgressionSystem(System):
     def on_tactical_read_performed(self, event):
         eid = event.data.get("eid")
         if eid != self.player_eid:
+            return
+        perception_access = str(event.data.get("perception_access", "visible") or "visible").strip().lower()
+        if perception_access in {"remembered", "unknown"}:
             return
         signature = str(event.data.get("signature", "") or "tactical").strip()
         self._apply_practice(eid, "tactics", 0.45, reason="tactical_read", cooldown_key=signature, cooldown=1)

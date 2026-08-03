@@ -10,6 +10,8 @@ ENVIRONMENT_HAZARD_PROFILES = {
         "glyph": "*",
         "color": "warning",
         "damage": 2,
+        "living_damage": 6,
+        "living_damage_per_intensity": 2,
         "damage_kind": "condition",
         "status": "burning",
         "duration": 10,

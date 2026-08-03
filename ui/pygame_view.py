@@ -197,6 +197,8 @@ class PygameView:
         self.height_cells = max(14, int(height_cells))
         resolved_cell_px = 24 if cell_px is None else cell_px
         self.cell_px = max(8, int(resolved_cell_px))
+        self.world_magnification = 1
+        self._world_view_state = None
         self._window_icon_path = None
         self._install_window_icon()
         self.surface = pygame.display.set_mode((self.width_cells * self.cell_px, self.height_cells * self.cell_px))
@@ -929,6 +931,8 @@ class PygameView:
                     if normalized:
                         return normalized
                     error_text = invalid_message
+                    if self._input_source_kind(mapped) != "key":
+                        break
                     continue
 
                 if key == 27:
@@ -937,6 +941,8 @@ class PygameView:
                 if key == 127:
                     text = text[:-1]
                     error_text = ""
+                    if self._input_source_kind(mapped) != "key":
+                        break
                     continue
 
                 if key == 9:
@@ -1120,9 +1126,13 @@ class PygameView:
                     return None
                 if key in (KEY_UP, KEY_LEFT):
                     selected = (selected - 1) % len(rows)
+                    if self._input_source_kind(mapped) != "key":
+                        break
                     continue
                 if key in (KEY_DOWN, KEY_RIGHT):
                     selected = (selected + 1) % len(rows)
+                    if self._input_source_kind(mapped) != "key":
+                        break
                     continue
                 if key in (ord("1"), ord("2"), ord("3")):
                     idx = key - ord("1")
@@ -8830,6 +8840,82 @@ class PygameView:
             self._animation_tick = int(animation_tick)
         except (TypeError, ValueError):
             self._animation_tick = 0
+
+    def set_world_magnification(self, value):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            value = 1
+        self.world_magnification = 2 if value == 2 else 1
+        return self.world_magnification
+
+    def begin_world_view(self, width_cells, height_cells, *, allocation_width_cells=None, allocation_height_cells=None):
+        """Redirect world draws to a base-resolution surface for later magnification."""
+        if self._world_view_state is not None:
+            return False
+        magnification = self.set_world_magnification(self.world_magnification)
+        if magnification <= 1:
+            return False
+        self._flush_queued_draws()
+        width_cells = max(1, int(width_cells))
+        height_cells = max(1, int(height_cells))
+        allocation_width_cells = max(
+            1,
+            int(allocation_width_cells if allocation_width_cells is not None else width_cells * magnification),
+        )
+        allocation_height_cells = max(
+            1,
+            int(allocation_height_cells if allocation_height_cells is not None else height_cells * magnification),
+        )
+        main_surface = self.surface
+        main_width_cells = self.width_cells
+        main_height_cells = self.height_cells
+        world_surface = self.pygame.Surface(
+            (width_cells * self.cell_px, height_cells * self.cell_px),
+            self.pygame.SRCALPHA,
+        )
+        world_surface.fill((0, 0, 0, 255))
+        self._world_view_state = {
+            "main_surface": main_surface,
+            "main_width_cells": main_width_cells,
+            "main_height_cells": main_height_cells,
+            "world_surface": world_surface,
+            "world_width_cells": width_cells,
+            "world_height_cells": height_cells,
+            "allocation_width_cells": allocation_width_cells,
+            "allocation_height_cells": allocation_height_cells,
+            "magnification": magnification,
+        }
+        self.surface = world_surface
+        self.width_cells = width_cells
+        self.height_cells = height_cells
+        return True
+
+    def end_world_view(self):
+        state = self._world_view_state
+        if not isinstance(state, dict):
+            return False
+        self._flush_queued_draws()
+        world_surface = state["world_surface"]
+        main_surface = state["main_surface"]
+        magnification = max(1, int(state["magnification"]))
+        output_width = max(1, int(state["world_width_cells"]) * self.cell_px * magnification)
+        output_height = max(1, int(state["world_height_cells"]) * self.cell_px * magnification)
+        allocation_width = max(1, int(state["allocation_width_cells"]) * self.cell_px)
+        allocation_height = max(1, int(state["allocation_height_cells"]) * self.cell_px)
+        scaled = self.pygame.transform.scale(world_surface, (output_width, output_height))
+        offset_x = (allocation_width - output_width) // 2
+        offset_y = (allocation_height - output_height) // 2
+        self.surface = main_surface
+        self.width_cells = int(state["main_width_cells"])
+        self.height_cells = int(state["main_height_cells"])
+        self._world_view_state = None
+        clip = self.pygame.Rect(0, 0, allocation_width, allocation_height)
+        previous_clip = main_surface.get_clip()
+        main_surface.set_clip(clip)
+        main_surface.blit(scaled, (offset_x, offset_y))
+        main_surface.set_clip(previous_clip)
+        return True
 
     @staticmethod
     def _render_cache_key_value(value):

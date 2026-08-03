@@ -1684,6 +1684,20 @@ def _property_room_tiles(sim, prop):
     }
 
 
+def _room_bonus_item_choice(room_kind, rng):
+    room_kind = str(room_kind or "").strip().lower()
+    ordinary_rows = tuple(ROOM_BONUS_LOOT_ROWS.get(room_kind, ()) or ())
+    treasure_rows = tuple(ROOM_TREASURE_LOOT_ROWS.get(room_kind, ()) or ())
+    if treasure_rows and rng.random() < ROOM_BONUS_TREASURE_CHANCE:
+        item_id = _weighted_choice(rng, list(treasure_rows))
+        if item_id:
+            return str(item_id).strip().lower(), "treasure"
+    item_id = _weighted_choice(rng, list(ordinary_rows))
+    if not item_id:
+        return "", ""
+    return str(item_id).strip().lower(), "supply"
+
+
 def _spawn_room_bonus_loot_for_property(sim, chunk_key, prop, rng):
     if not isinstance(prop, dict):
         return []
@@ -1701,11 +1715,13 @@ def _spawn_room_bonus_loot_for_property(sim, chunk_key, prop, rng):
     if not candidate_rows:
         return []
 
-    base_chance = 0.16 + min(0.16, 0.03 * len(candidate_rows))
+    # Ordinary property loot already runs before this helper.  Room-specific
+    # finds are a rarer second beat, not a second full loot table.
+    base_chance = 0.08 + min(0.08, 0.015 * len(candidate_rows))
     if rng.random() > base_chance:
         return []
 
-    budget = 1 + int(_property_total_levels(prop) >= 4 and rng.random() < 0.22)
+    budget = 1 + int(_property_total_levels(prop) >= 5 and rng.random() < 0.08)
     spawned = []
     used_rooms = set()
     for _index in range(int(max(1, budget))):
@@ -1724,7 +1740,7 @@ def _spawn_room_bonus_loot_for_property(sim, chunk_key, prop, rng):
         )
         if not room_kind:
             break
-        item_id = _weighted_choice(rng, list(ROOM_BONUS_LOOT_ROWS.get(room_kind, ())))
+        item_id, payoff_kind = _room_bonus_item_choice(room_kind, rng)
         item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower())
         if not item_def:
             used_rooms.add(str(room_kind))
@@ -1753,6 +1769,7 @@ def _spawn_room_bonus_loot_for_property(sim, chunk_key, prop, rng):
                 "placement_zone": "room_bonus",
                 "placement_room_kind": room_kind,
                 "room_bonus_kind": room_kind,
+                "room_payoff_kind": payoff_kind,
             },
         )
         spawned.append(ground_id)
@@ -3718,6 +3735,105 @@ ROOM_BONUS_LOOT_ROWS = {
     ),
 }
 
+# Room finds should mostly be ordinary supplies that make sense where they
+# appear.  A small separate roll can promote the find into something worth
+# remembering without making every upper floor a treasure route.
+ROOM_TREASURE_LOOT_ROWS = {
+    "archive": (
+        ("wire_data_siphon_shell_program", 4),
+        ("corp_interface_cable", 2),
+        ("cloned_thumb", 1),
+    ),
+    "clerk_office": (
+        ("wire_data_siphon_shell_program", 3),
+        ("forged_badge", 2),
+        ("trauma_autoinjector", 1),
+    ),
+    "housekeeping": (
+        ("trauma_autoinjector", 3),
+        ("micro_medkit", 2),
+    ),
+    "linen_closet": (
+        ("trauma_autoinjector", 3),
+        ("micro_medkit", 2),
+    ),
+    "service_corridor": (
+        ("halligan_bar", 2),
+        ("wire_data_siphon_shell_program", 2),
+        ("signal_jammer", 2),
+    ),
+    "boardroom": (
+        ("wire_data_siphon_shell_program", 4),
+        ("cloned_thumb", 2),
+        ("forged_badge", 2),
+    ),
+    "evidence_lockup": (
+        ("holdout_pistol", 2),
+        ("trauma_autoinjector", 2),
+        ("tear_gas_canister", 2),
+    ),
+    "screening_room": (
+        ("wire_data_siphon_shell_program", 3),
+        ("signal_jammer", 2),
+        ("trauma_autoinjector", 1),
+    ),
+}
+ROOM_BONUS_TREASURE_CHANCE = 0.08
+
+ROOM_OPERATIONS_PROFILES = {
+    "archive": ("Records Console", "records"),
+    "back_office": ("Back-Office Console", "records"),
+    "clerk_office": ("Records Console", "records"),
+    "control_room": ("Operations Console", "security"),
+    "evidence_lockup": ("Evidence Console", "security"),
+    "executive_office": ("Operations Console", "records"),
+    "loading_bay": ("Freight Console", "stock"),
+    "manager_office": ("Operations Console", "records"),
+    "module_wall": ("Drone Service Console", "drone"),
+    "noc": ("Network Operations Console", "systems"),
+    "parts_cage": ("Parts Control Console", "drone"),
+    "power_room": ("Plant Service Console", "systems"),
+    "records": ("Records Console", "records"),
+    "records_office": ("Records Console", "records"),
+    "records_room": ("Records Console", "records"),
+    "security_room": ("Security Operations Console", "security"),
+    "server_room": ("Systems Service Console", "systems"),
+    "service_corridor": ("Maintenance Console", "service"),
+    "service_counter": ("Service Console", "service"),
+    "service_office": ("Service Office Console", "service"),
+    "stock_room": ("Stock Control Console", "stock"),
+    "storage": ("Stock Control Console", "stock"),
+    "surveillance_room": ("Surveillance Console", "security"),
+    "test_bay": ("Drone Test Console", "drone"),
+}
+
+ROOM_OPERATIONS_SIGNAL_SENTENCES = {
+    "drone": (
+        "A live service console keeps a local machine docket open behind the public work.",
+        "The console is still showing service cycles and return checks for local machines.",
+    ),
+    "records": (
+        "A live records console has one outside work order held apart from the routine files.",
+        "The room's records index keeps returning to the same outside service route.",
+    ),
+    "security": (
+        "A live operations console exposes the local controller and records surfaces.",
+        "The room's service index is still open beneath the ordinary security readout.",
+    ),
+    "service": (
+        "A live maintenance console has an outside work order waiting in its local index.",
+        "The service console keeps a real local job in the active queue.",
+    ),
+    "stock": (
+        "A stock-control console keeps revisiting one outside delivery route.",
+        "The room's live inventory index has one supplier docket left open.",
+    ),
+    "systems": (
+        "A live systems console exposes a local service index and bounded records surface.",
+        "The console has been left on a diagnostic route instead of its public face.",
+    ),
+}
+
 ROOM_CURIOSITY_SIGNAL_SENTENCES = {
     "quiet_contact": (
         "Muffled voices keep finding the edge of the door.",
@@ -3770,6 +3886,183 @@ def _room_curiosity_signal(kind, room_kind, rng):
             "One ledger stack sits slightly apart from the honest clutter.",
         ) + tuple(rows)
     return str(_weighted_choice(rng, [(row, 1.0) for row in rows]) or rows[0]).strip()
+
+
+def _room_operations_candidate_rooms(sim, prop):
+    if not isinstance(prop, dict):
+        return {}
+    if str(prop.get("kind", "")).strip().lower() != "building":
+        return {}
+    if _property_total_levels(prop) <= 1 and int(_property_metadata(prop).get("basement_levels", 0) or 0) <= 0:
+        return {}
+    room_tiles = _property_room_tiles(sim, prop)
+    return {
+        room_kind: tuple(tiles)
+        for room_kind, tiles in room_tiles.items()
+        if room_kind in ROOM_OPERATIONS_PROFILES and tuple(tiles or ())
+    }
+
+
+def _room_operations_target_property(sim, host_prop, rng):
+    if not isinstance(host_prop, dict):
+        return None
+    host_id = str(host_prop.get("id", "") or "").strip()
+    host_meta = _property_metadata(host_prop)
+    try:
+        host_chunk = sim.chunk_coords(int(host_prop.get("x", 0)), int(host_prop.get("y", 0)))
+    except (TypeError, ValueError):
+        return None
+    host_org = host_meta.get("organization_eid")
+    candidates = []
+    for candidate in getattr(sim, "properties", {}).values():
+        if not isinstance(candidate, dict):
+            continue
+        if str(candidate.get("id", "") or "").strip() == host_id:
+            continue
+        if str(candidate.get("kind", "") or "").strip().lower() != "building":
+            continue
+        metadata = _property_metadata(candidate)
+        if bool(metadata.get("dialogue_trade_only")) or str(metadata.get("hidden_contact_kind", "") or "").strip():
+            continue
+        try:
+            candidate_chunk = sim.chunk_coords(int(candidate.get("x", 0)), int(candidate.get("y", 0)))
+        except (TypeError, ValueError):
+            continue
+        if tuple(candidate_chunk) != tuple(host_chunk):
+            continue
+        score = 1.0
+        if property_is_storefront(candidate):
+            score += 2.0
+        if property_is_public(candidate):
+            score += 0.5
+        service_words = {
+            str(value or "").strip().lower()
+            for value in tuple(candidate.get("services", ()) or ())
+            + tuple(metadata.get("site_services", ()) or ())
+            + tuple(metadata.get("finance_services", ()) or ())
+            if str(value or "").strip()
+        }
+        if service_words:
+            score += 1.25
+        if host_org is not None and metadata.get("organization_eid") == host_org:
+            score += 1.5
+        distance = abs(int(candidate.get("x", 0)) - int(host_prop.get("x", 0))) + abs(int(candidate.get("y", 0)) - int(host_prop.get("y", 0)))
+        score += max(0.0, 0.8 - (0.025 * distance))
+        candidates.append((candidate, score))
+    return _weighted_choice(rng, candidates)
+
+
+def _spawn_room_operations_payoff_for_property(sim, chunk_key, prop, rng):
+    """Materialize one scarce functional room payoff.
+
+    The console is a real local Wire target with a bounded records surface.  A
+    nearby docket, when another realized local building exists, points to that
+    actual place rather than inventing an abstract supplier or remote job.
+    """
+
+    room_tiles = _room_operations_candidate_rooms(sim, prop)
+    if not room_tiles:
+        return []
+
+    base_z = int(prop.get("z", 0) or 0)
+    weighted_rooms = []
+    for room_kind, tiles in sorted(room_tiles.items()):
+        vertical_bonus = 0.9 if any(int(tile[2]) != base_z for tile in tiles) else 0.0
+        secure_bonus = 0.35 if ROOM_OPERATIONS_PROFILES[room_kind][1] in {"security", "systems", "drone"} else 0.0
+        weighted_rooms.append((room_kind, 1.0 + vertical_bonus + secure_bonus + min(0.8, 0.08 * len(tiles))))
+    room_kind = _weighted_choice(rng, weighted_rooms)
+    if not room_kind:
+        return []
+
+    available_tiles = [
+        tile
+        for tile in tuple(room_tiles.get(room_kind, ()) or ())
+        if not sim.property_at(tile[0], tile[1], tile[2])
+    ]
+    console_tile = _pick_tile(sim, available_tiles, rng, allow_entities=False)
+    if not console_tile:
+        return []
+
+    console_label, operations_kind = ROOM_OPERATIONS_PROFILES[room_kind]
+    target_prop = _room_operations_target_property(sim, prop, rng)
+    target_property_id = str((target_prop or {}).get("id", "") or "").strip()
+    signal_rows = ROOM_OPERATIONS_SIGNAL_SENTENCES.get(operations_kind, ())
+    if target_property_id and signal_rows:
+        signal = str(_weighted_choice(rng, [(row, 1.0) for row in signal_rows]) or signal_rows[0]).strip()
+    else:
+        signal = "A live local operations console has been left on its service and records index."
+
+    prop_meta = _property_metadata(prop)
+    terminal_id = sim.register_property(
+        name=console_label,
+        kind="asset",
+        x=console_tile[0],
+        y=console_tile[1],
+        z=console_tile[2],
+        owner_eid=prop.get("owner_eid"),
+        owner_tag=prop.get("owner_tag", "city"),
+        metadata={
+            "archetype": "room_operations_terminal",
+            "fixture_type": "service_terminal",
+            "interaction_role": "service_terminal",
+            "wire_capable": True,
+            "linked_property_id": prop.get("id"),
+            "linked_building_id": str(prop_meta.get("building_id", "") or prop.get("id", "")).strip() or None,
+            "source_property_id": prop.get("id"),
+            "room_operations_target_property_id": target_property_id or None,
+            "room_operations_kind": operations_kind,
+            "room_curiosity_kind": "operations_terminal",
+            "room_curiosity_signal": signal,
+            "placement_zone": "room_operations",
+            "placement_room_kind": room_kind,
+            "room_payoff_kind": "operations",
+            "display_glyph": "t",
+            "display_color": "property_service",
+            "cover_kind": "low",
+            "cover_value": 0.3,
+            "public": False,
+            "chunk": tuple(chunk_key),
+        },
+    )
+    spawned = [terminal_id]
+
+    if target_property_id and "operations_docket" in ITEM_CATALOG:
+        docket_tiles = [tile for tile in available_tiles if tuple(tile) != tuple(console_tile)]
+        docket_tile = _pick_tile(sim, docket_tiles, rng, allow_entities=True)
+        if docket_tile:
+            ground_id = sim.register_ground_item(
+                item_id="operations_docket",
+                x=docket_tile[0],
+                y=docket_tile[1],
+                z=docket_tile[2],
+                quantity=1,
+                owner_eid=None,
+                owner_tag="city",
+                metadata={
+                    "source_property_id": prop.get("id"),
+                    "target_property_id": target_property_id,
+                    "target_property_name": str(target_prop.get("name", target_property_id)).strip() or target_property_id,
+                    "chunk": tuple(chunk_key),
+                    "placement_zone": "room_operations",
+                    "placement_room_kind": room_kind,
+                    "room_operations_kind": operations_kind,
+                    "room_curiosity_kind": "operations_terminal",
+                    "room_curiosity_signal": signal,
+                    "room_payoff_kind": "operations",
+                },
+            )
+            spawned.append(ground_id)
+
+    _record_room_curiosity(
+        prop,
+        kind="operations_terminal",
+        signal=signal,
+        room_kind=room_kind,
+        tile=console_tile,
+        source_property_id=prop.get("id"),
+        profile_id=f"room_operations:{operations_kind}",
+    )
+    return spawned
 
 
 def _record_room_curiosity(prop, *, kind, signal, room_kind, tile=None, source_eid=None, source_property_id=None, profile_id=""):
@@ -4837,6 +5130,37 @@ def spawn_chunk_special_population(sim, chunk, property_records):
             spawned.extend(_spawn_underground_pest_wildlife(sim, chunk, prop, rng))
 
     room_curiosity_props.sort(key=lambda row: str(row.get("id", "")))
+    room_operations_props = [
+        prop
+        for prop in room_curiosity_props
+        if _room_operations_candidate_rooms(sim, prop)
+    ]
+    room_operations_budget = min(
+        len(room_operations_props),
+        1 + int(len(room_operations_props) >= 6 and rng.random() < 0.15),
+    )
+    while room_operations_budget > 0 and room_operations_props:
+        prop = _weighted_choice(
+            rng,
+            [
+                (
+                    candidate,
+                    1.0
+                    + min(1.0, 0.12 * len(_room_operations_candidate_rooms(sim, candidate)))
+                    + min(0.6, 0.1 * max(0, _property_total_levels(candidate) - 1)),
+                )
+                for candidate in room_operations_props
+            ],
+        )
+        if not isinstance(prop, dict):
+            break
+        room_operations_props = [candidate for candidate in room_operations_props if candidate is not prop]
+        payoff_ids = _spawn_room_operations_payoff_for_property(sim, key, prop, rng)
+        if not payoff_ids:
+            continue
+        spawned.extend(payoff_ids)
+        room_operations_budget -= 1
+
     room_encounter_budget = 1 + int(len(room_curiosity_props) >= 5 and rng.random() < 0.18)
     room_stash_budget = 1 + int(len(room_curiosity_props) >= 6 and rng.random() < 0.12)
     for prop in room_curiosity_props:

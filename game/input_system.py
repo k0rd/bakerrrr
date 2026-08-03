@@ -113,7 +113,12 @@ from game.action_bindings import (
     set_action_binding,
 )
 from game.casino_ui_runtime import ensure_casino_ui_state
-from game.player_config import load_player_config, save_player_config
+from game.player_config import (
+    load_player_config,
+    normalize_accessibility_config,
+    normalize_world_magnification,
+    save_player_config,
+)
 from game.report_runtime import build_progress_report as _build_progress_report
 from game.release_runtime import debug_disabled_hint, debug_mode_enabled
 from game.run_objectives import reveal_run_objective
@@ -406,6 +411,8 @@ class InputSystem(System):
         self.player_config_path = getattr(self.sim, "player_config_path", None)
         self.player_config = load_player_config(config_path=self.player_config_path)
         self.control_bindings = sanitize_control_bindings(self.player_config.get("control_bindings"))
+        self._joystick_command_drain_pending = False
+        self._apply_world_magnification_preference()
 
         self.movement_keys = {
             KEY_UP: (0, -1),
@@ -3445,6 +3452,20 @@ class InputSystem(System):
         physical = self._normalize_input_event(physical)
         return bool(physical and str(physical.get("kind", "") or "").strip().lower() != "key")
 
+    def _mark_joystick_command_for_queue_drain(self, physical):
+        if self._input_is_controller(physical):
+            self._joystick_command_drain_pending = True
+        return physical
+
+    def _drain_pending_joystick_command_queue(self):
+        if not self._joystick_command_drain_pending:
+            return []
+        self._joystick_command_drain_pending = False
+        drain_inputs = getattr(self.view, "drain_inputs", None)
+        if not callable(drain_inputs):
+            return []
+        return list(drain_inputs() or ())
+
     def _record_recent_input_kind(self, physical):
         state = self._action_menu_state()
         state["last_input_kind"] = "controller" if self._input_is_controller(physical) else "key"
@@ -3462,6 +3483,51 @@ class InputSystem(System):
         self.player_config = config
         save_player_config(config, config_path=self.player_config_path)
         return bindings
+
+    def _apply_world_magnification_preference(self):
+        accessibility = normalize_accessibility_config(
+            self.player_config.get("accessibility") if isinstance(self.player_config, dict) else None
+        )
+        magnification = normalize_world_magnification(
+            accessibility.get("world_magnification", 1)
+        )
+        setter = getattr(self.view, "set_world_magnification", None)
+        if callable(setter):
+            setter(magnification)
+        else:
+            try:
+                self.view.world_magnification = magnification
+            except Exception:
+                pass
+        return magnification
+
+    def _toggle_world_magnification(self):
+        current = normalize_world_magnification(
+            getattr(
+                self.view,
+                "world_magnification",
+                normalize_accessibility_config(self.player_config.get("accessibility")).get(
+                    "world_magnification",
+                    1,
+                ),
+            )
+        )
+        magnification = 1 if current == 2 else 2
+        setter = getattr(self.view, "set_world_magnification", None)
+        if callable(setter):
+            setter(magnification)
+        else:
+            try:
+                self.view.world_magnification = magnification
+            except Exception:
+                return False
+        config = load_player_config(config_path=self.player_config_path)
+        accessibility = normalize_accessibility_config(config.get("accessibility"))
+        accessibility["world_magnification"] = magnification
+        config["accessibility"] = accessibility
+        self.player_config = config
+        save_player_config(config, config_path=self.player_config_path)
+        return True
 
     def _action_context(self, zoom_mode=None):
         mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower()
@@ -3581,11 +3647,9 @@ class InputSystem(System):
         rows = self._normalize_action_menu_selection(zoom_mode)
         if key in (KEY_UP, ord("k"), ord("K")):
             state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(rows))
-            self._next_input_event(collapse_burst=False)
             return True
         if key in (KEY_DOWN, ord("j"), ord("J")):
             state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(rows))
-            self._next_input_event(collapse_burst=False)
             return True
         if key is not None:
             if ord("1") <= key <= ord("9"):
@@ -3601,8 +3665,6 @@ class InputSystem(System):
             state["mode"] = "bind"
             state["pending_bind_action_id"] = row.get("id", "")
             state["feedback"] = f"Press a key or button for {row.get('label', 'action')}."
-            # Discard the key that just triggered the bind, duh!
-            self._next_input_event(collapse_burst=False)
             return True
         if key in (ord("r"), ord("R")):
             if row:
@@ -6358,6 +6420,8 @@ class InputSystem(System):
         if action_id == "help":
             self._help_state()["open"] = True
             return True
+        if action_id == "toggle_world_magnification":
+            return self._toggle_world_magnification()
         if action_id == "quit":
             self.sim.running = False
             self.sim.emit(Event("quit_requested", eid=self.player_eid))
@@ -7750,7 +7814,7 @@ class InputSystem(System):
                 inputs = [row for row in inputs if row is not None]
                 if not inputs:
                     return None
-                return inputs[-1]
+                return self._mark_joystick_command_for_queue_drain(inputs[-1])
             drain = getattr(self.view, "drain_keys", None)
             if callable(drain):
                 keys = [key for key in drain() if key is not None]
@@ -7759,7 +7823,9 @@ class InputSystem(System):
                 return key_physical_input(keys[-1])
         get_input = getattr(self.view, "get_input", None)
         if callable(get_input):
-            return self._normalize_input_event(get_input())
+            return self._mark_joystick_command_for_queue_drain(
+                self._normalize_input_event(get_input())
+            )
         key = self.view.get_key()
         return key_physical_input(key) if key is not None else None
 
@@ -7827,6 +7893,12 @@ class InputSystem(System):
         self._refresh_known_people_ui(reset_scroll=False)
 
     def update(self):
+        try:
+            return self._update_input_cycle()
+        finally:
+            self._drain_pending_joystick_command_queue()
+
+    def _update_input_cycle(self):
 
         state = self._inventory_state()
         trade_state = self._trade_state()

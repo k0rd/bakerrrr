@@ -7,7 +7,7 @@ from hashlib import blake2b
 from engine.events import Event
 from engine.systems import System
 
-from game.components import Collider, Render, VehicleState, Vitality
+from game.components import Collider, DroneState, Position, Render, VehicleState, Vitality
 from game.property_runtime import (
     property_is_vehicle,
     property_metadata,
@@ -23,6 +23,9 @@ VEHICLE_EXPLOSION_FIRE_RADIUS = 3
 VEHICLE_EXPLOSION_FIRE_INTENSITY = 5
 VEHICLE_EXPLOSION_SMOKE_INTENSITY = 2
 VEHICLE_EXPLOSION_OCCUPANT_DAMAGE = 110
+VEHICLE_EXPLOSION_LIVING_BASE_DAMAGE = 70
+VEHICLE_EXPLOSION_LIVING_DAMAGE_PER_RADIUS = 8
+VEHICLE_EXPLOSION_EDGE_DAMAGE_MULTIPLIER = 0.28
 VEHICLE_EXPLOSION_CLASS_FUSE_OFFSETS = {
     "micro": -4,
     "skiff": -3,
@@ -88,6 +91,13 @@ def vehicle_explosion_radius_for_fuel(vehicle_prop):
     if fuel < 120:
         return 5
     return 6
+
+
+def vehicle_explosion_living_damage_for_radius(radius):
+    """Return severe but survivable-at-range blast damage for exposed living actors."""
+
+    radius = max(1, _safe_int(radius, 1))
+    return int(VEHICLE_EXPLOSION_LIVING_BASE_DAMAGE + (radius * VEHICLE_EXPLOSION_LIVING_DAMAGE_PER_RADIUS))
 
 
 def _vehicle_chunk_loaded(sim, prop):
@@ -186,77 +196,53 @@ def _clear_vehicle_occupants(sim, vehicle_id):
     return inside
 
 
-def _damage_vehicle_explosion_occupants(sim, occupant_eids, *, vehicle_id, vehicle_name, x, y, z):
-    if sim is None or not occupant_eids:
-        return 0
-    damaged = 0
+def _damage_vehicle_explosion_actor(sim, eid, damage, *, vehicle_id, vehicle_name, x, y, z):
+    if sim is None:
+        return False
     vitalities = sim.ecs.get(Vitality)
     colliders = sim.ecs.get(Collider)
     renders = sim.ecs.get(Render)
     now = _safe_int(getattr(sim, "tick", 0), 0)
-    for eid in tuple(occupant_eids):
-        vitality = vitalities.get(eid)
-        if vitality is None:
-            continue
-        max_hp = max(1, _safe_int(getattr(vitality, "max_hp", 1), 1))
-        damage = max(VEHICLE_EXPLOSION_OCCUPANT_DAMAGE, int(round(max_hp * 0.75)))
-        was_downed = bool(getattr(vitality, "downed", False))
-        vitality.hp = max(0, _safe_int(getattr(vitality, "hp", 0), 0) - damage)
+    vitality = vitalities.get(eid)
+    if vitality is None:
+        return False
+    max_hp = max(1, _safe_int(getattr(vitality, "max_hp", 1), 1))
+    damage = max(1, _safe_int(damage, 1))
+    was_downed = bool(getattr(vitality, "downed", False))
+    vitality.hp = max(0, _safe_int(getattr(vitality, "hp", 0), 0) - damage)
+    sim.emit(Event(
+        "entity_damaged",
+        target_eid=eid,
+        source_eid=None,
+        source_property_id=vehicle_id,
+        vehicle_id=vehicle_id,
+        vehicle_name=vehicle_name,
+        weapon_id="vehicle_explosion",
+        damage_kind="vehicle_explosion",
+        raw_damage=int(damage),
+        damage=int(damage),
+        cover_absorb=0.0,
+        armor_absorb=0.0,
+        armor_name=None,
+        hp=vitality.hp,
+        max_hp=max_hp,
+        x=int(x),
+        y=int(y),
+        z=int(z),
+    ))
+    if int(vitality.hp) > 0 or was_downed:
+        return True
+    vitality.downed_count += 1
+    vitality.downed = True
+    vitality.downed_tick = now
+    setattr(vitality, "last_attacker_eid", None)
+    setattr(vitality, "death_reason", "vehicle_explosion")
+    if eid == getattr(sim, "player_eid", None):
         sim.emit(Event(
-            "entity_damaged",
+            "player_downed",
             target_eid=eid,
             source_eid=None,
-            source_property_id=vehicle_id,
-            vehicle_id=vehicle_id,
-            vehicle_name=vehicle_name,
-            weapon_id="vehicle_explosion",
-            damage_kind="vehicle_explosion",
-            raw_damage=int(damage),
-            damage=int(damage),
-            cover_absorb=0.0,
-            armor_absorb=0.0,
-            armor_name=None,
-            hp=vitality.hp,
-            max_hp=max_hp,
-            x=int(x),
-            y=int(y),
-            z=int(z),
-        ))
-        damaged += 1
-        if int(vitality.hp) > 0 or was_downed:
-            continue
-        vitality.downed_count += 1
-        vitality.downed = True
-        vitality.downed_tick = now
-        setattr(vitality, "last_attacker_eid", None)
-        setattr(vitality, "death_reason", "vehicle_explosion")
-        if eid == getattr(sim, "player_eid", None):
-            sim.emit(Event(
-                "player_downed",
-                target_eid=eid,
-                source_eid=None,
-                source_name=vehicle_name,
-                source_property_id=vehicle_id,
-                vehicle_id=vehicle_id,
-                weapon_id="vehicle_explosion",
-                reason="vehicle_explosion",
-                damage_kind="vehicle_explosion",
-                x=int(x),
-                y=int(y),
-                z=int(z),
-            ))
-            continue
-        _apply_downed_actor_state(sim, eid, tick=now)
-        collider = colliders.get(eid)
-        if collider:
-            collider.blocks = False
-        render = renders.get(eid)
-        if render:
-            render.glyph = "x"
-        sim.emit(Event(
-            "npc_downed",
-            target_eid=eid,
-            source_eid=None,
+            source_name=vehicle_name,
             source_property_id=vehicle_id,
             vehicle_id=vehicle_id,
             weapon_id="vehicle_explosion",
@@ -266,6 +252,106 @@ def _damage_vehicle_explosion_occupants(sim, occupant_eids, *, vehicle_id, vehic
             y=int(y),
             z=int(z),
         ))
+        return True
+    _apply_downed_actor_state(sim, eid, tick=now)
+    collider = colliders.get(eid)
+    if collider:
+        collider.blocks = False
+    render = renders.get(eid)
+    if render:
+        render.glyph = "x"
+    sim.emit(Event(
+        "npc_downed",
+        target_eid=eid,
+        source_eid=None,
+        source_property_id=vehicle_id,
+        vehicle_id=vehicle_id,
+        weapon_id="vehicle_explosion",
+        reason="vehicle_explosion",
+        damage_kind="vehicle_explosion",
+        x=int(x),
+        y=int(y),
+        z=int(z),
+    ))
+    return True
+
+
+def _damage_vehicle_explosion_occupants(sim, occupant_eids, *, vehicle_id, vehicle_name, x, y, z):
+    damaged = 0
+    for eid in tuple(occupant_eids or ()):
+        vitality = sim.ecs.get(Vitality).get(eid)
+        if vitality is None:
+            continue
+        max_hp = max(1, _safe_int(getattr(vitality, "max_hp", 1), 1))
+        damage = max(VEHICLE_EXPLOSION_OCCUPANT_DAMAGE, int(round(max_hp * 0.75)))
+        if _damage_vehicle_explosion_actor(
+            sim,
+            eid,
+            damage,
+            vehicle_id=vehicle_id,
+            vehicle_name=vehicle_name,
+            x=x,
+            y=y,
+            z=z,
+        ):
+            damaged += 1
+    return int(damaged)
+
+
+def _vehicle_explosion_bystander_damage_rows(
+    sim,
+    *,
+    excluded_eids=(),
+    x,
+    y,
+    z,
+    radius,
+    base_damage,
+):
+    excluded = set(excluded_eids or ())
+    positions = sim.ecs.get(Position)
+    vitalities = sim.ecs.get(Vitality)
+    drones = sim.ecs.get(DroneState)
+    rows = []
+    radius = max(1, _safe_int(radius, 1))
+    for eid, pos in tuple(positions.items()):
+        if eid in excluded or int(getattr(pos, "z", 0)) != int(z):
+            continue
+        if drones.get(eid) is not None or vitalities.get(eid) is None:
+            continue
+        distance = abs(int(getattr(pos, "x", 0)) - int(x)) + abs(int(getattr(pos, "y", 0)) - int(y))
+        if distance > radius:
+            continue
+        distance_ratio = float(distance) / float(radius)
+        damage_mult = max(
+            VEHICLE_EXPLOSION_EDGE_DAMAGE_MULTIPLIER,
+            1.0 - ((1.0 - VEHICLE_EXPLOSION_EDGE_DAMAGE_MULTIPLIER) * distance_ratio),
+        )
+        damage = max(1, int(round(max(1, _safe_int(base_damage, 1)) * damage_mult)))
+        rows.append((
+            eid,
+            damage,
+            int(getattr(pos, "x", x)),
+            int(getattr(pos, "y", y)),
+            int(z),
+        ))
+    return tuple(rows)
+
+
+def _apply_vehicle_explosion_bystander_damage(sim, rows, *, vehicle_id, vehicle_name):
+    damaged = 0
+    for eid, damage, x, y, z in tuple(rows or ()):
+        if _damage_vehicle_explosion_actor(
+            sim,
+            eid,
+            damage,
+            vehicle_id=vehicle_id,
+            vehicle_name=vehicle_name,
+            x=x,
+            y=y,
+            z=z,
+        ):
+            damaged += 1
     return int(damaged)
 
 
@@ -306,6 +392,7 @@ def arm_vehicle_explosion(
     metadata["vehicle_explosion_fire_intensity"] = VEHICLE_EXPLOSION_FIRE_INTENSITY
     metadata["vehicle_explosion_smoke_intensity"] = VEHICLE_EXPLOSION_SMOKE_INTENSITY
     metadata["vehicle_explosion_occupant_damage"] = VEHICLE_EXPLOSION_OCCUPANT_DAMAGE
+    metadata["vehicle_explosion_living_base_damage"] = vehicle_explosion_living_damage_for_radius(explosion_radius)
     metadata["vehicle_explosion_cause"] = _text(cause) or "vehicle_destroyed"
     sim.emit(Event(
         "vehicle_explosion_armed",
@@ -363,6 +450,23 @@ def detonate_vehicle_explosion(sim, vehicle_prop, *, force=False):
         y=y,
         z=z,
     )
+    living_base_damage = max(
+        1,
+        _safe_int(
+            metadata.get("vehicle_explosion_living_base_damage"),
+            vehicle_explosion_living_damage_for_radius(radius),
+        ),
+    )
+    bystander_damage_rows = _vehicle_explosion_bystander_damage_rows(
+        sim,
+        excluded_eids=occupant_eids,
+        x=x,
+        y=y,
+        z=z,
+        radius=radius,
+        base_damage=living_base_damage,
+    )
+    bystander_damage_count = len(bystander_damage_rows)
 
     metadata["vehicle_explosion_armed"] = False
     metadata["vehicle_exploded"] = True
@@ -380,6 +484,8 @@ def detonate_vehicle_explosion(sim, vehicle_prop, *, force=False):
         occupant_count=len(occupant_eids),
         occupant_damage=VEHICLE_EXPLOSION_OCCUPANT_DAMAGE,
         occupant_damage_count=occupant_damage_count,
+        bystander_damage_count=bystander_damage_count,
+        living_base_damage=living_base_damage,
         vehicle_owner_eid=vehicle_owner_eid,
         vehicle_owner_tag=vehicle_owner_tag,
         radius=radius,
@@ -402,11 +508,17 @@ def detonate_vehicle_explosion(sim, vehicle_prop, *, force=False):
         y=y,
         z=z,
         radius=radius,
-        hits=len(occupant_eids),
+        hits=int(occupant_damage_count + bystander_damage_count),
         fire_intensity=fire_intensity,
         smoke_intensity=smoke_intensity,
         force_fire=True,
     ))
+    bystander_damage_count = _apply_vehicle_explosion_bystander_damage(
+        sim,
+        bystander_damage_rows,
+        vehicle_id=vehicle_id,
+        vehicle_name=vehicle_name,
+    )
     sim.emit(Event(
         "noise",
         source_eid=None,
@@ -452,9 +564,11 @@ __all__ = [
     "VEHICLE_EXPLOSION_FUSE_MIN_TICKS",
     "VEHICLE_EXPLOSION_FUSE_TICKS",
     "VEHICLE_EXPLOSION_OCCUPANT_DAMAGE",
+    "VEHICLE_EXPLOSION_LIVING_BASE_DAMAGE",
     "VehicleExplosionSystem",
     "arm_vehicle_explosion",
     "detonate_vehicle_explosion",
     "disarm_vehicle_explosion",
     "vehicle_explosion_radius_for_fuel",
+    "vehicle_explosion_living_damage_for_radius",
 ]

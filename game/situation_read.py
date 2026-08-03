@@ -329,6 +329,20 @@ def build_situation_read(sim, player_eid, *, tactical=False, target=None):
     tactics = _skill(sim, player_eid, "tactics")
     slot_limit = 1 if perception < 4.0 else (2 if perception < 6.0 else (3 if perception < 8.0 else 4))
     prefix = "Tactical" if tactical else "Read"
+    perception_access = (
+        str(target.get("perception_access", "") or "").strip().lower()
+        if isinstance(target, dict)
+        else ""
+    )
+    if perception_access in {"remembered", "unknown"}:
+        text = f"{prefix}: no current visual read at that cursor"
+        return {
+            "text": text,
+            "signature": f"{('t' if tactical else 'r')}::cursor::{perception_access}",
+            "meaningful": False,
+            "has_streetwise": False,
+            "has_tactics": bool(tactical),
+        }
     entries = []
     has_streetwise = False
     has_tactics = bool(tactical)
@@ -426,6 +440,11 @@ def build_focus_read(sim, player_eid, x, y, z, *, purpose="inspect"):
 def perform_tactical_read(sim, player_eid, *, target=None, purpose=""):
     result = build_situation_read(sim, player_eid, tactical=True, target=target)
     text = str(result.get("text", "") or "Tactical: nothing clear").strip()
+    perception_access = (
+        str(target.get("perception_access", "visible") or "visible").strip().lower()
+        if isinstance(target, dict)
+        else "visible"
+    )
     state = {
         "text": text,
         "tick": int(getattr(sim, "tick", 0)),
@@ -449,6 +468,8 @@ def perform_tactical_read(sim, player_eid, *, target=None, purpose=""):
         signature=state["signature"],
         purpose=state["purpose"],
         has_streetwise=bool(result.get("has_streetwise", False)),
+        meaningful=bool(result.get("meaningful", False)),
+        perception_access=perception_access,
     ))
     _log_player_feedback(
         sim,
