@@ -101,6 +101,13 @@ from game.social_boundary_runtime import (
     BOUNDARY_REFUSAL_VIOLENCE_THRESHOLD,
     dialogue_refusal_active,
 )
+from game.social_fact_dialogue import (
+    is_social_fact_dialogue_topic as _is_social_fact_dialogue_topic,
+    resolve_social_fact_dialogue as _resolve_social_fact_dialogue,
+    social_fact_dialogue_rows as _social_fact_dialogue_rows,
+    specific_witness_matter_exists as _specific_witness_matter_exists,
+)
+from game.social_requests import PLAYER_FAVOR_TOPIC_IDS
 from engine.events import Event
 from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.items import (
@@ -1695,7 +1702,11 @@ class NPCInteractionSystem(System):
         ask_count = max(0, int(ask_count))
         if ask_count <= 0 or bool(context.get("guarded")):
             return 0
-        if topic_id in self.REPEAT_PRESSURE_SKIP_TOPICS or topic_id in self.MISSTEP_TOPICS:
+        if (
+            topic_id in self.REPEAT_PRESSURE_SKIP_TOPICS
+            or topic_id in self.MISSTEP_TOPICS
+            or _is_social_fact_dialogue_topic(topic_id)
+        ):
             return 0
         family_count = self._dialogue_recent_topic_family_count(
             context.get("npc_eid"),
@@ -12654,6 +12665,11 @@ class NPCInteractionSystem(System):
         npc_eid = context.get("npc_eid")
 
         score = 0.0
+        social_fact_action = str(row.get("social_fact_action", "") or "").strip().lower()
+        if social_fact_action in {"correct_claim", "withdraw"}:
+            score += 0.28
+        elif social_fact_action == "ask_reaction":
+            score -= 0.28
         if topic_id in self.CONVERSATION_SAFE_TOPICS or topic_id.startswith("service_"):
             score += 0.26
         if topic_id in self.CONVERSATION_SENSITIVE_TOPICS or topic_id in self.SENSITIVE_INFO_TOPICS:
@@ -13301,7 +13317,26 @@ class NPCInteractionSystem(System):
         return self._dialogue_opening_lines_with_narration(context, lines)
 
     def _available_dialog_topics(self, context):
-        available = []
+        request_system = getattr(self.sim, "social_request_system", None)
+        favor_rows = (
+            request_system.player_dialogue_rows(
+                self.player_eid,
+                context.get("npc_eid"),
+                context,
+            )
+            if request_system is not None and context.get("npc_eid") is not None
+            else []
+        )
+        available = list(favor_rows) + list(_social_fact_dialogue_rows(
+            self.sim,
+            self.player_eid,
+            context.get("npc_eid"),
+        ))
+        if _specific_witness_matter_exists(self.sim, self.player_eid, context.get("npc_eid")):
+            # Incident-specific witness business must use the durable three-way
+            # circuit. The older pressure payoff cannot erase a particular
+            # person's memory or substitute a global heat reduction for it.
+            context["payoff_available"] = False
         unlocked = set(self._dialogue_memory(context["npc_eid"])["unlocked_topics"])
         if bool(context.get("run_objective_visible")) and (
             str(context.get("final_operation_summary_line", "")).strip()
@@ -15590,6 +15625,10 @@ class NPCInteractionSystem(System):
         transcript.append(
             self._dialogue_player_line(player_line)
         )
+        for line in response.get("narration_lines", ()) or ():
+            formatted = self._dialogue_narration_line(line)
+            if formatted:
+                transcript.append(formatted)
         social_outcome = str(response.get("social_outcome", "") or "").strip().lower()
         if social_outcome:
             narration = self._dialogue_social_reaction_line(
@@ -15771,6 +15810,27 @@ class NPCInteractionSystem(System):
         pressure_tier = str(context.get("pressure_tier", "low") or "low").strip().lower() or "low"
         if pressure_tier == "high":
             return None
+        request_system = getattr(self.sim, "social_request_system", None)
+        if request_system is not None:
+            favor_candidate = request_system.player_offer_candidate(
+                context.get("npc_eid"),
+                self.player_eid,
+                context,
+            )
+            if isinstance(favor_candidate, dict):
+                return {
+                    "prompt_lines": (),
+                    "highlight_topic_ids": (
+                        "favor_why",
+                        "favor_accept",
+                        "favor_counter_later",
+                        "favor_defer",
+                        "favor_decline",
+                    ),
+                    "score": float(favor_candidate.get("score", 0.0) or 0.0),
+                    "favor_kind": str(favor_candidate.get("kind", "") or "").strip().lower(),
+                    "favor_terms": dict(favor_candidate.get("terms", {}) or {}),
+                }
         tone = str(context.get("tone", "neutral") or "neutral").strip().lower() or "neutral"
         bond = context.get("bond") or self._bond_snapshot(context.get("npc_eid")) or {}
         trust = float(bond.get("trust", 0.0) or 0.0)
@@ -15865,6 +15925,19 @@ class NPCInteractionSystem(System):
         if best is None:
             return
         _score, npc_eid, request = best
+        favor_kind = str(request.get("favor_kind", "") or "").strip().lower()
+        if favor_kind:
+            request_system = getattr(self.sim, "social_request_system", None)
+            if request_system is None:
+                return
+            opened = request_system.begin_player_offer(
+                npc_eid,
+                self.player_eid,
+                kind=favor_kind,
+                terms=request.get("favor_terms", {}),
+            )
+            request = dict(request)
+            request["prompt_lines"] = (opened.get("prompt", ""),)
         self._set_dialogue_cooldown(npc_eid, 240)
         self.sim.emit(Event(
             "npc_dialogue_request",
@@ -15941,25 +16014,52 @@ class NPCInteractionSystem(System):
             if selected_row_matches
             else ""
         ) or self._dialogue_pressure_family_key(topic_id, context)
-        response = self._resolve_dialog_topic(
-            context,
-            topic_id,
-            pressure_topic_id=pressure_topic_id,
-            pressure_family_id=pressure_family_id,
-        )
-        response = self._apply_dialogue_initiative(
-            context,
-            topic_id,
-            response,
-            pressure_topic_id=pressure_topic_id,
-        )
-        response = self._apply_dialogue_repeat_friction(
-            context,
-            topic_id,
-            response,
-            pressure_topic_id=pressure_topic_id,
-            pressure_family_id=pressure_family_id,
-        )
+        if topic_id in PLAYER_FAVOR_TOPIC_IDS and selected_row_matches:
+            request_system = getattr(self.sim, "social_request_system", None)
+            if request_system is None:
+                response = {"npc_lines": ["That promise has slipped out of reach."]}
+            else:
+                response = request_system.resolve_player_dialogue_choice(
+                    self.player_eid,
+                    npc_eid,
+                    topic_id,
+                    selected_row,
+                    context,
+                )
+        elif _is_social_fact_dialogue_topic(topic_id) and selected_row_matches:
+            self._dialogue_mark_topic(
+                npc_eid,
+                topic_id,
+                pressure_topic_id=pressure_topic_id,
+                pressure_family_id=pressure_family_id,
+            )
+            response = _resolve_social_fact_dialogue(
+                self.sim,
+                self.player_eid,
+                npc_eid,
+                selected_row,
+                bond=context.get("bond"),
+            )
+        else:
+            response = self._resolve_dialog_topic(
+                context,
+                topic_id,
+                pressure_topic_id=pressure_topic_id,
+                pressure_family_id=pressure_family_id,
+            )
+            response = self._apply_dialogue_initiative(
+                context,
+                topic_id,
+                response,
+                pressure_topic_id=pressure_topic_id,
+            )
+            response = self._apply_dialogue_repeat_friction(
+                context,
+                topic_id,
+                response,
+                pressure_topic_id=pressure_topic_id,
+                pressure_family_id=pressure_family_id,
+            )
         self._remember_revealed_social_lead_names(context, response)
         self._append_dialogue_response(
             context,
@@ -16034,6 +16134,15 @@ class NPCInteractionSystem(System):
                     row
                     for row in list(state.get("topics", ()) or ())
                     if str(row.get("id", "")).strip().lower() == "hire_accept"
+                ),
+                preferred_row,
+            )
+        if topic_id in {"favor_invite"}:
+            preferred_row = next(
+                (
+                    row
+                    for row in list(state.get("topics", ()) or ())
+                    if str(row.get("id", "")).strip().lower() == "favor_why"
                 ),
                 preferred_row,
             )

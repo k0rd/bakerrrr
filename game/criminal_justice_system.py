@@ -71,6 +71,7 @@ from game.appearance_loadout import (
     mark_inventory_instance_worn,
 )
 from game.item_semantics import inventory_has_phone
+from game.incident_silencing import incident_case_cooperation_withheld
 from game.quick_travel_ramps import map_mode_active
 from engine.systems import System
 from game.system_support.offense_runtime import (
@@ -80,6 +81,7 @@ from game.system_support.offense_runtime import (
     CIVIC_WILDLIFE_OFFENSE_CONTEXTS,
     OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS,
     VIOLENT_OFFENSE_CONTEXTS,
+    WITNESS_TAMPERING_OFFENSE_CONTEXTS,
     _emit_action_offense_event,
     _offense_notice_radius,
     _offense_score_for_action,
@@ -986,7 +988,13 @@ class CriminalJusticeSystem(System):
             context = str(incident.get("context", case.get("context", "")) or "").strip().lower()
             if not context:
                 context = str(incident.get("merge_subject", case.get("merge_subject", "")) or "").split(":")[-1].strip().lower()
-            if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS, *CIVIC_WILDLIFE_OFFENSE_CONTEXTS}:
+            if context not in {
+                "contraband_trade",
+                "contraband_use",
+                *VIOLENT_OFFENSE_CONTEXTS,
+                *CIVIC_WILDLIFE_OFFENSE_CONTEXTS,
+                *WITNESS_TAMPERING_OFFENSE_CONTEXTS,
+            }:
                 return None
             if context in VIOLENT_OFFENSE_CONTEXTS:
                 actual_eid = incident.get("primary_actor_eid")
@@ -1007,6 +1015,7 @@ class CriminalJusticeSystem(System):
         if profile.get("incident_type") not in {
             "trespass", "tamper", "theft", "contraband", "unarmed_assault", "melee_assault",
             "armed_assault", "explosive_discharge", "homicide", "hunting_violation", "protected_species_violation",
+            "witness_intimidation", "witness_bribery",
         }:
             return None
         return profile
@@ -3291,6 +3300,15 @@ class CriminalJusticeSystem(System):
 
         knowledge = self.sim.ecs.get(IncidentKnowledge).get(actor_eid)
         record = knowledge.records.get(int(incident_id)) if knowledge is not None else None
+        if incident_case_cooperation_withheld(self.sim, actor_eid, incident_id):
+            self._record_investigator_canvas_contact(
+                investigator_eid,
+                actor_eid,
+                incident_id,
+                outcome="statement_withheld",
+                supplied_account=False,
+            )
+            return
         supplied = self._formalize_canvas_account(investigator_eid, actor_eid, incident_id, record) if isinstance(record, dict) else False
         self._record_investigator_canvas_contact(
             investigator_eid,
@@ -5779,7 +5797,13 @@ class CriminalJusticeSystem(System):
             return
         factual_offender_eid = offender_eid
         context = str(event.data.get("context", "ordinary") or "").strip().lower() or "ordinary"
-        if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS, *CIVIC_WILDLIFE_OFFENSE_CONTEXTS}:
+        if context not in {
+            "contraband_trade",
+            "contraband_use",
+            *VIOLENT_OFFENSE_CONTEXTS,
+            *CIVIC_WILDLIFE_OFFENSE_CONTEXTS,
+            *WITNESS_TAMPERING_OFFENSE_CONTEXTS,
+        }:
             return
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
@@ -6123,7 +6147,13 @@ class CriminalJusticeSystem(System):
             )
         elif incident_kind == "action_offense":
             context = str(incident.get("context", "") or "").strip().lower() or str(incident.get("merge_subject", "") or "").split(":")[-1].strip().lower()
-            if context not in {"contraband_trade", "contraband_use", *VIOLENT_OFFENSE_CONTEXTS, *CIVIC_WILDLIFE_OFFENSE_CONTEXTS}:
+            if context not in {
+                "contraband_trade",
+                "contraband_use",
+                *VIOLENT_OFFENSE_CONTEXTS,
+                *CIVIC_WILDLIFE_OFFENSE_CONTEXTS,
+                *WITNESS_TAMPERING_OFFENSE_CONTEXTS,
+            }:
                 return
             force_read = None
             effective_severity = severity_score

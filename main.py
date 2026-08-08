@@ -101,6 +101,8 @@ from game.population import human_max_hp_for_role, seed_chunk_items, seed_npc_fi
 from game.player_businesses import PlayerBusinessSystem
 from game.run_echoes import maybe_seed_run_echo_for_chunk, prime_run_echoes_runtime
 from game.systems_incidents import IncidentKnowledgeSystem
+from game.social_fact_consequences import SocialFactConsequenceSystem
+from game.social_requests import NPCSocialRequestSystem
 from game.systems_business_reputation import BusinessReputationSystem
 from game.run_bootstrap import bootstrap_normal_run, _register_justice_station_vehicles
 from game.player_config import (
@@ -616,6 +618,8 @@ def _register_runtime_systems(sim, view, player):
     drone_system = DroneSystem(sim)
     wire_consequence_system = WireConsequenceSystem(sim, player)
     incident_knowledge_system = IncidentKnowledgeSystem(sim)
+    social_fact_consequence_system = SocialFactConsequenceSystem(sim)
+    social_request_system = NPCSocialRequestSystem(sim)
     observed_incident_consequence_system = ObservedIncidentConsequenceSystem(sim)
     observed_incident_response_system = ObservedIncidentResponseSystem(sim)
     observed_incident_dispatch_system = ObservedIncidentDispatchSystem(sim)
@@ -733,6 +737,8 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(item_system, 1)
     _live_timeskip_stride(drone_system, 0)
     _live_timeskip_stride(incident_knowledge_system, 10)
+    _live_timeskip_stride(social_fact_consequence_system, 1)
+    _live_timeskip_stride(social_request_system, 1)
     _live_timeskip_stride(observed_incident_consequence_system, 10)
     _live_timeskip_stride(observed_incident_response_system, 10)
     _live_timeskip_stride(observed_incident_dispatch_system, 10)
@@ -805,6 +811,8 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(item_system)
     sim.register_system(drone_system)
     sim.register_system(incident_knowledge_system)
+    sim.register_system(social_fact_consequence_system)
+    sim.register_system(social_request_system)
     sim.register_system(observed_incident_consequence_system)
     sim.register_system(observed_incident_response_system)
     sim.register_system(observed_incident_dispatch_system)

@@ -16,6 +16,7 @@ from game.system_support.offense_runtime import (
     _offense_notice_radius,
     _offense_tier,
 )
+from game.incident_silencing import incident_spread_suppressed
 
 AI = _systems.AI
 JusticeProfile = _systems.JusticeProfile
@@ -1472,6 +1473,12 @@ class RumorSystem(System):
             offender_eid = data.get("offender_eid")
             incident_id = data.get("incident_id")
             if offender_eid is None:
+                continue
+            if incident_id is not None and incident_spread_suppressed(
+                self.sim,
+                from_eid,
+                incident_id,
+            ):
                 continue
 
             ranked_bonds = sorted(

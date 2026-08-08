@@ -20,6 +20,7 @@ from engine.visibility import observer_can_see_position
 from game.components import AI, IncidentKnowledge, Inventory, JusticeProfile, NPCWill, NPCRoutine, Position
 from game.incident_runtime import incident_record, mark_incident_registry_changed
 from game.identity_evidence import transmitted_subject_account
+from game.incident_silencing import incident_spread_suppressed
 from game.items import item_display_name
 from game.item_semantics import inventory_has_phone, item_tags
 from game.property_runtime import property_infrastructure_role as _property_infrastructure_role
@@ -81,6 +82,10 @@ class ObservedIncidentResponseSystem(System):
         self.sim.events.subscribe("observed_response_cue", self.on_observed_response_cue)
         self.sim.events.subscribe("npc_report_arrived", self.on_npc_report_arrived)
         self.sim.events.subscribe("npc_help_arrived", self.on_npc_help_arrived)
+        self.sim.events.subscribe(
+            "incident_witness_resolution",
+            self.on_incident_witness_resolution,
+        )
         if not hasattr(sim, "observed_response_stats"):
             sim.observed_response_stats = {
                 "queued": 0,
@@ -95,6 +100,7 @@ class ObservedIncidentResponseSystem(System):
 
     def on_observed_response_cue(self, event):
         data = dict(getattr(event, "data", {}) or {})
+        event.data["response_route_status"] = "invalid"
         npc_eid = data.get("npc_eid")
         incident_id = data.get("incident_id")
         try:
@@ -107,10 +113,29 @@ class ObservedIncidentResponseSystem(System):
         state = RESPONSE_STATE_BY_CUE.get(cue_kind)
         if not state:
             return
+        if (
+            not bool(data.get("bypass_witness_suppression", False))
+            and cue_kind in {"report_authority", "warn_nearby"}
+            and incident_spread_suppressed(
+                self.sim,
+                npc_eid,
+                incident_id,
+            )
+        ):
+            self._clear_actor_cue(npc_eid, incident_id)
+            self.sim.emit(Event(
+                "incident_report_cue_suppressed",
+                npc_eid=npc_eid,
+                incident_id=incident_id,
+                reason="witness_silencing_compliance",
+            ))
+            event.data["response_route_status"] = "suppressed"
+            return
 
         incident = incident_record(self.sim, incident_id) or {}
         pos = self.sim.ecs.get(Position).get(npc_eid)
         if pos is None:
+            event.data["response_route_status"] = "unavailable"
             return
 
         route = self._select_route(npc_eid, cue_kind, incident, data)
@@ -124,6 +149,7 @@ class ObservedIncidentResponseSystem(System):
                     incident_id=incident_id,
                     reason="no_report_route",
                 ))
+            event.data["response_route_status"] = "unavailable"
             return
 
         now = int(getattr(self.sim, "tick", 0))
@@ -141,6 +167,7 @@ class ObservedIncidentResponseSystem(System):
             "reason": _text(data.get("reason")),
             "deferred_report": bool(data.get("deferred_report", False)),
             "deferred_report_methods": tuple(data.get("deferred_report_methods") or ()),
+            "followup_statement": bool(data.get("followup_statement", False)),
             "created_tick": now,
             "expires_tick": now + DEFAULT_RESPONSE_TTL,
             "completed": False,
@@ -162,11 +189,69 @@ class ObservedIncidentResponseSystem(System):
             elif route.get("method") == "cell_phone":
                 self.sim.observed_response_stats["phone_reports"] += 1
             self._clear_actor_cue(npc_eid, incident_id)
+            event.data["response_route_status"] = "completed"
             return
 
         self.pending[npc_eid] = pending
         self.sim.observed_response_stats["queued"] += 1
         self._apply_pending_intent(pending)
+        event.data["response_route_status"] = "started"
+
+    def on_incident_witness_resolution(self, event):
+        data = dict(getattr(event, "data", {}) or {})
+        npc_eid = _int(data.get("npc_eid"), -1)
+        incident_id = _int(data.get("incident_id"), -1)
+        outcome = _key(data.get("outcome"))
+        if npc_eid < 0 or incident_id < 0:
+            return
+        if bool(data.get("report_already_requested", False)):
+            return
+
+        cue = self.pending.get(npc_eid)
+        same_cue = isinstance(cue, dict) and _int(cue.get("incident_id"), -2) == incident_id
+        if outcome in {"complied", "accepted", "forbearance"}:
+            if same_cue and _key(cue.get("cue_kind")) in {"report_authority", "warn_nearby"}:
+                self._drop_cue(npc_eid, cue, reason=f"witness_resolution_{outcome}")
+            elif same_cue and bool(cue.get("deferred_report", False)):
+                cue["deferred_report"] = False
+                cue["deferred_report_methods"] = ()
+            return
+        if outcome == "countered":
+            return
+
+        incident = incident_record(self.sim, incident_id)
+        if (
+            not isinstance(incident, dict)
+            or not bool(incident.get("official_reportable"))
+        ):
+            return
+        followup = bool(data.get("followup_statement", False)) or outcome in {
+            "accountability_required", "fulfilled",
+        }
+        if bool(incident.get("officially_reported")) and not followup:
+            return
+        if same_cue and _key(cue.get("cue_kind")) == "report_authority":
+            return
+        knowledge = self.sim.ecs.get(IncidentKnowledge).get(npc_eid)
+        if knowledge is not None:
+            knowledge.urgent_queue = [
+                row
+                for row in tuple(knowledge.urgent_queue or ())
+                if _int(row.get("incident_id"), -1) != incident_id
+            ]
+        self.sim.emit(Event(
+            "observed_response_cue",
+            npc_eid=npc_eid,
+            incident_id=incident_id,
+            cue_kind="report_authority",
+            target=self._incident_position(incident),
+            target_eid=None,
+            urgency=0.9,
+            reason=f"witness_resolution_{outcome}",
+            preferred_methods=REPORT_METHOD_PRIORITY,
+            deferred_report=False,
+            followup_statement=followup,
+        ))
 
     def update(self):
         now = int(getattr(self.sim, "tick", 0))
@@ -555,12 +640,20 @@ class ObservedIncidentResponseSystem(System):
         incident_id = _int(cue.get("incident_id"), -1)
         incident = incident_record(self.sim, incident_id)
         reporter_eid = _int(cue.get("npc_eid"), -1)
+        followup = bool(cue.get("followup_statement", False))
+        now = int(getattr(self.sim, "tick", 0))
         reporter_knowledge = self.sim.ecs.get(IncidentKnowledge).get(reporter_eid)
         reporter_record = reporter_knowledge.records.get(incident_id) if reporter_knowledge is not None else None
         if isinstance(reporter_record, dict):
             reporter_record["survivor_response_pending"] = False
             reporter_record["deferred_report_pending"] = False
             reporter_record["deferred_report_completed"] = True
+            reporter_record.setdefault("authority_reported_tick", now)
+            reporter_record.setdefault("authority_report_method", _text(cue.get("method")))
+            if followup:
+                followups = list(reporter_record.get("authority_followup_reports", ()) or ())
+                followups.append({"tick": now, "method": _text(cue.get("method"))})
+                reporter_record["authority_followup_reports"] = tuple(followups[-6:])
         subject_account = transmitted_subject_account(
             (reporter_record or {}).get("subject_account"),
             channel="authority_report",
@@ -571,15 +664,27 @@ class ObservedIncidentResponseSystem(System):
         )
         if isinstance(incident, dict):
             incident["officially_reported"] = True
-            incident["reported_tick"] = int(getattr(self.sim, "tick", 0))
-            incident["reported_by_eid"] = reporter_eid
-            incident["report_method"] = _text(cue.get("method"))
+            if followup:
+                incident.setdefault("reported_tick", now)
+                incident.setdefault("reported_by_eid", reporter_eid)
+                incident.setdefault("report_method", _text(cue.get("method")))
+                followups = list(incident.get("followup_reports", ()) or ())
+                followups.append({
+                    "reported_tick": now,
+                    "reported_by_eid": reporter_eid,
+                    "method": _text(cue.get("method")),
+                })
+                incident["followup_reports"] = tuple(followups[-8:])
+            else:
+                incident["reported_tick"] = now
+                incident["reported_by_eid"] = reporter_eid
+                incident["report_method"] = _text(cue.get("method"))
             mark_incident_registry_changed(self.sim)
 
         reports = getattr(self.sim, "world_traits", {}).setdefault("observed_authority_reports", {})
-        reports[str(incident_id)] = {
+        report_row = {
             "incident_id": incident_id,
-            "reported_tick": int(getattr(self.sim, "tick", 0)),
+            "reported_tick": now,
             "reported_by_eid": reporter_eid,
             "method": _text(cue.get("method")),
             "x": _int(x, 0),
@@ -587,6 +692,13 @@ class ObservedIncidentResponseSystem(System):
             "z": _int(z, 0),
             "subject_account": subject_account,
         }
+        if followup and isinstance(reports.get(str(incident_id)), dict):
+            original = reports[str(incident_id)]
+            followups = list(original.get("followups", ()) or ())
+            followups.append(report_row)
+            original["followups"] = tuple(followups[-8:])
+        else:
+            reports[str(incident_id)] = report_row
         self.sim.observed_response_stats["reported"] += 1
         observation = observation_payload_from_observers(
             self.sim,
@@ -604,6 +716,7 @@ class ObservedIncidentResponseSystem(System):
             y=_int(y, 0),
             z=_int(z, 0),
             subject_account=subject_account,
+            followup_statement=followup,
             **observation,
         ))
 

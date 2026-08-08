@@ -233,8 +233,53 @@ def _line_matches_log_filter(line, filter_id):
     return True
 
 
+def _collapse_default_log_groups(lines):
+    lines = list(lines or ())
+    grouped = {}
+    for index, line in enumerate(lines):
+        if not isinstance(line, dict):
+            continue
+        group_key = str(line.get("default_log_group", "") or "").strip()
+        if not group_key:
+            continue
+        grouped.setdefault(group_key, []).append(index)
+
+    replacements = {}
+    suppressed = set()
+    for indexes in grouped.values():
+        if len(indexes) <= 1:
+            continue
+        last_index = indexes[-1]
+        last_line = lines[last_index]
+        unique_items = {
+            str(lines[index].get("default_log_item", "") or f"line:{index}")
+            for index in indexes
+            if isinstance(lines[index], dict)
+        }
+        if len(unique_items) <= 1:
+            continue
+        replacement = dict(last_line)
+        template = str(last_line.get("default_log_summary", "") or "").strip()
+        if not template:
+            continue
+        replacement["text"] = template.format(count=len(unique_items))
+        replacement.pop("segments", None)
+        replacement["priority"] = max(_line_priority(lines[index]) for index in indexes)
+        replacements[last_index] = replacement
+        suppressed.update(indexes[:-1])
+
+    return [
+        replacements.get(index, line)
+        for index, line in enumerate(lines)
+        if index not in suppressed
+    ]
+
+
 def _filtered_log_lines(lines, filter_id):
-    return [line for line in _sorted_log_lines(lines) if _line_matches_log_filter(line, filter_id)]
+    filtered = [line for line in _sorted_log_lines(lines) if _line_matches_log_filter(line, filter_id)]
+    if _log_filter_spec(filter_id)["id"] == "priority":
+        return _collapse_default_log_groups(filtered)
+    return filtered
 
 
 def _log_prefix(line):

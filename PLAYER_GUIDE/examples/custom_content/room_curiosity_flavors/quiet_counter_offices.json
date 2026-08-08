@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "schema_version": 1
+  },
+  "quiet_counter_offices": {
+    "label": "Quiet Counter Offices",
+    "base_profile": "quiet_contact",
+    "selection_weight": 2.0,
+    "archetypes": ["corner_store"],
+    "room_kinds": ["back_office"],
+    "room_curiosity_signal": "A quiet knock pattern keeps returning to the back office."
+  }
+}

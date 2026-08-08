@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from engine.events import Event
 from engine.systems import System
+from engine.visibility import observer_can_see_position
 
 from game.components import AI, CreatureIdentity, IncidentKnowledge, Inventory, JusticeProfile, NPCTraits, Occupation, Position
 from game.bounty_authority import stamp_bounty_authority
@@ -26,6 +27,10 @@ from game.incident_runtime import (
     update_incident_propagation,
 )
 from game.identity_evidence import build_witness_subject_account, transmitted_subject_account
+from game.incident_silencing import (
+    incident_spread_suppressed,
+    record_player_known_firsthand_witness,
+)
 from game.organizations import property_org_members
 from game.property_runtime import property_covering, property_runtime_container_entries
 from game.system_support.awareness_runtime import event_observation_accountability, observation_payload_for_position
@@ -970,6 +975,7 @@ class IncidentKnowledgeSystem(System):
             "bounty_authority_scope",
             "bounty_authority_exclusions",
             "bounty_authority_evaluated_tick",
+            "related_incident_id",
         ):
             value = event.data.get(field)
             if value not in (None, "", ()):
@@ -1077,8 +1083,9 @@ class IncidentKnowledgeSystem(System):
     def _learn_self_and_witnesses(self, incident, event, *, source_kind="witnessed", witnesses=()):
         incident_id = int(incident.get("id", 0) or 0)
         offender_eid = event.data.get("offender_eid", event.data.get("eid"))
+        self_record = None
         if offender_eid is not None:
-            self._learn_incident(
+            self_record = self._learn_incident(
                 offender_eid,
                 incident_id,
                 source_kind="self",
@@ -1088,10 +1095,11 @@ class IncidentKnowledgeSystem(System):
                 propagation_depth=0,
                 queue=False,
             )
+        learned_witnesses = []
         for observer_eid in tuple(witnesses or ()):
             if observer_eid == offender_eid:
                 continue
-            self._learn_incident(
+            learned = self._learn_incident(
                 observer_eid,
                 incident_id,
                 source_kind=source_kind,
@@ -1099,6 +1107,60 @@ class IncidentKnowledgeSystem(System):
                 firsthand=True,
                 confidence=1.0,
                 propagation_depth=0,
+            )
+            if isinstance(learned, dict):
+                learned_witnesses.append(observer_eid)
+
+        player_eid = getattr(self.sim, "player_eid", None)
+        try:
+            player_authored = int(offender_eid) == int(player_eid)
+        except (TypeError, ValueError):
+            player_authored = False
+        if (
+            not player_authored
+            or not isinstance(self_record, dict)
+            or _text(event.data.get("context")).lower() == "witness_intimidation"
+        ):
+            return
+
+        player_pos = self.sim.ecs.get(Position).get(player_eid)
+        direct_target = event.data.get("victim_eid", event.data.get("target_eid"))
+        candidates = []
+        for raw_eid in (*tuple(learned_witnesses), direct_target):
+            try:
+                witness_eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            if witness_eid == int(player_eid) or witness_eid in candidates:
+                continue
+            candidates.append(witness_eid)
+
+        for witness_eid in candidates:
+            if direct_target is not None and witness_eid == _safe_int(direct_target, -1):
+                basis = "direct_target"
+            else:
+                witness_pos = self.sim.ecs.get(Position).get(witness_eid)
+                if player_pos is None or witness_pos is None:
+                    continue
+                if not observer_can_see_position(
+                    self.sim,
+                    player_eid,
+                    player_pos.x,
+                    player_pos.y,
+                    player_pos.z,
+                    witness_pos.x,
+                    witness_pos.y,
+                    witness_pos.z,
+                    12,
+                ):
+                    continue
+                basis = "mutual_scene_visibility"
+            record_player_known_firsthand_witness(
+                self.sim,
+                player_eid,
+                witness_eid,
+                incident_id,
+                basis=basis,
             )
 
     def _learn_private_bodyguard_observers(self, incident, event, observation):
@@ -1235,7 +1297,14 @@ class IncidentKnowledgeSystem(System):
         self._learn_drone_incident_reports(incident, event)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
-        if context in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge"}:
+        if context in {
+            "unarmed_assault",
+            "melee_assault",
+            "armed_assault",
+            "explosive_discharge",
+            "witness_intimidation",
+            "witness_bribery",
+        }:
             self._learn_victim_survivor_memory(incident, event)
 
     def on_npc_killed(self, event):
@@ -1561,6 +1630,8 @@ class IncidentKnowledgeSystem(System):
         from_eid = event.data.get("from_eid")
         to_eid = event.data.get("to_eid")
         if incident_id is None or from_eid is None or to_eid is None:
+            return
+        if incident_spread_suppressed(self.sim, from_eid, incident_id):
             return
         incident = incident_record(self.sim, incident_id)
         if not isinstance(incident, dict):

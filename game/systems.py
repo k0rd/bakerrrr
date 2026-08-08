@@ -4226,7 +4226,10 @@ def _resolve_ai_target(sim, ai):
     state = str(getattr(ai, "state", "") or "").strip().lower()
     coordinate_target_states = {
         "evading_authority",
+        "delivering_social_fact",
+        "heeding_social_warning",
         "leaving_property",
+        "seeking_corroboration",
         "seeking_safe_spot",
         "seeking_safety",
         "seeking_shelter",

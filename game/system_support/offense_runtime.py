@@ -65,11 +65,16 @@ CONTRABAND_OFFENSE_CONTEXTS = frozenset({
     "contraband_trade",
     "contraband_use",
 })
+WITNESS_INTIMIDATION_OFFENSE_CONTEXTS = frozenset({"witness_intimidation"})
+WITNESS_BRIBERY_OFFENSE_CONTEXTS = frozenset({"witness_bribery"})
+WITNESS_TAMPERING_OFFENSE_CONTEXTS = (
+    WITNESS_INTIMIDATION_OFFENSE_CONTEXTS | WITNESS_BRIBERY_OFFENSE_CONTEXTS
+)
 OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS = VIOLENT_OFFENSE_CONTEXTS | CONTRABAND_OFFENSE_CONTEXTS | frozenset({
     "trespass",
     "tamper",
     "item_theft",
-}) | CIVIC_WILDLIFE_OFFENSE_CONTEXTS
+}) | CIVIC_WILDLIFE_OFFENSE_CONTEXTS | WITNESS_TAMPERING_OFFENSE_CONTEXTS
 
 DEFAULT_ACTION_OFFENSE_CONTEXT_BONUS = {
     "ordinary": 0,
@@ -79,6 +84,8 @@ DEFAULT_ACTION_OFFENSE_CONTEXT_BONUS = {
     "item_theft": 48,
     "contraband_trade": 32,
     "contraband_use": 32,
+    "witness_intimidation": 58,
+    "witness_bribery": 44,
     "unarmed_assault": 14,
     "melee_assault": 28,
     "armed_assault": 56,

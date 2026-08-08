@@ -885,6 +885,16 @@ class NPCSocialDynamicsSystem(System):
 
     def _social_chatter_payload(self, speaker_eid, partner_eid, relation, tone):
         relation = str(relation or "friend").strip().lower() or "friend"
+        request_system = getattr(self.sim, "social_request_system", None)
+        if request_system is not None:
+            request_payload = request_system.social_contact_payload(
+                speaker_eid,
+                partner_eid,
+                relation,
+                tone,
+            )
+            if request_payload:
+                return request_payload
         opportunity_rows = self._social_opportunity_rows_for(speaker_eid, limit=5)
         social_knowledge_payload = choose_social_knowledge_payload(
             self.sim,
@@ -1042,6 +1052,9 @@ class SocialKnowledgeInfluenceSystem(System):
         "holding",
         "helping_victim",
         "reporting_incident",
+        "delivering_social_fact",
+        "heeding_social_warning",
+        "seeking_corroboration",
         "warning",
         "chasing",
         "evading_authority",

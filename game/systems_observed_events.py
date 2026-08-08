@@ -35,6 +35,10 @@ from game.components import (
 )
 from game.incident_runtime import incident_propagation_allowed, incident_record
 from game.identity_evidence import transmitted_subject_account
+from game.incident_silencing import (
+    incident_spread_suppressed,
+    process_expired_witness_forbearance,
+)
 from game.justice_force_runtime import classify_lawful_force
 from game.npc_relationships import incident_relationship_override
 from game.organizations import actor_org_memberships
@@ -60,6 +64,7 @@ VIOLENCE_TAGS = {
     "murder",
     "homicide",
     "death",
+    "witness_intimidation",
 }
 DISASTER_TAGS = {"fire", "explosion", "collapse", "toxic", "hazard", "disaster", "gas", "flood"}
 TRESPASS_TAGS = {"trespass", "forced_entry", "break_in", "break-in", "unauthorized"}
@@ -89,6 +94,9 @@ SOCIAL_UNAVAILABLE_STATES = {
     "helping",
     "protecting",
     "reporting_incident",
+    "delivering_social_fact",
+    "heeding_social_warning",
+    "seeking_corroboration",
     "seeking_safety",
     "warning",
 }
@@ -194,6 +202,7 @@ class ObservedIncidentConsequenceSystem(System):
     # ------------------------------------------------------------------
 
     def update(self):
+        process_expired_witness_forbearance(self.sim)
         self._process_urgent_queues()
         self._process_social_queues()
 
@@ -228,7 +237,7 @@ class ObservedIncidentConsequenceSystem(System):
                     self._remove_queue_item(knowledge, "social", incident_id)
                     continue
 
-                if not self._record_can_propagate(record, incident):
+                if not self._record_can_propagate(from_eid, record, incident):
                     self._remove_queue_item(knowledge, "social", incident_id)
                     continue
 
@@ -444,7 +453,9 @@ class ObservedIncidentConsequenceSystem(System):
         record["shared_with"] = sorted(cleaned)
         return cleaned
 
-    def _record_can_propagate(self, source_record, incident):
+    def _record_can_propagate(self, actor_eid, source_record, incident):
+        if incident_spread_suppressed(self.sim, actor_eid, source_record.get("incident_id")):
+            return False
         source_depth = _int(source_record.get("propagation_depth"), 0)
         next_depth = source_depth + 1
         if next_depth > RUMOR_HARD_PROPAGATION_LIMIT:
@@ -452,6 +463,8 @@ class ObservedIncidentConsequenceSystem(System):
         return incident_propagation_allowed(incident, next_depth)
 
     def _share_rumor(self, from_eid, to_eid, incident_id, source_record, incident):
+        if incident_spread_suppressed(self.sim, from_eid, incident_id):
+            return False
         source_depth = _int(source_record.get("propagation_depth"), 0)
         next_depth = source_depth + 1
         if next_depth > RUMOR_HARD_PROPAGATION_LIMIT:
@@ -511,7 +524,7 @@ class ObservedIncidentConsequenceSystem(System):
                 target_record["account_tags"] = tuple(account.get("account_tags", ()))
                 target_record["corruption_kind"] = account.get("corruption_kind", "")
                 target_record["shared_with"] = []
-                target_record["spreadable"] = self._record_can_propagate(target_record, incident)
+                target_record["spreadable"] = self._record_can_propagate(to_eid, target_record, incident)
                 if target_record["spreadable"]:
                     target_knowledge.queue_incident(
                         incident_id,
@@ -657,6 +670,18 @@ class ObservedIncidentConsequenceSystem(System):
             source_record,
             decision,
         )
+        silenced = incident_spread_suppressed(self.sim, eid, incident_id)
+        if silenced and cue_kind in {"report_authority", "warn_nearby"}:
+            source_record["silenced_response_suppressed_tick"] = int(now)
+            self.sim.emit(Event(
+                "incident_report_cue_suppressed",
+                npc_eid=eid,
+                incident_id=incident_id,
+                reason="witness_silencing_compliance",
+            ))
+            return True
+        if silenced:
+            deferred_report = False
 
         # Dispatched responders can keep acting/investigating, but they should
         # not recursively re-report the same incident they were assigned to.

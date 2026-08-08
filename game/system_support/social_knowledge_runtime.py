@@ -18,6 +18,10 @@ from game.components import (
     SocialKnowledge,
 )
 from game.incident_runtime import incident_knowledge_label, incident_record
+from game.incident_silencing import (
+    incident_spread_suppressed,
+    social_knowledge_incident_spread_suppressed,
+)
 from game.system_support.entity_naming import _entity_display_name
 
 
@@ -204,6 +208,8 @@ def hydrate_incident_social_knowledge(sim, actor_eid, *, limit=3, source_event="
         incident_id = _int(queue_row.get("incident_id"), 0)
         record = (incident_knowledge.records or {}).get(incident_id)
         if incident_id <= 0 or not isinstance(record, dict):
+            continue
+        if incident_spread_suppressed(sim, actor_eid, incident_id):
             continue
         incident = incident_record(sim, incident_id) or {}
         kind = incident_knowledge_label(record, incident)
@@ -538,6 +544,8 @@ def choose_social_knowledge_payload(sim, speaker_eid, partner_eid, relation, ton
         key = _text(queue_row.get("key"))
         record = (knowledge.entries or {}).get(key)
         if not isinstance(record, dict):
+            continue
+        if social_knowledge_incident_spread_suppressed(sim, speaker_eid, record):
             continue
         shared = knowledge.last_shared.get(key)
         if isinstance(shared, dict):

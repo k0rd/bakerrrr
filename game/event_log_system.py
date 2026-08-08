@@ -429,6 +429,8 @@ class EventLogSystem(System):
         self.run_warning_flags = set()
         self.last_location_building_token = ""
         self.last_location_room_token = ""
+        self._default_log_dispatch_root_id = None
+        self._default_log_groups = {}
         assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
         self._held_credits_snapshot = (
             _int_or_default(getattr(assets, "credits", 0), 0)
@@ -798,16 +800,63 @@ class EventLogSystem(System):
             dedupe_window=0,
         )
 
-    def _log(self, text, *, channel="general", priority="normal", dedupe_window=None, dedupe_key=None):
+    def _default_log_batch_metadata(self, event, *, family, item_key, summary):
+        dispatch_root_id = getattr(event, "dispatch_root_id", None)
+        family = str(family or "").strip().lower()
+        item_key = str(item_key or "").strip().lower()
+        summary = str(summary or "").strip()
+        if dispatch_root_id is None or not family or not item_key or not summary:
+            return {}
+        if dispatch_root_id != self._default_log_dispatch_root_id:
+            self._default_log_dispatch_root_id = dispatch_root_id
+            self._default_log_groups = {}
+        group_key = self._default_log_groups.get(family)
+        if not group_key:
+            sequence = int(getattr(self.sim.log, "next_sequence", len(self.sim.log.entries)) or 0)
+            group_key = f"{family}:{self.player_eid}:{sequence}"
+            self._default_log_groups[family] = group_key
+        return {
+            "default_log_group": group_key,
+            "default_log_item": item_key,
+            "default_log_summary": summary,
+        }
+
+    def _log(
+        self,
+        text,
+        *,
+        channel="general",
+        priority="normal",
+        dedupe_window=None,
+        dedupe_key=None,
+        default_log_group=None,
+        default_log_item=None,
+        default_log_summary=None,
+    ):
         self.sim.log.add(
             text,
             channel=channel,
             priority=priority,
             dedupe_window=dedupe_window,
             dedupe_key=dedupe_key,
+            default_log_group=default_log_group,
+            default_log_item=default_log_item,
+            default_log_summary=default_log_summary,
         )
 
-    def _log_rich(self, segments, *, text=None, channel="general", priority="normal", dedupe_window=None, dedupe_key=None):
+    def _log_rich(
+        self,
+        segments,
+        *,
+        text=None,
+        channel="general",
+        priority="normal",
+        dedupe_window=None,
+        dedupe_key=None,
+        default_log_group=None,
+        default_log_item=None,
+        default_log_summary=None,
+    ):
         self.sim.log.add_rich(
             segments,
             text=text,
@@ -815,6 +864,9 @@ class EventLogSystem(System):
             priority=priority,
             dedupe_window=dedupe_window,
             dedupe_key=dedupe_key,
+            default_log_group=default_log_group,
+            default_log_item=default_log_item,
+            default_log_summary=default_log_summary,
         )
 
     def _warn_once(self, key, text, *, channel="alerts", priority="high"):
@@ -1147,7 +1199,19 @@ class EventLogSystem(System):
             return f"{source.replace('_', ' ')} at {place_name}"
         return source.replace("_", " ")
 
-    def _log_npc_message(self, eid, text, *, channel="social", priority="normal", dedupe_window=None, dedupe_key=None):
+    def _log_npc_message(
+        self,
+        eid,
+        text,
+        *,
+        channel="social",
+        priority="normal",
+        dedupe_window=None,
+        dedupe_key=None,
+        default_log_group=None,
+        default_log_item=None,
+        default_log_summary=None,
+    ):
         message = str(text or "").strip()
         if not message:
             return
@@ -1158,6 +1222,9 @@ class EventLogSystem(System):
                 priority=priority,
                 dedupe_window=dedupe_window,
                 dedupe_key=dedupe_key,
+                default_log_group=default_log_group,
+                default_log_item=default_log_item,
+                default_log_summary=default_log_summary,
             )
             return
         entry = _entity_legend_line(self.sim, eid, message, player_eid=self.player_eid)
@@ -1170,6 +1237,9 @@ class EventLogSystem(System):
                 priority=priority,
                 dedupe_window=dedupe_window,
                 dedupe_key=dedupe_key,
+                default_log_group=default_log_group,
+                default_log_item=default_log_item,
+                default_log_summary=default_log_summary,
             )
         else:
             self._log(
@@ -1178,6 +1248,9 @@ class EventLogSystem(System):
                 priority=priority,
                 dedupe_window=dedupe_window,
                 dedupe_key=dedupe_key,
+                default_log_group=default_log_group,
+                default_log_item=default_log_item,
+                default_log_summary=default_log_summary,
             )
 
     def _entity_log_color(self, eid):
@@ -1582,7 +1655,37 @@ class EventLogSystem(System):
             return "other_floor"
         return "nearby"
 
-    def _log_npc_bark(self, npc_eid, quote, nearby_audio, other_floor_audio=None, *, channel="alerts", priority="high", dedupe_key=None):
+    def _log_npc_bark(
+        self,
+        npc_eid,
+        quote,
+        nearby_audio,
+        other_floor_audio=None,
+        *,
+        channel="alerts",
+        priority="high",
+        dedupe_key=None,
+        batch_event=None,
+        player_directed=False,
+    ):
+        if isinstance(priority, str):
+            critical = priority.strip().lower() in {"critical", "urgent"}
+        else:
+            try:
+                critical = int(priority) >= 3
+            except (TypeError, ValueError):
+                critical = False
+        batch_metadata = {}
+        if player_directed and not critical:
+            batch_metadata = self._default_log_batch_metadata(
+                batch_event,
+                family="player_directed_barks",
+                item_key=npc_eid,
+                summary="{count} nearby people begin shouting at you.",
+            )
+        resolved_dedupe_key = dedupe_key or quote
+        if player_directed and npc_eid is not None:
+            resolved_dedupe_key = f"{resolved_dedupe_key}:{npc_eid}"
         mode = self._npc_notice_mode(npc_eid)
         if mode == "visible":
             npc_name = self._npc_label(npc_eid)
@@ -1592,7 +1695,8 @@ class EventLogSystem(System):
                 channel=channel,
                 priority=priority,
                 dedupe_window=4,
-                dedupe_key=dedupe_key or quote,
+                dedupe_key=resolved_dedupe_key,
+                **batch_metadata,
             )
             return
         if mode == "other_floor":
@@ -1601,7 +1705,8 @@ class EventLogSystem(System):
                 channel=channel,
                 priority=priority,
                 dedupe_window=4,
-                dedupe_key=dedupe_key or quote,
+                dedupe_key=resolved_dedupe_key,
+                **batch_metadata,
             )
             return
         self._log(
@@ -1609,7 +1714,8 @@ class EventLogSystem(System):
             channel=channel,
             priority=priority,
             dedupe_window=4,
-            dedupe_key=dedupe_key or quote,
+            dedupe_key=resolved_dedupe_key,
+            **batch_metadata,
         )
 
     def _bark_location_label(self, prop):
@@ -2449,12 +2555,23 @@ class EventLogSystem(System):
         # classifies whether the player's usable knowledge materially changed.
         # Keep major changes in the default log regardless of notebook domain;
         # retain minor refinements in All without presenting them as urgent.
+        # Multiple major mutations nested under one originating action remain
+        # individually readable in All, but the default view collapses them.
         priority = "high" if significance == "major" else "normal"
+        batch_metadata = {}
+        if priority == "high":
+            batch_metadata = self._default_log_batch_metadata(
+                event,
+                family="notebook",
+                item_key=f"{notebook_kind}:{subject_id or subject_name.casefold()}",
+                summary=f"{{count}} notebook entries were updated {key_label}.",
+            )
         self._log(
             text,
             channel="knowledge",
             priority=priority,
             dedupe_window=0,
+            **batch_metadata,
         )
 
     def on_property_self_discovered(self, event):
@@ -3177,6 +3294,8 @@ class EventLogSystem(System):
             channel="alerts",
             priority="high",
             dedupe_key=f"bodyguard_warning:{guard_eid}:{subject_eid}",
+            batch_event=event,
+            player_directed=subject_eid == self.player_eid,
         )
 
     def on_bodyguard_threat_response(self, event):
@@ -4143,6 +4262,8 @@ class EventLogSystem(System):
                 channel="alerts",
                 priority="high",
                 dedupe_key=dedupe_key,
+                batch_event=event,
+                player_directed=True,
             )
             return
 
@@ -4161,13 +4282,16 @@ class EventLogSystem(System):
         npc_eid = event.data.get("npc_eid")
         quote, nearby_audio, other_floor_audio = self._investigation_bark(npc_eid, event)
         combat_noise = self._investigation_combat_noise(npc_eid, event)
+        direct_target = self._investigation_bark_is_direct_target(npc_eid, event)
         self._log_npc_bark(
             npc_eid,
             quote,
             nearby_audio,
             other_floor_audio,
             channel="combat" if combat_noise else "alerts",
-            priority="critical" if combat_noise and self._investigation_bark_is_direct_target(npc_eid, event) else "high",
+            priority="critical" if combat_noise and direct_target else "high",
+            batch_event=event,
+            player_directed=direct_target,
         )
 
     def _purposeful_search_is_player_legible(self, event):
@@ -4317,7 +4441,16 @@ class EventLogSystem(System):
         relation = event.data.get("relation", "ally")
         npc_eid = event.data.get("npc_eid")
         quote, nearby_audio, other_floor_audio = self._protect_ally_bark(npc_eid, relation)
-        self._log_npc_bark(npc_eid, quote, nearby_audio, other_floor_audio, channel="alerts", priority="high")
+        self._log_npc_bark(
+            npc_eid,
+            quote,
+            nearby_audio,
+            other_floor_audio,
+            channel="alerts",
+            priority="high",
+            batch_event=event,
+            player_directed=True,
+        )
 
     def on_npc_warn_property(self, event):
         if event.data.get("offender_eid") != self.player_eid:
@@ -4325,7 +4458,16 @@ class EventLogSystem(System):
         prop = self.sim.properties.get(event.data.get("property_id"))
         npc_eid = event.data.get("npc_eid")
         quote, nearby_audio, other_floor_audio = self._warning_bark(npc_eid, event, prop)
-        self._log_npc_bark(npc_eid, quote, nearby_audio, other_floor_audio, channel="alerts", priority="high")
+        self._log_npc_bark(
+            npc_eid,
+            quote,
+            nearby_audio,
+            other_floor_audio,
+            channel="alerts",
+            priority="high",
+            batch_event=event,
+            player_directed=True,
+        )
 
     def on_npc_conversation_refused(self, event):
         if event.data.get("target_eid") != self.player_eid:
@@ -4340,6 +4482,8 @@ class EventLogSystem(System):
             channel="alerts",
             priority="high",
             dedupe_key=f"conversation_refused:{npc_eid}",
+            batch_event=event,
+            player_directed=True,
         )
 
     def on_npc_eject_target(self, event):
@@ -4376,6 +4520,8 @@ class EventLogSystem(System):
             channel="alerts",
             priority="high",
             dedupe_key=f"eject:{npc_eid}:{place}",
+            batch_event=event,
+            player_directed=True,
         )
 
     def on_npc_ejection_complied(self, event):
@@ -4853,7 +4999,16 @@ class EventLogSystem(System):
 
         npc_eid = event.data.get("npc_eid")
         quote, nearby_audio, other_floor_audio = self._offended_bark(event)
-        self._log_npc_bark(npc_eid, quote, nearby_audio, other_floor_audio, channel="alerts", priority="high")
+        self._log_npc_bark(
+            npc_eid,
+            quote,
+            nearby_audio,
+            other_floor_audio,
+            channel="alerts",
+            priority="high",
+            batch_event=event,
+            player_directed=True,
+        )
 
     def on_npc_sneak_reaction(self, event):
         if event.data.get("source_eid") != self.player_eid:
@@ -4882,6 +5037,8 @@ class EventLogSystem(System):
             channel="alerts",
             priority="high" if reaction in {"tailing", "property_challenge", "personal_space"} else "normal",
             dedupe_key=f"sneak_reaction:{npc_eid}:{context}:{repeat_count}",
+            batch_event=event,
+            player_directed=True,
         )
 
     def on_item_picked_up(self, event):
@@ -6169,6 +6326,8 @@ class EventLogSystem(System):
             channel="alerts",
             priority="high",
             dedupe_key=f"meaningful-object:{event.data.get('object_id')}:{speaker_eid}",
+            batch_event=event,
+            player_directed=offender_eid == self.player_eid,
         )
 
     def on_item_stolen(self, event):
@@ -6571,21 +6730,43 @@ class EventLogSystem(System):
     def on_status_applied(self, event):
         if event.data.get("eid") != self.player_eid:
             return
+        status_key = str(event.data.get("status", "effect") or "effect").strip().lower() or "effect"
         status_text = _status_effect_label(
-            event.data.get("status", "effect"),
+            status_key,
             duration=event.data.get("duration", 0),
             modifiers=event.data.get("modifiers", {}),
             title=True,
             limit=3,
         )
         prefix = "Status applied" if bool(event.data.get("new", True)) else "Status refreshed"
-        self._log(f"{prefix}: {status_text}.", channel="status", priority="high")
+        self._log(
+            f"{prefix}: {status_text}.",
+            channel="status",
+            priority="high",
+            **self._default_log_batch_metadata(
+                event,
+                family="status_change",
+                item_key=status_key,
+                summary="{count} status effects changed.",
+            ),
+        )
 
     def on_status_expired(self, event):
         if event.data.get("eid") != self.player_eid:
             return
-        status = _humanize_slug(event.data.get("status", "effect"), title=True) or "Effect"
-        self._log(f"Status expired: {status}.", channel="status", priority="high")
+        status_key = str(event.data.get("status", "effect") or "effect").strip().lower() or "effect"
+        status = _humanize_slug(status_key, title=True) or "Effect"
+        self._log(
+            f"Status expired: {status}.",
+            channel="status",
+            priority="high",
+            **self._default_log_batch_metadata(
+                event,
+                family="status_change",
+                item_key=status_key,
+                summary="{count} status effects changed.",
+            ),
+        )
 
     def on_movement_misdirected(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -6865,9 +7046,11 @@ class EventLogSystem(System):
         tone = str(event.data.get("tone", "gossip") or "").strip().lower()
         topic = str(event.data.get("topic", "") or "").strip().lower()
         quote = str(event.data.get("quote", "") or "").strip()
+        response_quote = str(event.data.get("response_quote", "") or "").strip()
         summary = str(event.data.get("summary", "") or "").strip()
         channel = str(event.data.get("channel", "social") or "").strip().lower() or "social"
         priority = str(event.data.get("priority", "low") or "").strip().lower() or "low"
+        audible_radius = max(1, int(event.data.get("audible_radius", 8) or 8))
         dedupe_key = f"npc-socialized:{topic or tone}:{summary.lower() or npc_eid}"
 
         if player_pos is not None and bool(event.data.get("level_local", False)):
@@ -6884,10 +7067,21 @@ class EventLogSystem(System):
                 visible = True
                 break
 
+        audible = False
+        if player_pos is not None:
+            for pos in (npc_pos, partner_pos):
+                if pos is None:
+                    continue
+                horizontal = abs(int(player_pos.x) - int(pos.x)) + abs(int(player_pos.y) - int(pos.y))
+                floor_cost = abs(int(player_pos.z) - int(pos.z)) * 4
+                if horizontal + floor_cost <= audible_radius:
+                    audible = True
+                    break
+
         if visible:
             speaker = self._npc_label(npc_eid)
             partner = self._npc_label(partner_eid)
-            if quote:
+            if quote and audible:
                 self._log_visible_social_quote(
                     npc_eid,
                     partner_eid,
@@ -6899,6 +7093,18 @@ class EventLogSystem(System):
                     dedupe_window=8,
                     dedupe_key=dedupe_key,
                 )
+                if response_quote:
+                    self._log_visible_social_quote(
+                        partner_eid,
+                        npc_eid,
+                        partner,
+                        speaker,
+                        response_quote,
+                        channel=channel,
+                        priority=priority,
+                        dedupe_window=8,
+                        dedupe_key=f"{dedupe_key}:response",
+                    )
                 return
             if tone == "conspiring":
                 text = f"{speaker} huddles with {partner}."
@@ -6909,6 +7115,9 @@ class EventLogSystem(System):
             else:
                 text = f"{speaker} chats with {partner}."
             self._log_npc_message(npc_eid, text, dedupe_window=4, dedupe_key=dedupe_key)
+            return
+
+        if not audible:
             return
 
         if player_pos and npc_pos and int(player_pos.z) != int(npc_pos.z):
@@ -9696,6 +9905,12 @@ class EventLogSystem(System):
                 priority="high",
                 dedupe_window=6,
                 dedupe_key=f"skill-up:{skill_id}:{value:.1f}",
+                **self._default_log_batch_metadata(
+                    event,
+                    family="skill_improved",
+                    item_key=skill_id,
+                    summary="{count} skills improved.",
+                ),
             )
             return
 
@@ -9707,6 +9922,12 @@ class EventLogSystem(System):
                 priority="high",
                 dedupe_window=6,
                 dedupe_key=f"skill-down:{skill_id}:{value:.1f}",
+                **self._default_log_batch_metadata(
+                    event,
+                    family="skill_neglect",
+                    item_key=skill_id,
+                    summary="{count} skills slipped from neglect.",
+                ),
             )
             return
 
@@ -9716,6 +9937,12 @@ class EventLogSystem(System):
             priority="high",
             dedupe_window=6,
             dedupe_key=f"skill-shift:{skill_id}:{value:.1f}",
+            **self._default_log_batch_metadata(
+                event,
+                family="skill_shifted",
+                item_key=skill_id,
+                summary="{count} skills changed.",
+            ),
         )
 
     def on_lighting_phase_changed(self, event):

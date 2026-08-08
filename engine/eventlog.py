@@ -79,7 +79,18 @@ class EventLog:
             text = "".join(plain)
         return normalized, str(text)
 
-    def _make_entry(self, text, *, channel=None, priority=None, tick=None, segments=None):
+    def _make_entry(
+        self,
+        text,
+        *,
+        channel=None,
+        priority=None,
+        tick=None,
+        segments=None,
+        default_log_group=None,
+        default_log_item=None,
+        default_log_summary=None,
+    ):
         tick = self._normalize_tick(tick)
         entry = {
             "text": str(text),
@@ -90,6 +101,14 @@ class EventLog:
         }
         if segments:
             entry["segments"] = segments
+        for key, value in (
+            ("default_log_group", default_log_group),
+            ("default_log_item", default_log_item),
+            ("default_log_summary", default_log_summary),
+        ):
+            value = str(value or "").strip()
+            if value:
+                entry[key] = value
         return entry
 
     def _dedupe_key(self, entry, dedupe_key=None):
@@ -134,6 +153,11 @@ class EventLog:
         refreshed["text"] = str(entry.get("text", refreshed.get("text", "")))
         if entry.get("segments"):
             refreshed["segments"] = entry["segments"]
+        for key in ("default_log_group", "default_log_item", "default_log_summary"):
+            if key in entry:
+                refreshed[key] = entry[key]
+            else:
+                refreshed.pop(key, None)
         self.entries.append(refreshed)
         self._next_sequence += 1
         self._trim_recent_keys()
@@ -167,12 +191,27 @@ class EventLog:
 
         return True
 
-    def add(self, text, *, channel=None, priority=None, tick=None, dedupe_window=None, dedupe_key=None):
+    def add(
+        self,
+        text,
+        *,
+        channel=None,
+        priority=None,
+        tick=None,
+        dedupe_window=None,
+        dedupe_key=None,
+        default_log_group=None,
+        default_log_item=None,
+        default_log_summary=None,
+    ):
         entry = self._make_entry(
             text,
             channel=channel,
             priority=priority,
             tick=tick,
+            default_log_group=default_log_group,
+            default_log_item=default_log_item,
+            default_log_summary=default_log_summary,
         )
         self._append(entry, dedupe_window=dedupe_window, dedupe_key=dedupe_key)
 
@@ -186,6 +225,9 @@ class EventLog:
         tick=None,
         dedupe_window=None,
         dedupe_key=None,
+        default_log_group=None,
+        default_log_item=None,
+        default_log_summary=None,
     ):
         normalized, entry_text = self._normalized_segments(segments)
         if text is not None:
@@ -196,9 +238,16 @@ class EventLog:
             priority=priority,
             tick=tick,
             segments=normalized,
+            default_log_group=default_log_group,
+            default_log_item=default_log_item,
+            default_log_summary=default_log_summary,
         )
         self._append(entry, dedupe_window=dedupe_window, dedupe_key=dedupe_key)
 
     def recent(self, n=10):
 
         return self.entries[-n:]
+
+    @property
+    def next_sequence(self):
+        return int(self._next_sequence)

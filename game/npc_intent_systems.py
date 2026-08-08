@@ -712,8 +712,11 @@ def _resolve_ai_target(*args, **kwargs):
 
 
 _ADJACENT_INTERACTION_STATES = frozenset({
+    "delivering_social_fact",
+    "fulfilling_social_request",
     "helping_victim",
     "seeking_companionship",
+    "seeking_corroboration",
     "seeking_social",
     "seeking_street_appraiser",
     "seeking_street_buyer",
@@ -746,6 +749,11 @@ def _adjacent_interaction_approach_target(sim, eid, ai, pos, target):
         (1, 1),
     ):
         ax, ay = tx + dx, ty + dy
+        # Contact completion is orthogonally adjacent.  A diagonally adjacent
+        # current cell is therefore not an arrival tile even though it appears
+        # in this eight-way candidate ring.
+        if ax == int(pos.x) and ay == int(pos.y):
+            continue
         traversable, _reason = _is_traversable_for(sim, eid, ax, ay, tz)
         if not traversable:
             continue
@@ -2356,6 +2364,10 @@ class NPCWillSystem(System):
         "holding",
         "helping_victim",
         "reporting_incident",
+        "delivering_social_fact",
+        "fulfilling_social_request",
+        "heeding_social_warning",
+        "seeking_corroboration",
         "warning",
         "ejecting_target",
         "leaving_property",
@@ -3368,7 +3380,17 @@ class NPCWillSystem(System):
             # Observed incident response intents are assigned by
             # ObservedIncidentResponseSystem. Preserve them here so the
             # ordinary needs/duty planner does not immediately stomp them.
-            if ai.state in {"reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property"} and ai.target:
+            if ai.state in {
+                "reporting_incident",
+                "helping_victim",
+                "delivering_social_fact",
+                "fulfilling_social_request",
+                "heeding_social_warning",
+                "warning",
+                "seeking_corroboration",
+                "ejecting_target",
+                "leaving_property",
+            } and ai.target:
                 will.intent = ai.state
                 will.target = ai.target
                 will.target_eid = ai.target_eid
@@ -4798,6 +4820,10 @@ class NPCInvestigateSystem(System):
         "protecting": 1,
         "helping_victim": 1,
         "reporting_incident": 2,
+        "delivering_social_fact": 2,
+        "fulfilling_social_request": 2,
+        "heeding_social_warning": 1,
+        "seeking_corroboration": 2,
         "warning": 1,
         "ejecting_target": 1,
         "leaving_property": 1,
@@ -4837,6 +4863,10 @@ class NPCInvestigateSystem(System):
         "protecting",
         "helping_victim",
         "reporting_incident",
+        "delivering_social_fact",
+        "fulfilling_social_request",
+        "heeding_social_warning",
+        "seeking_corroboration",
         "warning",
         "ejecting_target",
         "leaving_property",
@@ -4886,6 +4916,9 @@ class NPCInvestigateSystem(System):
     REPLAN_ON_NO_PATH_STATES = {
         "scavenging",
         "selling_scavenged",
+        "delivering_social_fact",
+        "fulfilling_social_request",
+        "seeking_corroboration",
         "casing_target",
         "committing_property_crime",
         "rendezvousing_crew",
@@ -5253,6 +5286,40 @@ class NPCInvestigateSystem(System):
                 current_tick=self.sim.tick,
                 reason="unreachable_watch_post",
             )
+        if state == "seeking_corroboration":
+            self.sim.emit(Event(
+                "npc_corroboration_contact_failed",
+                npc_eid=eid,
+                contact_eid=getattr(ai, "social_fact_contact_eid", ai.target_eid),
+                thread_id=getattr(ai, "social_fact_action_thread_id", ""),
+                reason="unreachable_contact",
+                x=int(pos.x) if pos is not None else None,
+                y=int(pos.y) if pos is not None else None,
+                z=int(pos.z) if pos is not None else None,
+            ))
+        if state == "delivering_social_fact":
+            self.sim.emit(Event(
+                "npc_social_fact_delivery_failed",
+                npc_eid=eid,
+                contact_eid=getattr(ai, "social_fact_contact_eid", ai.target_eid),
+                thread_id=getattr(ai, "social_fact_action_thread_id", ""),
+                delivery_kind=getattr(ai, "social_fact_delivery_kind", ""),
+                reason="unreachable_contact",
+                x=int(pos.x) if pos is not None else None,
+                y=int(pos.y) if pos is not None else None,
+                z=int(pos.z) if pos is not None else None,
+            ))
+        if state == "fulfilling_social_request":
+            self.sim.emit(Event(
+                "npc_social_request_failed",
+                npc_eid=eid,
+                requester_eid=ai.target_eid,
+                request_id=getattr(ai, "social_request_id", ""),
+                reason="unreachable_requester",
+                x=int(pos.x) if pos is not None else None,
+                y=int(pos.y) if pos is not None else None,
+                z=int(pos.z) if pos is not None else None,
+            ))
         ai.state = "idle"
         ai.target = None
         ai.target_eid = None
@@ -7213,6 +7280,40 @@ class NPCInvestigateSystem(System):
                         z=tz,
                     ))
 
+                if ai.state == "seeking_corroboration":
+                    self.sim.emit(Event(
+                        "npc_corroboration_contact_arrived",
+                        npc_eid=eid,
+                        contact_eid=getattr(ai, "social_fact_contact_eid", ai.target_eid),
+                        thread_id=getattr(ai, "social_fact_action_thread_id", ""),
+                        x=tx,
+                        y=ty,
+                        z=tz,
+                    ))
+
+                if ai.state == "delivering_social_fact":
+                    self.sim.emit(Event(
+                        "npc_social_fact_delivery_arrived",
+                        npc_eid=eid,
+                        contact_eid=getattr(ai, "social_fact_contact_eid", ai.target_eid),
+                        thread_id=getattr(ai, "social_fact_action_thread_id", ""),
+                        delivery_kind=getattr(ai, "social_fact_delivery_kind", ""),
+                        x=tx,
+                        y=ty,
+                        z=tz,
+                    ))
+
+                if ai.state == "fulfilling_social_request":
+                    self.sim.emit(Event(
+                        "npc_social_request_arrived",
+                        npc_eid=eid,
+                        requester_eid=ai.target_eid,
+                        request_id=getattr(ai, "social_request_id", ""),
+                        x=tx,
+                        y=ty,
+                        z=tz,
+                    ))
+
                 if ai.state == "protecting":
                     self.sim.emit(Event("npc_guarding_target", npc_eid=eid, target_eid=ai.target_eid, x=tx, y=ty, z=tz))
 
@@ -7307,7 +7408,7 @@ class NPCInvestigateSystem(System):
                         self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
                     continue
 
-            if ai.state in {"investigating", "seeking_social", "seeking_companionship", "protecting", "reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property", "soliciting_player", "seeking_street_buyer", "seeking_street_appraiser"} and _manhattan(pos.x, pos.y, tx, ty) <= 1:
+            if ai.state in {"investigating", "seeking_social", "seeking_companionship", "seeking_corroboration", "delivering_social_fact", "fulfilling_social_request", "protecting", "reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property", "soliciting_player", "seeking_street_buyer", "seeking_street_appraiser"} and _manhattan(pos.x, pos.y, tx, ty) <= 1:
                 if ai.state == "reporting_incident":
                     self.sim.emit(Event(
                         "npc_report_arrived",
@@ -7346,6 +7447,53 @@ class NPCInvestigateSystem(System):
                     ai.state = "idle"
                     ai.target = None
                     ai.target_eid = None
+                elif ai.state == "seeking_corroboration":
+                    self.sim.emit(Event(
+                        "npc_corroboration_contact_arrived",
+                        npc_eid=eid,
+                        contact_eid=getattr(ai, "social_fact_contact_eid", ai.target_eid),
+                        thread_id=getattr(ai, "social_fact_action_thread_id", ""),
+                        x=pos.x,
+                        y=pos.y,
+                        z=tz,
+                    ))
+                    if str(ai.state or "").strip().lower() == "seeking_corroboration":
+                        ai.state = "idle"
+                        ai.target = None
+                        ai.target_eid = None
+                elif ai.state == "delivering_social_fact":
+                    self.sim.emit(Event(
+                        "npc_social_fact_delivery_arrived",
+                        npc_eid=eid,
+                        contact_eid=getattr(ai, "social_fact_contact_eid", ai.target_eid),
+                        thread_id=getattr(ai, "social_fact_action_thread_id", ""),
+                        delivery_kind=getattr(ai, "social_fact_delivery_kind", ""),
+                        x=pos.x,
+                        y=pos.y,
+                        z=tz,
+                    ))
+                    if str(ai.state or "").strip().lower() == "delivering_social_fact":
+                        ai.state = "idle"
+                        ai.target = None
+                        ai.target_eid = None
+                elif ai.state == "fulfilling_social_request":
+                    request_id = str(getattr(ai, "social_request_id", "") or "")
+                    self.sim.emit(Event(
+                        "npc_social_request_arrived",
+                        npc_eid=eid,
+                        requester_eid=ai.target_eid,
+                        request_id=request_id,
+                        x=pos.x,
+                        y=pos.y,
+                        z=tz,
+                    ))
+                    if (
+                        str(ai.state or "").strip().lower() == "fulfilling_social_request"
+                        and str(getattr(ai, "social_request_id", "") or "") == request_id
+                    ):
+                        ai.state = "idle"
+                        ai.target = None
+                        ai.target_eid = None
                 elif ai.state == "investigating":
                     if purposeful_observation_holds_at_target(
                         getattr(ai, "investigation_context", None),
@@ -7604,6 +7752,11 @@ class NPCInvestigateSystem(System):
                         relationship_kind=(chatter or {}).get("relationship_kind", ""),
                         social_knowledge_key=(chatter or {}).get("social_knowledge_key", ""),
                         source_domain=(chatter or {}).get("source_domain", ""),
+                        request_id=(chatter or {}).get("request_id", ""),
+                        request_kind=(chatter or {}).get("request_kind", ""),
+                        request_status=(chatter or {}).get("request_status", ""),
+                        response_quote=(chatter or {}).get("response_quote", ""),
+                        audible_radius=(chatter or {}).get("audible_radius", 8),
                         confidence_hint=(chatter or {}).get("confidence_hint", 0.0),
                         property_lead_kind=(chatter or {}).get("property_lead_kind", ""),
                         culture_key=(chatter or {}).get("culture_key", ""),

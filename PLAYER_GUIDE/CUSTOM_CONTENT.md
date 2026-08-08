@@ -16,6 +16,7 @@ Copy-ready examples are included here:
 ```bash
 PLAYER_GUIDE/examples/custom_content/items/morning_glory_seeds.json
 PLAYER_GUIDE/examples/custom_content/world_profiles/canal_slums.json
+PLAYER_GUIDE/examples/custom_content/room_curiosity_flavors/quiet_counter_offices.json
 PLAYER_GUIDE/examples/custom_content/ui_themes/coastal_glass.json
 ```
 

@@ -99,6 +99,16 @@ class Simulation:
         self.city_anchor_by_chunk = {}
         self.npc_move_tick_stride = 1
         self.world_traits = {}
+        # Persistent, versioned social history.  The graph module owns schema
+        # normalization; Simulation only guarantees a save-visible container.
+        self.social_fact_graph = {}
+        # Persistent operational state for graph-backed social consequences.
+        # Immutable speech/history remains in social_fact_graph; this smaller
+        # container owns work that may still be in motion between conversations.
+        self.social_fact_actions = {}
+        # Actor-to-actor requests keep mutable lifecycle state here while each
+        # proposal, answer, and outcome is retained in the Social Fact graph.
+        self.social_requests = {}
         self.organization_index = {}
         self.world_rumors = []
         self.active_ejections = {}
@@ -207,6 +217,12 @@ class Simulation:
             briefing_state = self.world_traits.get("organization_actor_briefings")
             if isinstance(briefing_state, dict):
                 briefing_state["query_cache"] = {}
+        if not isinstance(getattr(self, "social_fact_graph", None), dict):
+            self.social_fact_graph = {}
+        if not isinstance(getattr(self, "social_fact_actions", None), dict):
+            self.social_fact_actions = {}
+        if not isinstance(getattr(self, "social_requests", None), dict):
+            self.social_requests = {}
         if not isinstance(getattr(self, "_underground_plan_cache", None), dict):
             self._underground_plan_cache = {}
         if not isinstance(getattr(self, "flora_patches", None), dict):
@@ -3369,11 +3385,11 @@ class Simulation:
         self.systems.append(system)
 
     def emit(self, event):
+        with self.events.dispatch_scope():
+            self.events.emit(event)
 
-        self.events.emit(event)
-
-        for m in self.mutators:
-            m.on_event(event, self)
+            for m in self.mutators:
+                m.on_event(event, self)
 
     def _system_runtime_tag(self, system):
         tag = str(getattr(system, "runtime_tag", "") or "").strip().lower()
@@ -3413,7 +3429,8 @@ class Simulation:
                 continue
             if stride > 1 and (int(self.tick) % stride != 0):
                 continue
-            system.update()
+            with self.events.dispatch_scope():
+                system.update()
 
     def _update_cycle(
         self,
@@ -3489,4 +3506,5 @@ class Simulation:
         for system in self.systems:
             if self._system_runtime_tag(system) != "render":
                 continue
-            system.update()
+            with self.events.dispatch_scope():
+                system.update()
