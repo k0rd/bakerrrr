@@ -3681,6 +3681,8 @@ class RenderSystem(System):
                 display_pos = _property_display_position(prop, active_quest_target=active_quest_target)
                 if not display_pos:
                     continue
+                if int(display_pos[2]) != int(active_z):
+                    continue
                 screen_x = display_pos[0] - camera_x
                 screen_y = display_pos[1] - camera_y
                 if not (0 <= screen_x < map_w and 0 <= screen_y < map_h):
@@ -5201,7 +5203,10 @@ class RenderSystem(System):
                 try:
                     service_key = str(casino_ui.get("service", "") or "").strip().lower()
                     mode_key = str(casino_ui.get("mode", "") or "").strip().lower()
-                    art_request_h = min(7, max(4, body_h // 2))
+                    if service_key == "texas_holdem_cash":
+                        art_request_h = min(11, max(7, body_h - 2))
+                    else:
+                        art_request_h = min(7, max(4, body_h // 2))
                     if mode_key == "result" and service_key in {"keno", "plinko"}:
                         art_request_h = min(4, art_request_h)
                     text_rows_after_art = body_h - art_request_h - 1

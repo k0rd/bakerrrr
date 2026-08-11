@@ -1543,6 +1543,31 @@ class Simulation:
             max_rooms=max_rooms,
         )
 
+        # A casino's ground floor is an activity space, not a shallow foyer.
+        # Keep the public gaming room open enough for full spatial tables whose
+        # chairs are real actor anchors; service rooms can live on other floors
+        # or remain abstract venue infrastructure in a compact one-floor shell.
+        if (
+            int(floor) == 0
+            and floor_rooms
+            and str(floor_rooms[0]).strip().lower() in {"gaming_floor", "main_floor"}
+            and width >= 7
+            and height >= 5
+        ):
+            return {
+                "rooms": (
+                    {
+                        "kind": floor_rooms[0],
+                        "left": interior_left,
+                        "right": interior_right,
+                        "top": interior_top,
+                        "bottom": interior_bottom,
+                    },
+                ),
+                "walls": (),
+                "doors": (),
+            }
+
         if len(floor_rooms) <= 1 or width < 2 or height < 2:
             return {
                 "rooms": (

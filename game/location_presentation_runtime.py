@@ -596,6 +596,14 @@ def _tile_label(sim, tile, x, y, z=0):
     if feature_style:
         return feature_style[2]
 
+    semantic_id = str(getattr(tile, "semantic_id", "") or "").strip().lower()
+    if semantic_id == "fixture_holdem_cash_felt":
+        return "Texas hold'em cash table"
+    if semantic_id == "fixture_holdem_cash_seat":
+        return "hold'em table chair"
+    if semantic_id == "fixture_holdem_cash_dealer":
+        return "hold'em dealer station"
+
     glyph = str(tile.glyph)[:1] or "."
     structure = sim.structure_at(x, y, z) if hasattr(sim, "structure_at") else None
     if not tile.walkable and glyph == "#" and _building_id_from_structure(structure):

@@ -153,6 +153,7 @@ from game.run_pressure import RunPressureSystem
 from game.run_objectives import evaluate_run_objective, seed_run_objective
 from game.run_epilogue import RunEpilogueLedgerSystem
 from game.service_menu import ServiceMenuSystem
+from game.holdem_cash_runtime import HoldemCashSystem
 from game.site_services import SiteServiceSystem
 from game.skill_progression import SkillProgressionSystem
 from game.skills import seed_skill_profile
@@ -677,6 +678,7 @@ def _register_runtime_systems(sim, view, player):
     justice_vehicle_misuse_system = JusticeVehicleMisuseSystem(sim)
     social_knowledge_influence_system = SocialKnowledgeInfluenceSystem(sim)
     npc_will_system = NPCWillSystem(sim)
+    holdem_cash_system = HoldemCashSystem(sim)
     npc_emergency_system = NPCEmergencyActionSystem(sim)
     business_pulse_aftermath_system = BusinessPulseAftermathSystem(sim)
     business_pulse_scene_system = BusinessPulseSceneSystem(sim, player)
@@ -775,6 +777,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(door_wait_system, 10)
     _live_timeskip_stride(criminal_drive_system, 60)
     _live_timeskip_stride(npc_will_system, 12)
+    _live_timeskip_stride(holdem_cash_system, 4)
     _live_timeskip_stride(business_pulse_scene_system, 0)
     _live_timeskip_stride(business_scene_work_system, 5)
     _live_timeskip_stride(npc_weapon_system, 1)
@@ -869,6 +872,9 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(justice_vehicle_misuse_system)
     sim.register_system(social_knowledge_influence_system)
     sim.register_system(npc_will_system)
+    # Reassert table-bound intent after ordinary will selection and before
+    # movement resolves the actor's real chair anchor.
+    sim.register_system(holdem_cash_system)
     sim.register_system(npc_emergency_system)
     sim.register_system(business_pulse_scene_system)
     sim.register_system(business_scene_work_system)

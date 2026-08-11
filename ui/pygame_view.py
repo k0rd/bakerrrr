@@ -9726,7 +9726,10 @@ class PygameView:
         if not service:
             return 0
         mode = str(state.get("mode", "") or "").strip().lower()
-        art_cap = 4 if service in {"keno", "plinko"} and mode == "result" else 7
+        if service == "texas_holdem_cash":
+            art_cap = 11
+        else:
+            art_cap = 4 if service in {"keno", "plinko"} and mode == "result" else 7
         used_cells = max(4, min(height, art_cap))
         rect = self.pygame.Rect(x * self.cell_px, y * self.cell_px, width * self.cell_px, used_cells * self.cell_px)
         if rect.w <= 0 or rect.h <= 0:
@@ -10186,7 +10189,82 @@ class PygameView:
             label = f"KENO {hit_count}/{pick_count}" if pick_count else "KENO"
             _center_text(label, self.pygame.Rect(board.left + 4, board.top + 1, board.w - 8, title_h), gold, self._ui_bold_font)
 
-        if service in {"video_poker", "baccarat", "three_card_poker", "twenty_one", "casino_holdem"}:
+        def _draw_holdem_cash():
+            seats = [row for row in list(payload.get("seats", ()) or ()) if isinstance(row, dict)]
+            inner = rect.inflate(-max(8, self.cell_px), -max(6, self.cell_px // 2))
+            table_rect = self.pygame.Rect(
+                inner.left + max(self.cell_px * 3, inner.w // 7),
+                inner.top + max(self.cell_px, inner.h // 7),
+                max(self.cell_px * 10, inner.w - max(self.cell_px * 6, inner.w // 4)),
+                max(self.cell_px * 4, inner.h - max(self.cell_px * 2, inner.h // 4)),
+            )
+            self.pygame.draw.ellipse(self.surface, rail, table_rect.inflate(max(8, self.cell_px // 2), max(8, self.cell_px // 2)))
+            self.pygame.draw.ellipse(self.surface, felt_alt, table_rect)
+            self.pygame.draw.ellipse(self.surface, gold, table_rect, max(1, self.cell_px // 10))
+
+            seat_w = max(self.cell_px * 5, min(self.cell_px * 9, inner.w // 5))
+            seat_h = max(self.cell_px + 5, min(self.cell_px * 2, inner.h // 4))
+            anchors = (
+                (table_rect.left + table_rect.w // 5, table_rect.top - seat_h // 2),
+                (table_rect.right - table_rect.w // 5, table_rect.top - seat_h // 2),
+                (table_rect.right + seat_w // 4, table_rect.top + table_rect.h // 4),
+                (table_rect.right + seat_w // 4, table_rect.bottom - table_rect.h // 4),
+                (table_rect.right - table_rect.w // 5, table_rect.bottom + seat_h // 2),
+                (table_rect.centerx, table_rect.bottom + seat_h // 2),
+                (table_rect.left + table_rect.w // 5, table_rect.bottom + seat_h // 2),
+                (table_rect.left - seat_w // 4, table_rect.centery),
+            )
+            for idx in range(8):
+                seat = next((row for row in seats if int(row.get("index", -1)) == idx), {})
+                cx, cy = anchors[idx]
+                seat_rect = self.pygame.Rect(0, 0, seat_w, seat_h)
+                seat_rect.center = (int(cx), int(cy))
+                occupied = seat.get("actor_eid") is not None
+                active = bool(seat.get("acting"))
+                folded = bool(seat.get("folded"))
+                fill = (37, 45, 43) if occupied else (23, 66, 55)
+                border = cursor if active else (muted if folded else gold)
+                self.pygame.draw.rect(self.surface, fill, seat_rect, border_radius=max(2, self.cell_px // 5))
+                self.pygame.draw.rect(self.surface, border, seat_rect, 2 if active else 1, border_radius=max(2, self.cell_px // 5))
+                label = f"{idx + 1} OPEN"
+                if occupied:
+                    dealer_button = " D" if seat.get("button") else ""
+                    label = f"{seat.get('name', 'Player')}{dealer_button} · {int(seat.get('stack', 0) or 0)}"
+                _center_text(label, seat_rect, muted if folded else (cursor if active else white), self._ui_bold_font if active else self._ui_font)
+
+            board = list(payload.get("board", ()) or ())
+            pot = int(payload.get("pot", 0) or 0)
+            phase = str(payload.get("phase", "waiting") or "waiting").upper()
+            _center_text(
+                f"{phase} · POT {pot}",
+                self.pygame.Rect(table_rect.left, table_rect.top + 2, table_rect.w, max(self.cell_px, 12)),
+                gold,
+                self._ui_bold_font,
+            )
+            if board:
+                card_gap = max(2, self.cell_px // 4)
+                card_w = max(self.cell_px + 2, min(self.cell_px * 2, (table_rect.w - self.cell_px * 3) // 5))
+                card_h = max(self.cell_px * 2, min(self.cell_px * 3, table_rect.h // 2))
+                total_w = len(board) * card_w + max(0, len(board) - 1) * card_gap
+                start_x = table_rect.centerx - total_w // 2
+                top = table_rect.centery - card_h // 2
+                for idx, card in enumerate(board[:5]):
+                    _draw_card(self.pygame.Rect(start_x + idx * (card_w + card_gap), top, card_w, card_h), card)
+            else:
+                _center_text("NEXT HAND FORMING", table_rect.inflate(-self.cell_px * 2, -self.cell_px * 2), muted, self._ui_bold_font)
+
+            hero_cards = list(payload.get("hero_cards", ()) or ())
+            if hero_cards:
+                hero_w = max(self.cell_px * 2, min(self.cell_px * 3, table_rect.w // 7))
+                hero_h = max(self.cell_px * 2, min(self.cell_px * 3, table_rect.h // 2))
+                hero_left = table_rect.centerx - ((hero_w * len(hero_cards)) + (4 * max(0, len(hero_cards) - 1))) // 2
+                hero_top = min(rect.bottom - hero_h - 4, table_rect.bottom - hero_h // 2)
+                for idx, card in enumerate(hero_cards[:2]):
+                    _draw_card(self.pygame.Rect(hero_left + idx * (hero_w + 4), hero_top, hero_w, hero_h), card)
+
+        if service == "texas_holdem_cash":
+            _draw_holdem_cash()
+        elif service in {"video_poker", "baccarat", "three_card_poker", "twenty_one", "casino_holdem"}:
             top = rect.top + 9
             dealer = payload.get("dealer_cards") or payload.get("banker_cards") or ()
             player = payload.get("cards") or payload.get("player_cards") or ()

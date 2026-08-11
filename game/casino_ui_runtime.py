@@ -17,6 +17,7 @@ CASINO_TABLE_SERVICE_IDS = (
     "baccarat",
     "three_card_poker",
     "casino_holdem",
+    "texas_holdem_cash",
     "twenty_one",
     "three_bones",
     "bloom_cards",

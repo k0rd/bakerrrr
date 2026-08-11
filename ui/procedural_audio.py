@@ -70,8 +70,12 @@ WILDERNESS_NIGHT_CRICKET_CLUSTER_STARTS = (0.07,)
 AMBIENT_ONE_SHOT_REST_SECONDS_BY_CUE = {
     "ambient_water": (5.2, 6.0),
     "ambient_campfire": (5.2, 6.0),
-    "ambient_biome_wilderness_day": (18.0, 42.0),
-    "ambient_biome_wilderness_night": (14.0, 36.0),
+    "ambient_biome_wilderness_day": (24.0, 90.0),
+    "ambient_biome_wilderness_night": (20.0, 78.0),
+}
+AMBIENT_ONE_SHOT_REST_MODE_SECONDS_BY_CUE = {
+    "ambient_biome_wilderness_day": 64.0,
+    "ambient_biome_wilderness_night": 56.0,
 }
 AMBIENT_ONE_SHOT_INITIAL_DELAY_SECONDS_BY_CUE = {
     "ambient_biome_wilderness_day": (2.0, 8.0),
@@ -89,6 +93,37 @@ WORLD_SOUND_EVENTS = {
     "structure_broken",
     "explosion_triggered",
 }
+CASINO_SOUND_EVENTS = {
+    "casino_chips_bet",
+    "casino_menu_backed",
+    "casino_menu_confirmed",
+    "casino_menu_moved",
+    "holdem_cash_actor_left",
+    "holdem_cash_action",
+    "holdem_cash_actor_seated",
+    "holdem_cash_hand_settled",
+    "holdem_cash_hand_started",
+    "site_service_used",
+}
+CASINO_MACHINE_SERVICE_IDS = frozenset({
+    "slots",
+    "video_poker",
+    "keno",
+    "plinko",
+    "crash",
+})
+CASINO_GAME_SERVICE_IDS = CASINO_MACHINE_SERVICE_IDS | frozenset({
+    "baccarat",
+    "bloom_cards",
+    "casino_holdem",
+    "craps",
+    "roulette",
+    "texas_holdem_cash",
+    "three_bones",
+    "three_bright",
+    "three_card_poker",
+    "twenty_one",
+})
 
 
 @dataclass(frozen=True)
@@ -255,6 +290,88 @@ def _transaction(duration: float, sample_rate: int) -> list[float]:
     _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=0.085, frequency=440.0, amplitude=0.105, shape="triangle", decay=2.8)
     _add_tone(samples, sample_rate=sample_rate, start=0.058, duration=0.10, frequency=659.25, amplitude=0.12, shape="triangle", decay=3.2)
     _add_noise(samples, sample_rate=sample_rate, start=0.055, duration=0.025, amplitude=0.025, seed=41, color="high", release=0.012, decay=5.0)
+    return samples
+
+
+def _casino_menu_move(duration: float, sample_rate: int) -> list[float]:
+    """A tiny dry cursor pip, audible without becoming a menu melody."""
+
+    samples = _blank(duration, sample_rate)
+    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=0.045, frequency=920.0, end_frequency=980.0, amplitude=0.050, shape="triangle", attack=0.003, release=0.022, decay=2.5)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.018, amplitude=0.010, seed=43, color="high", release=0.010, decay=5.0)
+    return samples
+
+
+def _casino_menu_confirm(duration: float, sample_rate: int) -> list[float]:
+    """Two restrained terminal pips for accepting a casino-menu choice."""
+
+    samples = _blank(duration, sample_rate)
+    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=0.065, frequency=690.0, end_frequency=730.0, amplitude=0.052, shape="triangle", attack=0.004, release=0.030, decay=2.8)
+    _add_tone(samples, sample_rate=sample_rate, start=0.045, duration=0.070, frequency=930.0, end_frequency=990.0, amplitude=0.046, shape="triangle", attack=0.004, release=0.032, decay=2.8)
+    return samples
+
+
+def _casino_menu_back(duration: float, sample_rate: int) -> list[float]:
+    """A very short downward answer for backing out of casino UI."""
+
+    samples = _blank(duration, sample_rate)
+    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=0.090, frequency=670.0, end_frequency=430.0, amplitude=0.047, shape="triangle", attack=0.004, release=0.040, decay=2.5)
+    return samples
+
+
+def _casino_chip_bet(duration: float, sample_rate: int) -> list[float]:
+    """Three ceramic contacts: lift, toss, and a chip settling on felt."""
+
+    samples = _blank(duration, sample_rate)
+    for index, (start, frequency, amplitude) in enumerate((
+        (0.000, 1_620.0, 0.080),
+        (0.058, 1_940.0, 0.092),
+        (0.116, 1_480.0, 0.068),
+    )):
+        _add_noise(samples, sample_rate=sample_rate, start=start, duration=0.022, amplitude=0.034, seed=45 + index, color="high", release=0.012, decay=5.5)
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.052, frequency=frequency, end_frequency=frequency * 0.82, amplitude=amplitude, shape="triangle", attack=0.002, release=0.027, decay=4.3)
+    _add_noise(samples, sample_rate=sample_rate, start=0.108, duration=0.066, amplitude=0.022, seed=48, color="low", attack=0.006, release=0.040, decay=3.8)
+    return samples
+
+
+def _casino_chip_stack(duration: float, sample_rate: int) -> list[float]:
+    """A dealer raking loose chips into a compact stack."""
+
+    samples = _blank(duration, sample_rate)
+    contacts = (0.000, 0.041, 0.076, 0.107, 0.134, 0.158, 0.180, 0.204, 0.230)
+    for index, start in enumerate(contacts):
+        frequency = 1_310.0 + ((index % 3) * 230.0)
+        _add_noise(samples, sample_rate=sample_rate, start=start, duration=0.027, amplitude=0.032, seed=81 + index, color="high", release=0.014, decay=5.0)
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.055, frequency=frequency, end_frequency=frequency * 0.78, amplitude=0.061, shape="triangle", attack=0.002, release=0.030, decay=4.0)
+    _add_noise(samples, sample_rate=sample_rate, start=0.012, duration=0.250, amplitude=0.019, seed=90, color="low", attack=0.010, release=0.065, decay=1.8)
+    return samples
+
+
+def _casino_chip_payout(duration: float, sample_rate: int) -> list[float]:
+    """A slightly wider chip cascade that reads as chips coming back."""
+
+    samples = _blank(duration, sample_rate)
+    contacts = (0.000, 0.048, 0.091, 0.130, 0.166, 0.200, 0.232, 0.263, 0.293)
+    for index, start in enumerate(contacts):
+        frequency = 1_220.0 + ((index % 4) * 205.0) + (index * 24.0)
+        _add_noise(samples, sample_rate=sample_rate, start=start, duration=0.029, amplitude=0.034, seed=93 + index, color="high", release=0.015, decay=5.2)
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.060, frequency=frequency, end_frequency=frequency * 0.84, amplitude=0.065, shape="triangle", attack=0.002, release=0.033, decay=3.9)
+    _add_noise(samples, sample_rate=sample_rate, start=0.025, duration=0.315, amplitude=0.019, seed=102, color="low", attack=0.012, release=0.075, decay=1.7)
+    return samples
+
+
+def _casino_machine_win(duration: float, sample_rate: int) -> list[float]:
+    """A modest electromechanical win ding, deliberately short of a fanfare."""
+
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=0.026, amplitude=0.026, seed=105, color="high", release=0.014, decay=6.0)
+    for start, frequency, amplitude in (
+        (0.010, 783.99, 0.070),
+        (0.112, 987.77, 0.061),
+        (0.226, 1_174.66, 0.052),
+    ):
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.245, frequency=frequency, end_frequency=frequency * 0.997, amplitude=amplitude, shape="triangle", attack=0.004, release=0.145, decay=3.0)
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.190, frequency=frequency * 2.01, end_frequency=frequency * 2.00, amplitude=amplitude * 0.24, attack=0.003, release=0.120, decay=3.5)
     return samples
 
 
@@ -602,6 +719,17 @@ def _ambient_biome_wilderness_night(duration: float, sample_rate: int) -> list[f
     return samples
 
 
+def _ambient_one_shot_rest_seconds(cue_name: str, rng: random.Random) -> float:
+    rest_min, rest_max = AMBIENT_ONE_SHOT_REST_SECONDS_BY_CUE.get(
+        cue_name,
+        (6.0, 12.0),
+    )
+    mode = AMBIENT_ONE_SHOT_REST_MODE_SECONDS_BY_CUE.get(cue_name)
+    if mode is None:
+        return float(rng.uniform(float(rest_min), float(rest_max)))
+    return float(rng.triangular(float(rest_min), float(rest_max), float(mode)))
+
+
 def _ambient_biome_coastal(duration: float, sample_rate: int) -> list[float]:
     samples = _blank(duration, sample_rate)
     _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.060, seed=471, color="low", attack=0.34, release=0.36)
@@ -770,6 +898,13 @@ SFX_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
     CueDefinition("door", 0.24, _door, gain=0.74, cooldown=0.08),
     CueDefinition("pickup", 0.17, _pickup, gain=0.72, cooldown=0.06),
     CueDefinition("transaction", 0.18, _transaction, gain=0.72, cooldown=0.12),
+    CueDefinition("casino_menu_move", 0.06, _casino_menu_move, gain=0.42, cooldown=0.025),
+    CueDefinition("casino_menu_confirm", 0.13, _casino_menu_confirm, gain=0.46, cooldown=0.06),
+    CueDefinition("casino_menu_back", 0.11, _casino_menu_back, gain=0.42, cooldown=0.06),
+    CueDefinition("casino_chip_bet", 0.19, _casino_chip_bet, gain=0.64, cooldown=0.10),
+    CueDefinition("casino_chip_stack", 0.31, _casino_chip_stack, gain=0.60, cooldown=0.18),
+    CueDefinition("casino_chip_payout", 0.40, _casino_chip_payout, gain=0.63, cooldown=0.20),
+    CueDefinition("casino_machine_win", 0.55, _casino_machine_win, gain=0.58, cooldown=0.30),
     CueDefinition("work", 0.29, _work, gain=0.74, cooldown=0.15),
     CueDefinition("gunfire", 0.32, _gunfire, gain=0.86, cooldown=0.055),
     CueDefinition("flora_sparkle", 0.24, _flora_sparkle, gain=0.62, cooldown=0.16),
@@ -850,6 +985,13 @@ EVENT_CUE_VARIANTS: dict[str, tuple[str, ...]] = {
 WORLD_EVENT_CUE_MAP: dict[str, str] = {
     "structure_broken": "breaking_glass",
     "explosion_triggered": "explosion",
+}
+
+CASINO_EVENT_CUE_MAP: dict[str, str] = {
+    "casino_chips_bet": "casino_chip_bet",
+    "casino_menu_backed": "casino_menu_back",
+    "casino_menu_confirmed": "casino_menu_confirm",
+    "casino_menu_moved": "casino_menu_move",
 }
 
 
@@ -933,6 +1075,14 @@ def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
         raise AssertionError("an action event variant references an unknown cue")
     if set(WORLD_EVENT_CUE_MAP.values()) - set(names):
         raise AssertionError("a world event references an unknown cue")
+    casino_cue_names = set(CASINO_EVENT_CUE_MAP.values()) | {
+        "casino_chip_bet",
+        "casino_chip_stack",
+        "casino_chip_payout",
+        "casino_machine_win",
+    }
+    if casino_cue_names - set(names):
+        raise AssertionError("a casino event references an unknown cue")
     music_cues = tuple(cue for cue in cues if cue.definition.bus == "music")
     if tuple(cue.definition.name for cue in music_cues) != MUSIC_CUE_NAMES:
         raise AssertionError("the cached music passage family drifted")
@@ -1371,7 +1521,7 @@ class PygameAudioRuntime:
             cue.definition.name: pygame.mixer.Sound(file=io.BytesIO(cue.wav))
             for cue in cues
         }
-        for event_type in EVENT_CUE_MAP.keys() | EVENT_CUE_VARIANTS.keys() | WORLD_SOUND_EVENTS | ENVIRONMENT_DIRTY_EVENTS:
+        for event_type in EVENT_CUE_MAP.keys() | EVENT_CUE_VARIANTS.keys() | WORLD_SOUND_EVENTS | ENVIRONMENT_DIRTY_EVENTS | CASINO_SOUND_EVENTS:
             sim.events.subscribe(event_type, self.on_event)
         sim.events.subscribe("quit_requested", self.on_quit_requested)
 
@@ -1446,11 +1596,109 @@ class PygameAudioRuntime:
         self.event_counts[event.type] += 1
         self.play(cue_name, source_event=event.type, volume_scale=volume_scale)
 
+    def _casino_ui_matches(self, event, *, service="", table_id="") -> bool:
+        state = getattr(self.sim, "casino_ui", None)
+        if not isinstance(state, dict) or not bool(state.get("open")):
+            return False
+        event_property = str(event.data.get("property_id", "") or "")
+        state_property = str(state.get("property_id", "") or "")
+        if event_property and event_property != state_property:
+            return False
+        service = str(service or event.data.get("service", "") or "").strip().lower()
+        state_service = str(state.get("service", "") or "").strip().lower()
+        if service and service != state_service:
+            return False
+        table_id = str(table_id or event.data.get("table_id", "") or "")
+        if table_id:
+            art = state.get("art") if isinstance(state.get("art"), dict) else {}
+            visible_table_id = str(art.get("table_id", "") or "")
+            if visible_table_id != table_id:
+                return False
+        return True
+
+    def _play_casino_event(self, event) -> None:
+        data = event.data
+        if event.type in CASINO_EVENT_CUE_MAP:
+            if data.get("eid") != self.player_eid or not self._casino_ui_matches(event):
+                return
+            cue_name = CASINO_EVENT_CUE_MAP[event.type]
+        elif event.type == "site_service_used":
+            service = str(data.get("service", "") or "").strip().lower()
+            if service not in CASINO_GAME_SERVICE_IDS:
+                return
+            if data.get("eid") != self.player_eid or not self._casino_ui_matches(event, service=service):
+                return
+            try:
+                payout = max(0, int(data.get("payout", 0) or 0))
+                net_credits = int(data.get("net_credits", 0) or 0)
+            except (TypeError, ValueError):
+                payout = 0
+                net_credits = 0
+            if service in CASINO_MACHINE_SERVICE_IDS:
+                if net_credits <= 0:
+                    return
+                cue_name = "casino_machine_win"
+            elif payout > 0:
+                cue_name = "casino_chip_payout"
+            else:
+                cue_name = "casino_chip_stack"
+        elif event.type in {
+            "holdem_cash_action",
+            "holdem_cash_actor_left",
+            "holdem_cash_actor_seated",
+            "holdem_cash_hand_started",
+            "holdem_cash_hand_settled",
+        }:
+            actor_is_player = data.get("actor_eid") == self.player_eid
+            physical_player_cash = actor_is_player and event.type in {"holdem_cash_actor_seated", "holdem_cash_actor_left"}
+            if not physical_player_cash and not self._casino_ui_matches(event, service="texas_holdem_cash"):
+                return
+            state = getattr(self.sim, "casino_ui", {})
+            art = state.get("art") if isinstance(state.get("art"), dict) else {}
+            if event.type == "holdem_cash_action":
+                try:
+                    paid = max(0, int(data.get("paid", 0) or 0))
+                except (TypeError, ValueError):
+                    paid = 0
+                if paid <= 0:
+                    return
+                cue_name = "casino_chip_bet"
+            elif event.type == "holdem_cash_hand_started":
+                cue_name = "casino_chip_bet"
+            elif event.type == "holdem_cash_actor_seated":
+                cue_name = "casino_chip_stack"
+            elif event.type == "holdem_cash_actor_left":
+                try:
+                    chips = max(0, int(data.get("chips", 0) or 0))
+                except (TypeError, ValueError):
+                    chips = 0
+                if chips <= 0:
+                    return
+                cue_name = "casino_chip_payout" if actor_is_player else "casino_chip_stack"
+            else:
+                awards = data.get("awards") if isinstance(data.get("awards"), dict) else {}
+                try:
+                    hero_seat = int(art.get("hero_seat"))
+                except (TypeError, ValueError):
+                    hero_seat = -1
+                player_won = any(
+                    str(index) == str(hero_seat) and int(amount or 0) > 0
+                    for index, amount in awards.items()
+                )
+                cue_name = "casino_chip_payout" if player_won else "casino_chip_stack"
+        else:
+            return
+        self.event_counts[event.type] += 1
+        self.play(cue_name, source_event=event.type)
+
     def on_event(self, event) -> None:
         if not self.enabled:
             return
         if event.type in WORLD_SOUND_EVENTS:
             self._play_world_event(event)
+            return
+        if event.type in CASINO_SOUND_EVENTS:
+            self._play_casino_event(event)
             return
         is_player_event = self._event_is_for_player(event)
         if event.type in ENVIRONMENT_DIRTY_EVENTS and is_player_event:
@@ -1666,11 +1914,7 @@ class PygameAudioRuntime:
         if channel is None or sound is None or definition is None:
             return
         channel.play(sound, loops=0, fade_ms=90)
-        rest_min, rest_max = AMBIENT_ONE_SHOT_REST_SECONDS_BY_CUE.get(
-            cue_name,
-            (6.0, 12.0),
-        )
-        rest_seconds = self._ambient_rng.uniform(float(rest_min), float(rest_max))
+        rest_seconds = _ambient_one_shot_rest_seconds(cue_name, self._ambient_rng)
         self._ambient_one_shot_next_at[group] = (
             float(now) + float(definition.duration) + rest_seconds
         )
@@ -1908,6 +2152,10 @@ __all__ = [
     "AMBIENT_ATTACK_SECONDS_BY_GROUP",
     "AMBIENT_CUE_BY_GROUP",
     "AMBIENT_RELEASE_SECONDS_BY_GROUP",
+    "CASINO_EVENT_CUE_MAP",
+    "CASINO_GAME_SERVICE_IDS",
+    "CASINO_MACHINE_SERVICE_IDS",
+    "CASINO_SOUND_EVENTS",
     "CUE_DEFINITIONS",
     "DEFAULT_MUSIC_PROFILE",
     "DEFAULT_CHANNEL_COUNT",

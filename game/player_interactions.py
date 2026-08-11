@@ -1451,6 +1451,17 @@ class PlayerInteractionRuntime:
         preferred_dir = target_dir or self.action_system._player_interact_direction(eid, pos)
         exact_direction = bool(force_direction and preferred_dir is not None)
 
+        # Cash-table chairs are spatial fixtures inside a larger building
+        # property.  Give the exact chair/felt interaction first refusal so an
+        # adjacent table opens the live felt rather than the casino's root menu.
+        if preferred_dir is not None:
+            from game.holdem_cash_runtime import holdem_cash_interact_at
+
+            target_x = int(pos.x) + int(preferred_dir[0])
+            target_y = int(pos.y) + int(preferred_dir[1])
+            if holdem_cash_interact_at(self.sim, eid, target_x, target_y, int(pos.z)):
+                return
+
         bounty_actor = self.nearest_bounty_restrainable_actor(
             eid,
             pos,

@@ -32,6 +32,14 @@ from game.casino_ui_runtime import (
     default_casino_ui_state,
     ensure_casino_ui_state,
 )
+from game.holdem_cash_runtime import (
+    HOLDEM_CASH_SERVICE_ID,
+    holdem_cash_join,
+    holdem_cash_leave,
+    holdem_cash_public_snapshot,
+    holdem_cash_submit_action,
+    holdem_cash_table_for_property,
+)
 from game.finance_services import _nearest_property_with_finance_service
 from game.ecology_registry import (
     FAUNA_CULL_FEE,
@@ -206,6 +214,7 @@ class ServiceMenuSystem(System):
         self.sim.events.subscribe("property_interact", self.on_property_interact)
         self.sim.events.subscribe("player_action", self.on_player_action)
         self.sim.events.subscribe("casino_ui_action", self.on_casino_ui_action)
+        self.sim.events.subscribe("holdem_cash_view_request", self.on_holdem_cash_view_request)
         self.sim.events.subscribe("dialog_close_request", self.on_dialog_close_request)
         self.sim.events.subscribe("service_menu_execute_request", self.on_service_menu_execute_request)
         self.sim.events.subscribe("site_service_started", self.on_site_service_started)
@@ -219,7 +228,20 @@ class ServiceMenuSystem(System):
 
     def update(self):
         state = self._casino_ui_state()
-        if not bool(state.get("open")) or str(state.get("service", "")).strip().lower() != "crash":
+        if not bool(state.get("open")):
+            return
+        service = str(state.get("service", "")).strip().lower()
+        if service == HOLDEM_CASH_SERVICE_ID:
+            prop = self.sim.properties.get(state.get("property_id"))
+            table = holdem_cash_table_for_property(self.sim, state.get("property_id"), ensure=False)
+            snapshot = holdem_cash_public_snapshot(self.sim, table, self.player_eid)
+            current = state.get("session") if isinstance(state.get("session"), dict) else {}
+            if isinstance(prop, dict) and isinstance(snapshot, dict) and int(snapshot.get("revision", 0) or 0) != int(current.get("revision", -1) or -1):
+                selected = self._selected_casino_row()
+                selected_id = str(selected.get("id", "") or "") if isinstance(selected, dict) else ""
+                self._open_holdem_cash_table(prop, table=table, selected_id=selected_id)
+            return
+        if service != "crash":
             return
         session = _casino_crash_normalize_session(state.get("session"))
         if not session or session.get("phase") != "live":
@@ -322,6 +344,17 @@ class ServiceMenuSystem(System):
     def _wallet_credits(self):
         assets = self._assets_for(self.player_eid)
         return int(getattr(assets, "credits", 0)) if assets else 0
+
+    def _emit_casino_audio_event(self, event_type, **data):
+        state = self._casino_ui_state()
+        payload = {
+            "eid": self.player_eid,
+            "property_id": state.get("property_id"),
+            "service": str(state.get("service", "") or "").strip().lower(),
+            "mode": str(state.get("mode", "") or "").strip().lower(),
+        }
+        payload.update(data)
+        self.sim.emit(Event(str(event_type), **payload))
 
     def _ticks_per_hour(self):
         world_traits = getattr(self.sim, "world_traits", {})
@@ -515,6 +548,7 @@ class ServiceMenuSystem(System):
         if assets and amount > 0:
             assets.credits = max(0, int(assets.credits) - amount)
             credits = int(assets.credits)
+            self._emit_casino_audio_event("casino_chips_bet", amount=int(amount))
         return True, credits
 
     def _casino_selectable_indices(self, rows=None):
@@ -806,6 +840,9 @@ class ServiceMenuSystem(System):
         if not profile:
             self._present_service_result("Casino", ["That game is not running on this floor right now."], property_id=prop.get("id"))
             return
+        if str(service or "").strip().lower() == HOLDEM_CASH_SERVICE_ID:
+            self._open_holdem_cash_table(prop, selected_id=selected_id)
+            return
         host_style = str(host_style or casino_host_style(prop)).strip().lower() or "floor"
         prop_name = self._casino_prop_name(prop)
         table_context = _casino_table_context(self.sim, prop, game=service)
@@ -982,13 +1019,14 @@ class ServiceMenuSystem(System):
         if selected is None:
             state["selected_index"] = selectable[0]
             return True
+        previous = int(selected)
         try:
             cursor = selectable.index(selected)
         except ValueError:
             cursor = 0
         cursor = max(0, min(len(selectable) - 1, cursor + int(delta)))
         state["selected_index"] = selectable[cursor]
-        return True
+        return int(state["selected_index"]) != previous
 
     def _move_keno_cursor(self, session, dx, dy):
         current = _casino_keno_normalize_session(session)
@@ -1347,6 +1385,116 @@ class ServiceMenuSystem(System):
             mode="casino:holdem:hand",
             session=session,
         )
+
+    def _open_holdem_cash_table(self, prop, *, table=None, notice="", selected_id=""):
+        table = table if isinstance(table, dict) else holdem_cash_table_for_property(self.sim, prop, ensure=True)
+        if not isinstance(table, dict):
+            self._present_service_result(
+                "Texas Hold'em Cash",
+                [
+                    "This floor cannot fit the live table yet.",
+                    "The house needs a clear seven-by-five gaming-floor footprint for the felt and all eight chairs.",
+                ],
+                property_id=prop.get("id") if isinstance(prop, dict) else None,
+            )
+            return
+        snapshot = holdem_cash_public_snapshot(self.sim, table, self.player_eid)
+        if not isinstance(snapshot, dict):
+            return
+        seats = list(snapshot.get("seats", ()) or ())
+        hero_index = snapshot.get("hero_seat")
+        hero = next((seat for seat in seats if seat.get("index") == hero_index), None)
+        acting = next((seat for seat in seats if seat.get("acting")), None)
+        body_lines = []
+        if str(notice or "").strip():
+            body_lines.append(str(notice).strip())
+        body_lines.append(str(snapshot.get("last_hand_summary", "The table is live.") or "The table is live."))
+        board = " ".join(str(card) for card in list(snapshot.get("board", ()) or ())) or "--"
+        body_lines.append(f"Board {board} | Pot {_credit_amount_label(snapshot.get('pot', 0))}.")
+        if isinstance(hero, dict):
+            cards = " ".join(str(card) for card in list(hero.get("cards", ()) or ())) or "--"
+            body_lines.append(f"Your seat {int(hero.get('index', 0)) + 1}: {cards} | stack {_credit_amount_label(hero.get('stack', 0))}.")
+        else:
+            body_lines.append("Walk up to an open gold chair and interact to take that exact seat.")
+        if isinstance(acting, dict):
+            body_lines.append(f"Action: {acting.get('name', 'Player')} at seat {int(acting.get('index', 0)) + 1}.")
+
+        rows = []
+        legal = list(snapshot.get("legal_actions", ()) or ())
+        action_labels = {
+            "fold": "Fold",
+            "check": "Check",
+            "call": f"Call {_credit_amount_label(max(0, int(snapshot.get('current_bet', 0) or 0) - int((hero or {}).get('street_bet', 0) or 0)))}",
+            "raise_small": "Raise · two big blinds",
+            "raise_pot": "Raise · pot",
+            "all_in": "All in",
+        }
+        for action in legal:
+            rows.append({"id": f"cash:{action}", "label": action_labels.get(action, action.replace("_", " ").title())})
+        if isinstance(hero, dict):
+            if not legal:
+                rows.append({"id": "cash:leave_after", "label": "Stand after this hand"})
+            rows.append({"id": "cash:leave_now", "label": "Stand now"})
+        else:
+            player_pos = self._position_for(self.player_eid)
+            nearby = []
+            if player_pos is not None:
+                for seat in list(table.get("seats", ()) or ()):
+                    if seat.get("actor_eid") is not None or seat.get("reserved_eid") is not None:
+                        continue
+                    distance = abs(int(seat.get("x", 0)) - int(player_pos.x)) + abs(int(seat.get("y", 0)) - int(player_pos.y))
+                    if int(seat.get("z", 0)) == int(player_pos.z) and distance <= 2:
+                        nearby.append((distance, int(seat.get("index", 0))))
+            for _distance, seat_index in sorted(nearby):
+                rows.append({
+                    "id": f"cash:join:{seat_index}",
+                    "label": f"Take seat {seat_index + 1} · {_credit_amount_label(snapshot.get('buy_in', 0))} buy-in",
+                })
+
+        rail_lines = [
+            "Cash table",
+            f"Blinds {snapshot.get('small_blind', 0)}/{snapshot.get('big_blind', 0)}",
+            f"Hand {snapshot.get('hand_number', 0)}",
+            str(snapshot.get("phase", "waiting")).title(),
+            "",
+            "Seats",
+        ]
+        for seat in seats:
+            marker = "D" if seat.get("button") else (">" if seat.get("acting") else " ")
+            if seat.get("actor_eid") is None:
+                rail_lines.append(f"{marker}{int(seat.get('index', 0)) + 1} open")
+                continue
+            status = "fold" if seat.get("folded") else ("all-in" if seat.get("all_in") else str(seat.get("last_action", "") or "in"))
+            rail_lines.append(f"{marker}{int(seat.get('index', 0)) + 1} {seat.get('name', 'Player')} {seat.get('stack', 0)} {status}".rstrip())
+        state = self._casino_ui_state()
+        self._open_casino_ui(
+            mode="live",
+            prop=prop,
+            host_style="floor",
+            title=f"Texas Hold'em Cash: {self._casino_prop_name(prop)}",
+            subtitle="Live table · the world keeps moving",
+            body_lines=body_lines,
+            rail_lines=rail_lines,
+            rows=rows,
+            hint="Choose your action. Esc stands and folds if a hand is live.",
+            close_pending=False,
+            floor_page=state.get("floor_page", "games"),
+            service=HOLDEM_CASH_SERVICE_ID,
+            session=snapshot,
+            art=snapshot,
+            return_to="floor",
+            return_option_id=HOLDEM_CASH_SERVICE_ID,
+            selected_id=selected_id,
+            pause_time=False,
+        )
+
+    def on_holdem_cash_view_request(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self.sim.properties.get(event.data.get("property_id"))
+        table = getattr(self.sim, "holdem_cash_tables", {}).get(str(event.data.get("table_id", "")))
+        if isinstance(prop, dict) and isinstance(table, dict):
+            self._open_holdem_cash_table(prop, table=table)
 
     def _open_video_poker_table(self, prop, session):
         session = _casino_video_poker_normalize_session(session)
@@ -2257,6 +2405,37 @@ class ServiceMenuSystem(System):
         if not isinstance(prop, dict):
             title, lines = self._stale_service_option_lines(service or option_id)
             self._present_service_result(title, lines, property_id=prop.get("id") if isinstance(prop, dict) else None)
+            return True
+
+        if service == HOLDEM_CASH_SERVICE_ID and option_id.startswith("cash:"):
+            table = holdem_cash_table_for_property(self.sim, prop, ensure=False)
+            if not isinstance(table, dict):
+                self._present_service_result("Texas Hold'em Cash", ["That table is no longer on this floor."], property_id=prop.get("id"))
+                return True
+            command = option_id.partition(":")[2]
+            notice = ""
+            if command.startswith("join:"):
+                try:
+                    seat_index = int(command.rsplit(":", 1)[-1])
+                except (TypeError, ValueError):
+                    seat_index = -1
+                result = holdem_cash_join(self.sim, table, self.player_eid, seat_index=seat_index, actor_kind="player")
+                if not result.get("ok"):
+                    if result.get("reason") == "insufficient_funds":
+                        notice = f"You need {_credit_amount_label(result.get('need', table.get('buy_in', 0)))} to buy in."
+                    else:
+                        notice = "That chair is no longer open."
+            elif command == "leave_after":
+                holdem_cash_leave(self.sim, table, self.player_eid, immediate=False)
+                notice = "You will rack up after this hand."
+            elif command == "leave_now":
+                holdem_cash_leave(self.sim, table, self.player_eid, immediate=True)
+                notice = "You stand now; a live hand is folded."
+            else:
+                result = holdem_cash_submit_action(self.sim, table, self.player_eid, command)
+                if not result.get("ok"):
+                    notice = "The action moved before your input reached the felt."
+            self._open_holdem_cash_table(prop, table=table, notice=notice)
             return True
 
         if service == "plinko" and option_id.startswith("plinko:lane:"):
@@ -5893,10 +6072,18 @@ class ServiceMenuSystem(System):
             action = "back"
 
         if action == "tab" and host_style == "floor" and mode in {"floor", "services"}:
+            self._emit_casino_audio_event("casino_menu_moved", direction="tab")
             self._open_casino_floor(prop, page="services" if mode == "floor" else "games")
             return
 
         if action == "back":
+            self._emit_casino_audio_event("casino_menu_backed")
+            if service == HOLDEM_CASH_SERVICE_ID and mode == "live":
+                table = holdem_cash_table_for_property(self.sim, state.get("property_id"), ensure=False)
+                if isinstance(table, dict):
+                    holdem_cash_leave(self.sim, table, self.player_eid, immediate=True)
+                self._close_casino_ui()
+                return
             if service == "crash" and crash_phase == "setup":
                 if host_style == "floor":
                     self._open_casino_floor(prop, page=state.get("floor_page", "games"), selected_id=f"game:{service}")
@@ -5937,40 +6124,57 @@ class ServiceMenuSystem(System):
                 row = self._selected_casino_row()
                 row_id = str(row.get("id", "")).strip().lower() if isinstance(row, dict) else ""
                 if row_id == "crash:auto":
+                    self._emit_casino_audio_event("casino_menu_moved", direction=dx)
                     self._open_crash_setup(prop, _casino_crash_adjust_auto(crash_session, dx) or crash_session, selected_id="crash:auto")
                     return
                 if row_id == "crash:step":
+                    self._emit_casino_audio_event("casino_menu_moved", direction=dx)
                     self._open_crash_setup(prop, _casino_crash_cycle_auto_step(crash_session, dx) or crash_session, selected_id="crash:step")
                     return
             if mode in {"floor", "services", "wager"} or (mode == "live" and list(state.get("rows", ()) or ())):
                 step = dy if dy else dx
-                if step:
-                    self._move_casino_row_selection(step)
+                if step and self._move_casino_row_selection(step):
+                    self._emit_casino_audio_event("casino_menu_moved", direction=step)
                 return
             session = self._casino_session()
             if service == "keno":
+                before = int((session or {}).get("cursor", 1) or 1)
                 moved = self._move_keno_cursor(session, dx, dy)
                 if moved:
+                    if int(moved.get("cursor", before) or before) != before:
+                        self._emit_casino_audio_event("casino_menu_moved", direction=dy if dy else dx)
                     self._open_keno_table(prop, moved)
                 return
             if service == "roulette":
+                before = str((session or {}).get("cursor_key", "") or "")
                 moved = self._move_roulette_cursor(session, dx, dy)
                 if moved:
+                    if str(moved.get("cursor_key", "") or "") != before:
+                        self._emit_casino_audio_event("casino_menu_moved", direction=dy if dy else dx)
                     self._open_roulette_table(prop, moved)
                 return
             if service == "craps":
+                before = str((session or {}).get("cursor_key", "") or "")
                 moved = self._move_craps_cursor(session, dx, dy)
                 if moved:
+                    if str(moved.get("cursor_key", "") or "") != before:
+                        self._emit_casino_audio_event("casino_menu_moved", direction=dy if dy else dx)
                     self._open_craps_table(prop, moved)
                 return
             if service == "three_bright":
+                before = str((session or {}).get("cursor_key", "") or "")
                 moved = self._move_three_bright_cursor(session, dx, dy)
                 if moved:
+                    if str(moved.get("cursor_key", "") or "") != before:
+                        self._emit_casino_audio_event("casino_menu_moved", direction=dy if dy else dx)
                     self._open_three_bright_table(prop, moved)
                 return
             if service == "three_bones":
+                before = str((session or {}).get("cursor_key", "") or "")
                 moved = self._move_three_bones_cursor(session, dx, dy)
                 if moved:
+                    if str(moved.get("cursor_key", "") or "") != before:
+                        self._emit_casino_audio_event("casino_menu_moved", direction=dy if dy else dx)
                     self._open_three_bones_table(prop, moved)
                 return
             return
@@ -5979,6 +6183,7 @@ class ServiceMenuSystem(System):
             if mode in {"floor", "services", "wager"} or list(state.get("rows", ()) or ()):
                 row = self._selected_casino_row()
                 if row:
+                    self._emit_casino_audio_event("casino_menu_confirmed", option_id=row.get("id"))
                     self.on_service_menu_execute_request(Event(
                         "service_menu_execute_request",
                         eid=self.player_eid,
@@ -6033,6 +6238,17 @@ class ServiceMenuSystem(System):
             return
 
         if action == "primary":
+            if service == HOLDEM_CASH_SERVICE_ID and list(state.get("rows", ()) or ()):
+                row = self._selected_casino_row()
+                if row:
+                    self._emit_casino_audio_event("casino_menu_confirmed", option_id=row.get("id"))
+                    self.on_service_menu_execute_request(Event(
+                        "service_menu_execute_request",
+                        eid=self.player_eid,
+                        property_id=state.get("property_id"),
+                        option_id=row.get("id"),
+                    ))
+                return
             session = self._casino_session()
             if service == "crash":
                 current = _casino_crash_normalize_session(session)
@@ -6045,6 +6261,7 @@ class ServiceMenuSystem(System):
                     return
                 row = self._selected_casino_row()
                 if row:
+                    self._emit_casino_audio_event("casino_menu_confirmed", option_id=row.get("id"))
                     self.on_service_menu_execute_request(Event(
                         "service_menu_execute_request",
                         eid=self.player_eid,
@@ -6215,6 +6432,10 @@ class ServiceMenuSystem(System):
             return
         casino_state = self._casino_ui_state()
         if bool(casino_state.get("open")):
+            if str(casino_state.get("service", "") or "").strip().lower() == HOLDEM_CASH_SERVICE_ID:
+                table = holdem_cash_table_for_property(self.sim, casino_state.get("property_id"), ensure=False)
+                if isinstance(table, dict):
+                    holdem_cash_leave(self.sim, table, self.player_eid, immediate=True)
             if self._casino_session() and not bool(casino_state.get("close_pending")):
                 self._forfeit_active_casino_session()
             self._close_casino_ui()

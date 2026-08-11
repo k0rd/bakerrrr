@@ -4847,6 +4847,7 @@ class NPCInvestigateSystem(System):
         "seeking_medical_aid": 2,
         "seeking_safe_spot": 2,
         "seeking_shelter": 2,
+        "seeking_poker_table": 2,
         "patrolling": 3,
         "working": 3,
         "lounging": 4,
@@ -4890,6 +4891,7 @@ class NPCInvestigateSystem(System):
         "seeking_medical_aid",
         "seeking_safe_spot",
         "seeking_shelter",
+        "seeking_poker_table",
         "patrolling",
         "working",
         "lounging",
@@ -4928,6 +4930,7 @@ class NPCInvestigateSystem(System):
         "seeking_medical_aid",
         "seeking_safe_spot",
         "seeking_shelter",
+        "seeking_poker_table",
         "patrolling",
         "working",
         "lounging",
@@ -6984,6 +6987,25 @@ class NPCInvestigateSystem(System):
                 continue
 
             if pos.x == tx and pos.y == ty:
+                if ai.state == "seeking_poker_table":
+                    self.sim.emit(Event(
+                        "npc_holdem_seat_arrived",
+                        npc_eid=eid,
+                        table_id=getattr(ai, "holdem_cash_table_id", None),
+                        seat_index=getattr(ai, "holdem_cash_seat_index", None),
+                        x=tx,
+                        y=ty,
+                        z=tz,
+                    ))
+                    if str(getattr(ai, "state", "") or "") == "seeking_poker_table":
+                        ai.state = "idle"
+                        ai.target = None
+                        ai.target_eid = None
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                    continue
                 drive_state = criminal_drive_state(self.sim, eid, create=False)
                 if ai.state == "casing_target":
                     observation = self._ensure_criminal_casing_observation(eid, ai, drive_state)
