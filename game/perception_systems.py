@@ -11,6 +11,7 @@ from game.lighting import (
 from game.components import (
     AI,
     CoverState,
+    DroneState,
     JusticeProfile,
     NPCMemory,
     NPCNeeds,
@@ -137,6 +138,7 @@ class CombatPacingSystem(System):
 
         _combat_overlay_state(self.sim)
         self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
+        self.sim.events.subscribe("drone_weapon_fired", self.on_drone_weapon_fired)
 
     @staticmethod
     def _int_or_none(value):
@@ -149,6 +151,17 @@ class CombatPacingSystem(System):
         overlay = overlay if isinstance(overlay, dict) else _combat_overlay_state(self.sim)
         overlay["recent_hit_target"] = None
         overlay["pursuit_target_count"] = 0
+
+    def _clear_recent_player_drone_attacker(self, overlay=None):
+        overlay = overlay if isinstance(overlay, dict) else _combat_overlay_state(self.sim)
+        overlay["recent_player_drone_attacker"] = None
+
+    def _drone_is_player_controlled(self, drone_state):
+        for attribute in ("owner_eid", "controller_eid"):
+            actor_eid = self._int_or_none(getattr(drone_state, attribute, None))
+            if actor_eid is not None and int(actor_eid) == int(self.player_eid):
+                return True
+        return False
 
     def _target_available_for_recent_hit_pacing(self, target_eid):
         if target_eid is None:
@@ -234,6 +247,83 @@ class CombatPacingSystem(System):
             "last_z": int(target_pos.z),
         }
 
+    def on_drone_weapon_fired(self, event):
+        target_eid = self._int_or_none(event.data.get("target_eid"))
+        drone_eid = self._int_or_none(event.data.get("drone_eid"))
+        if target_eid != int(self.player_eid) or drone_eid is None:
+            return
+
+        drone_state = self.sim.ecs.get(DroneState).get(drone_eid)
+        drone_pos = self.sim.ecs.get(Position).get(drone_eid)
+        if (
+            drone_state is None
+            or drone_pos is None
+            or str(getattr(drone_state, "mode", "") or "").strip().lower() != "deployed"
+            or self._drone_is_player_controlled(drone_state)
+        ):
+            return
+
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        distance = (
+            _manhattan(player_pos.x, player_pos.y, drone_pos.x, drone_pos.y)
+            if player_pos is not None and int(player_pos.z) == int(drone_pos.z)
+            else None
+        )
+        overlay = _combat_overlay_state(self.sim)
+        overlay["recent_player_drone_attacker"] = {
+            "drone_eid": int(drone_eid),
+            "last_attack_tick": int(getattr(self.sim, "tick", 0) or 0),
+            "last_x": int(drone_pos.x),
+            "last_y": int(drone_pos.y),
+            "last_z": int(drone_pos.z),
+        }
+        overlay["threat_count"] = max(1, int(overlay.get("threat_count", 0) or 0))
+        overlay["direct_threat_count"] = max(1, int(overlay.get("direct_threat_count", 0) or 0))
+        overlay["nearest_threat_dist"] = distance
+        self.calm_frames = 0
+        if not bool(overlay.get("active")):
+            overlay["active"] = True
+            self.sim.emit(Event(
+                "combat_overlay_entered",
+                player_eid=self.player_eid,
+                threat_count=overlay["threat_count"],
+                direct_threat_count=overlay["direct_threat_count"],
+                ambient_threat_count=int(overlay.get("ambient_threat_count", 0) or 0),
+                pursuit_target_count=int(overlay.get("pursuit_target_count", 0) or 0),
+                nearest_threat_dist=distance,
+                drone_eid=int(drone_eid),
+                incoming_drone_attack=True,
+            ))
+        self.sim.turn_based = True
+
+    def _recent_player_drone_attacker(self, player_pos, counted_eids):
+        overlay = _combat_overlay_state(self.sim)
+        record = overlay.get("recent_player_drone_attacker")
+        if not isinstance(record, dict):
+            self._clear_recent_player_drone_attacker(overlay)
+            return None
+
+        drone_eid = self._int_or_none(record.get("drone_eid"))
+        if drone_eid is None or drone_eid in counted_eids:
+            self._clear_recent_player_drone_attacker(overlay)
+            return None
+        drone_state = self.sim.ecs.get(DroneState).get(drone_eid)
+        drone_pos = self.sim.ecs.get(Position).get(drone_eid)
+        target_eid = self._int_or_none(getattr(drone_state, "target_eid", None)) if drone_state is not None else None
+        if (
+            drone_state is None
+            or drone_pos is None
+            or str(getattr(drone_state, "mode", "") or "").strip().lower() != "deployed"
+            or self._drone_is_player_controlled(drone_state)
+            or target_eid != int(self.player_eid)
+            or _entity_is_downed(self.sim, drone_eid)
+            or int(drone_pos.z) != int(player_pos.z)
+            or _manhattan(player_pos.x, player_pos.y, drone_pos.x, drone_pos.y) > self.engage_radius
+        ):
+            self._clear_recent_player_drone_attacker(overlay)
+            return None
+        return drone_eid, drone_pos
+
     def _threat_snapshot(self):
         positions = self.sim.ecs.get(Position)
         ais = self.sim.ecs.get(AI)
@@ -288,6 +378,16 @@ class CombatPacingSystem(System):
             pursuit_count = 1
             threat_count += 1
             dist = _manhattan(player_pos.x, player_pos.y, target_pos.x, target_pos.y)
+            if nearest is None or dist < nearest:
+                nearest = dist
+
+        incoming_drone = self._recent_player_drone_attacker(player_pos, counted_eids)
+        if incoming_drone is not None:
+            drone_eid, drone_pos = incoming_drone
+            counted_eids.add(int(drone_eid))
+            direct_count += 1
+            threat_count += 1
+            dist = _manhattan(player_pos.x, player_pos.y, drone_pos.x, drone_pos.y)
             if nearest is None or dist < nearest:
                 nearest = dist
 

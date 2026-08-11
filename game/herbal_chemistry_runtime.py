@@ -1130,6 +1130,12 @@ def _plants_in_property_chunk(sim, prop):
 
 
 def herbalist_local_recipe_ids(sim, prop, *, include_self_only=False):
+    """Return recipes an herbalist can teach from plants growing in its chunk.
+
+    A local plant gives the herbalist familiarity with every recipe that uses
+    that plant's chemistry class; the chunk does not need a complete set of a
+    recipe's ingredients.
+    """
     recipes = load_herbal_recipe_catalog()
     if not isinstance(prop, Mapping):
         return tuple(
@@ -1154,7 +1160,7 @@ def herbalist_local_recipe_ids(sim, prop, *, include_self_only=False):
             for class_id in tuple(recipe.get("required_classes", ()) or ())
             if _key(class_id)
         }
-        if required and required.issubset(local_classes):
+        if required.intersection(local_classes):
             available.append(recipe_id)
     return tuple(available)
 
