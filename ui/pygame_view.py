@@ -205,18 +205,23 @@ class PygameView:
         pygame.display.set_caption(str(title or "bakerrrr"))
 
         # Use a monospace system font so glyph-grid alignment remains predictable.
-        self.font = pygame.font.SysFont("DejaVu Sans Mono", self.cell_px)
+        self._system_font_cache = {}
+        self.font = self._system_font("DejaVu Sans Mono", self.cell_px)
         ui_font_px = max(8, int(round(self.cell_px * 0.78)))
-        self._ui_font = pygame.font.SysFont("DejaVu Sans Mono", ui_font_px)
-        self._ui_bold_font = pygame.font.SysFont("DejaVu Sans Mono", ui_font_px, bold=True)
+        self._ui_font = self._system_font("DejaVu Sans Mono", ui_font_px)
+        self._ui_bold_font = self._system_font("DejaVu Sans Mono", ui_font_px, bold=True)
         marker_font_px = max(8, int(round(self.cell_px * 0.62)))
-        self._marker_font = pygame.font.SysFont("DejaVu Sans Mono", marker_font_px, bold=True)
+        self._marker_font = self._system_font("DejaVu Sans Mono", marker_font_px, bold=True)
         token_font_px = max(7, int(round(self.cell_px * 0.32)))
-        self._token_font = pygame.font.SysFont("DejaVu Sans Mono", token_font_px, bold=True)
+        self._token_font = self._system_font("DejaVu Sans Mono", token_font_px, bold=True)
         self._font_surface_cache = OrderedDict()
         self._font_surface_cache_limit = 4_096
+        self._font_glyph_surface_cache = OrderedDict()
+        self._font_glyph_surface_cache_limit = 2_048
         self._font_surface_cache_hits = 0
         self._font_surface_cache_misses = 0
+        self._font_glyph_surface_cache_hits = 0
+        self._font_glyph_surface_cache_misses = 0
         self._font_measure_cache = OrderedDict()
         self._font_measure_cache_limit = 8_192
         self._procedural_surface_cache = OrderedDict()
@@ -786,12 +791,12 @@ class PygameView:
         status_callback = status_lines_callback if callable(status_lines_callback) else None
         presentation = str(presentation or "").strip().lower()
         flora_title = presentation in {"flora", "flora_title", "living_flora"}
-        title_font = self.pygame.font.SysFont(
+        title_font = self._system_font(
             "DejaVu Sans Mono",
             max(18, int(self.cell_px * (2.05 if flora_title else 1.7))),
             bold=True,
         )
-        subtitle_font = self.pygame.font.SysFont("DejaVu Sans Mono", max(12, int(self.cell_px * 0.85)))
+        subtitle_font = self._system_font("DejaVu Sans Mono", max(12, int(self.cell_px * 0.85)))
 
         def _status_lines(current_text):
             if not status_callback:
@@ -864,10 +869,10 @@ class PygameView:
             text_px = panel_px + (self.cell_px * 2)
             text_py = panel_py + self.cell_px
             if banner:
-                banner_shadow = title_font.render(banner, True, (4, 10, 8))
-                banner_surface = title_font.render(
+                banner_shadow = self._font_surface(title_font, banner, (4, 10, 8))
+                banner_surface = self._font_surface(
+                    title_font,
                     banner,
-                    True,
                     self._color_value("flora_flower_white" if flora_title else "objective"),
                 )
                 if flora_title:
@@ -876,7 +881,11 @@ class PygameView:
             if subtitle:
                 subtitle_y = text_py + max(self.cell_px, title_font.get_height())
                 for idx, line in enumerate(subtitle_lines):
-                    subtitle_surface = subtitle_font.render(line, True, self._color_value("default"))
+                    subtitle_surface = self._font_surface(
+                        subtitle_font,
+                        line,
+                        self._color_value("default"),
+                    )
                     self.surface.blit(subtitle_surface, (text_px, subtitle_y + (idx * max(self.cell_px, subtitle_font.get_height()))))
 
             prompt_y = panel_y + 1 + header_rows + (1 if header_rows else 0)
@@ -993,7 +1002,7 @@ class PygameView:
 
         selected = max(0, min(int(initial_index), len(rows) - 1))
         clock = self.pygame.time.Clock()
-        subtitle_font = self.pygame.font.SysFont("DejaVu Sans Mono", max(12, int(self.cell_px * 0.85)))
+        subtitle_font = self._system_font("DejaVu Sans Mono", max(12, int(self.cell_px * 0.85)))
 
         prompt = str(prompt or "")
         detail = str(detail or "")
@@ -1001,7 +1010,7 @@ class PygameView:
         subtitle = str(subtitle or "")
         presentation = str(presentation or "").strip().lower()
         flora_title = presentation in {"flora", "flora_title", "living_flora"}
-        title_font = self.pygame.font.SysFont(
+        title_font = self._system_font(
             "DejaVu Sans Mono",
             max(18, int(self.cell_px * (2.05 if flora_title else 1.7))),
             bold=True,
@@ -1067,10 +1076,10 @@ class PygameView:
             text_px = panel_px + (self.cell_px * 2)
             text_py = panel_py + self.cell_px
             if banner:
-                banner_shadow = title_font.render(banner, True, (4, 10, 8))
-                banner_surface = title_font.render(
+                banner_shadow = self._font_surface(title_font, banner, (4, 10, 8))
+                banner_surface = self._font_surface(
+                    title_font,
                     banner,
-                    True,
                     self._color_value("flora_flower_white" if flora_title else "objective"),
                 )
                 if flora_title:
@@ -1082,7 +1091,11 @@ class PygameView:
             if subtitle:
                 subtitle_y = text_py + max(self.cell_px, title_font.get_height())
                 for idx, line in enumerate(subtitle_lines):
-                    subtitle_surface = subtitle_font.render(line, True, self._color_value("default"))
+                    subtitle_surface = self._font_surface(
+                        subtitle_font,
+                        line,
+                        self._color_value("default"),
+                    )
                     self.surface.blit(subtitle_surface, (text_px, subtitle_y + (idx * max(self.cell_px, subtitle_font.get_height()))))
 
             prompt_y = panel_y + 1 + header_rows + (1 if header_rows else 0)
@@ -4436,7 +4449,7 @@ class PygameView:
         text_value = str(glyph or "@")[:1] or "@"
         brightness = (frame[0] * 0.299) + (frame[1] * 0.587) + (frame[2] * 0.114)
         text_rgb = (24, 28, 32) if brightness >= 150 else (245, 245, 245)
-        text_surface = self._ui_bold_font.render(text_value, True, text_rgb)
+        text_surface = self._font_surface(self._ui_bold_font, text_value, text_rgb)
         text_rect = text_surface.get_rect(center=(mid_x, mid_y))
         text_rect.y += max(-1, self.cell_px // 32)
         overlay.blit(text_surface, text_rect)
@@ -6028,7 +6041,7 @@ class PygameView:
         text_value = str(glyph or "P")[:1] or "P"
         brightness = (frame[0] * 0.299) + (frame[1] * 0.587) + (frame[2] * 0.114)
         text_rgb = (22, 26, 32) if brightness >= 150 else (245, 245, 245)
-        text_surface = self._marker_font.render(text_value, True, text_rgb)
+        text_surface = self._font_surface(self._marker_font, text_value, text_rgb)
         text_rect = text_surface.get_rect(center=(self.cell_px // 2, self.cell_px // 2))
         overlay.blit(text_surface, text_rect)
 
@@ -7043,7 +7056,7 @@ class PygameView:
 
         mark = {"threat": "!", "ally": "+", "contact": "*"}.get(kind, "*")
         text_rgb = (24, 26, 30) if sum(frame[:3]) >= 390 else (250, 250, 245)
-        text_surface = self._marker_font.render(mark, True, text_rgb)
+        text_surface = self._font_surface(self._marker_font, mark, text_rgb)
         text_rect = text_surface.get_rect(center=center)
         overlay.blit(text_surface, text_rect)
 
@@ -7099,7 +7112,7 @@ class PygameView:
             "public": "+",
         }.get(kind, "+")
         text_rgb = (24, 26, 30) if sum(frame[:3]) >= 390 else (250, 250, 245)
-        text_surface = self._marker_font.render(mark, True, text_rgb)
+        text_surface = self._font_surface(self._marker_font, mark, text_rgb)
         text_rect = text_surface.get_rect(center=rect.center)
         overlay.blit(text_surface, text_rect)
 
@@ -7216,7 +7229,7 @@ class PygameView:
         text_value = str(glyph or "!")[:1] or "!"
         brightness = (frame[0] * 0.299) + (frame[1] * 0.587) + (frame[2] * 0.114)
         text_rgb = (24, 28, 32) if brightness >= 155 else (245, 245, 245)
-        text_surface = self._marker_font.render(text_value, True, text_rgb)
+        text_surface = self._font_surface(self._marker_font, text_value, text_rgb)
         text_rect = text_surface.get_rect(center=(mid_x, mid_y))
         overlay.blit(text_surface, text_rect)
 
@@ -7909,7 +7922,7 @@ class PygameView:
             text_value = str(glyph or "!")[:1] or "!"
             brightness = (frame[0] * 0.299) + (frame[1] * 0.587) + (frame[2] * 0.114)
             text_rgb = (24, 28, 32) if brightness >= 155 else (245, 245, 245)
-            text_surface = self._marker_font.render(text_value, True, text_rgb)
+            text_surface = self._font_surface(self._marker_font, text_value, text_rgb)
             text_rect = text_surface.get_rect(center=(mid_x, mid_y))
             overlay.blit(text_surface, text_rect)
 
@@ -8160,7 +8173,11 @@ class PygameView:
                         self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 174), (inset + 4, py), (self.cell_px - inset - 4, py), max(1, stroke_w - 1))
             glyph_text = str(glyph or "")[:1]
             if glyph_text and glyph_text != " " and self.cell_px >= 18 and not is_effect:
-                text_surface = self._marker_font.render(glyph_text, True, (238, 246, 250))
+                text_surface = self._font_surface(
+                    self._marker_font,
+                    glyph_text,
+                    (238, 246, 250),
+                )
                 text_rect = text_surface.get_rect(center=(mid_x, mid_y))
                 overlay.blit(text_surface, text_rect)
             self.surface.blit(overlay, (cell_x, cell_y))
@@ -8941,33 +8958,65 @@ class PygameView:
         while len(cache) > max(1, int(limit)):
             cache.popitem(last=False)
 
+    def _system_font(self, family, size, *, bold=False, italic=False):
+        """Return one retained pygame font object for a stable font spec."""
+
+        key = (
+            str(family or "DejaVu Sans Mono"),
+            max(1, int(size)),
+            bool(bold),
+            bool(italic),
+        )
+        cached = self._system_font_cache.get(key)
+        if cached is not None:
+            return cached
+        font = self.pygame.font.SysFont(
+            key[0],
+            key[1],
+            bold=key[2],
+            italic=key[3],
+        )
+        self._system_font_cache[key] = font
+        return font
+
     def _font_surface(self, font, text, fg, bg=None):
         text = str(text or "")
         fg_key = tuple(int(channel) for channel in fg)
         bg_key = None if bg is None else tuple(int(channel) for channel in bg)
-        key = (id(font), text, fg_key, bg_key)
-        cached = self._font_surface_cache.get(key)
+        key = (font, text, fg_key, bg_key)
+        glyph_sized = len(text) <= 1
+        cache = self._font_glyph_surface_cache if glyph_sized else self._font_surface_cache
+        cache_limit = (
+            self._font_glyph_surface_cache_limit
+            if glyph_sized
+            else self._font_surface_cache_limit
+        )
+        cached = cache.get(key)
         if cached is not None:
-            self._font_surface_cache.move_to_end(key)
+            cache.move_to_end(key)
             self._font_surface_cache_hits += 1
+            if glyph_sized:
+                self._font_glyph_surface_cache_hits += 1
             return cached
 
         self._font_surface_cache_misses += 1
+        if glyph_sized:
+            self._font_glyph_surface_cache_misses += 1
         if bg is None:
             surface = font.render(text, True, fg)
         else:
             surface = font.render(text, True, fg, bg)
         self._bounded_cache_store(
-            self._font_surface_cache,
+            cache,
             key,
             surface,
-            self._font_surface_cache_limit,
+            cache_limit,
         )
         return surface
 
     def _font_text_width(self, font, text):
         text = str(text or "")
-        key = (id(font), text)
+        key = (font, text)
         cached = self._font_measure_cache.get(key)
         if cached is not None:
             self._font_measure_cache.move_to_end(key)
@@ -8983,20 +9032,38 @@ class PygameView:
 
     def clear_render_caches(self):
         self._font_surface_cache.clear()
+        self._font_glyph_surface_cache.clear()
         self._font_measure_cache.clear()
         self._procedural_surface_cache.clear()
 
     def render_cache_stats(self):
+        text_hits = max(0, self._font_surface_cache_hits - self._font_glyph_surface_cache_hits)
+        text_misses = max(0, self._font_surface_cache_misses - self._font_glyph_surface_cache_misses)
         return {
             "font": {
-                "size": len(self._font_surface_cache),
-                "limit": int(self._font_surface_cache_limit),
+                "size": len(self._font_surface_cache) + len(self._font_glyph_surface_cache),
+                "limit": int(self._font_surface_cache_limit + self._font_glyph_surface_cache_limit),
                 "hits": int(self._font_surface_cache_hits),
                 "misses": int(self._font_surface_cache_misses),
+            },
+            "font_text": {
+                "size": len(self._font_surface_cache),
+                "limit": int(self._font_surface_cache_limit),
+                "hits": int(text_hits),
+                "misses": int(text_misses),
+            },
+            "font_glyph": {
+                "size": len(self._font_glyph_surface_cache),
+                "limit": int(self._font_glyph_surface_cache_limit),
+                "hits": int(self._font_glyph_surface_cache_hits),
+                "misses": int(self._font_glyph_surface_cache_misses),
             },
             "font_measure": {
                 "size": len(self._font_measure_cache),
                 "limit": int(self._font_measure_cache_limit),
+            },
+            "font_objects": {
+                "size": len(self._system_font_cache),
             },
             "procedural": {
                 "size": len(self._procedural_surface_cache),
@@ -9752,7 +9819,7 @@ class PygameView:
 
         def _text(text, px, py, color=white, font=None):
             font = font or self._ui_font
-            surface = font.render(str(text), True, color)
+            surface = self._font_surface(font, str(text), color)
             self.surface.blit(surface, (int(px), int(py)))
 
         def _center_text(text, target, color=white, font=None):
@@ -9763,7 +9830,7 @@ class PygameView:
             fitted = self._fit_text_to_pixel_width(text, font, max(1, target.w - 4))
             if not fitted:
                 return
-            surface = font.render(fitted, True, color)
+            surface = self._font_surface(font, fitted, color)
             self.surface.blit(surface, (
                 target.left + max(0, (target.w - surface.get_width()) // 2),
                 target.top + max(0, (target.h - surface.get_height()) // 2),
@@ -10471,7 +10538,7 @@ class PygameView:
             right_status = f"{payout_mult:g}x" if mode == "result" else "5 x 4"
             status = self.pygame.Rect(frame.left + 5, grid_rect.bottom, frame.w - 10, status_h)
             _text(left_status, status.left, status.top + max(0, (status.h - self._ui_font.get_height()) // 2), (112, 234, 139) if feature_title else muted, self._ui_font)
-            right_surface = self._ui_bold_font.render(right_status, True, gold)
+            right_surface = self._font_surface(self._ui_bold_font, right_status, gold)
             self.surface.blit(right_surface, (status.right - right_surface.get_width(), status.top + max(0, (status.h - right_surface.get_height()) // 2)))
         else:
             _center_text(str(service).replace("_", " ").title(), rect, gold, self._ui_bold_font)
