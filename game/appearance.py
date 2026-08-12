@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Mapping, Tuple
 
 from engine.buildings import building_exterior_profile
-from game.components import AI, CreatureIdentity, NPCSocial, NPCWill, Render, Vitality
+from game.components import AI, CreatureIdentity, NPCSocial, NPCWill, Occupation, Render, Vitality
 from game.appearance_loadout import (
     appearance_render_colors,
     humanoid_render_profile,
@@ -34,6 +34,7 @@ from game.object_profile_runtime import (
     object_visual_signature,
     property_is_item_backed_fixture,
 )
+from game.system_support.actor_role_runtime import actor_presentation_role
 
 DISTRICT_GLYPHS = {
     "industrial": ":",
@@ -2108,6 +2109,7 @@ class AppearanceManager:
         render = self.sim.ecs.get(Render).get(eid)
         identity = self.sim.ecs.get(CreatureIdentity).get(eid)
         ai = self.sim.ecs.get(AI).get(eid)
+        occupation = self.sim.ecs.get(Occupation).get(eid)
         will = self.sim.ecs.get(NPCWill).get(eid)
         social = self.sim.ecs.get(NPCSocial).get(eid)
         vitality = self.sim.ecs.get(Vitality).get(eid)
@@ -2117,7 +2119,7 @@ class AppearanceManager:
         player_controlled = player_eid is not None and eid == player_eid
         defaults = entity_default_snapshot(
             identity,
-            role=str(getattr(ai, "role", "") or "").strip().lower(),
+            role=actor_presentation_role(self.sim, eid, ai=ai, occupation=occupation),
             player=player_controlled,
             catalog=self.catalog,
             seed=getattr(self.sim, "seed", None),

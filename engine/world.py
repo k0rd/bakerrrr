@@ -1045,6 +1045,11 @@ class World:
         "warehouse",
     }
 
+    DEDICATED_POKER_FLOOR_ARCHETYPES = {
+        "casino",
+        "gaming_hall",
+    }
+
     TALL_BUILDING_ARCHETYPES = {
         "apartment",
         "bank",
@@ -4121,6 +4126,33 @@ class World:
                 continue
             self._maybe_apply_vertical_mixed_use_span(building, district, rng, used_business_names)
 
+    def _apply_dedicated_poker_floors(self, blocks):
+        """Give structurally roomy casino plots a real upstairs card room."""
+
+        for block in blocks:
+            if not isinstance(block, dict) or block.get("parcel_reserved"):
+                continue
+            buildings = block.get("buildings", ())
+            if not isinstance(buildings, list) or len(buildings) != 1:
+                continue
+            building = buildings[0]
+            if not isinstance(building, dict) or building.get("span_kind"):
+                continue
+            archetype = str(building.get("archetype", "") or "").strip().lower()
+            if archetype not in self.DEDICATED_POKER_FLOOR_ARCHETYPES:
+                continue
+            building["dedicated_poker_floor"] = True
+            building["poker_floor"] = 1
+            building["floors"] = max(2, int(building.get("floors", 1) or 1))
+            rooms = [
+                str(room or "").strip().lower()
+                for room in tuple(building.get("rooms", ()) or ())
+                if str(room or "").strip()
+            ]
+            if "poker_room" not in rooms:
+                rooms.append("poker_room")
+            building["rooms"] = rooms
+
     def _large_parcel_chance(self, district_type, density, wealth):
         chance = float(self.LARGE_PARCEL_BASE_CHANCE_BY_DISTRICT.get(district_type, 0.0))
         if chance <= 0.0:
@@ -4312,6 +4344,7 @@ class World:
             ]
 
         self._apply_vertical_mixed_use_spans(blocks, district, rng, used_business_names)
+        self._apply_dedicated_poker_floors(blocks)
         self._assign_city_placement_profiles(blocks, district, cx=cx, cy=cy)
         return blocks
 

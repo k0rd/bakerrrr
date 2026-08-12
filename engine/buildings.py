@@ -1835,6 +1835,11 @@ def building_shell_span(building, rng=None):
     if floors + basement_levels > 1:
         width = max(int(width), 7)
         height = max(int(height), 7)
+    if bool((building or {}).get("dedicated_poker_floor")):
+        # A 9x9 shell leaves a seven-by-seven interior: enough for the
+        # seven-by-five table scene plus a clear landing row for the stairs.
+        width = max(int(width), 9)
+        height = max(int(height), 9)
     return int(width), int(height)
 
 
@@ -2301,6 +2306,10 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         parcel_span_x=parcel_span_x,
         parcel_span_y=parcel_span_y,
     ))
+    if bool((building or {}).get("dedicated_poker_floor")):
+        # The card-room floor needs full support and must not bridge a court or
+        # notch whose ground level belongs to the street or another building.
+        excluded.clear()
     if excluded and _included_interior_cell_count(left, right, top, bottom, excluded) <= 0:
         excluded.clear()
 

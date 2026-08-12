@@ -168,6 +168,7 @@ from game.property_access import (
     property_ingress_context as _property_ingress_context,
     property_claim_reason as _property_claim_reason,
     property_status_text as _property_status_text,
+    site_services_with_holdem_mode,
     world_hour as _world_hour,
 )
 from game.quick_travel_ramps import generate_quick_travel_ramp_records
@@ -719,6 +720,11 @@ class WorldStreamingSystem(System):
                     list(_default_site_services_for_archetype(archetype, seed_token=service_seed_token))
                     + list(vehicle_services_for_archetype(archetype))
                 ))
+                if str(archetype or "").strip().lower() in {"casino", "gaming_hall"}:
+                    site_services = list(site_services_with_holdem_mode(
+                        site_services,
+                        live_cash_available=bool(building.get("dedicated_poker_floor")),
+                    ))
                 service_destinations = {}
                 underpass_plan = underground_by_source.get(chunk_building_id)
                 if isinstance(underpass_plan, dict):
@@ -747,6 +753,8 @@ class WorldStreamingSystem(System):
                     "parcel_span_y": int(building.get("parcel_span_y", 1) or 1),
                     "floors": int(floors),
                     "basement_levels": int(basement_levels),
+                    "dedicated_poker_floor": bool(building.get("dedicated_poker_floor")),
+                    "poker_floor": int(building.get("poker_floor", 1) or 1) if building.get("dedicated_poker_floor") else None,
                     "rooms": list(building.get("rooms", ())),
                     "common_area_room_kinds": sorted(COMMON_AREA_ROOM_KINDS),
                     "common_area_kinds": sorted(COMMON_AREA_ROOM_KINDS),
@@ -773,6 +781,10 @@ class WorldStreamingSystem(System):
                     "purchase_cost": rng.randint(180, 460),
                     "finance_services": finance_services,
                     "site_services": site_services,
+                    "holdem_cash_available": bool(building.get("dedicated_poker_floor")) if archetype in {"casino", "gaming_hall"} else None,
+                    "holdem_offer_mode": (
+                        "live_cash" if building.get("dedicated_poker_floor") else "casino_holdem"
+                    ) if archetype in {"casino", "gaming_hall"} else None,
                     "site_service_seed_token": service_seed_token,
                     "is_storefront": bool(building.get("is_storefront")),
                     "public": bool(building.get("public")),

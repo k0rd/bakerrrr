@@ -3443,6 +3443,10 @@ ROOM_KIND_SENTENCES = {
         "The room is built to keep attention circulating without ever fully letting it rest.",
         "Sightlines, open lanes, and managed distractions make the room feel deliberately absorbing.",
     ),
+    "poker_room": (
+        "The upstairs room opens around one broad felt table, with every chair given enough space to matter.",
+        "The room is quieter than the floor below, built around cards, faces, and the measured movement of chips.",
+    ),
     "guest_floor": (
         "The room trades privacy for orderly repetition, one door or partition after the next.",
         "Everything here feels standardized enough to host strangers without ever really personalizing the space.",

@@ -2933,19 +2933,37 @@ class Simulation:
                     door_x = int(entry.get("x", layout["anchor_x"]))
                     door_y = int(entry.get("y", bottom))
                     shape_excluded = layout.get("excluded", frozenset())
+                    dedicated_poker_floor = bool(building.get("dedicated_poker_floor"))
+                    try:
+                        poker_floor = int(building.get("poker_floor", 1))
+                    except (TypeError, ValueError):
+                        poker_floor = 1
                     for z in range(-basement_levels, floors):
                         floor_excluded = shape_excluded
-                        room_plan = self._room_plan_for_shell(
-                            building.get("rooms", ()),
-                            left=left,
-                            right=right,
-                            top=top,
-                            bottom=bottom,
-                            floor=z,
-                            floors=floors,
-                            basement_levels=basement_levels,
-                            entry_side=entry.get("side", "south"),
-                        )
+                        if dedicated_poker_floor and int(z) == int(poker_floor):
+                            room_plan = {
+                                "rooms": ({
+                                    "kind": "poker_room",
+                                    "left": int(left) + 1,
+                                    "right": int(right) - 1,
+                                    "top": int(top) + 1,
+                                    "bottom": int(bottom) - 1,
+                                },),
+                                "walls": (),
+                                "doors": (),
+                            }
+                        else:
+                            room_plan = self._room_plan_for_shell(
+                                building.get("rooms", ()),
+                                left=left,
+                                right=right,
+                                top=top,
+                                bottom=bottom,
+                                floor=z,
+                                floors=floors,
+                                basement_levels=basement_levels,
+                                entry_side=entry.get("side", "south"),
+                            )
                         structure_info = {
                             "building_id": chunk_building_id,
                             "local_building_id": local_building_id or None,

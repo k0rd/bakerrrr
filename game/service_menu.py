@@ -754,9 +754,16 @@ class ServiceMenuSystem(System):
         for service_id in CASINO_TABLE_SERVICE_IDS:
             option = option_map.get(service_id)
             if option:
+                label = str(option.get("label", _service_menu_option_label(service_id))).strip() or _service_menu_option_label(service_id)
+                if service_id == HOLDEM_CASH_SERVICE_ID:
+                    table = holdem_cash_table_for_property(self.sim, prop, ensure=False)
+                    center = tuple((table or {}).get("center", ()) or ()) if isinstance(table, dict) else ()
+                    if len(center) >= 3 and int(center[2]) != int(pos.z):
+                        direction = "upstairs" if int(center[2]) > int(pos.z) else "downstairs"
+                        label = f"{label} · {direction}"
                 table_rows.append({
                     "id": f"game:{service_id}",
-                    "label": str(option.get("label", _service_menu_option_label(service_id))).strip() or _service_menu_option_label(service_id),
+                    "label": label,
                     "service": service_id,
                     "selectable": True,
                 })
@@ -841,7 +848,21 @@ class ServiceMenuSystem(System):
             self._present_service_result("Casino", ["That game is not running on this floor right now."], property_id=prop.get("id"))
             return
         if str(service or "").strip().lower() == HOLDEM_CASH_SERVICE_ID:
-            self._open_holdem_cash_table(prop, selected_id=selected_id)
+            table = holdem_cash_table_for_property(self.sim, prop, ensure=True)
+            player_pos = self._position_for(self.player_eid)
+            center = tuple((table or {}).get("center", ()) or ()) if isinstance(table, dict) else ()
+            if player_pos is not None and len(center) >= 3 and int(player_pos.z) != int(center[2]):
+                direction = "upstairs" if int(center[2]) > int(player_pos.z) else "downstairs"
+                self._present_service_result(
+                    "Texas Hold'em Cash",
+                    [
+                        f"The live table is {direction} in the poker room.",
+                        "Take the stairs, then interact with an open gold chair to claim that exact seat.",
+                    ],
+                    property_id=prop.get("id") if isinstance(prop, dict) else None,
+                )
+                return
+            self._open_holdem_cash_table(prop, table=table, selected_id=selected_id)
             return
         host_style = str(host_style or casino_host_style(prop)).strip().lower() or "floor"
         prop_name = self._casino_prop_name(prop)
@@ -4100,6 +4121,11 @@ class ServiceMenuSystem(System):
             options.append({"id": "redeem_meal_voucher", "label": "Redeem meal voucher"})
 
         for site_service in _site_services_for_property(prop) if access.can_use_services else ():
+            if site_service == HOLDEM_CASH_SERVICE_ID and not isinstance(
+                holdem_cash_table_for_property(self.sim, prop, ensure=False),
+                dict,
+            ):
+                continue
             options.append({"id": site_service, "label": _service_menu_option_label(site_service)})
             if site_service == "fuel" and self._inventory_item_count("glass_bottle") > 0:
                 options.append({"id": "fuel_fill_bottle", "label": _service_menu_option_label("fuel_fill_bottle")})

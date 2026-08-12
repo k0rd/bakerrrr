@@ -1,6 +1,7 @@
 """Shared entity display-label helpers."""
 
-from game.components import AI, ContactLedger, CreatureIdentity
+from game.components import AI, ContactLedger, CreatureIdentity, Occupation
+from game.system_support.actor_role_runtime import actor_presentation_role
 
 
 _ARTICLE_SKIP_WORDS = {"a", "an", "the", "some", "someone", "somebody", "you"}
@@ -149,10 +150,12 @@ def _viewer_knows_entity_name(sim, viewer_eid, eid):
 def _entity_generic_display_name(sim, eid, title_case=False):
     identities = sim.ecs.get(CreatureIdentity) if getattr(sim, "ecs", None) is not None else None
     ais = sim.ecs.get(AI) if getattr(sim, "ecs", None) is not None else None
+    occupations = sim.ecs.get(Occupation) if getattr(sim, "ecs", None) is not None else None
     identity = identities.get(eid) if identities is not None else None
     ai = ais.get(eid) if ais is not None else None
+    occupation = occupations.get(eid) if occupations is not None else None
 
-    role = str(getattr(ai, "role", "") or "").replace("_", " ").strip() if ai else ""
+    role = actor_presentation_role(sim, eid, ai=ai, occupation=occupation).replace("_", " ").strip()
     if identity:
         common = str(getattr(identity, "common_name", "") or "").replace("_", " ").strip()
         creature_type = str(getattr(identity, "creature_type", "") or "").replace("_", " ").strip()

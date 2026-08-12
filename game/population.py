@@ -286,6 +286,7 @@ FRONT_ROOM_KINDS = {
     "sales",
     "gaming_floor",
     "main_floor",
+    "poker_room",
     "dining",
     "seating",
     "common_room",

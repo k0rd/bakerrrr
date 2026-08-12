@@ -25,6 +25,11 @@ from game.components import (
     Vitality,
 )
 from game.population import _spawn_human
+from game.property_access import (
+    HOLDEM_CASH_SERVICE_ID,
+    site_services_for_property,
+    site_services_with_holdem_mode,
+)
 from game.service_runtime import (
     CASINO_CARD_RANKS,
     CASINO_CARD_SUITS,
@@ -37,7 +42,6 @@ from game.system_support.npc_income_runtime import (
 )
 
 
-HOLDEM_CASH_SERVICE_ID = "texas_holdem_cash"
 HOLDEM_CASH_MAX_SEATS = 8
 HOLDEM_CASH_SMALL_BLIND = 2
 HOLDEM_CASH_BIG_BLIND = 4
@@ -126,6 +130,7 @@ def _room_cells_for_property(sim, prop):
     building_id = str(metadata.get("building_id", "") or "").strip()
     if not building_id:
         return ()
+    dedicated = []
     preferred = {"gaming_floor", "main_floor"}
     rows = []
     fallback = []
@@ -140,9 +145,26 @@ def _room_cells_for_property(sim, prop):
             continue
         row = (int(x), int(y), int(z))
         fallback.append(row)
-        if str((info or {}).get("room_kind", "") or "").strip().lower() in preferred:
+        room_kind = str((info or {}).get("room_kind", "") or "").strip().lower()
+        if room_kind == "poker_room":
+            dedicated.append(row)
+        elif room_kind in preferred:
             rows.append(row)
-    return tuple(rows or fallback)
+    return tuple(dedicated or rows or fallback)
+
+
+def _set_cash_service_available(prop, available):
+    if not isinstance(prop, dict):
+        return False
+    metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+    before = tuple(site_services_for_property(prop))
+    services = site_services_with_holdem_mode(before, live_cash_available=available)
+    changed = before != services
+    metadata["site_services"] = list(services)
+    metadata["site_services_replace_defaults"] = True
+    metadata["holdem_cash_available"] = bool(available)
+    metadata["holdem_offer_mode"] = "live_cash" if bool(available) else "casino_holdem"
+    return changed
 
 
 def _retrofit_open_gaming_floor(sim, prop):
@@ -1062,7 +1084,9 @@ class HoldemCashSystem(System):
                 continue
             table = holdem_cash_table_for_property(self.sim, prop, ensure=True)
             if table is None:
+                _set_cash_service_available(prop, False)
                 continue
+            _set_cash_service_available(prop, True)
             _stamp_table(self.sim, table)
             self._ensure_dealer(table, prop)
             self._ensure_house_regulars(table, prop)

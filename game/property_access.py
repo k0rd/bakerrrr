@@ -223,6 +223,7 @@ COMMON_AREA_ROOM_KINDS = frozenset({
     "yard",
     "drain_junction",
     "platform",
+    "poker_room",
 })
 STAFF_ONLY_COMMON_AREA_ROOM_KINDS = frozenset({
     "drain_junction",
@@ -429,12 +430,38 @@ CONTROLLER_INTRUSION_PROFILES = {
     },
 }
 
+CASINO_HOLDEM_SERVICE_ID = "casino_holdem"
+HOLDEM_CASH_SERVICE_ID = "texas_holdem_cash"
+
+
+def site_services_with_holdem_mode(services, *, live_cash_available):
+    """Return one Hold'em offering matched to the venue's spatial capacity."""
+
+    chosen = HOLDEM_CASH_SERVICE_ID if bool(live_cash_available) else CASINO_HOLDEM_SERVICE_ID
+    resolved = []
+    holdem_index = None
+    for service in tuple(services or ()):
+        clean = str(service or "").strip().lower()
+        if not clean:
+            continue
+        if clean in {CASINO_HOLDEM_SERVICE_ID, HOLDEM_CASH_SERVICE_ID}:
+            if holdem_index is None:
+                holdem_index = len(resolved)
+            continue
+        if clean not in resolved:
+            resolved.append(clean)
+    if holdem_index is None:
+        holdem_index = len(resolved)
+    resolved.insert(min(int(holdem_index), len(resolved)), chosen)
+    return tuple(resolved)
+
+
 DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "bank": ("business_management",),
     "barbershop": ("appearance_style",),
     "brokerage": ("business_management",),
     "butcher_shop": ("butcher_prepare", "fauna_registry"),
-    "casino": ("slots", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", "casino_holdem", "texas_holdem_cash", "plinko", "crash", "twenty_one", "three_bones", "bloom_cards"),
+    "casino": ("slots", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", CASINO_HOLDEM_SERVICE_ID, HOLDEM_CASH_SERVICE_ID, "plinko", "crash", "twenty_one", "three_bones", "bloom_cards"),
     "contractor_office": ("building_repair", "business_remodel", "bodyguard_contract"),
     "courthouse": ("civic_records",),
     "courier_office": ("courier_jobs",),
@@ -443,7 +470,7 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "employment_agency": ("agency_jobs", "business_management"),
     "ferry_post": ("intel", "ferry_transit"),
     "flophouse": ("rest",),
-    "gaming_hall": ("video_poker", "keno", "plinko", "crash", "roulette", "craps", "baccarat", "three_card_poker", "texas_holdem_cash", "three_bones", "bloom_cards"),
+    "gaming_hall": ("video_poker", "keno", "plinko", "crash", "roulette", "craps", "baccarat", "three_card_poker", HOLDEM_CASH_SERVICE_ID, "three_bones", "bloom_cards"),
     "hair_studio": ("appearance_style",),
     "herbalist_camp": ("herbal_care", "herbal_prepare", "herbal_recipe_sales", "flora_registry"),
     "herbalist_shop": ("herbal_care", "herbal_prepare", "herbal_recipe_sales", "flora_registry"),

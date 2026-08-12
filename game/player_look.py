@@ -47,6 +47,7 @@ from game.property_runtime import (
 from game.service_runtime import _int_or_default, _legend_line
 from game.situation_read import build_focus_read
 from game.system_support.actor_attention_runtime import record_area_warmth
+from game.system_support.actor_role_runtime import actor_presentation_role
 from game.system_support.altered_state_runtime import (
     hallucinated_entity_label,
     hallucinated_item_label,
@@ -516,7 +517,12 @@ class PlayerLookRuntime:
                     routine = self.sim.ecs.get(NPCRoutine).get(target_eid)
                     detail_bits = []
                     if ai:
-                        role = str(ai.role or "npc").replace("_", " ").strip() or "npc"
+                        role = actor_presentation_role(
+                            self.sim,
+                            target_eid,
+                            ai=ai,
+                            occupation=occupation,
+                        ).replace("_", " ").strip() or "npc"
                         state = str(ai.state or "idle").replace("_", " ").strip() or "idle"
                         detail_bits.append(f"role:{role} state:{state}")
                         read_text = _crime_read_summary(self.sim, eid, target_eid, mode="look", sentence=False)
@@ -926,7 +932,14 @@ class PlayerLookRuntime:
             if career_text or workplace_prop or npc_ai:
                 job_bits = []
                 if npc_ai:
-                    job_bits.append(f"role:{str(npc_ai.role).replace('_', ' ')}")
+                    visible_role = actor_presentation_role(
+                        self.sim,
+                        npc_eid,
+                        ai=npc_ai,
+                        occupation=npc_occupation,
+                    ).replace("_", " ").strip()
+                    if visible_role and visible_role != str(career_text or "").strip().lower():
+                        job_bits.append(f"role:{visible_role}")
                 if career_text:
                     job_bits.append(f"job:{career_text}")
                 if workplace_prop:
