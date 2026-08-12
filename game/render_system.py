@@ -2297,7 +2297,10 @@ class RenderSystem(System):
         feedback = str(wire_kit_ui.get("feedback", "") or "").strip()
         if feedback:
             self._draw_display_line(panel_x + 2, footer_y - 1, _clip_display_line(feedback, body_w), body_cell_w)
-        hint = f"1-{len(tab_ids)} tabs  Arrows select  Enter act/study  U load-unload  Esc/Q close"
+        if tab == "programs":
+            hint = f"1-{len(tab_ids)} tabs  Arrows select  Enter RAM load/unload  U backpack  Esc/Q close"
+        else:
+            hint = f"1-{len(tab_ids)} tabs  Arrows select  Enter act/study  U load-unload  Esc/Q close"
         self.view.draw_text(panel_x + 2, footer_y, _local_clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
         return True
 
@@ -2440,6 +2443,20 @@ class RenderSystem(System):
             except (TypeError, ValueError):
                 continue
             user_by_pos.setdefault(point, user)
+        effect_by_pos = {}
+        for effect in scene.get("wire_action_effects", ()) or ():
+            if not isinstance(effect, dict):
+                continue
+            visual = wire_visual_for_kind(effect.get("visual_kind", "effect_packet_pulse"))
+            path = list(effect.get("path", ()) or ())
+            for raw_point in path:
+                if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
+                    continue
+                try:
+                    point = (int(raw_point[0]), int(raw_point[1]))
+                except (TypeError, ValueError):
+                    continue
+                effect_by_pos[point] = visual
         avatar = scene.get("avatar") if isinstance(scene.get("avatar"), dict) else {}
         avatar_pos = (int(avatar.get("x", -999)), int(avatar.get("y", -999)))
 
@@ -2462,6 +2479,8 @@ class RenderSystem(System):
                     visual = wire_visual_for_kind(entity.get("visual_kind", "ice_trace_sentinel"))
                 elif user and point != avatar_pos:
                     visual = wire_visual_for_kind(user.get("visual_kind", "wire_user"))
+                elif point in effect_by_pos and point != avatar_pos:
+                    visual = effect_by_pos[point]
                 else:
                     visual = wire_visual_for_cell(
                         scene,
@@ -2491,7 +2510,10 @@ class RenderSystem(System):
         if dialogue_open:
             panel_label = "WIRE DIALOGUE"
         else:
-            panel_label = "PROGRAMS" if bool(wire_scene_ui.get("program_panel")) else f"{theme_label} HUD"
+            if bool(wire_scene_ui.get("program_load_panel")):
+                panel_label = "LOAD RAM"
+            else:
+                panel_label = "PROGRAMS" if bool(wire_scene_ui.get("program_panel")) else f"{theme_label} HUD"
         self.view.draw_text(side_x, side_y, _local_clip(panel_label, side_w), color=self._theme_color(scene_theme, "title", "objective"))
         side_y += 1
         if dialogue_open:
@@ -2518,6 +2540,23 @@ class RenderSystem(System):
                 wrapped = _wrap_display_lines(prefix + str(row.get("label", "topic")), side_w, max_lines=1)
                 self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), body_cell_w)
                 side_y += 1
+        elif bool(wire_scene_ui.get("program_load_panel")):
+            load_rows = list(wire_scene_ui.get("load_program_rows", ()) or [])
+            selected_load = int(wire_scene_ui.get("selected_load_program_index", 0) or 0)
+            self.view.draw_text(side_x, side_y, _local_clip("KIT PROGRAMS", side_w), color=self._theme_color(scene_theme, "title", "objective"))
+            side_y += 1
+            if not load_rows:
+                self._draw_display_line(side_x, side_y, "No unloaded kit programs.", body_cell_w)
+                side_y += 1
+            max_load_rows = max(1, footer_y - side_y - 2)
+            for idx, row in enumerate(load_rows[:max_load_rows]):
+                prefix = "> " if idx == selected_load else "  "
+                wrapped = _wrap_display_lines(prefix + str(row.get("label", "program")), side_w, max_lines=2)
+                for part in wrapped:
+                    if side_y >= footer_y - 1:
+                        break
+                    self._draw_display_line(side_x, side_y, _clip_display_line(part, side_w), body_cell_w)
+                    side_y += 1
         elif bool(wire_scene_ui.get("program_panel")):
             program_rows = list(wire_scene_ui.get("program_rows", ()) or [])
             target_rows = list(wire_scene_ui.get("target_rows", ()) or [])
@@ -2564,6 +2603,8 @@ class RenderSystem(System):
             self._draw_display_line(panel_x + 2, footer_y - 1, _clip_display_line(feedback, body_w), body_cell_w)
         if dialogue_open:
             hint = "Up/Down topic  Enter choose  Esc back"
+        elif bool(wire_scene_ui.get("program_load_panel")):
+            hint = "Up/Down choose exact program  Enter/L load  Esc/U back"
         elif bool(wire_scene_ui.get("program_panel")):
             hint = "Up/Down program  Left/Right target  Enter/R run  L load  U unload  Esc back"
         else:

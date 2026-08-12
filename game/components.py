@@ -1299,12 +1299,14 @@ class IncidentKnowledge:
         category_label=None,
         kind_label=None,
         severity=0,
+        incident_tick=None,
         x=None,
         y=None,
         z=None,
         official_item_links=None,
         official_item_link_counts=None,
         subject_account=None,
+        participant_accounts=None,
     ):
         incident_key = self._incident_key(incident_id)
         if incident_key is None:
@@ -1315,6 +1317,10 @@ class IncidentKnowledge:
         except (TypeError, ValueError):
             learned_tick = 0
         incoming_learned_tick = int(learned_tick)
+        try:
+            incident_tick = int(incident_tick) if incident_tick is not None else None
+        except (TypeError, ValueError):
+            incident_tick = None
         try:
             source_eid = int(source_eid) if source_eid is not None else None
         except (TypeError, ValueError):
@@ -1408,6 +1414,12 @@ class IncidentKnowledge:
                 x = existing.get("x")
                 y = existing.get("y")
                 z = existing.get("z")
+            existing_incident_tick = existing.get("incident_tick")
+            if incident_tick is None or not prefer_incoming_source:
+                try:
+                    incident_tick = int(existing_incident_tick) if existing_incident_tick is not None else incident_tick
+                except (TypeError, ValueError):
+                    pass
 
         if isinstance(existing, dict):
             if not incident_kind:
@@ -1450,20 +1462,39 @@ class IncidentKnowledge:
         record = dict(existing) if isinstance(existing, dict) else {}
         existing_subject_account = record.get("subject_account") if isinstance(record.get("subject_account"), dict) else {}
         incoming_subject_account = dict(subject_account) if isinstance(subject_account, dict) else {}
+        rank = {
+            "unknown": 0,
+            "described": 1,
+            "reported": 2,
+            "recognized": 3,
+            "verified": 4,
+        }
         if incoming_subject_account:
-            rank = {
-                "unknown": 0,
-                "described": 1,
-                "reported": 2,
-                "recognized": 3,
-                "verified": 4,
-            }
             old_rank = rank.get(str(existing_subject_account.get("identification", "unknown") or "unknown").strip().lower(), 0)
             new_rank = rank.get(str(incoming_subject_account.get("identification", "unknown") or "unknown").strip().lower(), 0)
             old_quality = float((existing_subject_account.get("observation") or {}).get("quality", existing_subject_account.get("identity_confidence", 0.0)) or 0.0)
             new_quality = float((incoming_subject_account.get("observation") or {}).get("quality", incoming_subject_account.get("identity_confidence", 0.0)) or 0.0)
             if not existing_subject_account or new_rank > old_rank or (new_rank == old_rank and new_quality > old_quality):
                 record["subject_account"] = incoming_subject_account
+        existing_participants = (
+            dict(record.get("participant_accounts") or {})
+            if isinstance(record.get("participant_accounts"), dict)
+            else {}
+        )
+        incoming_participants = participant_accounts if isinstance(participant_accounts, dict) else {}
+        for raw_role, raw_account in incoming_participants.items():
+            role = str(raw_role or "").strip().lower().replace(" ", "_")
+            if not role or not isinstance(raw_account, dict):
+                continue
+            old_account = existing_participants.get(role) if isinstance(existing_participants.get(role), dict) else {}
+            old_rank = rank.get(str(old_account.get("identification", "unknown") or "unknown").strip().lower(), 0)
+            new_rank = rank.get(str(raw_account.get("identification", "unknown") or "unknown").strip().lower(), 0)
+            old_quality = float((old_account.get("observation") or {}).get("quality", old_account.get("identity_confidence", 0.0)) or 0.0)
+            new_quality = float((raw_account.get("observation") or {}).get("quality", raw_account.get("identity_confidence", 0.0)) or 0.0)
+            if not old_account or new_rank > old_rank or (new_rank == old_rank and new_quality > old_quality):
+                existing_participants[role] = dict(raw_account)
+        if existing_participants:
+            record["participant_accounts"] = existing_participants
         record.update({
             "incident_id": incident_key,
             "learned_tick": int(learned_tick),
@@ -1493,6 +1524,7 @@ class IncidentKnowledge:
             "kind_label": kind_label,
             "friendly_kind": kind_label,
             "severity": int(severity),
+            "incident_tick": incident_tick,
             "x": x,
             "y": y,
             "z": z,

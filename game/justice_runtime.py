@@ -22,6 +22,7 @@ INCIDENT_REPEAT_COOLDOWNS = {
     "theft": 16,
     "contraband": 14,
     "obstruction": 14,
+    "failure_to_identify": 14,
     "resisting_custody": 14,
     "unarmed_assault": 14,
     "melee_assault": 16,
@@ -38,6 +39,7 @@ INCIDENT_LABELS = {
     "theft": "theft",
     "contraband": "contraband",
     "obstruction": "obstruction",
+    "failure_to_identify": "failure to identify",
     "resisting_custody": "resisting custody",
     "unarmed_assault": "unarmed assault",
     "melee_assault": "armed melee assault",
@@ -713,6 +715,8 @@ def _incident_weight(incident_type, *, severity=0, witnessed=False):
         return min(16, 7 + (severity // 14) + witnessed_bonus)
     if incident_type == "obstruction":
         return min(14, 5 + (severity // 18) + witnessed_bonus)
+    if incident_type == "failure_to_identify":
+        return min(14, 6 + (severity // 20) + witnessed_bonus)
     if incident_type == "resisting_custody":
         return min(22, 10 + (severity // 12) + witnessed_bonus)
     if incident_type == "unarmed_assault":

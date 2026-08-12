@@ -352,6 +352,11 @@ def unload_wire_kit_entry_to_inventory(sim, actor_eid, instance_id, *, item_cata
     wire_state = wire_state_for_actor(sim, actor_eid, create=True)
     if inventory is None:
         return {"ok": False, "reason": "missing_inventory"}
+    if any(
+        isinstance(slot, Mapping) and str(slot.get("instance_id", "") or "") == str(instance_id or "")
+        for slot in getattr(wire_state, "ram_slots", ()) or ()
+    ):
+        return {"ok": False, "reason": "program_loaded_in_ram"}
     entry = wire_kit_find_entry(wire_state, instance_id)
     if entry is None:
         return {"ok": False, "reason": "wire_entry_unavailable"}
@@ -419,6 +424,13 @@ def wire_kit_rows(sim, actor_eid, tab="kit", *, item_catalog=None):
         tab = "kit"
     state = wire_state_for_actor(sim, actor_eid, create=True)
     refresh_wire_state_interface_capacity(sim, actor_eid, state, item_catalog=item_catalog)
+    loaded_ids = {
+        str(entry.get("instance_id", "") or "")
+        for entry in getattr(state, "ram_slots", ()) or ()
+        if isinstance(entry, Mapping)
+    }
+    ram_used = _wire_ram_used_points(state, item_catalog=item_catalog)
+    ram_capacity = int(getattr(state, "program_slots", 0) or 0)
     rows = []
     if tab == "pack":
         inventory = sim.ecs.get(Inventory).get(actor_eid)
@@ -449,16 +461,41 @@ def wire_kit_rows(sim, actor_eid, tab="kit", *, item_catalog=None):
             and metadata.get("subject_eid") is not None
         )
         label = _row_label(entry, source="kit", item_catalog=item_catalog)
-        if research_action:
+        instance_id = str(entry.get("instance_id", "") or "")
+        program_action = tab == "programs" and _wire_kind_bucket(entry.get("item_id"), item_catalog=item_catalog) == "programs"
+        ram_loaded = bool(program_action and instance_id in loaded_ids)
+        profile = wire_profile_for_item(entry.get("item_id"), item_catalog=item_catalog)
+        ram_cost = max(1, _int(profile.get("ram_cost"), 1)) if program_action else 0
+        ram_fits = bool(program_action and not ram_loaded and ram_capacity > 0 and ram_used + ram_cost <= ram_capacity)
+        if program_action:
+            if ram_loaded:
+                label = label.replace("-> backpack", f"[RAM {ram_cost}, loaded] -> unload RAM")
+            else:
+                fit_label = "fits" if ram_fits else "no room"
+                label = label.replace("-> backpack", f"[RAM {ram_cost}, {fit_label}] -> load RAM")
+        elif research_action:
             label = label.replace("-> backpack", "-> study (or sell to broker)")
         elif leverage_action:
             subject_name = str(metadata.get("subject_name", "the subject") or "the subject").strip()
             label = label.replace("-> backpack", f"-> confront {subject_name} (or sell; U unloads)")
         rows.append({
             "kind": "kit",
-            "instance_id": str(entry.get("instance_id", "") or ""),
+            "instance_id": instance_id,
             "entry": dict(entry),
             "label": label,
-            "action": "study" if research_action else ("leverage_hint" if leverage_action else "unload"),
+            "action": (
+                "ram_unload"
+                if ram_loaded
+                else "ram_load"
+                if program_action
+                else "study"
+                if research_action
+                else "leverage_hint"
+                if leverage_action
+                else "unload"
+            ),
+            "ram_cost": ram_cost,
+            "ram_fits": ram_fits,
+            "ram_loaded": ram_loaded,
         })
     return rows

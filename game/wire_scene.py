@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from hashlib import blake2b
 
 from engine.events import Event
 from game.components import Inventory, Position
 from game.items import ITEM_CATALOG, item_display_name
-from game.wire_combat import advance_wire_combat_turn, initialize_wire_combat_scene
+from game.wire_combat import advance_wire_combat_turn, initialize_wire_combat_scene, wire_blocking_ice_at
 from game.wire_kit import wire_state_for_actor
 from game.wire_runtime import normalize_wire_interface_metadata, wire_interface_profile_for_item
 from game.wire_users import seed_wire_users_for_scene
@@ -39,6 +40,11 @@ def _int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _hash_int(*parts):
+    data = ":".join(str(part or "") for part in parts).encode("utf-8", errors="replace")
+    return int.from_bytes(blake2b(data, digest_size=8).digest(), "big")
 
 
 def _prop_metadata(prop):
@@ -187,6 +193,137 @@ def _build_walkable(nodes, edges):
             continue
         points.update(_path_points(a["x"], a["y"], b["x"], b["y"]))
     return sorted(points)
+
+
+def _network_family(*, target_kind, target_class, archetype, service_words, is_atm_surface):
+    target_kind = _clean_id(target_kind)
+    target_class = _clean_id(target_class)
+    archetype = _clean_id(archetype)
+    service_words = {_clean_id(word) for word in service_words}
+    if target_kind == "drone":
+        return "drone_radio"
+    if target_kind == "vehicle":
+        return "vehicle_bus"
+    if is_atm_surface or service_words.intersection({"banking", "finance", "atm", "payments"}):
+        return "finance_mask"
+    if target_class == "access_panel":
+        return "access_control"
+    if target_class == "service_terminal":
+        if any(word in archetype for word in ("civic", "justice", "hospital", "authority", "government")):
+            return "civic_service"
+        return "commercial_service"
+    return "local_controller"
+
+
+def _wire_scene_layout(network_family, branch_kind, secondary_kind, *, variant=0, mid=None):
+    """Return target-family topology rather than repainting one universal graph."""
+
+    mid = int(WIRE_SCENE_HEIGHT // 2 if mid is None else mid)
+    upper = mid - 3 if int(variant) % 2 == 0 else mid + 3
+    lower = mid + 3 if int(variant) % 2 == 0 else mid - 3
+    family = _clean_id(network_family)
+    if family == "access_control":
+        positions = {
+            "entry": (2, mid),
+            "diagnostic": (7, upper),
+            "controller": (13, mid),
+            branch_kind: (18, upper),
+            secondary_kind: (18, lower),
+            "exit": (24, mid),
+        }
+        edges = [
+            ("entry", "diagnostic"),
+            ("diagnostic", "controller"),
+            ("controller", branch_kind),
+            (branch_kind, secondary_kind),
+            ("controller", "exit"),
+        ]
+    elif family in {"commercial_service", "civic_service"}:
+        positions = {
+            "entry": (2, mid),
+            "diagnostic": (6, mid),
+            branch_kind: (11, upper),
+            "controller": (15, mid),
+            secondary_kind: (20, lower),
+            "exit": (24, mid),
+        }
+        edges = [
+            ("entry", "diagnostic"),
+            ("diagnostic", branch_kind),
+            (branch_kind, "controller"),
+            ("controller", secondary_kind),
+            (secondary_kind, "exit"),
+            ("controller", "exit"),
+        ]
+    elif family == "finance_mask":
+        positions = {
+            "entry": (2, mid),
+            branch_kind: (7, mid),
+            "diagnostic": (11, upper),
+            "controller": (16, mid),
+            secondary_kind: (20, upper),
+            "exit": (24, mid),
+        }
+        edges = [
+            ("entry", branch_kind),
+            (branch_kind, "diagnostic"),
+            ("diagnostic", "controller"),
+            ("controller", secondary_kind),
+            (secondary_kind, "exit"),
+        ]
+    elif family == "drone_radio":
+        positions = {
+            "entry": (2, mid),
+            "diagnostic": (7, mid),
+            branch_kind: (12, upper),
+            "controller": (16, mid),
+            secondary_kind: (20, lower),
+            "exit": (24, mid),
+        }
+        edges = [
+            ("entry", "diagnostic"),
+            ("diagnostic", branch_kind),
+            (branch_kind, "controller"),
+            ("controller", secondary_kind),
+            (secondary_kind, "exit"),
+            ("controller", "exit"),
+        ]
+    elif family == "vehicle_bus":
+        positions = {
+            "entry": (2, mid),
+            "diagnostic": (6, mid),
+            "controller": (11, mid),
+            branch_kind: (16, upper),
+            secondary_kind: (20, mid),
+            "vehicle_ignition": (16, lower),
+            "exit": (24, mid),
+        }
+        edges = [
+            ("entry", "diagnostic"),
+            ("diagnostic", "controller"),
+            ("controller", branch_kind),
+            (branch_kind, secondary_kind),
+            ("controller", "vehicle_ignition"),
+            ("vehicle_ignition", secondary_kind),
+            (secondary_kind, "exit"),
+        ]
+    else:
+        positions = {
+            "entry": (2, mid),
+            "diagnostic": (8, upper),
+            "controller": (14, mid),
+            branch_kind: (20, upper),
+            secondary_kind: (20, lower),
+            "exit": (24, mid),
+        }
+        edges = [
+            ("entry", "diagnostic"),
+            ("diagnostic", "controller"),
+            ("controller", branch_kind),
+            ("controller", secondary_kind),
+            ("controller", "exit"),
+        ]
+    return {"positions": positions, "edges": edges}
 
 
 def _node_at(scene, x, y):
@@ -341,12 +478,32 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
             "Data siphon programs can pull one bounded packet from this surface.",
         ]
     )
+    network_family = _network_family(
+        target_kind=target_kind,
+        target_class=target_class,
+        archetype=archetype,
+        service_words=service_words,
+        is_atm_surface=is_atm_surface,
+    )
+    layout_variant = _hash_int(target_identity, network_family, source_org_key, archetype) % 2
+    layout = _wire_scene_layout(
+        network_family,
+        branch_kind,
+        secondary_kind,
+        variant=layout_variant,
+        mid=mid,
+    )
+    positions = dict(layout.get("positions") or {})
+
+    def _position(node_id):
+        point = positions.get(str(node_id), (2, mid))
+        return int(point[0]), int(point[1])
+
     nodes = [
         _node(
             "entry",
             "entry",
-            2,
-            mid,
+            *_position("entry"),
             "entry jack",
             [
                 f"{interface['name']} resolves a local layer for {target_name}.",
@@ -357,8 +514,7 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
         _node(
             "diagnostic",
             "diagnostic",
-            8,
-            mid - 3,
+            *_position("diagnostic"),
             "diagnostic node",
             _diagnostic_lines(interface, security),
             glyph="?",
@@ -366,8 +522,7 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
         _node(
             "controller",
             "controller",
-            14,
-            mid,
+            *_position("controller"),
             "controller node",
             [
                 f"Controller surface: {target_class.replace('_', ' ') or 'wire target'}.",
@@ -381,12 +536,11 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
             ],
             glyph="C",
         ),
-        _node(branch_kind, branch_kind, 20, mid - 3, branch_label, branch_read, glyph="R"),
+        _node(branch_kind, branch_kind, *_position(branch_kind), branch_label, branch_read, glyph="R"),
         _node(
             secondary_kind,
             secondary_kind,
-            20,
-            mid if target_kind == "vehicle" else mid + 3,
+            *_position(secondary_kind),
             secondary_label,
             secondary_read,
             glyph="T" if target_kind == "vehicle" else "D",
@@ -394,8 +548,7 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
         _node(
             "exit",
             "exit",
-            24,
-            mid,
+            *_position("exit"),
             "exit route",
             ["Clean disconnect returns attention to the meat layer."],
             glyph="<",
@@ -405,8 +558,7 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
         nodes.insert(-1, _node(
             "vehicle_ignition",
             "vehicle_ignition",
-            20,
-            mid + 4,
+            *_position("vehicle_ignition"),
             "ignition controller",
             [
                 "The ignition controller reports start readiness and active override state.",
@@ -414,15 +566,7 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
             ],
             glyph="I",
         ))
-    edges = [
-        ("entry", "diagnostic"),
-        ("diagnostic", "controller"),
-        ("controller", branch_kind),
-        ("controller", secondary_kind),
-        ("controller", "exit"),
-    ]
-    if target_kind == "vehicle":
-        edges.insert(-1, ("controller", "vehicle_ignition"))
+    edges = [tuple(edge) for edge in layout.get("edges", ()) or ()]
     walkable = _build_walkable(nodes, edges)
     scene = {
         "schema_version": WIRE_SCENE_SCHEMA_VERSION,
@@ -450,6 +594,8 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
         "linked_archetype": linked_archetype,
         "source_org_key": source_org_key,
         "source_org_name": source_org_name,
+        "network_family": network_family,
+        "layout_variant": int(layout_variant),
         "source_refs": {
             "body": {"x": int(pos.x), "y": int(pos.y), "z": int(pos.z)},
             "target_ref": target_ref,
@@ -512,6 +658,11 @@ def _open_wire_scene_target(sim, actor_eid, *, prop=None, target=None, item_cata
         "scroll": 0,
         "feedback": scene.get("last_feedback", "Wire layer open."),
         "status_lines": wire_scene_status_lines(scene),
+        "program_panel": False,
+        "program_load_panel": False,
+        "selected_program_index": 0,
+        "selected_load_program_index": 0,
+        "selected_target_index": 0,
     })
     shell = getattr(sim, "wire_connection_ui", None)
     if isinstance(shell, dict):
@@ -686,6 +837,20 @@ def move_wire_avatar(sim, actor_eid, dx, dy):
         scene["last_feedback"] = "No route resolves there."
         sim.emit(Event("wire_scene_move_blocked", eid=actor_eid, reason=reason))
         return {"ok": False, "reason": reason}
+    blocking_ice = wire_blocking_ice_at(scene, new_x, new_y)
+    if blocking_ice:
+        reason = "ice_blocks_route"
+        label = str(blocking_ice.get("label", "ICE") or "ICE")
+        scene["last_feedback"] = f"{label} occupies that route. Break it or take another path."
+        state.active_scene = dict(scene)
+        sim.emit(Event(
+            "wire_scene_move_blocked",
+            eid=actor_eid,
+            reason=reason,
+            ice_kind=blocking_ice.get("kind"),
+            ice_label=label,
+        ))
+        return {"ok": False, "reason": reason, "entity": blocking_ice}
     scene["avatar"] = {"x": int(new_x), "y": int(new_y)}
     node = _node_at(scene, new_x, new_y)
     if node:

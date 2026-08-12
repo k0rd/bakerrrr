@@ -333,6 +333,7 @@ class CriminalJusticeSystem(System):
     PLAYER_IDENTITY_CHECK_NOTICE_RADIUS = 8
     PLAYER_IDENTITY_CHECK_PROMPT_RADIUS = 1
     PLAYER_IDENTITY_CHECK_SCAN_TICKS = 3
+    IDENTITY_REFUSAL_SEVERITY = 24
     JUSTICE_DETENTION_NOTICE_RADIUS = 10
     JUSTICE_DETENTION_CONTACT_RADIUS = 1
     BOUNTY_PICKUP_DISPATCH_RADIUS = 80
@@ -3376,6 +3377,14 @@ class CriminalJusticeSystem(System):
         summary = subject_description_summary(description)
         cues = [str(cue).strip() for cue in tuple(match.get("matched_cues", ()) or ()) if str(cue).strip()]
         provisional_read = provisional_attribution_read(self.sim, case, self.player_eid, match=match)
+        enforcer, _law_drive, _priority = self._actor_is_enforcer(npc_eid)
+        formal_identity_demand = bool(
+            enforcer
+            and str(case.get("status", "") or "").strip().lower() == "unresolved"
+            and bool(case.get("factual_incident", False))
+            and bool(match.get("plausible", False))
+            and float(match.get("score", 0.0) or 0.0) >= 0.62
+        )
         jurisdiction_name = str(case.get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office"
         npc_ai = self.sim.ecs.get(AI).get(npc_eid)
         investigation_context = getattr(npc_ai, "investigation_context", None) if npc_ai is not None else None
@@ -3400,6 +3409,8 @@ class CriminalJusticeSystem(System):
             f"The {authority_label} steps into your path. {opening}",
             f'"A witness described {summary}. You match enough of it that I need your name and where you have been."',
         ]
+        if formal_identity_demand:
+            transcript.append('"This is a formal identity demand. Refusing to identify yourself is an offense."')
         if weapon_line:
             transcript.insert(1, weapon_line)
         state = self._dialog_ui_state()
@@ -3413,9 +3424,12 @@ class CriminalJusticeSystem(System):
             "subtitle": jurisdiction_name,
             "transcript": transcript,
             "topics": [
-                {"id": "identify", "label": "Give your presented name"},
-                {"id": "explain", "label": "Explain where you were"},
-                {"id": "decline", "label": "Decline the questions"},
+                {"id": "identify", "label": "Give your name"},
+                {"id": "explain", "label": "Give your name and explain"},
+                {
+                    "id": "decline",
+                    "label": "Refuse to identify" if formal_identity_demand else "Decline the questions",
+                },
             ],
             "selected_index": 0,
             "scroll": 0,
@@ -3436,6 +3450,7 @@ class CriminalJusticeSystem(System):
             "jurisdiction_key": str(case.get("jurisdiction_key", "") or "").strip().lower(),
             "jurisdiction_name": jurisdiction_name,
             "casework_kind": casework_kind,
+            "formal_identity_demand": formal_identity_demand,
         }
         return True
 
@@ -3450,8 +3465,9 @@ class CriminalJusticeSystem(System):
         provisional_read = prompt.get("provisional_read") if isinstance(prompt.get("provisional_read"), dict) else {}
         case = justice_case_for_incident(self.sim, incident_id)
         identity = actor_identity_snapshot(self.sim, self.player_eid) or {}
-        presented_name = str(identity.get("personal_name", "") or "").strip() if choice == "identify" else ""
-        if choice == "identify" and npc_eid is not None:
+        identity_supplied = choice in {"identify", "explain"}
+        presented_name = str(identity.get("personal_name", "") or "").strip() if identity_supplied else ""
+        if identity_supplied and npc_eid is not None:
             remember_presented_identity(
                 self.sim,
                 npc_eid,
@@ -3481,11 +3497,18 @@ class CriminalJusticeSystem(System):
             )
             explanation_succeeded = skill_defense >= evidence_pressure
         provisional_punishment = bool(eligible and not explanation_succeeded)
+        identity_refusal_offense = bool(
+            choice == "decline"
+            and bool(prompt.get("formal_identity_demand", False))
+            and not provisional_punishment
+        )
         outcome = (
             "provisionally_attributed_for_booking"
             if provisional_punishment
+            else "failure_to_identify_recorded"
+            if identity_refusal_offense
             else {
-                "identify": "identity_volunteered_without_charge",
+                "identify": "identity_supplied_without_charge",
                 "explain": "explanation_accepted_without_charge" if explanation_succeeded else "explanation_noted_without_charge",
                 "decline": "declined_without_charge",
             }[choice]
@@ -3510,6 +3533,12 @@ class CriminalJusticeSystem(System):
                 read=provisional_read,
                 disposition=f"player_identity_check_{choice}",
             )
+        refusal_change = None
+        if identity_refusal_offense:
+            refusal_change = self._escalate_player_identity_refusal(
+                by_eid=npc_eid,
+                prompt=prompt,
+            )
         self.sim.emit(Event(
             "justice_identity_check_resolved",
             eid=self.player_eid,
@@ -3520,8 +3549,10 @@ class CriminalJusticeSystem(System):
             outcome=outcome,
             presented_name=presented_name,
             match_score=float(match.get("score", 0.0) or 0.0),
-            justice_record_created=isinstance(provisional_change, dict),
+            justice_record_created=isinstance(provisional_change, dict) or isinstance(refusal_change, dict),
             provisional_attribution=provisional_punishment,
+            formal_identity_demand=bool(prompt.get("formal_identity_demand", False)),
+            identity_refusal_offense=identity_refusal_offense,
             canonical_identity_resolved=False,
         ))
         if provisional_punishment:
@@ -3547,15 +3578,19 @@ class CriminalJusticeSystem(System):
                 f"After another look, the {authority_label} steps aside.",
             ],
             "explain": [
-                f"You explain where you have been. The {authority_label} listens and makes a note.",
+                f"You give your name and explain where you have been. The {authority_label} listens and makes a note.",
                 f"The {authority_label} steps aside." if explanation_succeeded else f"After another look, the {authority_label} steps aside.",
             ],
             "decline": [
-                f"You decline to answer. The {authority_label} watches you for a moment, makes a note, and steps aside.",
+                (
+                    f"You refuse to identify yourself. The {authority_label} records failure to identify and moves to detain you."
+                    if identity_refusal_offense
+                    else f"You decline to answer. The {authority_label} watches you for a moment, makes a note, and steps aside."
+                ),
             ],
         }[choice]
         self._present_justice_result(
-            f"{authority_label.title()} Steps Aside",
+            "Identity Refusal Recorded" if identity_refusal_offense else f"{authority_label.title()} Steps Aside",
             lines,
             subtitle=str(prompt.get("jurisdiction_name", "Justice Office") or "Justice Office"),
         )
@@ -4018,6 +4053,84 @@ class CriminalJusticeSystem(System):
             candidates.append((0 if int(eid) == int(primary_eid or -1) else 1, dist, -priority, -law_drive, int(eid)))
         candidates.sort()
         return [eid for _primary, _dist, _priority, _law_drive, eid in candidates]
+
+    def _escalate_player_identity_refusal(self, *, by_eid=None, prompt=None):
+        """Turn a witnessed formal ID refusal into bounded custody pressure."""
+
+        prompt = prompt if isinstance(prompt, dict) else {}
+        player_pos = self._position_for(self.player_eid)
+        if player_pos is None:
+            return None
+        property_id = str(prompt.get("property_id", "") or "").strip() or None
+        change = self._record_incident(
+            self.player_eid,
+            incident_type="failure_to_identify",
+            severity=int(self.IDENTITY_REFUSAL_SEVERITY),
+            source_event="justice_identity_check_choice",
+            property_id=property_id,
+            x=player_pos.x,
+            y=player_pos.y,
+            witnessed=True,
+            note=f"formal_identity_demand/case_{prompt.get('case_id') or prompt.get('incident_id') or 'unknown'}",
+        )
+
+        target = (int(player_pos.x), int(player_pos.y), int(player_pos.z))
+        enforcers = self._justice_enforcers_near_player(
+            primary_eid=by_eid,
+            radius=max(self.DETENTION_RADIUS + 2, 10),
+        )
+        primary = int(by_eid) if by_eid is not None else (enforcers[0] if enforcers else None)
+        for enforcer_eid in enforcers:
+            ai = self.sim.ecs.get(AI).get(enforcer_eid)
+            will = self.sim.ecs.get(NPCWill).get(enforcer_eid)
+            if ai is not None and will is not None:
+                _sync_ai_intent(
+                    ai,
+                    will,
+                    self.sim.tick,
+                    "protecting",
+                    score=86.0,
+                    target=target,
+                    target_eid=self.player_eid,
+                )
+                continue
+            if ai is not None:
+                ai.state = "protecting"
+                ai.target = target
+                ai.target_eid = self.player_eid
+            if will is not None:
+                will.intent = "protecting"
+                will.score = 86.0
+                will.target = target
+                will.target_eid = self.player_eid
+                will.last_tick = self.sim.tick
+
+        self.sim.emit(Event(
+            "justice_identity_refusal_recorded",
+            eid=self.player_eid,
+            officer_eid=primary,
+            incident_id=prompt.get("incident_id"),
+            case_id=prompt.get("case_id"),
+            x=target[0],
+            y=target[1],
+            z=target[2],
+            custody_pressure=bool(enforcers),
+        ))
+        if primary is not None:
+            self.sim.emit(Event(
+                "npc_defend_property",
+                npc_eid=primary,
+                offender_eid=self.player_eid,
+                property_id=property_id,
+                owner_eid=None,
+                defender_reason="law",
+                threat_type="justice_identity_refusal",
+                severity_label="failure_to_identify",
+                ingress_kind="identity_refusal",
+                aperture_kind="",
+                ingress_method="identity_refusal",
+            ))
+        return change
 
     def _escalate_player_surrender_refusal(self, *, by_eid=None, source_prop=None, snapshot=None):
         snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot()

@@ -9,7 +9,8 @@ Core invariants:
 - dispatch does not create new reports for the same incident
 - existing actors respond first
 - civilian vigils are civic/social responses, not guaranteed police response
-- police/security may respond if an available local actor and seeded chance allow it
+- a usable reported subject description receives one available bounded peace response
+- reports without a usable subject lead retain a seeded police/security response chance
 """
 
 from __future__ import annotations
@@ -57,6 +58,7 @@ BUSY_STATES = {
 }
 DEFAULT_DISPATCH_DELAY = 40
 DEFAULT_VIGIL_RADIUS = 22
+DEFAULT_PEACE_DISPATCH_RADIUS = 80
 DEFAULT_MAX_VIGIL_RESPONDERS = 3
 DEFAULT_MAX_PEACE_RESPONDERS = 1
 SPECIALIST_RESPONSE_ROLES = {
@@ -394,10 +396,24 @@ class ObservedIncidentDispatchSystem(System):
         incident["dispatch_active_tick"] = _int(getattr(self.sim, "tick", 0), 0)
 
         investigator_eid = self._select_case_investigator(incident_id, target)
+        case = justice_case_for_incident(self.sim, incident_id)
+        account = case.get("best_subject_account") if isinstance(case, dict) and isinstance(case.get("best_subject_account"), dict) else {}
+        description = account.get("description") if isinstance(account.get("description"), dict) else {}
+        requires_casework_response = bool(
+            isinstance(case, dict)
+            and _key(case.get("status")) == "unresolved"
+            and bool(case.get("factual_incident", False))
+            and description
+        )
         peace_eids = (
             [investigator_eid]
             if investigator_eid is not None
-            else self._maybe_select_peace_responders(incident_id, incident, target)
+            else self._maybe_select_peace_responders(
+                incident_id,
+                incident,
+                target,
+                required=requires_casework_response,
+            )
         )
         vigil_eids = self._select_vigil_responders(incident_id, incident, target, excluded=set(peace_eids))
         dispatched = []
@@ -495,7 +511,7 @@ class ObservedIncidentDispatchSystem(System):
         jitter = int(_unit_roll(getattr(self.sim, "seed", ""), "dispatch_delay", incident_id) * 18)
         return base + jitter
 
-    def _maybe_select_peace_responders(self, incident_id, incident, target):
+    def _maybe_select_peace_responders(self, incident_id, incident, target, *, required=False):
         max_count = _int(getattr(self.sim, "observed_dispatch_max_peace", DEFAULT_MAX_PEACE_RESPONDERS), DEFAULT_MAX_PEACE_RESPONDERS)
         if max_count <= 0:
             return []
@@ -511,7 +527,10 @@ class ObservedIncidentDispatchSystem(System):
             + (_float(pressure.get("response_followthrough_bonus"), 0.0) * 0.18)
             + (_int(pressure.get("response_readiness_tier"), 0) * 0.05),
         )
-        if _unit_roll(getattr(self.sim, "seed", ""), "peace_dispatch", incident_id, severity) > min(0.85, base_chance):
+        if (
+            not bool(required)
+            and _unit_roll(getattr(self.sim, "seed", ""), "peace_dispatch", incident_id, severity) > min(0.85, base_chance)
+        ):
             return []
         occupations = self.sim.ecs.get(Occupation)
         available = [
@@ -586,7 +605,8 @@ class ObservedIncidentDispatchSystem(System):
             if not pos or int(pos.z) != int(target[2]):
                 continue
             distance = _dist((pos.x, pos.y, pos.z), target)
-            if distance > DEFAULT_VIGIL_RADIUS:
+            response_radius = DEFAULT_PEACE_DISPATCH_RADIUS if peace_only else DEFAULT_VIGIL_RADIUS
+            if distance > response_radius:
                 continue
             traits = traits_map.get(eid) or NPCTraits()
             justice = justices.get(eid)
@@ -600,7 +620,7 @@ class ObservedIncidentDispatchSystem(System):
                 civic_pull += min(0.12, len(social.bonds) * 0.012)
             jitter = _unit_roll(getattr(self.sim, "seed", ""), "dispatch_candidate", target, eid) * 0.08
             investigator_bonus = 0.07 if peace_only and any(token in career for token in INVESTIGATOR_CAREER_TOKENS) else 0.0
-            score = civic_pull + investigator_bonus + jitter - (distance / float(DEFAULT_VIGIL_RADIUS + 1)) * 0.35
+            score = civic_pull + investigator_bonus + jitter - (distance / float(response_radius + 1)) * 0.35
             ranked.append((score, eid))
         ranked.sort(key=lambda row: (row[0], -row[1]), reverse=True)
         return ranked

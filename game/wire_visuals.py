@@ -53,16 +53,6 @@ CURRENT_WIRE_VISUAL_KINDS = (
     "wire_rival_intruder",
     "wire_honeypot_user",
     "wire_echo_user",
-)
-
-
-FUTURE_WIRE_VISUAL_KINDS = (
-    "data_packet",
-    "credential_access_key",
-    "license",
-    "backup",
-    "trace",
-    "corrupted_file",
     "program_talk",
     "program_route_probe",
     "program_handshake_breaker",
@@ -89,6 +79,16 @@ FUTURE_WIRE_VISUAL_KINDS = (
     "effect_buffer_shield",
     "effect_lock_bars",
     "effect_packet_pulse",
+)
+
+
+FUTURE_WIRE_VISUAL_KINDS = (
+    "data_packet",
+    "credential_access_key",
+    "license",
+    "backup",
+    "trace",
+    "corrupted_file",
 )
 
 
@@ -295,6 +295,45 @@ WIRE_INTERFACE_THEME_BY_KEY = {
 }
 
 
+WIRE_HOST_THEME_BY_FAMILY = {
+    "access_control": {
+        "id": "access_control",
+        "label": "access-control lattice",
+        "tokens": {"route": "feature_door", "noise": "property_asset", "border": "building_edge"},
+    },
+    "commercial_service": {
+        "id": "commercial_service",
+        "label": "commercial service mesh",
+        "tokens": {"route": "property_service", "noise": "feature_window", "border": "property_fixture"},
+    },
+    "civic_service": {
+        "id": "civic_service",
+        "label": "civic service grid",
+        "tokens": {"route": "guard", "noise": "property_fixture", "border": "building_edge"},
+    },
+    "finance_mask": {
+        "id": "finance_mask",
+        "label": "financial mask chain",
+        "tokens": {"route": "world_object_gold", "noise": "item_access", "border": "property_asset"},
+    },
+    "drone_radio": {
+        "id": "drone_radio",
+        "label": "drone radio lattice",
+        "tokens": {"route": "human_denim", "noise": "property_service", "border": "feature_window"},
+    },
+    "vehicle_bus": {
+        "id": "vehicle_bus",
+        "label": "vehicle bus rails",
+        "tokens": {"route": "world_object_silver", "noise": "human_olive", "border": "building_edge"},
+    },
+    "local_controller": {
+        "id": "local_controller",
+        "label": "local controller mesh",
+        "tokens": {"route": "feature_window", "noise": "human_slate", "border": "building_edge"},
+    },
+}
+
+
 def _clean_key(value, default="unknown"):
     text = str(value or "").strip().lower()
     return text if text else str(default)
@@ -356,13 +395,37 @@ def wire_interface_theme(style=None, manufacturer=None, theme_profile=None):
     return dict(WIRE_INTERFACE_THEME_BY_KEY["unknown"])
 
 
-def wire_visual_metadata(scene_id, target_class, interface_style, manufacturer, *, security=1, theme_profile=None):
+def wire_host_theme(network_family=None):
+    key = _clean_key(network_family, "local_controller")
+    row = WIRE_HOST_THEME_BY_FAMILY.get(key) or WIRE_HOST_THEME_BY_FAMILY["local_controller"]
+    return {"id": row["id"], "label": row["label"], "tokens": dict(row.get("tokens") or {})}
+
+
+def wire_visual_metadata(
+    scene_id,
+    target_class,
+    interface_style,
+    manufacturer,
+    *,
+    security=1,
+    theme_profile=None,
+    network_family=None,
+):
     theme = wire_interface_theme(interface_style, manufacturer, theme_profile=theme_profile)
-    seed = _hash_int(scene_id, target_class, theme["id"], int(security or 0))
+    if not str(network_family or "").strip():
+        network_family = {
+            "access_panel": "access_control",
+            "service_terminal": "commercial_service",
+            "drone_radio": "drone_radio",
+            "vehicle_controller": "vehicle_bus",
+        }.get(_clean_key(target_class, ""), "local_controller")
+    host_theme = wire_host_theme(network_family)
+    seed = _hash_int(scene_id, target_class, theme["id"], host_theme["id"], int(security or 0))
     return {
         "visual_schema_version": WIRE_VISUAL_SCHEMA_VERSION,
         "visual_seed": int(seed % 2_147_483_647),
         "interface_theme": theme,
+        "host_theme": host_theme,
         "biome_style": theme.get("biome_style", "quiet_signal"),
     }
 
@@ -377,6 +440,7 @@ def apply_wire_scene_visuals(scene, *, security=1):
         scene.get("interface_manufacturer", ""),
         security=security,
         theme_profile=scene.get("interface_theme_profile"),
+        network_family=scene.get("network_family"),
     )
     scene.update(metadata)
     for node in scene.get("nodes", ()) or ():
@@ -410,6 +474,16 @@ def _noise_variant(scene, x, y):
     return _hash_int(seed, int(x), int(y)) % 17
 
 
+def _host_colored_visual(scene, visual, token):
+    result = dict(visual or {})
+    host_theme = scene.get("host_theme") if isinstance(scene, Mapping) and isinstance(scene.get("host_theme"), Mapping) else {}
+    tokens = host_theme.get("tokens") if isinstance(host_theme.get("tokens"), Mapping) else {}
+    color = str(tokens.get(token, "") or "").strip()
+    if color:
+        result["color"] = color
+    return result
+
+
 def wire_visual_for_cell(scene, x, y, *, walkable=False, node=None, avatar=False, width=0, height=0):
     if avatar:
         return wire_visual_for_kind("avatar")
@@ -417,11 +491,13 @@ def wire_visual_for_cell(scene, x, y, *, walkable=False, node=None, avatar=False
         visual_kind = node.get("visual_kind") or wire_visual_kind_for_node_kind(node.get("kind"))
         return wire_visual_for_kind(visual_kind)
     if walkable:
-        return wire_visual_for_kind("noise_residue" if _noise_variant(scene, x, y) == 0 else "walkable_route")
+        kind = "noise_residue" if _noise_variant(scene, x, y) == 0 else "walkable_route"
+        token = "noise" if kind == "noise_residue" else "route"
+        return _host_colored_visual(scene, wire_visual_for_kind(kind), token)
     if x <= 0 or y <= 0 or (width and x >= int(width) - 1) or (height and y >= int(height) - 1):
-        return wire_visual_for_kind("boundary")
+        return _host_colored_visual(scene, wire_visual_for_kind("boundary"), "border")
     if _noise_variant(scene, x, y) in {1, 9}:
-        return wire_visual_for_kind("noise_residue")
+        return _host_colored_visual(scene, wire_visual_for_kind("noise_residue"), "noise")
     return wire_visual_for_kind("void")
 
 
@@ -437,11 +513,23 @@ def wire_scene_hud_lines(scene):
             node_label = str(node.get("label", node_label))
             break
     lines = [
-        f"Target: {scene.get('target_name', 'wire target')} [{str(scene.get('target_class', 'wire')).replace('_', ' ')}]",
+        (
+            f"Target: {scene.get('target_name', 'wire target')} "
+            f"[{str(scene.get('target_class', 'wire')).replace('_', ' ')} / "
+            f"{str(scene.get('network_family', 'local_controller')).replace('_', ' ')}]"
+        ),
         f"Interface: {scene.get('interface_name', 'interface')} / {scene.get('interface_style', 'plain')}",
         f"Node: {node_label}",
         "Body: anchored in meatspace; link active",
     ]
+    action_effects = [
+        effect
+        for effect in scene.get("wire_action_effects", ()) or ()
+        if isinstance(effect, Mapping) and str(effect.get("label", "") or "").strip()
+    ]
+    if action_effects:
+        recent = [str(effect.get("label")) for effect in action_effects[-2:]]
+        lines.append("Activity: " + " / ".join(recent))
     live_ice = [
         entity
         for entity in scene.get("wire_entities", ()) or ()

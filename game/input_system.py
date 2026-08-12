@@ -212,10 +212,12 @@ from game.wire_connection import (
     wire_target_class_for_property,
 )
 from game.wire_combat import (
+    advance_wire_combat_turn,
     load_wire_program_to_ram,
     request_clean_wire_exit,
     run_wire_program,
     unload_wire_ram_slot,
+    wire_program_load_rows,
     wire_program_rows,
     wire_program_target_rows,
 )
@@ -526,6 +528,7 @@ class InputSystem(System):
                 "close_pending": False,
                 "backup_cursor_mark": None,
                 "backup_cursor_pending_topic": "",
+                "social_fact_incident_draft": None,
             }
         ensure_casino_ui_state(self.sim)
         if not hasattr(self.sim, "help_ui"):
@@ -663,11 +666,14 @@ class InputSystem(System):
                 "read_lines": [],
                 "feedback": "",
                 "program_panel": False,
+                "program_load_panel": False,
                 "wire_dialogue": {},
                 "selected_dialogue_index": 0,
                 "selected_program_index": 0,
+                "selected_load_program_index": 0,
                 "selected_target_index": 0,
                 "program_rows": [],
+                "load_program_rows": [],
                 "target_rows": [],
             }
 
@@ -765,6 +771,7 @@ class InputSystem(System):
                 "machine_action": None,
                 "backup_cursor_mark": None,
                 "backup_cursor_pending_topic": "",
+                "social_fact_incident_draft": None,
             }
             self.sim.dialog_ui = state
         else:
@@ -781,6 +788,7 @@ class InputSystem(System):
             state.setdefault("machine_action", None)
             state.setdefault("backup_cursor_mark", None)
             state.setdefault("backup_cursor_pending_topic", "")
+            state.setdefault("social_fact_incident_draft", None)
         return state
 
     def _casino_state(self):
@@ -1069,11 +1077,14 @@ class InputSystem(System):
         state.setdefault("read_lines", [])
         state.setdefault("feedback", "")
         state.setdefault("program_panel", False)
+        state.setdefault("program_load_panel", False)
         state.setdefault("wire_dialogue", {})
         state.setdefault("selected_dialogue_index", 0)
         state.setdefault("selected_program_index", 0)
+        state.setdefault("selected_load_program_index", 0)
         state.setdefault("selected_target_index", 0)
         state.setdefault("program_rows", [])
+        state.setdefault("load_program_rows", [])
         state.setdefault("target_rows", [])
         return state
 
@@ -2844,6 +2855,27 @@ class InputSystem(System):
         if force_unload and str(row.get("kind", "") or "").strip().lower() == "kit":
             action = "unload"
         instance_id = str(row.get("instance_id", "") or "").strip()
+        if action == "ram_load":
+            if not bool(row.get("ram_fits")):
+                state["feedback"] = "Cannot load: that program does not fit available RAM."
+            else:
+                result = load_wire_program_to_ram(self.sim, self.player_eid, instance_id, item_catalog=self.catalog)
+                state["feedback"] = (
+                    f"Loaded {self._wire_kit_item_name(result)} into RAM."
+                    if result.get("ok")
+                    else f"Cannot load RAM: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+                )
+            self._refresh_wire_kit_ui()
+            return True
+        if action == "ram_unload":
+            result = unload_wire_ram_slot(self.sim, self.player_eid, instance_id=instance_id, item_catalog=self.catalog)
+            state["feedback"] = (
+                f"Unloaded {self._wire_kit_item_name(result)} from RAM."
+                if result.get("ok")
+                else f"Cannot unload RAM: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            )
+            self._refresh_wire_kit_ui()
+            return True
         if action == "load":
             result = load_inventory_entry_to_wire_kit(self.sim, self.player_eid, instance_id, item_catalog=self.catalog)
             if result.get("ok"):
@@ -3144,6 +3176,7 @@ class InputSystem(System):
         state["status_lines"] = wire_scene_status_lines(scene)
         state["read_lines"] = wire_scene_current_read(scene)
         state["program_rows"] = wire_program_rows(self.sim, self.player_eid, item_catalog=self.catalog)
+        state["load_program_rows"] = wire_program_load_rows(self.sim, self.player_eid, item_catalog=self.catalog)
         state["target_rows"] = wire_program_target_rows(self.sim, self.player_eid)
         dialogue = wire_dialogue_state(scene)
         state["wire_dialogue"] = dialogue
@@ -3158,6 +3191,10 @@ class InputSystem(System):
             state["selected_program_index"] = max(0, min(int(state.get("selected_program_index", 0) or 0), len(state["program_rows"]) - 1))
         else:
             state["selected_program_index"] = 0
+        if state["load_program_rows"]:
+            state["selected_load_program_index"] = max(0, min(int(state.get("selected_load_program_index", 0) or 0), len(state["load_program_rows"]) - 1))
+        else:
+            state["selected_load_program_index"] = 0
         if state["target_rows"]:
             state["selected_target_index"] = max(0, min(int(state.get("selected_target_index", 0) or 0), len(state["target_rows"]) - 1))
         else:
@@ -3218,18 +3255,79 @@ class InputSystem(System):
         state = self._wire_scene_state()
         key = self._input_key_code(physical_input)
         movement_delta = self._input_movement_delta(physical_input)
+        if bool(state.get("program_load_panel")):
+            rows = list(state.get("load_program_rows", ()) or ())
+            if key in (27, ord("u"), ord("U")):
+                state["program_load_panel"] = False
+                state["feedback"] = "RAM load list closed."
+                self._refresh_wire_scene_ui()
+                return True
+            if movement_delta is not None:
+                _dx, dy = movement_delta
+                if dy and rows:
+                    state["selected_load_program_index"] = (
+                        int(state.get("selected_load_program_index", 0) or 0) + (1 if dy > 0 else -1)
+                    ) % len(rows)
+                self._refresh_wire_scene_ui()
+                return True
+            if key in ENTER_KEYS or key in (ord("l"), ord("L")):
+                index = int(state.get("selected_load_program_index", 0) or 0)
+                row = rows[index] if 0 <= index < len(rows) else None
+                if row is None:
+                    state["feedback"] = "No kit program is available to load."
+                elif not bool(row.get("fits")):
+                    state["feedback"] = f"Load blocked: {row.get('label', 'program')} does not fit available RAM."
+                else:
+                    result = load_wire_program_to_ram(
+                        self.sim,
+                        self.player_eid,
+                        instance_id=str(row.get("instance_id", "") or ""),
+                        item_catalog=self.catalog,
+                    )
+                    if result.get("ok"):
+                        program_name = row.get("label", "program").split(" [", 1)[0]
+                        active_scene = active_wire_scene(self.sim, self.player_eid)
+                        hot_load = bool(
+                            isinstance(active_scene, dict)
+                            and (
+                                active_scene.get("trace_awake")
+                                or int(active_scene.get("trace_current", 0) or 0) > 0
+                            )
+                        )
+                        if hot_load:
+                            advance_wire_combat_turn(
+                                self.sim,
+                                self.player_eid,
+                                cause="hot_ram_load",
+                                item_catalog=self.catalog,
+                            )
+                            self.sim.turn_advance_requested = True
+                            refreshed = active_wire_scene(self.sim, self.player_eid)
+                            message = f"Hot-loaded {program_name}; active security gets a turn."
+                            if isinstance(refreshed, dict):
+                                refreshed["last_feedback"] = message
+                                wire_state = wire_state_for_actor(self.sim, self.player_eid, create=False)
+                                if wire_state is not None:
+                                    wire_state.active_scene = dict(refreshed)
+                            state["feedback"] = message
+                        else:
+                            state["feedback"] = f"Loaded {program_name} into RAM."
+                    else:
+                        state["feedback"] = f"Load blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+                self._refresh_wire_scene_ui()
+                return True
+            self._refresh_wire_scene_ui()
+            return True
         if key in (27,):
             state["program_panel"] = False
+            state["program_load_panel"] = False
             state["feedback"] = "Program panel closed."
             self._refresh_wire_scene_ui()
             return True
         if key in (ord("l"), ord("L")) and movement_delta is None:
-            result = load_wire_program_to_ram(self.sim, self.player_eid, item_catalog=self.catalog)
-            state["feedback"] = (
-                "Program loaded into RAM."
-                if result.get("ok")
-                else f"Load blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
-            )
+            state["program_load_panel"] = True
+            state["selected_load_program_index"] = 0
+            state["feedback"] = "Choose the exact kit program to load."
             self._refresh_wire_scene_ui()
             return True
         if key in (ord("u"), ord("U")):

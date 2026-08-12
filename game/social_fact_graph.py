@@ -4,7 +4,8 @@ The graph records socially meaningful history without granting any actor
 omniscient access to simulation truth.  Domain systems still own incidents,
 properties, employment, opportunities, and other material state.  This module
 owns stable references, truth-neutral propositions, immutable occurrences,
-actor-scoped perspectives, causal social effects, and continuing threads.
+actor-scoped perspectives with mutable attention, causal social effects, and
+continuing threads.
 
 Ordinary callers should use actor-scoped query helpers.  The explicitly named
 ``debug_social_fact_trace`` helper is the only public whole-graph read surface.
@@ -21,7 +22,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 
-SOCIAL_FACT_GRAPH_SCHEMA_VERSION = 1
+SOCIAL_FACT_GRAPH_SCHEMA_VERSION = 2
 
 PERSPECTIVE_STANCES = (
     "unknown",
@@ -200,6 +201,46 @@ def _next_numeric_id(records: Mapping[str, Any], prefix: str) -> int:
     return highest + 1
 
 
+def _combined_weight(values: Iterable[float]) -> float:
+    remainder = 1.0
+    for value in tuple(values or ()):
+        remainder *= 1.0 - _unit(value)
+    return _unit(1.0 - remainder)
+
+
+def _migrate_v1_perspective_attention(state: dict[str, Any]) -> None:
+    """Move mutable salience out of immutable v1 evidence records."""
+
+    occurrences = state.get("occurrences") if isinstance(state.get("occurrences"), dict) else {}
+    perspectives = state.get("perspectives") if isinstance(state.get("perspectives"), dict) else {}
+    for actor_rows in perspectives.values():
+        if not isinstance(actor_rows, dict):
+            continue
+        for row in actor_rows.values():
+            if not isinstance(row, dict):
+                continue
+            evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+            attention = row.get("attention") if isinstance(row.get("attention"), dict) else {}
+            for occurrence_id, evidence_record in evidence.items():
+                if not isinstance(evidence_record, dict) or "salience" not in evidence_record:
+                    continue
+                salience = _unit(evidence_record.pop("salience"), 0.0)
+                occurrence = occurrences.get(occurrence_id)
+                attention.setdefault(
+                    occurrence_id,
+                    {
+                        "salience": salience,
+                        "updated_tick": _int((occurrence or {}).get("tick"), 0),
+                    },
+                )
+            row["attention"] = attention
+            row["salience"] = _combined_weight(
+                item.get("salience", 0.0)
+                for item in attention.values()
+                if isinstance(item, dict)
+            )
+
+
 def _normalize_state(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict) or not raw:
         return _empty_state()
@@ -216,6 +257,8 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
         return _empty_state()
 
     state = raw
+    if version == 1:
+        _migrate_v1_perspective_attention(state)
     state["schema_version"] = SOCIAL_FACT_GRAPH_SCHEMA_VERSION
     for key in (
         "referents",
@@ -436,15 +479,9 @@ def occurrence_record(sim, occurrence_id: str) -> dict[str, Any] | None:
     return copy.deepcopy(record) if isinstance(record, dict) else None
 
 
-def _combined_weight(values: Iterable[float]) -> float:
-    remainder = 1.0
-    for value in tuple(values or ()):
-        remainder *= 1.0 - _unit(value)
-    return _unit(1.0 - remainder)
-
-
 def _reduce_perspective(row: dict[str, Any], occurrences: Mapping[str, Any]) -> dict[str, Any]:
     evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+    attention = row.get("attention") if isinstance(row.get("attention"), dict) else {}
     support = _combined_weight(
         item.get("strength", 0.0)
         for item in evidence.values()
@@ -457,7 +494,7 @@ def _reduce_perspective(row: dict[str, Any], occurrences: Mapping[str, Any]) -> 
     )
     salience = _combined_weight(
         item.get("salience", 0.0)
-        for item in evidence.values()
+        for item in attention.values()
         if isinstance(item, dict)
     )
     exposure = "none"
@@ -515,7 +552,6 @@ def record_actor_evidence(
     strength: float = 0.5,
     exposure: str = "heard",
     source_actor_eid: Any = None,
-    salience: float = 0.0,
     tags: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Attach immutable evidence to one actor's mutable proposition view."""
@@ -547,6 +583,7 @@ def record_actor_evidence(
             "actor_eid": actor,
             "proposition_id": proposition_key,
             "evidence": {},
+            "attention": {},
         }
         perspectives[proposition_key] = row
     evidence = row.get("evidence")
@@ -559,7 +596,6 @@ def record_actor_evidence(
         "strength": _unit(strength, 0.5),
         "exposure": exposure_key,
         "source_actor_eid": _actor_id(source_actor_eid),
-        "salience": _unit(salience),
         "tags": tuple(sorted({_token(tag) for tag in tuple(tags or ()) if _token(tag)})),
     }
     existing_evidence = evidence.get(occurrence_key)
@@ -571,6 +607,41 @@ def record_actor_evidence(
             )
     else:
         evidence[occurrence_key] = evidence_record
+    _reduce_perspective(row, state["occurrences"])
+    return copy.deepcopy(row)
+
+
+def set_actor_perspective_attention(
+    sim,
+    actor_eid: Any,
+    proposition_id: str,
+    occurrence_id: str,
+    *,
+    salience: float,
+    tick: int | None = None,
+) -> dict[str, Any]:
+    """Set mutable attention grounded in evidence already owned by the actor."""
+
+    state = social_fact_graph_state(sim)
+    actor = _actor_id(actor_eid)
+    proposition_key = _text(proposition_id)
+    occurrence_key = _text(occurrence_id)
+    if actor is None:
+        raise ValueError("actor attention requires a positive actor id")
+    row = state["perspectives"].get(actor, {}).get(proposition_key)
+    if not isinstance(row, dict):
+        raise KeyError("actor attention requires an existing perspective")
+    evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+    if occurrence_key not in evidence:
+        raise KeyError("actor attention must reference actor-owned evidence")
+    attention = row.get("attention")
+    if not isinstance(attention, dict):
+        attention = {}
+        row["attention"] = attention
+    attention[occurrence_key] = {
+        "salience": _unit(salience),
+        "updated_tick": _int(getattr(sim, "tick", 0) if tick is None else tick, 0),
+    }
     _reduce_perspective(row, state["occurrences"])
     return copy.deepcopy(row)
 
@@ -647,8 +718,15 @@ def record_claim(
             strength=certainty_value * _unit(credibility, 0.5),
             exposure="heard",
             source_actor_eid=speaker,
-            salience=salience,
             tags=("claim", "attributed"),
+        )
+        set_actor_perspective_attention(
+            sim,
+            audience,
+            proposition_key,
+            occurrence["id"],
+            salience=salience,
+            tick=tick,
         )
     return occurrence
 
@@ -721,8 +799,15 @@ def record_correction(
             strength=strength,
             exposure="heard",
             source_actor_eid=speaker,
-            salience=salience,
             tags=("correction", "attributed"),
+        )
+        set_actor_perspective_attention(
+            sim,
+            audience,
+            original_proposition,
+            correction["id"],
+            salience=salience,
+            tick=tick,
         )
         if revised_key:
             record_actor_evidence(
@@ -734,8 +819,15 @@ def record_correction(
                 strength=strength,
                 exposure="heard",
                 source_actor_eid=speaker,
-                salience=salience,
                 tags=("correction", "revised_claim", "attributed"),
+            )
+            set_actor_perspective_attention(
+                sim,
+                audience,
+                revised_key,
+                correction["id"],
+                salience=salience,
+                tick=tick,
             )
     return correction
 
@@ -1252,6 +1344,32 @@ def validate_social_fact_graph(sim) -> tuple[str, ...]:
                     )
                 if isinstance(evidence, dict) and _text(evidence.get("occurrence_id")) != occurrence_id:
                     errors.append(f"actor {actor_eid} evidence key disagrees with its record")
+                if isinstance(evidence, dict) and "salience" in evidence:
+                    errors.append(f"actor {actor_eid} evidence {occurrence_id} carries mutable salience")
+            attention = (perspective or {}).get("attention", {})
+            if not isinstance(attention, dict):
+                errors.append(f"actor {actor_eid} perspective attention is not a record")
+                attention = {}
+            for occurrence_id, attention_record in attention.items():
+                if occurrence_id not in dict((perspective or {}).get("evidence", {}) or {}):
+                    errors.append(f"actor {actor_eid} attention has unknown evidence {occurrence_id}")
+                if not isinstance(attention_record, dict):
+                    errors.append(f"actor {actor_eid} attention {occurrence_id} is not a record")
+                    continue
+                raw_salience = attention_record.get("salience", 0.0)
+                try:
+                    valid_salience = math.isfinite(float(raw_salience)) and 0.0 <= float(raw_salience) <= 1.0
+                except (TypeError, ValueError):
+                    valid_salience = False
+                if not valid_salience:
+                    errors.append(f"actor {actor_eid} attention {occurrence_id} has invalid salience")
+            derived_salience = _combined_weight(
+                item.get("salience", 0.0)
+                for item in attention.values()
+                if isinstance(item, dict)
+            )
+            if abs(_unit((perspective or {}).get("salience"), 0.0) - derived_salience) > 1e-9:
+                errors.append(f"actor {actor_eid} perspective salience disagrees with attention")
     for edge_id, edge in state["social_edges"].items():
         if not isinstance(edge, dict):
             errors.append(f"social edge {edge_id} is not a record")
@@ -1341,6 +1459,7 @@ __all__ = [
     "referent_record",
     "register_referent",
     "salient_people_for",
+    "set_actor_perspective_attention",
     "social_edge",
     "social_fact_graph_state",
     "social_thread",

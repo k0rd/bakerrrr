@@ -29,6 +29,7 @@ from game.social_fact_graph import (
     record_actor_evidence,
     record_claim,
     record_occurrence,
+    set_actor_perspective_attention,
     social_thread,
 )
 from game.social_fact_incidents import (
@@ -36,6 +37,7 @@ from game.social_fact_incidents import (
     incident_knowledge_for,
     project_heard_incident_account,
     project_heard_incident_packet,
+    project_heard_incident_snapshot,
 )
 from game.social_fact_packets import (
     actor_fact_packet,
@@ -44,7 +46,7 @@ from game.social_fact_packets import (
 )
 
 
-SOCIAL_FACT_ACTION_SCHEMA_VERSION = 2
+SOCIAL_FACT_ACTION_SCHEMA_VERSION = 3
 CORROBORATION_INTENT = "seeking_corroboration"
 SOCIAL_FACT_DELIVERY_INTENT = "delivering_social_fact"
 SOCIAL_WARNING_HEED_INTENT = "heeding_social_warning"
@@ -110,6 +112,156 @@ def _distance(left: Position, right: Position) -> int:
     return abs(int(left.x) - int(right.x)) + abs(int(left.y) - int(right.y))
 
 
+def _ticks_per_hour(sim) -> int:
+    world_traits = getattr(sim, "world_traits", {})
+    clock = world_traits.get("clock", {}) if isinstance(world_traits, Mapping) else {}
+    return max(60, _int((clock or {}).get("ticks_per_hour"), 600))
+
+
+def _person_account_fields(account: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only person details this account actually asserts."""
+
+    if not isinstance(account, Mapping):
+        return {}
+    fields = {}
+    suspect = _int(account.get("suspect_eid"), 0)
+    if suspect > 0:
+        fields["identity"] = suspect
+    name = _token(account.get("presented_name"))
+    if name:
+        fields["name"] = name
+    description = account.get("description") if isinstance(account.get("description"), Mapping) else {}
+    for key in ("presentation", "build"):
+        value = _token(description.get(key))
+        if value:
+            fields[key] = value
+    hair = description.get("hair") if isinstance(description.get("hair"), Mapping) else {}
+    for key in ("length", "color", "texture"):
+        value = _token(hair.get(key))
+        if value:
+            fields[f"hair_{key}"] = value
+    clothing = set()
+    for raw_item in tuple(description.get("worn_items", ()) or ()):
+        if not isinstance(raw_item, Mapping):
+            continue
+        label = _token(raw_item.get("label") or raw_item.get("name") or raw_item.get("item_id"))
+        color = _token(raw_item.get("color"))
+        slot = _token(raw_item.get("slot"))
+        if label or color:
+            clothing.add((slot, label, color))
+    if clothing:
+        fields["clothing"] = frozenset(clothing)
+    return fields
+
+
+def _person_detail_assessment(
+    role: str,
+    claimed: Mapping[str, Any],
+    contact: Mapping[str, Any],
+) -> tuple[list[str], list[str], list[str]]:
+    claimed_fields = _person_account_fields(claimed)
+    contact_fields = _person_account_fields(contact)
+    matches = []
+    conflicts = []
+    unconfirmed = []
+    for field, claimed_value in claimed_fields.items():
+        key = f"{role}.{field}"
+        if field not in contact_fields:
+            unconfirmed.append(key)
+            continue
+        contact_value = contact_fields[field]
+        if field == "clothing":
+            if set(claimed_value) & set(contact_value):
+                matches.append(key)
+            else:
+                conflicts.append(key)
+        elif claimed_value == contact_value:
+            matches.append(key)
+        else:
+            conflicts.append(key)
+    return matches, conflicts, unconfirmed
+
+
+def _incident_detail_assessment(
+    sim,
+    claimed: Mapping[str, Any],
+    contact: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compare only overlapping actor-owned detail, never canonical truth."""
+
+    matches = []
+    conflicts = []
+    unconfirmed = []
+
+    claimed_tick = claimed.get("incident_tick")
+    contact_tick = contact.get("incident_tick")
+    if claimed_tick is not None:
+        if contact_tick is None:
+            unconfirmed.append("time")
+        elif abs(_int(claimed_tick, 0) - _int(contact_tick, 0)) <= _ticks_per_hour(sim) * 12:
+            matches.append("time")
+        else:
+            conflicts.append("time")
+
+    claimed_location = claimed.get("location") if isinstance(claimed.get("location"), Mapping) else None
+    contact_location = contact.get("location") if isinstance(contact.get("location"), Mapping) else None
+    if isinstance(claimed_location, Mapping):
+        if not isinstance(contact_location, Mapping):
+            unconfirmed.append("location")
+        else:
+            distance = (
+                abs(_int(claimed_location.get("x"), 0) - _int(contact_location.get("x"), 0))
+                + abs(_int(claimed_location.get("y"), 0) - _int(contact_location.get("y"), 0))
+            )
+            same_level = _int(claimed_location.get("z"), 0) == _int(contact_location.get("z"), 0)
+            (matches if same_level and distance <= 2 else conflicts).append("location")
+
+    person_matches, person_conflicts, person_unconfirmed = _person_detail_assessment(
+        "actor",
+        claimed.get("subject_account") if isinstance(claimed.get("subject_account"), Mapping) else {},
+        contact.get("subject_account") if isinstance(contact.get("subject_account"), Mapping) else {},
+    )
+    matches.extend(person_matches)
+    conflicts.extend(person_conflicts)
+    unconfirmed.extend(person_unconfirmed)
+
+    claimed_participants = (
+        claimed.get("participant_accounts")
+        if isinstance(claimed.get("participant_accounts"), Mapping)
+        else {}
+    )
+    contact_participants = (
+        contact.get("participant_accounts")
+        if isinstance(contact.get("participant_accounts"), Mapping)
+        else {}
+    )
+    for raw_role, claimed_person in claimed_participants.items():
+        role = _token(raw_role)
+        contact_person = contact_participants.get(role)
+        if role not in {"victim"} or not isinstance(claimed_person, Mapping):
+            continue
+        if not isinstance(contact_person, Mapping):
+            if _person_account_fields(claimed_person):
+                unconfirmed.append(role)
+            continue
+        role_matches, role_conflicts, role_unconfirmed = _person_detail_assessment(
+            role,
+            claimed_person,
+            contact_person,
+        )
+        matches.extend(role_matches)
+        conflicts.extend(role_conflicts)
+        unconfirmed.extend(role_unconfirmed)
+
+    scope = "detail_conflict" if conflicts else "incident_supported" if unconfirmed else "detail_supported"
+    return {
+        "scope": scope,
+        "matches": tuple(sorted(set(matches))),
+        "conflicts": tuple(sorted(set(conflicts))),
+        "unconfirmed": tuple(sorted(set(unconfirmed))),
+    }
+
+
 def _empty_action_state() -> dict[str, Any]:
     return {
         "schema_version": SOCIAL_FACT_ACTION_SCHEMA_VERSION,
@@ -118,7 +270,18 @@ def _empty_action_state() -> dict[str, Any]:
 
 
 def _normalize_task(task: dict[str, Any]) -> dict[str, Any]:
-    """Upgrade one saved V1 corroboration task in place."""
+    """Upgrade one saved corroboration task in place."""
+
+    task.setdefault("account_claim_occurrence_id", None)
+    task.setdefault("corroboration_account_occurrence_id", None)
+    task.setdefault("corroboration_scope", None)
+    task.setdefault("corroboration_matches", ())
+    task.setdefault("corroboration_conflicts", ())
+    task.setdefault("corroboration_unconfirmed", ())
+    task.setdefault("corroboration_preference", None)
+    task.setdefault("account_preference_occurrence_id", None)
+    task.setdefault("requester_account_weight", None)
+    task.setdefault("contact_account_weight", None)
 
     task.setdefault("warning_status", "not_applicable")
     task.setdefault("warning_outcome", None)
@@ -172,6 +335,12 @@ def social_fact_action_state(sim) -> dict[str, Any]:
     for task in raw["actions"].values():
         if isinstance(task, dict):
             _normalize_task(task)
+            if not _text(task.get("account_claim_occurrence_id")):
+                thread = social_thread(sim, task.get("thread_id")) or {}
+                metadata = thread.get("metadata") if isinstance(thread.get("metadata"), Mapping) else {}
+                task["account_claim_occurrence_id"] = _text(
+                    metadata.get("account_claim_occurrence_id")
+                ) or None
     sim.social_fact_actions = raw
     return raw
 
@@ -204,6 +373,23 @@ def request_incident_corroboration(
         raise ValueError("social fact action must reference the thread's incident proposition")
     if occurrence_record(sim, request_occurrence_key) is None:
         raise KeyError(f"unknown social fact action request: {request_occurrence_key}")
+    metadata = thread.get("metadata") if isinstance(thread.get("metadata"), Mapping) else {}
+    account_claim_id = _text(metadata.get("account_claim_occurrence_id"))
+    account_claim = occurrence_record(sim, account_claim_id)
+    account_payload = (
+        account_claim.get("payload")
+        if isinstance(account_claim, dict) and isinstance(account_claim.get("payload"), Mapping)
+        else {}
+    )
+    if (
+        not isinstance(account_claim, dict)
+        or account_claim.get("kind") != "incident_account_claim"
+        or _int(account_payload.get("speaker_eid"), 0) != requester
+        or _int(account_payload.get("audience_eid"), 0) != owner
+        or _int(account_payload.get("incident_id"), 0) != incident
+        or not isinstance(account_payload.get("account"), Mapping)
+    ):
+        raise ValueError("corroboration requires the exact attributed account delivered in this thread")
 
     actions = social_fact_action_state(sim)["actions"]
     existing = actions.get(thread_key)
@@ -215,6 +401,7 @@ def request_incident_corroboration(
         "incident_id": incident,
         "proposition_id": proposition_key,
         "request_occurrence_id": request_occurrence_key,
+        "account_claim_occurrence_id": account_claim_id,
     }
     if isinstance(existing, dict):
         if any(existing.get(key) != value for key, value in identity.items()):
@@ -265,6 +452,10 @@ def social_fact_action_for_thread(
         "completed_tick": task.get("completed_tick"),
         "report_delivered": bool(task.get("report_delivered", False)),
         "progress_reported": bool(task.get("progress_reported", False)),
+        "corroboration_scope": task.get("corroboration_scope"),
+        "corroboration_conflicts": tuple(task.get("corroboration_conflicts", ()) or ()),
+        "corroboration_unconfirmed": tuple(task.get("corroboration_unconfirmed", ()) or ()),
+        "corroboration_preference": task.get("corroboration_preference"),
         "warning_status": task.get("warning_status"),
         "warning_outcome": task.get("warning_outcome"),
         "warning_completed_tick": task.get("warning_completed_tick"),
@@ -400,8 +591,46 @@ def validate_social_fact_actions(sim) -> tuple[str, ...]:
             errors.append(f"social fact action {thread_id} has an unrelated proposition")
         if occurrence_record(sim, task.get("request_occurrence_id")) is None:
             errors.append(f"social fact action {thread_id} has no request occurrence")
+        account_claim = occurrence_record(sim, task.get("account_claim_occurrence_id"))
+        account_payload = (
+            account_claim.get("payload")
+            if isinstance(account_claim, dict) and isinstance(account_claim.get("payload"), Mapping)
+            else {}
+        )
+        if (
+            not isinstance(account_claim, dict)
+            or account_claim.get("kind") != "incident_account_claim"
+            or not isinstance(account_payload.get("account"), Mapping)
+        ):
+            errors.append(f"social fact action {thread_id} has no frozen initiating account")
         if _token(task.get("status")) not in {"requested", "seeking", "completed", "failed"}:
             errors.append(f"social fact action {thread_id} has an invalid status")
+        account_query_id = _text(task.get("corroboration_account_occurrence_id"))
+        if _text(task.get("contact_thread_id")):
+            account_query = occurrence_record(sim, account_query_id)
+            if not isinstance(account_query, dict) or account_query.get("kind") != "corroboration_account_query":
+                errors.append(f"social fact action {thread_id} has no physically delivered comparison account")
+        preference_id = _text(task.get("account_preference_occurrence_id"))
+        if preference_id:
+            preference_occurrence = occurrence_record(sim, preference_id)
+            if (
+                not isinstance(preference_occurrence, dict)
+                or preference_occurrence.get("kind") != "account_preference"
+                or tuple(preference_occurrence.get("actor_eids", ()) or ())
+                != (_int(task.get("owner_eid"), 0),)
+            ):
+                errors.append(f"social fact action {thread_id} has invalid private account preference")
+        scope = _token(task.get("corroboration_scope"))
+        if scope and scope not in {
+            "detail_supported",
+            "incident_supported",
+            "detail_conflict",
+            "semantic_conflict",
+            "hearsay_only",
+            "hearsay_conflict",
+            "no_account",
+        }:
+            errors.append(f"social fact action {thread_id} has an invalid corroboration scope")
         warning_status = _token(task.get("warning_status"))
         if warning_status not in {"not_applicable", "requested", "seeking", "delivered", "failed"}:
             errors.append(f"social fact action {thread_id} has an invalid warning status")
@@ -431,6 +660,77 @@ def _thread_was_corrected(sim, thread: Mapping[str, Any]) -> bool:
         if origin_id in set(occurrence.get("source_occurrence_ids", ()) or ()):
             return True
     return False
+
+
+def _corroboration_account_source(
+    sim,
+    task: Mapping[str, Any],
+    thread: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str, bool]:
+    """Return the exact account the owner should carry into physical contact."""
+
+    owner = _int(task.get("owner_eid"), 0)
+    requester = _int(task.get("requester_eid"), 0)
+    incident_id = _int(task.get("incident_id"), 0)
+    corrected = _thread_was_corrected(sim, thread)
+    if corrected:
+        for occurrence_id in reversed(tuple(thread.get("occurrence_ids", ()) or ())):
+            occurrence = occurrence_record(sim, occurrence_id)
+            payload = occurrence.get("payload") if isinstance(occurrence, dict) else {}
+            if (
+                isinstance(occurrence, dict)
+                and occurrence.get("kind") == "incident_account_correction"
+                and _int(payload.get("speaker_eid"), 0) == requester
+                and _int(payload.get("audience_eid"), 0) == owner
+                and _int(payload.get("incident_id"), 0) == incident_id
+                and isinstance(payload.get("corrected_account"), Mapping)
+            ):
+                return copy.deepcopy(dict(payload["corrected_account"])), occurrence["id"], True
+
+    account_claim = occurrence_record(sim, task.get("account_claim_occurrence_id"))
+    payload = account_claim.get("payload") if isinstance(account_claim, dict) else {}
+    if (
+        isinstance(account_claim, dict)
+        and account_claim.get("kind") == "incident_account_claim"
+        and _int(payload.get("speaker_eid"), 0) == requester
+        and _int(payload.get("audience_eid"), 0) == owner
+        and _int(payload.get("incident_id"), 0) == incident_id
+        and isinstance(payload.get("account"), Mapping)
+    ):
+        return copy.deepcopy(dict(payload["account"])), account_claim["id"], corrected
+    return None, "", corrected
+
+
+def _requester_account_weight(
+    sim,
+    owner: int,
+    proposition_id: str,
+    origin_occurrence_id: str,
+) -> float:
+    perspective = actor_perspective(sim, owner, proposition_id) or {}
+    evidence = perspective.get("evidence") if isinstance(perspective.get("evidence"), Mapping) else {}
+    origin = evidence.get(_text(origin_occurrence_id))
+    if isinstance(origin, Mapping) and _token(origin.get("polarity")) == "support":
+        return _unit(origin.get("strength"), 0.0)
+    return 0.0
+
+
+def _contact_account_weight(sim, owner: int, contact: int, record: Mapping[str, Any]) -> float:
+    social = sim.ecs.get(NPCSocial).get(owner)
+    bond = (social.bonds or {}).get(contact) if isinstance(social, NPCSocial) else None
+    trust = _unit((bond or {}).get("trust"), 0.25)
+    confidence = _unit(record.get("confidence"), 0.5)
+    direct_bonus = 0.1 if bool(record.get("firsthand", False)) else 0.04
+    return _unit((confidence * (0.35 + (trust * 0.55))) + direct_bonus, 0.0)
+
+
+def _conflict_preference(requester_weight: float, contact_weight: float) -> str:
+    margin = float(requester_weight) - float(contact_weight)
+    if margin >= 0.12:
+        return "requester_preferred"
+    if margin <= -0.12:
+        return "contact_preferred"
+    return "unsettled"
 
 
 class SocialFactConsequenceSystem(System):
@@ -788,6 +1088,14 @@ class SocialFactConsequenceSystem(System):
         origin_thread = social_thread(self.sim, task.get("thread_id")) or {}
         corrected = _thread_was_corrected(self.sim, origin_thread)
         prior_view = ensure_actor_incident_perspective(self.sim, recipient, incident_id)
+        corroboration_scope = _token(task.get("corroboration_scope"))
+        corroboration_preference = _token(task.get("corroboration_preference"))
+        if corroboration_scope == "detail_supported":
+            packet_source_class = "independent_account"
+        elif corroboration_scope == "detail_conflict" and corroboration_preference == "requester_preferred":
+            packet_source_class = "trusted_contested_account"
+        else:
+            packet_source_class = "mixed_account"
         packet = create_actor_incident_fact_packet(
             self.sim,
             speaker_eid=owner,
@@ -795,7 +1103,7 @@ class SocialFactConsequenceSystem(System):
             proposition_id=proposition_id,
             purpose="protective_warning",
             source_occurrence_ids=self._packet_source_occurrences(task),
-            source_class="independent_account",
+            source_class=packet_source_class,
             initiating_actor_eid=requester,
             initiating_claim_corrected=corrected,
             attribution_disclosed=True,
@@ -808,6 +1116,18 @@ class SocialFactConsequenceSystem(System):
                 f"{requester_name} first brought me a story about a {label}, then backed off how certain "
                 "they were. I still found a separate account that held up. You're close enough to the place "
                 "that I thought you should know both parts."
+            )
+        elif packet_source_class == "trusted_contested_account":
+            spoken = (
+                f"{requester_name} brought me a story about a {label}. Someone else independently knew the "
+                "incident, but disputed some details. I know whose account I trust more, and you're close "
+                "enough to the reported place that I thought you should hear it."
+            )
+        elif packet_source_class == "mixed_account":
+            spoken = (
+                f"{requester_name} brought me a story about a {label}. Someone else independently backed the "
+                "incident, though not every detail. You're close enough to the reported place that I thought "
+                "you should know."
             )
         else:
             spoken = (
@@ -857,6 +1177,15 @@ class SocialFactConsequenceSystem(System):
         prior_independent = bool((prior_record or {}).get("firsthand")) or _token(
             (prior_record or {}).get("source_kind")
         ) in {"authority_report", "camera", "official_report", "verified", "witnessed"}
+        prior_detail_assessment = (
+            _incident_detail_assessment(
+                self.sim,
+                packet.get("account") if isinstance(packet.get("account"), Mapping) else {},
+                prior_view.get("snapshot") if isinstance(prior_view, dict) else {},
+            )
+            if prior_proposition == proposition_id and prior_independent
+            else {}
+        )
         acceptance_score = (
             (_unit(packet.get("confidence"), 0.5) * 0.58)
             + (credibility * 0.27)
@@ -866,6 +1195,12 @@ class SocialFactConsequenceSystem(System):
         if prior_proposition and prior_proposition != proposition_id:
             outcome = "disputed"
             response_line = "That isn't the account I had. I'm not going to pretend those fit together."
+        elif tuple(prior_detail_assessment.get("conflicts", ()) or ()):
+            outcome = "disputed"
+            response_line = (
+                "I know the incident, but the time, place, or person in your warning conflicts with my own "
+                "account. I'm not treating your version as settled."
+            )
         elif prior_proposition == proposition_id and prior_independent:
             outcome = "already_knew"
             response_line = "I know. I had my own reason to take it seriously before you came over."
@@ -899,6 +1234,7 @@ class SocialFactConsequenceSystem(System):
                 "outcome": outcome,
                 "npc_spoken_text": response_line,
                 "initiating_claim_corrected": corrected,
+                "detail_assessment": prior_detail_assessment,
             },
             flags=("speech", "attributed", "perceptible", "actor_owned"),
             dedupe_key=f"social-fact-warning:reaction:{task['thread_id']}:{recipient}",
@@ -913,8 +1249,14 @@ class SocialFactConsequenceSystem(System):
                 strength=0.5 if outcome == "disputed" else 0.34,
                 exposure="heard",
                 source_actor_eid=recipient,
-                salience=0.5,
                 tags=("warning_pushback", outcome),
+            )
+            set_actor_perspective_attention(
+                self.sim,
+                recipient,
+                proposition_id,
+                reaction["id"],
+                salience=0.5,
             )
         advance_social_thread(
             self.sim,
@@ -1101,8 +1443,14 @@ class SocialFactConsequenceSystem(System):
             strength=0.3,
             exposure="heard",
             source_actor_eid=owner,
-            salience=0.5,
             tags=("source_correction", "warning_repair"),
+        )
+        set_actor_perspective_attention(
+            self.sim,
+            recipient,
+            proposition_id,
+            relay["id"],
+            salience=0.5,
         )
         response_line = (
             "I hear you. I already moved on the warning; I can't make that part unhappen."
@@ -1331,8 +1679,16 @@ class SocialFactConsequenceSystem(System):
         original_thread = social_thread(self.sim, task.get("thread_id")) or {}
         contact_view = ensure_actor_incident_perspective(self.sim, contact, incident_id)
         owner_view = actor_perspective(self.sim, owner, proposition_id) or {}
-        corrected = _thread_was_corrected(self.sim, original_thread)
+        claimed_account, account_source_id, corrected = _corroboration_account_source(
+            self.sim,
+            task,
+            original_thread,
+        )
         label = _text(task.get("label")) or "incident"
+        if not isinstance(claimed_account, dict) or not account_source_id:
+            task["corroboration_scope"] = "no_account"
+            self._finish_task(task, outcome="no_account", failed=True)
+            return
 
         if corrected:
             query = record_occurrence(
@@ -1362,8 +1718,14 @@ class SocialFactConsequenceSystem(System):
                 strength=0.3,
                 exposure="heard",
                 source_actor_eid=owner,
-                salience=0.32,
                 tags=("qualified_query", "source_corrected"),
+            )
+            set_actor_perspective_attention(
+                self.sim,
+                contact,
+                proposition_id,
+                query["id"],
+                salience=0.32,
             )
         else:
             query = record_claim(
@@ -1378,6 +1740,38 @@ class SocialFactConsequenceSystem(System):
                 source_occurrence_ids=(task.get("request_occurrence_id"),),
                 dedupe_key=f"social-fact-corroboration:query:{task['thread_id']}:{contact}",
             )
+
+        account_query = record_occurrence(
+            self.sim,
+            "corroboration_account_query",
+            actor_eids=(owner, contact),
+            proposition_ids=(proposition_id,),
+            source_occurrence_ids=(query["id"], account_source_id),
+            payload={
+                "speaker_eid": owner,
+                "audience_eid": contact,
+                "incident_id": incident_id,
+                "account": claimed_account,
+                "correction_disclosed": bool(corrected),
+                "spoken_text": (
+                    f"I want to compare the time, place, and people in the {label} account I was given "
+                    "against what you actually know."
+                ),
+            },
+            flags=tuple(
+                flag
+                for flag in (
+                    "speech",
+                    "attributed",
+                    "actor_bounded",
+                    "exact_account",
+                    "repair_disclosed" if corrected else "",
+                )
+                if flag
+            ),
+            dedupe_key=f"social-fact-corroboration:account-query:{task['thread_id']}:{contact}",
+        )
+        task["corroboration_account_occurrence_id"] = account_query["id"]
 
         contact_thread = open_social_thread(
             self.sim,
@@ -1395,8 +1789,23 @@ class SocialFactConsequenceSystem(System):
                 "owner_eid": owner,
                 "contact_eid": contact,
                 "label": label,
+                "account_query_occurrence_id": account_query["id"],
             },
             thread_key=f"incident-corroboration:{task['thread_id']}:{owner}:{contact}",
+        )
+        advance_social_thread(
+            self.sim,
+            contact_thread["id"],
+            occurrence_id=account_query["id"],
+            status="awaiting_response",
+            awaiting_actor_eid=contact,
+        )
+        project_heard_incident_snapshot(
+            self.sim,
+            contact,
+            owner,
+            claimed_account,
+            thread_id=contact_thread["id"],
         )
 
         if not isinstance(contact_view, dict):
@@ -1405,7 +1814,7 @@ class SocialFactConsequenceSystem(System):
                 "corroboration_response",
                 actor_eids=(contact, owner),
                 proposition_ids=(proposition_id,),
-                source_occurrence_ids=(query["id"],),
+                source_occurrence_ids=(account_query["id"],),
                 payload={"outcome": "no_prior_account", "npc_spoken_text": "No. That's new to me."},
                 flags=("speech", "attributed"),
                 dedupe_key=f"social-fact-corroboration:no-account:{task['thread_id']}:{contact}",
@@ -1417,12 +1826,31 @@ class SocialFactConsequenceSystem(System):
                 status="closed",
                 awaiting_actor_eid=None,
             )
+            task["corroboration_scope"] = "no_account"
             self._finish_task(task, outcome="no_prior_account", contact_thread_id=contact_thread["id"])
             return
 
         contact_proposition = _text(contact_view["proposition"].get("id"))
         contact_record = contact_view["record"]
+        requester_weight = _requester_account_weight(
+            self.sim,
+            owner,
+            proposition_id,
+            _text(original_thread.get("origin_occurrence_id")),
+        )
+        contact_weight = _contact_account_weight(self.sim, owner, contact, contact_record)
+        task["requester_account_weight"] = requester_weight
+        task["contact_account_weight"] = contact_weight
         if contact_proposition == proposition_id:
+            assessment = _incident_detail_assessment(
+                self.sim,
+                claimed_account,
+                contact_view.get("snapshot") if isinstance(contact_view.get("snapshot"), Mapping) else {},
+            )
+            task["corroboration_scope"] = assessment["scope"]
+            task["corroboration_matches"] = assessment["matches"]
+            task["corroboration_conflicts"] = assessment["conflicts"]
+            task["corroboration_unconfirmed"] = assessment["unconfirmed"]
             independent = bool(contact_record.get("firsthand")) or _token(contact_record.get("source_kind")) in {
                 "authority_report",
                 "camera",
@@ -1431,16 +1859,38 @@ class SocialFactConsequenceSystem(System):
                 "witnessed",
             }
             if independent:
+                preference = (
+                    _conflict_preference(requester_weight, contact_weight)
+                    if assessment["conflicts"]
+                    else "accounts_compatible"
+                )
+                task["corroboration_preference"] = preference
+                if assessment["conflicts"]:
+                    response_line = (
+                        "Yes, I know that incident happened. But the time, place, or people in that account "
+                        "do not all match what I know."
+                    )
+                    response_outcome = "independent_detail_conflict"
+                elif assessment["unconfirmed"]:
+                    response_line = (
+                        "Yes. I have my own reason to know the incident happened. I cannot confirm every "
+                        "person or detail in that account, but nothing I know contradicts it."
+                    )
+                    response_outcome = "independent_incident_match"
+                else:
+                    response_line = "Yes. I have my own reason to believe that happened, and the details line up."
+                    response_outcome = "independent_detail_match"
                 response = record_occurrence(
                     self.sim,
                     "corroboration",
                     actor_eids=(contact, owner),
                     proposition_ids=(proposition_id,),
-                    source_occurrence_ids=(query["id"], contact_view["evidence"]["id"]),
+                    source_occurrence_ids=(account_query["id"], contact_view["evidence"]["id"]),
                     payload={
-                        "outcome": "independent_match",
-                        "npc_spoken_text": "Yes. I have my own reason to believe that happened.",
+                        "outcome": response_outcome,
+                        "npc_spoken_text": response_line,
                         "source_exposure": contact_view["snapshot"].get("firsthand") and "firsthand" or "verified",
+                        "detail_assessment": assessment,
                     },
                     flags=("speech", "attributed", "actor_owned", "independent_account"),
                     dedupe_key=f"social-fact-corroboration:match:{task['thread_id']}:{contact}",
@@ -1451,38 +1901,84 @@ class SocialFactConsequenceSystem(System):
                     proposition_id,
                     response["id"],
                     polarity="support",
-                    strength=_unit(contact_record.get("confidence"), 0.5) * 0.85,
+                    strength=contact_weight * (0.72 if assessment["conflicts"] else 0.85),
                     exposure="heard",
                     source_actor_eid=contact,
+                    tags=(
+                        "corroboration",
+                        "independent_account",
+                        assessment["scope"],
+                    ),
+                )
+                set_actor_perspective_attention(
+                    self.sim,
+                    owner,
+                    proposition_id,
+                    response["id"],
                     salience=0.58,
-                    tags=("corroboration", "independent_account"),
                 )
                 advance_social_thread(
                     self.sim,
                     contact_thread["id"],
                     occurrence_id=response["id"],
-                    status="corroborated",
+                    status="disputed" if assessment["conflicts"] else "corroborated",
                     awaiting_actor_eid=None,
                 )
+                if assessment["conflicts"]:
+                    preference_occurrence = record_occurrence(
+                        self.sim,
+                        "account_preference",
+                        actor_eids=(owner,),
+                        proposition_ids=(proposition_id,),
+                        source_occurrence_ids=(response["id"],),
+                        payload={
+                            "receiver_eid": owner,
+                            "requester_eid": _int(task.get("requester_eid"), 0),
+                            "contact_eid": contact,
+                            "preference": preference,
+                            "requester_weight": requester_weight,
+                            "contact_weight": contact_weight,
+                            "conflicts": assessment["conflicts"],
+                        },
+                        flags=("actor_owned", "trust_weighted", "account_resolution"),
+                        dedupe_key=f"social-fact-corroboration:preference:{task['thread_id']}:{contact}",
+                    )
+                    task["account_preference_occurrence_id"] = preference_occurrence["id"]
                 project_heard_incident_account(
                     self.sim,
                     owner,
                     contact,
                     contact_record,
                     thread_id=contact_thread["id"],
+                    preserve_existing_account=preference in {"requester_preferred", "unsettled"},
                 )
-                self._finish_task(task, outcome="corroborated", contact_thread_id=contact_thread["id"])
+                outcome = (
+                    "corroborated"
+                    if not assessment["conflicts"] or preference == "requester_preferred"
+                    else "different_details"
+                )
+                self._finish_task(task, outcome=outcome, contact_thread_id=contact_thread["id"])
                 return
 
+            task["corroboration_scope"] = (
+                "hearsay_conflict" if assessment["conflicts"] else "hearsay_only"
+            )
+            task["corroboration_preference"] = "no_independent_weight"
             response = record_occurrence(
                 self.sim,
                 "corroboration_response",
                 actor_eids=(contact, owner),
                 proposition_ids=(proposition_id,),
-                source_occurrence_ids=(query["id"], contact_view["evidence"]["id"]),
+                source_occurrence_ids=(account_query["id"], contact_view["evidence"]["id"]),
                 payload={
                     "outcome": "same_hearsay",
-                    "npc_spoken_text": "I've heard that too, but not for myself.",
+                    "npc_spoken_text": (
+                        "I've heard about the same incident, but the details came to me differently—and none "
+                        "of it was firsthand."
+                        if assessment["conflicts"]
+                        else "I've heard that too, but not for myself."
+                    ),
+                    "detail_assessment": assessment,
                 },
                 flags=("speech", "attributed", "actor_owned", "hearsay"),
                 dedupe_key=f"social-fact-corroboration:echo:{task['thread_id']}:{contact}",
@@ -1497,16 +1993,24 @@ class SocialFactConsequenceSystem(System):
             self._finish_task(task, outcome="same_hearsay", contact_thread_id=contact_thread["id"])
             return
 
+        task["corroboration_scope"] = "semantic_conflict"
+        preference = _conflict_preference(requester_weight, contact_weight)
+        task["corroboration_preference"] = preference
         counterclaim = record_claim(
             self.sim,
             contact,
             (owner,),
             contact_proposition,
             certainty=_unit(contact_record.get("confidence"), 0.5),
-            credibility_by_audience={owner: 0.58},
+            credibility_by_audience={
+                owner: _unit(
+                    contact_weight / max(0.01, _unit(contact_record.get("confidence"), 0.5)),
+                    0.58,
+                )
+            },
             salience=max(0.35, _unit(contact_record.get("social_interest"), 0.0)),
             spoken_text="What I heard was different from that.",
-            source_occurrence_ids=(query["id"], contact_view["evidence"]["id"]),
+            source_occurrence_ids=(account_query["id"], contact_view["evidence"]["id"]),
             dedupe_key=f"social-fact-corroboration:counterclaim:{task['thread_id']}:{contact}:{contact_proposition}",
         )
         conflict = record_occurrence(
@@ -1514,7 +2018,7 @@ class SocialFactConsequenceSystem(System):
             "account_conflict",
             actor_eids=(contact, owner),
             proposition_ids=(proposition_id, contact_proposition),
-            source_occurrence_ids=(query["id"], counterclaim["id"]),
+            source_occurrence_ids=(account_query["id"], counterclaim["id"]),
             payload={"outcome": "different_account", "npc_spoken_text": "That isn't how I heard it."},
             flags=("speech", "attributed", "actor_owned", "unresolved"),
             dedupe_key=f"social-fact-corroboration:conflict:{task['thread_id']}:{contact}",
@@ -1525,12 +2029,37 @@ class SocialFactConsequenceSystem(System):
             proposition_id,
             conflict["id"],
             polarity="contradict",
-            strength=_unit(contact_record.get("confidence"), 0.5) * 0.62,
+            strength=contact_weight * 0.72,
             exposure="heard",
             source_actor_eid=contact,
-            salience=0.55,
-            tags=("different_account", "unresolved"),
+            tags=("different_account", "unresolved", preference),
         )
+        set_actor_perspective_attention(
+            self.sim,
+            owner,
+            proposition_id,
+            conflict["id"],
+            salience=0.55,
+        )
+        preference_occurrence = record_occurrence(
+            self.sim,
+            "account_preference",
+            actor_eids=(owner,),
+            proposition_ids=(proposition_id,),
+            source_occurrence_ids=(conflict["id"],),
+            payload={
+                "receiver_eid": owner,
+                "requester_eid": _int(task.get("requester_eid"), 0),
+                "contact_eid": contact,
+                "preference": preference,
+                "requester_weight": requester_weight,
+                "contact_weight": contact_weight,
+                "semantic_conflict": True,
+            },
+            flags=("actor_owned", "trust_weighted", "account_resolution"),
+            dedupe_key=f"social-fact-corroboration:semantic-preference:{task['thread_id']}:{contact}",
+        )
+        task["account_preference_occurrence_id"] = preference_occurrence["id"]
         advance_social_thread(self.sim, contact_thread["id"], occurrence_id=counterclaim["id"])
         advance_social_thread(
             self.sim,
@@ -1545,6 +2074,7 @@ class SocialFactConsequenceSystem(System):
             contact,
             contact_record,
             thread_id=contact_thread["id"],
+            preserve_existing_account=preference in {"requester_preferred", "unsettled"},
         )
         self._finish_task(task, outcome="different_account", contact_thread_id=contact_thread["id"])
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Mapping
 from hashlib import blake2b
 
@@ -57,12 +58,12 @@ PROGRAM_SPECS = {
 }
 
 ICE_SPECS = {
-    "camera_watchdog": {"label": "Camera Watchdog", "hp": 4, "trace": 2, "visual": "ice_camera_watchdog"},
-    "door_arbiter": {"label": "Door Arbiter", "hp": 7, "buffer": 1, "visual": "ice_door_arbiter"},
+    "camera_watchdog": {"label": "Camera Watchdog", "hp": 4, "trace": 2, "visual": "ice_camera_watchdog", "mobile": True},
+    "door_arbiter": {"label": "Door Arbiter", "hp": 7, "buffer": 1, "visual": "ice_door_arbiter", "blocks_route": True},
     "trace_sentinel": {"label": "Trace Sentinel", "hp": 5, "trace": 3, "visual": "ice_trace_sentinel"},
     "compliance_daemon": {"label": "Compliance Daemon", "hp": 6, "trace": 1, "visual": "ice_compliance_daemon"},
-    "quarantine_gate": {"label": "Quarantine Gate", "hp": 8, "trace": 1, "visual": "ice_quarantine_gate"},
-    "corruptor": {"label": "Corruptor", "hp": 6, "buffer": 1, "visual": "ice_corruptor"},
+    "quarantine_gate": {"label": "Quarantine Gate", "hp": 8, "trace": 1, "visual": "ice_quarantine_gate", "blocks_route": True},
+    "corruptor": {"label": "Corruptor", "hp": 6, "buffer": 1, "visual": "ice_corruptor", "mobile": True, "blocks_route": True},
 }
 
 OFFENSIVE_PROGRAMS = {"handshake_breaker", "door_latch", "camera_loop", "data_siphon_shell", "spike", "ice_cutter"}
@@ -73,6 +74,12 @@ PASSIVE_EFFECT_BY_PROGRAM = {
     "checksum_ward": "checksum_ward",
     "sacrificial_shell": "sacrificial_shell",
 }
+
+PROGRAM_VISUAL_BY_KEY = {
+    key: f"program_{key}"
+    for key in PROGRAM_SPECS
+}
+PROGRAM_VISUAL_BY_KEY["data_siphon_shell"] = "program_data_siphon"
 
 
 def _clean_text(value, default=""):
@@ -297,6 +304,15 @@ def _entity_at_node(nodes, node_kind):
     return 1, 1
 
 
+def _entity_at_first_node(nodes, *node_kinds):
+    wanted = tuple(_clean_key(kind) for kind in node_kinds if _clean_key(kind))
+    for kind in wanted:
+        for node in nodes:
+            if isinstance(node, Mapping) and _clean_key(node.get("kind")) == kind:
+                return int(node.get("x", 0)), int(node.get("y", 0))
+    return 1, 1
+
+
 def _ice_entity(scene, kind, entity_id, x, y, *, traits=()):
     spec = ICE_SPECS[kind]
     visual = wire_visual_for_kind(spec["visual"])
@@ -322,6 +338,7 @@ def _ice_entity(scene, kind, entity_id, x, y, *, traits=()):
 def _initial_ice_entities(scene, *, security=1):
     nodes = list(scene.get("nodes", ()) or ())
     target_class = _clean_key(scene.get("target_class"))
+    target_kind = _clean_key(scene.get("target_kind"))
     scene_id = _clean_text(scene.get("scene_id"))
     security = _int(security, 1, minimum=0)
     rows = []
@@ -331,7 +348,8 @@ def _initial_ice_entities(scene, *, security=1):
         rx, ry = _entity_at_node(nodes, "door_alarm_relay")
         rows.append(_ice_entity(scene, "door_arbiter", "ice-arbiter-1", rx, ry))
     else:
-        sx, sy = _entity_at_node(nodes, "service_index")
+        preferred_anchor = "sensor_relay" if target_kind == "drone" else "vehicle_lock_bus" if target_kind == "vehicle" else "service_index"
+        sx, sy = _entity_at_first_node(nodes, preferred_anchor, "controller", "diagnostic")
         rows.append(_ice_entity(scene, "compliance_daemon", "ice-daemon-1", sx, sy))
     if security >= 2:
         tx, ty = _entity_at_node(nodes, "records")
@@ -378,6 +396,10 @@ def initialize_wire_combat_scene(scene, *, interface_metadata=None, security=1):
     scene.setdefault("ejection_state", {})
     scene.setdefault("wire_turn_index", 0)
     scene.setdefault("last_hostile_program_instance_id", "")
+    scene.setdefault("wire_action_frame", 0)
+    scene.setdefault("wire_action_cause", "")
+    scene.setdefault("wire_action_effects", [])
+    scene.setdefault("last_wire_action", "")
     scene["interface_memory_speed"] = _memory_speed(interface_metadata)
     if not scene.get("wire_entities_initialized"):
         scene["wire_entities"] = _initial_ice_entities(scene, security=security)
@@ -443,6 +465,9 @@ def load_wire_program_to_ram(sim, actor_eid, instance_id=None, *, item_catalog=N
         clean["slot"] = len(getattr(state, "ram_slots", ()) or ())
         state.ram_slots.append(clean)
         state.last_wire_feedback = f"Loaded {_program_name(clean, item_catalog=item_catalog)} into RAM."
+        if isinstance(scene, dict):
+            scene["last_feedback"] = state.last_wire_feedback
+            state.active_scene = dict(scene)
         sim.emit(Event(
             "wire_program_loaded",
             eid=actor_eid,
@@ -530,6 +555,69 @@ def wire_program_rows(sim, actor_eid, *, item_catalog=None):
     return rows
 
 
+def wire_blocking_ice_at(scene, x, y):
+    point = (int(x), int(y))
+    for entity in _live_ice_entities(scene):
+        spec = ICE_SPECS.get(_clean_key(entity.get("kind")), {})
+        if not bool(spec.get("blocks_route")):
+            continue
+        if _wire_point(entity) == point:
+            return dict(entity)
+    return None
+
+
+def wire_program_load_rows(sim, actor_eid, *, item_catalog=None):
+    """Return the exact kit programs the player may choose to load into RAM."""
+
+    item_catalog = item_catalog or ITEM_CATALOG
+    state = wire_state_for_actor(sim, actor_eid, create=True)
+    scene = ensure_wire_combat_state(sim, actor_eid, item_catalog=item_catalog)
+    if scene is None:
+        refresh_wire_state_interface_capacity(sim, actor_eid, state, item_catalog=item_catalog)
+        normalize_wire_ram_slots(state, item_catalog=item_catalog)
+    loaded_ids = {
+        _clean_text(entry.get("instance_id"))
+        for entry in getattr(state, "ram_slots", ()) or ()
+        if isinstance(entry, Mapping)
+    }
+    used_points = wire_ram_used_points(state, item_catalog=item_catalog)
+    capacity = _int(getattr(state, "program_slots", 0), 0, minimum=0)
+    rows = []
+    for entry in getattr(state, "kit_entries", ()) or ():
+        if not isinstance(entry, Mapping) or not _is_program_entry(entry, item_catalog=item_catalog):
+            continue
+        clean = _normalized_program_entry(entry, item_catalog=item_catalog, storage_status="wire_kit")
+        if clean is None:
+            continue
+        instance_id = _clean_text(clean.get("instance_id"))
+        if not instance_id or instance_id in loaded_ids:
+            continue
+        profile = _program_profile(clean.get("item_id"), item_catalog=item_catalog)
+        metadata = dict(clean.get("metadata") or {})
+        program_key = _program_key_for_item(clean.get("item_id"), item_catalog=item_catalog)
+        cost = _ram_cost(clean, item_catalog=item_catalog)
+        durability = _int(metadata.get("durability"), profile.get("durability_max", 1), minimum=0)
+        runs = _int(metadata.get("runs"), profile.get("runs_max", 0), minimum=0)
+        runs_max = _int(metadata.get("runs_max"), profile.get("runs_max", 0), minimum=0)
+        mode = str(PROGRAM_SPECS.get(program_key, {}).get("mode", "active") or "active").strip().lower()
+        fits = capacity > 0 and used_points + cost <= capacity
+        condition = f"{mode}, RAM {cost}, dur {durability}"
+        if runs_max:
+            condition += f", runs {runs}/{runs_max}"
+        condition += ", fits" if fits else ", no room"
+        rows.append({
+            "instance_id": instance_id,
+            "item_id": _clean_key(clean.get("item_id")),
+            "program_key": program_key,
+            "mode": mode,
+            "ram_cost": cost,
+            "fits": bool(fits),
+            "entry": dict(clean),
+            "label": f"{_program_name(clean, item_catalog=item_catalog)} [{condition}]",
+        })
+    return rows
+
+
 def wire_program_target_rows(sim, actor_eid):
     scene = ensure_wire_combat_state(sim, actor_eid)
     if not isinstance(scene, Mapping):
@@ -597,6 +685,127 @@ def _target_from_row(sim, scene, target=None, *, program_key=""):
 def _grid_distance(scene, entity):
     avatar = scene.get("avatar") if isinstance(scene.get("avatar"), Mapping) else {}
     return abs(_int(avatar.get("x"), 0) - _int(entity.get("x"), 0)) + abs(_int(avatar.get("y"), 0) - _int(entity.get("y"), 0))
+
+
+def _wire_point(value, default=(0, 0)):
+    if isinstance(value, Mapping):
+        return (_int(value.get("x"), default[0]), _int(value.get("y"), default[1]))
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        return (_int(value[0], default[0]), _int(value[1], default[1]))
+    return (int(default[0]), int(default[1]))
+
+
+def _wire_route_path(scene, source, target):
+    """Resolve an action through the scene's actual signal routes."""
+
+    start = _wire_point(source)
+    goal = _wire_point(target, start)
+    if start == goal:
+        return [list(start)]
+    walkable = {
+        _wire_point(point)
+        for point in (scene.get("walkable", ()) or ())
+        if isinstance(point, (list, tuple)) and len(point) >= 2
+    }
+    walkable.update((start, goal))
+    frontier = deque((start,))
+    previous = {start: None}
+    while frontier:
+        current = frontier.popleft()
+        if current == goal:
+            break
+        for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+            neighbor = (current[0] + dx, current[1] + dy)
+            if neighbor not in walkable or neighbor in previous:
+                continue
+            previous[neighbor] = current
+            frontier.append(neighbor)
+    if goal not in previous:
+        return [list(start), list(goal)]
+    path = []
+    current = goal
+    while current is not None:
+        path.append([int(current[0]), int(current[1])])
+        current = previous[current]
+    path.reverse()
+    return path
+
+
+def _begin_wire_action_frame(scene, *, cause="action"):
+    scene["wire_action_frame"] = _int(scene.get("wire_action_frame"), 0, minimum=0) + 1
+    scene["wire_action_cause"] = _clean_key(cause, "action")
+    scene["wire_action_effects"] = []
+
+
+def _record_wire_action(scene, *, source, target, visual_kind, label, source_kind="wire"):
+    if not isinstance(scene, dict):
+        return None
+    source_point = _wire_point(source)
+    target_point = _wire_point(target, source_point)
+    visual = wire_visual_for_kind(visual_kind)
+    row = {
+        "source": [int(source_point[0]), int(source_point[1])],
+        "target": [int(target_point[0]), int(target_point[1])],
+        "path": _wire_route_path(scene, source_point, target_point),
+        "visual_kind": str(visual.get("kind", visual_kind) or visual_kind),
+        "glyph": str(visual.get("glyph", "*") or "*")[:1],
+        "color": str(visual.get("color", "objective") or "objective"),
+        "semantic_id": str(visual.get("semantic_id", f"wire_{visual_kind}") or f"wire_{visual_kind}"),
+        "label": _clean_text(label, "Wire activity resolves."),
+        "source_kind": _clean_key(source_kind, "wire"),
+    }
+    effects = [dict(effect) for effect in scene.get("wire_action_effects", ()) or () if isinstance(effect, Mapping)]
+    effects.append(row)
+    scene["wire_action_effects"] = effects[-12:]
+    scene["last_wire_action"] = row["label"]
+    return row
+
+
+def _resolved_target_point(scene, target):
+    if isinstance(target, Mapping):
+        for key in ("entity", "user", "node"):
+            value = target.get(key)
+            if isinstance(value, Mapping):
+                return _wire_point(value)
+    return _wire_point(scene.get("avatar") if isinstance(scene, Mapping) else None)
+
+
+def _scene_node_point(scene, kind, default=None):
+    needle = _clean_key(kind)
+    for node in scene.get("nodes", ()) or ():
+        if isinstance(node, Mapping) and _clean_key(node.get("kind")) == needle:
+            return _wire_point(node)
+    return _wire_point(default or scene.get("avatar"))
+
+
+def _advance_mobile_ice(scene, entity):
+    kind = _clean_key((entity or {}).get("kind"))
+    spec = ICE_SPECS.get(kind, {})
+    if not bool(spec.get("mobile")):
+        return None
+    if "ram_reset_attack" in tuple((entity or {}).get("traits", ()) or ()):
+        return None
+    if kind == "corruptor" and not _clean_text(scene.get("last_hostile_program_instance_id")):
+        return None
+    start = _wire_point(entity)
+    goal = _wire_point(scene.get("avatar"), start)
+    path = _wire_route_path(scene, start, goal)
+    if len(path) <= 2:
+        return None
+    next_point = _wire_point(path[1], start)
+    occupied = {
+        _wire_point(other)
+        for other in _live_ice_entities(scene)
+        if _clean_text(other.get("entity_id")) != _clean_text(entity.get("entity_id"))
+    }
+    if next_point in occupied or next_point == goal:
+        return None
+    updated = dict(entity)
+    updated["x"] = int(next_point[0])
+    updated["y"] = int(next_point[1])
+    updated["last_move_from"] = [int(start[0]), int(start[1])]
+    _set_entity(scene, updated)
+    return {"entity": updated, "from": start, "to": next_point}
 
 
 def _validate_target(scene, program_key, target):
@@ -952,7 +1161,15 @@ def _check_forced_eject(sim, actor_eid, state, scene, *, reason="trace"):
     return True
 
 
-def advance_wire_combat_turn(sim, actor_eid, *, cause="action", skip_cooldown_instance_id="", item_catalog=None):
+def advance_wire_combat_turn(
+    sim,
+    actor_eid,
+    *,
+    cause="action",
+    skip_cooldown_instance_id="",
+    preserve_action_effects=False,
+    item_catalog=None,
+):
     item_catalog = item_catalog or ITEM_CATALOG
     state = wire_state_for_actor(sim, actor_eid, create=False)
     if state is None or not isinstance(getattr(state, "active_scene", None), Mapping):
@@ -960,6 +1177,8 @@ def advance_wire_combat_turn(sim, actor_eid, *, cause="action", skip_cooldown_in
     scene = ensure_wire_combat_state(sim, actor_eid, item_catalog=item_catalog)
     if scene is None:
         return {"ok": False, "reason": "missing_scene"}
+    if not preserve_action_effects:
+        _begin_wire_action_frame(scene, cause=cause)
     scene["wire_turn_index"] = _int(scene.get("wire_turn_index"), 0, minimum=0) + 1
     _decrement_ram_cooldowns(state, skip_instance_id=skip_cooldown_instance_id, item_catalog=item_catalog)
     _decrement_effects(scene)
@@ -976,8 +1195,34 @@ def advance_wire_combat_turn(sim, actor_eid, *, cause="action", skip_cooldown_in
     for entity in _live_ice_entities(scene):
         kind = _clean_key(entity.get("kind"))
         spec = ICE_SPECS.get(kind, {})
+        pursuit = _advance_mobile_ice(scene, entity)
+        if pursuit:
+            entity = dict(pursuit["entity"])
+            action_label = f"{_entity_label(entity)} advances one route segment toward your process."
+            _record_wire_action(
+                scene,
+                source=pursuit["from"],
+                target=pursuit["to"],
+                visual_kind=spec.get("visual", "effect_trace_sweep"),
+                label=action_label,
+                source_kind="ice_move",
+            )
+            sim.emit(Event(
+                "wire_ice_acted",
+                eid=actor_eid,
+                ice_kind=kind,
+                ice_label=_entity_label(entity),
+                cause=cause,
+                action="advance",
+                x=entity.get("x"),
+                y=entity.get("y"),
+            ))
+            continue
         trace = _int(spec.get("trace"), 0, minimum=0)
         buffer_damage = _int(spec.get("buffer"), 0, minimum=0)
+        action_target = _wire_point(scene.get("avatar"))
+        action_visual = "effect_trace_sweep" if trace else "effect_packet_pulse"
+        action_label = f"{_entity_label(entity)} sends pressure toward your process."
         if _effect_active(scene, "signal_cloak"):
             buffer_damage = max(0, buffer_damage - 1)
         traits = tuple(entity.get("traits", ()) or ())
@@ -994,22 +1239,46 @@ def advance_wire_combat_turn(sim, actor_eid, *, cause="action", skip_cooldown_in
                     other["hp"] = min(hp_max, hp + 2)
                     _set_entity(scene, other)
                     healed = True
+                    action_target = _wire_point(other)
+                    action_visual = "effect_buffer_shield"
+                    action_label = f"{_entity_label(entity)} sends a repair packet to {_entity_label(other)}."
                     break
             if healed:
                 trace = 0
         if kind == "quarantine_gate":
             scene["clean_exit_blocked"] = True
+            action_target = _scene_node_point(scene, "exit", scene.get("avatar"))
+            action_visual = "effect_lock_bars"
+            action_label = f"{_entity_label(entity)} holds lock bars across the exit route."
         if kind == "corruptor":
             target_iid = _clean_text(scene.get("last_hostile_program_instance_id"))
             if target_iid:
+                corrupt_target = _last_ram_entry(state, target_iid, item_catalog=item_catalog)
                 _damage_program(sim, actor_eid, state, scene, target_iid, reason="corruptor", item_catalog=item_catalog)
                 buffer_damage = 0
+                action_visual = "effect_corruption_flecks"
+                action_label = (
+                    f"{_entity_label(entity)} throws corruption into "
+                    f"{_program_name(corrupt_target, item_catalog=item_catalog) if corrupt_target else 'the attacking program'}."
+                )
         if "ram_reset_attack" in traits:
             _reset_ram(sim, actor_eid, state, scene, item_catalog=item_catalog)
+            action_visual = "effect_corruption_flecks"
+            action_label = f"{_entity_label(entity)} drives a reset pulse into loaded RAM."
         if trace:
             _add_trace(sim, actor_eid, scene, trace, reason=f"ice_{kind}")
         if buffer_damage:
             _add_buffer_damage(sim, actor_eid, scene, buffer_damage, reason=f"ice_{kind}")
+            if action_visual == "effect_packet_pulse":
+                action_label = f"{_entity_label(entity)} strikes your buffer along the signal route."
+        _record_wire_action(
+            scene,
+            source=entity,
+            target=action_target,
+            visual_kind=action_visual,
+            label=action_label,
+            source_kind="ice",
+        )
         sim.emit(Event("wire_ice_acted", eid=actor_eid, ice_kind=kind, ice_label=_entity_label(entity), cause=cause))
     _refresh_clean_exit_block(scene)
     _refresh_trace_alert(scene)
@@ -1109,6 +1378,9 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
                 sim.emit(Event("wire_program_blocked", eid=actor_eid, reason=reason, program_key=program_key))
                 return {"ok": False, "reason": reason}
 
+    _begin_wire_action_frame(scene, cause=f"program_{program_key}")
+    program_source = _wire_point(scene.get("avatar"))
+    program_target = _resolved_target_point(scene, resolved_target)
     trace_add = _int(metadata.get("trace_cost"), profile.get("trace_cost", 0), minimum=0)
     trace_add += _int(metadata.get("noise"), profile.get("noise", 0), minimum=0)
     if _active_trait(scene, "blackbox_auditor") and program_key in OFFENSIVE_PROGRAMS:
@@ -1224,6 +1496,14 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
             return {"ok": False, "reason": reason}
         feedback = str(dialogue.get("feedback", "Talk channel open.") or "Talk channel open.")
 
+    _record_wire_action(
+        scene,
+        source=program_source,
+        target=program_target,
+        visual_kind=PROGRAM_VISUAL_BY_KEY.get(program_key, "effect_packet_pulse"),
+        label=feedback,
+        source_kind="program",
+    )
     _mark_program_use(state, entry, program_key=program_key, item_catalog=item_catalog)
     scene["last_program_result"] = {
         "program_key": program_key,
@@ -1275,6 +1555,7 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
         actor_eid,
         cause=f"program_{program_key}",
         skip_cooldown_instance_id=entry.get("instance_id"),
+        preserve_action_effects=True,
         item_catalog=item_catalog,
     )
     state = wire_state_for_actor(sim, actor_eid, create=False)

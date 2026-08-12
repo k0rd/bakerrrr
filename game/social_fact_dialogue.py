@@ -8,6 +8,7 @@ registry, so an NPC cannot react to truth they have not encountered.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 from typing import Any
 
@@ -32,6 +33,7 @@ from game.identity_evidence import (
     actor_identity_snapshot,
     build_witness_subject_account,
     ensure_contact_ledger,
+    subject_description_summary,
 )
 from game.incident_silencing import (
     apply_incident_silence_pressure,
@@ -43,7 +45,9 @@ from game.incident_silencing import (
 from game.knowledge_notebook import note_person_notebook_mutation
 from game.social_fact_incidents import (
     ensure_actor_incident_perspective,
+    incident_account_snapshot,
     incident_knowledge_for,
+    project_heard_incident_account,
 )
 from game.social_fact_consequences import (
     mark_social_fact_action_progress_reported,
@@ -65,6 +69,7 @@ from game.social_fact_graph import (
     record_claim,
     record_correction,
     record_occurrence,
+    social_edge,
     social_fact_graph_state,
     social_thread,
     social_threads_for_actor,
@@ -128,8 +133,12 @@ def _ticks_per_hour(sim) -> int:
 
 
 def _incident_age_ticks(sim, record: Mapping[str, Any]) -> int:
-    learned = _int(record.get("last_learned_tick"), _int(record.get("learned_tick"), 0))
-    return max(0, _int(getattr(sim, "tick", 0), 0) - learned)
+    remembered_time = (
+        _int(record.get("incident_tick"), 0)
+        if record.get("incident_tick") is not None
+        else _int(record.get("last_learned_tick"), _int(record.get("learned_tick"), 0))
+    )
+    return max(0, _int(getattr(sim, "tick", 0), 0) - remembered_time)
 
 
 def _incident_implicates_player(record: Mapping[str, Any], player_eid: int) -> bool:
@@ -247,9 +256,239 @@ def _incident_location_label(sim, player_eid: int, record: Mapping[str, Any]) ->
     return f"farther {direction}"
 
 
+def _incident_person_account_label(player_eid: int, role: str, account: Mapping[str, Any]) -> str:
+    role_label = _text(role).replace("_", " ").lower() or "person"
+    identification = _token(account.get("identification"))
+    known_eid = _int(account.get("suspect_eid"), 0)
+    name = _text(account.get("presented_name"))
+    if known_eid == int(player_eid):
+        return f"{role_label}: you"
+    if name and identification in {"verified", "recognized"}:
+        return f"{role_label}: {name}"
+    if name and identification == "reported":
+        return f"{role_label}: reportedly {name}"
+    description = account.get("description") if isinstance(account.get("description"), Mapping) else {}
+    if description:
+        return f"{role_label}: described as {subject_description_summary(dict(description))}"
+    return f"{role_label} unclear"
+
+
+def _incident_people_label(player_eid: int, record: Mapping[str, Any]) -> str:
+    rows = []
+    subject = record.get("subject_account") if isinstance(record.get("subject_account"), Mapping) else {}
+    rows.append(_incident_person_account_label(player_eid, "actor", subject))
+    participants = record.get("participant_accounts") if isinstance(record.get("participant_accounts"), Mapping) else {}
+    ordered_roles = sorted(
+        participants,
+        key=lambda role: (0 if _token(role) == "victim" else 1, _token(role)),
+    )
+    for role in ordered_roles:
+        account = participants.get(role)
+        if not isinstance(account, Mapping):
+            continue
+        rows.append(_incident_person_account_label(player_eid, _text(role), account))
+    return "; ".join(rows[:3])
+
+
 def _incident_choice_detail(sim, player_eid: int, adapted: Mapping[str, Any]) -> str:
     record = adapted.get("record") if isinstance(adapted.get("record"), Mapping) else {}
-    return f"{_incident_age_label(sim, record)}, {_incident_location_label(sim, player_eid, record)}"
+    return (
+        f"{_incident_age_label(sim, record)}, "
+        f"{_incident_location_label(sim, player_eid, record)}; "
+        f"{_incident_people_label(player_eid, record)}"
+    )
+
+
+def _outgoing_incident_record(
+    sim,
+    player_eid: int,
+    adapted: Mapping[str, Any],
+    *,
+    distortion_kind: str = "",
+    distortion_role: str = "",
+) -> dict[str, Any] | None:
+    """Build a copy of what the player will claim without changing memory."""
+
+    source_record = adapted.get("record") if isinstance(adapted.get("record"), Mapping) else None
+    if not isinstance(source_record, Mapping):
+        return None
+    outgoing = copy.deepcopy(dict(source_record))
+    kind = _token(distortion_kind)
+    role = _token(distortion_role)
+    distortions = []
+    if kind == "conceal_people":
+        outgoing["subject_account"] = {
+            "identification": "unknown",
+            "suspect_eid": None,
+            "presented_name": "",
+            "identity_confidence": 0.0,
+            "description": {},
+            "observation": {},
+        }
+        outgoing["participant_accounts"] = {}
+        distortions.append(kind)
+    elif kind == "shift_time":
+        now = _int(getattr(sim, "tick", 0), 0)
+        ticks_per_hour = _ticks_per_hour(sim)
+        actual_age = _incident_age_ticks(sim, source_record)
+        claimed_age = ticks_per_hour * 48 if actual_age < ticks_per_hour * 24 else ticks_per_hour * 2
+        outgoing["incident_tick"] = max(0, now - claimed_age)
+        distortions.append(kind)
+    elif kind == "shift_location":
+        if source_record.get("x") is None or source_record.get("y") is None:
+            return None
+        player_pos = sim.ecs.get(Position).get(player_eid)
+        x = _int(source_record.get("x"), 0)
+        y = _int(source_record.get("y"), 0)
+        if player_pos is None:
+            outgoing["x"] = x + 8
+            outgoing["y"] = y
+        else:
+            dx = x - _int(player_pos.x, 0)
+            dy = y - _int(player_pos.y, 0)
+            if dx == 0 and dy == 0:
+                dx = 8
+            outgoing["x"] = _int(player_pos.x, 0) - dx
+            outgoing["y"] = _int(player_pos.y, 0) - dy
+        distortions.append(kind)
+    elif kind == "frame_actor":
+        participants = (
+            copy.deepcopy(dict(source_record.get("participant_accounts") or {}))
+            if isinstance(source_record.get("participant_accounts"), Mapping)
+            else {}
+        )
+        framed_account = participants.get(role)
+        if not isinstance(framed_account, Mapping) or role == "victim":
+            return None
+        outgoing["subject_account"] = copy.deepcopy(dict(framed_account))
+        participants.pop(role, None)
+        outgoing["participant_accounts"] = participants
+        outgoing["framed_from_role"] = role
+        distortions.append(kind)
+    elif kind:
+        return None
+    outgoing["distortion_kinds"] = tuple(distortions)
+    return outgoing
+
+
+def _outgoing_incident_detail(sim, player_eid: int, outgoing: Mapping[str, Any]) -> str:
+    return (
+        f"{_incident_age_label(sim, outgoing)}, "
+        f"{_incident_location_label(sim, player_eid, outgoing)}; "
+        f"{_incident_people_label(player_eid, outgoing)}"
+    )
+
+
+def _distortion_draft_state(sim, player_eid: int, npc_eid: int) -> dict[str, Any] | None:
+    dialog = getattr(sim, "dialog_ui", None)
+    draft = dialog.get("social_fact_incident_draft") if isinstance(dialog, dict) else None
+    if not isinstance(draft, dict):
+        return None
+    if _int(draft.get("player_eid"), 0) != player_eid or _int(draft.get("npc_eid"), 0) != npc_eid:
+        return None
+    return draft
+
+
+def _set_distortion_draft(sim, player_eid: int, npc_eid: int, incident_id: int | None) -> None:
+    dialog = getattr(sim, "dialog_ui", None)
+    if not isinstance(dialog, dict):
+        dialog = {}
+        sim.dialog_ui = dialog
+    dialog["social_fact_incident_draft"] = (
+        {
+            "player_eid": int(player_eid),
+            "npc_eid": int(npc_eid),
+            "incident_id": int(incident_id),
+        }
+        if incident_id is not None and int(incident_id) > 0
+        else None
+    )
+
+
+def _distortion_draft_rows(sim, player_eid: int, npc_eid: int, draft: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    incident_id = _int(draft.get("incident_id"), 0)
+    adapted = ensure_actor_incident_perspective(sim, player_eid, incident_id)
+    if not isinstance(adapted, dict):
+        _set_distortion_draft(sim, player_eid, npc_eid, None)
+        return ()
+    label = adapted["label"]
+    source_detail = _incident_choice_detail(sim, player_eid, adapted)
+    if bool(adapted["snapshot"].get("firsthand")):
+        faithful_line = f"I saw enough of that {label} to think you should know about it. {source_detail}."
+    elif adapted["snapshot"].get("source_eid"):
+        faithful_line = f"Someone told me about a {label}. This is the account I have: {source_detail}."
+    else:
+        faithful_line = f"I heard about a {label}. This is the account I have: {source_detail}."
+    rows = [
+        _row(
+            f"sfg_tell_faithful_{incident_id}",
+            "tell_incident",
+            f"Tell it as you remember it — {source_detail}.",
+            faithful_line,
+            social_fact_incident_id=incident_id,
+            social_fact_proposition_id=adapted["proposition"]["id"],
+        )
+    ]
+    variants = [
+        ("conceal_people", "", "Leave out who was involved"),
+        ("shift_time", "", "Change when it happened"),
+    ]
+    if adapted["record"].get("x") is not None and adapted["record"].get("y") is not None:
+        variants.append(("shift_location", "", "Put it somewhere else"))
+    participant_accounts = adapted["record"].get("participant_accounts")
+    if isinstance(participant_accounts, Mapping):
+        for role in sorted(participant_accounts):
+            role_key = _token(role)
+            if role_key == "victim" or not role_key.startswith(("witness_", "bystander_")):
+                continue
+            variants.append(("frame_actor", role_key, f"Put the remembered {_text(role).replace('_', ' ')} in the actor's place"))
+    for kind, role, instruction in variants:
+        outgoing = _outgoing_incident_record(
+            sim,
+            player_eid,
+            adapted,
+            distortion_kind=kind,
+            distortion_role=role,
+        )
+        if not isinstance(outgoing, dict):
+            continue
+        outgoing_detail = _outgoing_incident_detail(sim, player_eid, outgoing)
+        rows.append(_row(
+            f"sfg_distort_{incident_id}_{kind}_{role or 'none'}",
+            "tell_incident_distorted",
+            f"{instruction}. What you know: {source_detail}. What you'll say: {outgoing_detail}.",
+            f"About that {label}: {outgoing_detail}.",
+            social_fact_incident_id=incident_id,
+            social_fact_proposition_id=adapted["proposition"]["id"],
+            social_fact_distortion_kind=kind,
+            social_fact_distortion_role=role,
+        ))
+    rows.append(_row(
+        f"sfg_distort_cancel_{incident_id}",
+        "cancel_incident_distortion",
+        "Keep the account to yourself for now.",
+        "",
+        social_fact_incident_id=incident_id,
+    ))
+    return tuple(rows)
+
+
+def _outgoing_claim_conflicts(sim, npc_record: Mapping[str, Any], outgoing: Mapping[str, Any]) -> bool:
+    distortions = {_token(kind) for kind in tuple(outgoing.get("distortion_kinds", ()) or ()) if _token(kind)}
+    if "frame_actor" in distortions and bool(npc_record.get("firsthand", False)):
+        return True
+    if "shift_location" in distortions:
+        if all(value is not None for value in (npc_record.get("x"), npc_record.get("y"), outgoing.get("x"), outgoing.get("y"))):
+            distance = abs(_int(npc_record.get("x"), 0) - _int(outgoing.get("x"), 0)) + abs(_int(npc_record.get("y"), 0) - _int(outgoing.get("y"), 0))
+            if distance > 2 or _int(npc_record.get("z"), 0) != _int(outgoing.get("z"), 0):
+                return True
+    if "shift_time" in distortions and bool(npc_record.get("firsthand", False)):
+        tolerance = _ticks_per_hour(sim) * 12
+        npc_tick = npc_record.get("incident_tick", npc_record.get("learned_tick"))
+        outgoing_tick = outgoing.get("incident_tick", outgoing.get("learned_tick"))
+        if abs(_int(npc_tick, 0) - _int(outgoing_tick, 0)) > tolerance:
+            return True
+    return False
 
 
 def _location_matches_property(sim, record: Mapping[str, Any], property_id: Any) -> bool:
@@ -530,6 +769,26 @@ def _thread_has_correction(sim, thread: Mapping[str, Any]) -> bool:
     return False
 
 
+def _thread_authored_distortion_kinds(sim, thread: Mapping[str, Any]) -> tuple[str, ...]:
+    """Read the speaker-private authorship note, never the listener's account."""
+
+    metadata = thread.get("metadata") if isinstance(thread.get("metadata"), Mapping) else {}
+    occurrence = occurrence_record(sim, metadata.get("account_authorship_occurrence_id"))
+    if not isinstance(occurrence, dict) or occurrence.get("kind") != "incident_account_authorship":
+        return ()
+    player = _int(metadata.get("player_eid"), 0)
+    if tuple(occurrence.get("actor_eids", ()) or ()) != (player,):
+        return ()
+    payload = occurrence.get("payload") if isinstance(occurrence.get("payload"), Mapping) else {}
+    return tuple(
+        sorted({
+            _token(kind)
+            for kind in tuple(payload.get("distortion_kinds", ()) or ())
+            if _token(kind)
+        })
+    )
+
+
 def _row(topic_id: str, action: str, label: str, player_line: str, **data: Any) -> dict[str, Any]:
     return {
         "id": topic_id,
@@ -554,6 +813,9 @@ def social_fact_dialogue_rows(
     npc = _int(npc_eid, 0)
     if player <= 0 or npc <= 0 or player == npc:
         return ()
+    draft = _distortion_draft_state(sim, player, npc)
+    if isinstance(draft, dict):
+        return _distortion_draft_rows(sim, player, npc, draft)
     rows = []
     threads = _exchange_threads(sim, player, npc)
     claimed_propositions = set()
@@ -685,11 +947,20 @@ def social_fact_dialogue_rows(
             ))
 
         if status not in _FINISHED_THREAD_STATUSES and not corrected:
+            distorted = bool(_thread_authored_distortion_kinds(sim, thread))
             rows.append(_row(
                 f"sfg_correct_{thread_id}",
                 "correct_claim",
-                f"Correct what you said about the {label}.",
-                f"I need to correct what I said about that {label}. I wasn't as certain as I sounded.",
+                (
+                    f"Correct the details you changed about the {label}."
+                    if distorted
+                    else f"Correct what you said about the {label}."
+                ),
+                (
+                    f"I changed details when I told you about that {label}. Here is what I actually remember."
+                    if distorted
+                    else f"I need to correct what I said about that {label}. I wasn't as certain as I sounded."
+                ),
                 social_fact_thread_id=thread_id,
             ))
 
@@ -858,8 +1129,16 @@ def social_fact_dialogue_rows(
         rows.append(_row(
             f"sfg_tell_{proposition_id}",
             "tell_incident",
-            f"Tell them about the {label} ({_incident_choice_detail(sim, player, adapted)}).",
+            f"Tell them faithfully about the {label} ({_incident_choice_detail(sim, player, adapted)}).",
             player_line,
+            social_fact_incident_id=incident_id,
+            social_fact_proposition_id=proposition_id,
+        ))
+        rows.append(_row(
+            f"sfg_prepare_distortion_{proposition_id}",
+            "prepare_incident_distortion",
+            f"Change details before telling them about the {label}. [deception]",
+            "",
             social_fact_incident_id=incident_id,
             social_fact_proposition_id=proposition_id,
         ))
@@ -871,6 +1150,176 @@ def social_fact_dialogue_rows(
 
 def _bond_trust(bond: Mapping[str, Any] | None) -> float:
     return _unit((bond or {}).get("trust"), 0.0)
+
+
+def _signed_unit(value: Any, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        result = float(default)
+    return max(-1.0, min(1.0, result))
+
+
+def _known_account_party_rows(account: Mapping[str, Any]) -> tuple[tuple[str, int], ...]:
+    """Return people the spoken account identifies as particular actors."""
+
+    rows = []
+
+    def add(role: str, person_account: Any) -> None:
+        if not isinstance(person_account, Mapping):
+            return
+        identification = _token(person_account.get("identification"))
+        person_eid = _int(person_account.get("suspect_eid"), 0)
+        presented_name = _text(person_account.get("presented_name"))
+        if (
+            identification not in {"reported", "recognized", "verified"}
+            or person_eid <= 0
+            or not presented_name
+        ):
+            return
+        pair = (_token(role) or "participant", person_eid)
+        if pair not in rows:
+            rows.append(pair)
+
+    add("actor", account.get("subject_account"))
+    participants = account.get("participant_accounts")
+    if isinstance(participants, Mapping):
+        for role, person_account in participants.items():
+            add(_text(role), person_account)
+    return tuple(rows)
+
+
+def _involved_party_interest(sim, npc_eid: int, account: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the NPC's own social map for people identified in the account."""
+
+    social = sim.ecs.get(NPCSocial).get(npc_eid)
+    strongest = {
+        "score": 0.0,
+        "role": "",
+        "person_eid": None,
+        "relation_kind": "",
+    }
+    for role, person_eid in _known_account_party_rows(account):
+        if person_eid == npc_eid:
+            interest = 1.0
+            relation_kind = "self"
+        else:
+            legacy_bond = social.bonds.get(person_eid) if isinstance(social, NPCSocial) else None
+            legacy_bond = legacy_bond if isinstance(legacy_bond, Mapping) else {}
+            edge = social_edge(sim, npc_eid, person_eid) or {}
+            dimensions = edge.get("dimensions") if isinstance(edge.get("dimensions"), Mapping) else {}
+            relation_kind = _token(
+                legacy_bond.get("kind")
+                or edge.get("relation_kind")
+            )
+            closeness = max(
+                abs(_signed_unit(legacy_bond.get("closeness"), 0.0)),
+                _unit(dimensions.get("closeness"), 0.0),
+            )
+            trust = max(
+                abs(_signed_unit(legacy_bond.get("trust"), 0.0)),
+                _unit(dimensions.get("trust"), 0.0),
+            )
+            protectiveness = max(
+                _unit(legacy_bond.get("protectiveness"), 0.0),
+                _unit(dimensions.get("protectiveness"), 0.0),
+            )
+            obligation = _unit(dimensions.get("obligation"), 0.0)
+            adverse = max(
+                _unit(dimensions.get("resentment"), 0.0),
+                _unit(dimensions.get("fear"), 0.0),
+                0.82 if relation_kind in {"enemy", "hostile", "rival", "threat"} else 0.0,
+            )
+            interest = max(
+                (closeness * 0.34) + (trust * 0.16) + (protectiveness * 0.34) + (obligation * 0.16),
+                adverse,
+            )
+        role_weight = (
+            1.0
+            if role in {"actor", "victim"}
+            else 0.62
+            if role.startswith("witness")
+            else 0.48
+        )
+        weighted = _unit(interest * role_weight, 0.0)
+        if weighted > _unit(strongest.get("score"), 0.0):
+            strongest = {
+                "score": weighted,
+                "role": role,
+                "person_eid": person_eid,
+                "relation_kind": relation_kind,
+            }
+    return strongest
+
+
+def _corroboration_motivation(
+    sim,
+    npc_eid: int,
+    thread: Mapping[str, Any],
+    bond: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Decide whether this actor has a reason to spend time checking a claim.
+
+    Inputs are limited to the account they heard, their own incident attention,
+    their own place/duty lens, and their own relationships.  Canonical incident
+    state is deliberately absent.
+    """
+
+    metadata = thread.get("metadata") if isinstance(thread.get("metadata"), Mapping) else {}
+    proposition_id = _text(metadata.get("proposition_id"))
+    perspective = actor_perspective(sim, npc_eid, proposition_id) or {}
+    incident_id = _int(metadata.get("incident_id"), 0)
+    knowledge = incident_knowledge_for(sim, npc_eid)
+    record = (knowledge.records or {}).get(incident_id) if knowledge is not None else None
+    record = record if isinstance(record, Mapping) else {}
+    claimed_account = metadata.get("claimed_account")
+    claimed_account = claimed_account if isinstance(claimed_account, Mapping) else {}
+    involved = _involved_party_interest(sim, npc_eid, claimed_account)
+
+    source_trust = _unit((bond or {}).get("trust"), 0.0)
+    source_closeness = _unit((bond or {}).get("closeness"), 0.0)
+    source_protectiveness = _unit((bond or {}).get("protectiveness"), 0.0)
+    lens = _token(metadata.get("reaction_lens")) or "neutral"
+    stake_bonus = {
+        "workplace_stake": 0.26,
+        "home_stake": 0.24,
+        "duty_triage": 0.30,
+        "protective_concern": 0.20,
+        "source_skepticism": -0.06,
+    }.get(lens, 0.0)
+    traits = sim.ecs.get(NPCTraits).get(npc_eid)
+    empathy = _unit(getattr(traits, "empathy", 0.5), 0.5)
+    urgency = _unit(record.get("urgency"), 0.0)
+    score = (
+        (_unit(record.get("social_interest"), 0.0) * 0.18)
+        + (urgency * 0.14)
+        + (_unit(perspective.get("salience"), 0.0) * 0.18)
+        + (_unit(perspective.get("confidence"), 0.0) * 0.06)
+        + (source_trust * 0.18)
+        + (source_closeness * 0.10)
+        + (source_protectiveness * 0.08)
+        + (_unit(involved.get("score"), 0.0) * 0.32)
+        + (empathy * urgency * 0.08)
+        + stake_bonus
+    )
+    if _unit(involved.get("score"), 0.0) >= 0.42:
+        reason = "involved_relationship"
+    elif lens in {"workplace_stake", "home_stake", "duty_triage", "protective_concern"}:
+        reason = lens
+    elif (source_closeness * 0.58) + (source_protectiveness * 0.42) >= 0.55:
+        reason = "source_relationship"
+    elif max(_unit(record.get("social_interest"), 0.0), urgency, _unit(perspective.get("salience"), 0.0)) >= 0.58:
+        reason = "incident_interest"
+    else:
+        reason = "insufficient_interest"
+    return {
+        "willing": score >= 0.39,
+        "score": max(0.0, min(1.0, score)),
+        "reason": reason,
+        "lens": lens,
+        "involved_role": involved.get("role") or None,
+        "involved_person_eid": involved.get("person_eid"),
+    }
 
 
 def _thread_for_action(sim, row: Mapping[str, Any], player: int, npc: int) -> dict[str, Any]:
@@ -1446,6 +1895,29 @@ def resolve_social_fact_dialogue(
     action = _token(row.get("social_fact_action"))
     if player <= 0 or npc <= 0 or player == npc or not action:
         return {"npc_lines": ["I lost the thread of what you meant."]}
+
+    if action == "prepare_incident_distortion":
+        incident_id = _int(row.get("social_fact_incident_id"), 0)
+        player_view = ensure_actor_incident_perspective(sim, player, incident_id)
+        if (
+            not isinstance(player_view, dict)
+            or player_view["proposition"]["id"] != _text(row.get("social_fact_proposition_id"))
+        ):
+            return {"npc_lines": ["You lose track of which account you meant to reshape."]}
+        _set_distortion_draft(sim, player, npc, incident_id)
+        return {
+            "narration_lines": ("You hold what you remember apart from what you might choose to say.",),
+            "suppress_player_line": True,
+            "menu_only": True,
+        }
+
+    if action == "cancel_incident_distortion":
+        _set_distortion_draft(sim, player, npc, None)
+        return {
+            "narration_lines": ("You leave the account unsaid.",),
+            "suppress_player_line": True,
+            "menu_only": True,
+        }
 
     if action == "open_witness_resolution":
         incident_id = _int(row.get("social_fact_incident_id"), 0)
@@ -2168,7 +2640,7 @@ def resolve_social_fact_dialogue(
         )
         return {"npc_lines": ("All right. But what I saw does not go away.",), "close": True}
 
-    if action == "tell_incident":
+    if action in {"tell_incident", "tell_incident_distorted"}:
         incident_id = _int(row.get("social_fact_incident_id"), 0)
         player_view = ensure_actor_incident_perspective(sim, player, incident_id)
         if not isinstance(player_view, dict):
@@ -2176,6 +2648,33 @@ def resolve_social_fact_dialogue(
         proposition_id = player_view["proposition"]["id"]
         if proposition_id != _text(row.get("social_fact_proposition_id")):
             raise ValueError("incident dialogue row no longer matches the player's account")
+        distortion_kind = (
+            _token(row.get("social_fact_distortion_kind"))
+            if action == "tell_incident_distorted"
+            else ""
+        )
+        distortion_role = _token(row.get("social_fact_distortion_role"))
+        outgoing_record = _outgoing_incident_record(
+            sim,
+            player,
+            player_view,
+            distortion_kind=distortion_kind,
+            distortion_role=distortion_role,
+        )
+        if not isinstance(outgoing_record, dict):
+            _set_distortion_draft(sim, player, npc, None)
+            return {"npc_lines": ["That version no longer fits what you remember."]}
+        _set_distortion_draft(sim, player, npc, None)
+        outgoing_snapshot = incident_account_snapshot(outgoing_record)
+        outgoing_detail = _outgoing_incident_detail(sim, player, outgoing_record)
+        player_line = _text(row.get("player_line"))
+        if not player_line:
+            if bool(player_view["snapshot"].get("firsthand")):
+                player_line = f"I saw enough of that {player_view['label']} to think you should know about it. {outgoing_detail}."
+            elif player_view["snapshot"].get("source_eid"):
+                player_line = f"Someone told me about a {player_view['label']}. This is the account I have: {outgoing_detail}."
+            else:
+                player_line = f"I heard about a {player_view['label']}. This is the account I have: {outgoing_detail}."
 
         npc_view = ensure_actor_incident_perspective(sim, npc, incident_id)
         warning_record = npc_view.get("record") if isinstance(npc_view, dict) else {}
@@ -2185,17 +2684,58 @@ def resolve_social_fact_dialogue(
         )
         if not isinstance(npc_view, dict):
             reaction_shape = "new_information"
+        elif _outgoing_claim_conflicts(sim, npc_view.get("record") or {}, outgoing_record):
+            reaction_shape = "different_account"
         elif warned_from_player and npc_view["proposition"]["id"] == proposition_id:
             reaction_shape = "warning_recognition"
         elif npc_view["proposition"]["id"] == proposition_id:
             reaction_shape = "recognition"
         else:
             reaction_shape = "different_account"
-        reaction_lens = _social_fact_reaction_lens(sim, npc, player_view, bond)
+        reaction_lens = _social_fact_reaction_lens(
+            sim,
+            npc,
+            {"record": outgoing_record},
+            bond,
+        )
 
         trust = _bond_trust(bond)
         credibility = 0.32 + (trust * 0.5)
         confidence = _unit(player_view["record"].get("confidence"), 0.5)
+        account_claim = record_occurrence(
+            sim,
+            "incident_account_claim",
+            actor_eids=(player, npc),
+            proposition_ids=(proposition_id,),
+            source_occurrence_ids=(player_view["evidence"]["id"],),
+            payload={
+                "speaker_eid": player,
+                "audience_eid": npc,
+                "incident_id": incident_id,
+                "account": outgoing_snapshot,
+                "spoken_text": player_line,
+            },
+            flags=("speech", "attributed", "actor_owned"),
+            dedupe_key=f"social-fact-dialogue:account-claim:{player}:{npc}:{proposition_id}",
+        )
+        account_authorship = record_occurrence(
+            sim,
+            "incident_account_authorship",
+            actor_eids=(player,),
+            proposition_ids=(proposition_id,),
+            source_occurrence_ids=(account_claim["id"],),
+            payload={
+                "speaker_eid": player,
+                "account_claim_occurrence_id": account_claim["id"],
+                "distortion_kinds": tuple(outgoing_record.get("distortion_kinds", ()) or ()),
+            },
+            flags=(
+                "speaker_private",
+                "authorship",
+                "distorted" if distortion_kind else "faithful",
+            ),
+            dedupe_key=f"social-fact-dialogue:account-authorship:{player}:{npc}:{proposition_id}",
+        )
         claim = record_claim(
             sim,
             player,
@@ -2204,7 +2744,8 @@ def resolve_social_fact_dialogue(
             certainty=confidence,
             credibility_by_audience={npc: credibility},
             salience=max(0.3, _unit(player_view["record"].get("social_interest"), 0.0)),
-            spoken_text=_text(row.get("player_line")),
+            spoken_text=player_line,
+            source_occurrence_ids=(account_claim["id"],),
             dedupe_key=f"social-fact-dialogue:claim:{player}:{npc}:{proposition_id}",
         )
         thread = open_social_thread(
@@ -2225,6 +2766,9 @@ def resolve_social_fact_dialogue(
                 "label": player_view["label"],
                 "reaction_shape": reaction_shape,
                 "reaction_lens": reaction_lens,
+                "account_claim_occurrence_id": account_claim["id"],
+                "account_authorship_occurrence_id": account_authorship["id"],
+                "claimed_account": outgoing_snapshot,
             },
             thread_key=f"incident-dialogue:{player}:{npc}:{proposition_id}",
         )
@@ -2250,6 +2794,13 @@ def resolve_social_fact_dialogue(
             occurrence_id=reaction["id"],
             status="awaiting_response",
             awaiting_actor_eid=player,
+        )
+        project_heard_incident_account(
+            sim,
+            npc,
+            player,
+            outgoing_record,
+            thread_id=thread["id"],
         )
         return {
             "narration_lines": (cue,),
@@ -2290,10 +2841,46 @@ def resolve_social_fact_dialogue(
             )
             return {"npc_lines": (line,)}
 
-        line = (
-            "I'll ask one person I trust. If it's just the same story coming back around, "
-            "I won't treat that as a second account."
-        )
+        motivation = _corroboration_motivation(sim, npc, thread, bond)
+        if not bool(motivation.get("willing", False)):
+            line = (
+                "No. I don't know anyone involved well enough, and this doesn't touch "
+                "anything I'm responsible for. I'm not spending time chasing it."
+            )
+            occurrence = _thread_occurrence(
+                sim,
+                thread,
+                "corroboration_declined",
+                player=player,
+                npc=npc,
+                action=action,
+                player_spoken_text=_text(row.get("player_line")),
+                npc_spoken_text=line,
+            )
+            advance_social_thread(
+                sim,
+                thread_id,
+                occurrence_id=occurrence["id"],
+                status="closed",
+                awaiting_actor_eid=None,
+            )
+            return {"npc_lines": (line,)}
+
+        if _token(motivation.get("reason")) == "involved_relationship":
+            line = (
+                "I know someone in that account. I'll ask one person I trust. If it's just "
+                "the same story coming back around, I won't treat that as a second account."
+            )
+        elif _token(motivation.get("reason")) == "source_relationship":
+            line = (
+                "I'm willing to do that because it's you asking. I'll ask one person I trust, "
+                "but I won't count your story coming back around as a second account."
+            )
+        else:
+            line = (
+                "I'll ask one person I trust. If it's just the same story coming back around, "
+                "I won't treat that as a second account."
+            )
         occurrence = _thread_occurrence(
             sim,
             thread,
@@ -2354,14 +2941,28 @@ def resolve_social_fact_dialogue(
         if not isinstance(consequence, dict):
             return {"npc_lines": ("I don't know what check you mean.",)}
         warning_status = _token(consequence.get("warning_status"))
+        corroboration_scope = _token(consequence.get("corroboration_scope"))
+        corroboration_preference = _token(consequence.get("corroboration_preference"))
+        if corroboration_scope == "detail_conflict" and corroboration_preference == "requester_preferred":
+            base = (
+                "The separate account confirms the incident but conflicts on some details. I still put more "
+                "weight on your version."
+            )
+        elif corroboration_scope == "incident_supported":
+            base = (
+                "The separate account confirms the incident. They couldn't confirm every detail you gave me, "
+                "but they had nothing that contradicted it."
+            )
+        else:
+            base = "I got a separate account that held up."
         if warning_status == "seeking":
             line = (
-                "I got a separate account that held up. There's someone close enough to the place that "
+                f"{base} There's someone close enough to the place that "
                 "I want to warn them myself, but I haven't reached them yet."
             )
         else:
             line = (
-                "I got a separate account that held up. I'm deciding whether there's anyone I know who "
+                f"{base} I'm deciding whether there's anyone I know who "
                 "is close enough to the place to need a warning."
             )
         occurrence = _thread_occurrence(
@@ -2388,6 +2989,8 @@ def resolve_social_fact_dialogue(
         if not isinstance(consequence, dict) or _token(consequence.get("status")) not in {"completed", "failed"}:
             return {"npc_lines": ("I don't have anything new to tell you yet.",)}
         outcome = _token(consequence.get("outcome"))
+        corroboration_scope = _token(consequence.get("corroboration_scope"))
+        corroboration_preference = _token(consequence.get("corroboration_preference"))
         lines = {
             "corroborated": (
                 "I asked someone I trust. They had their own reason to know, and their account "
@@ -2397,6 +3000,13 @@ def resolve_social_fact_dialogue(
                 "I asked someone I trust. What they heard doesn't line up cleanly with what you "
                 "told me. I'm not calling either version settled."
             ),
+            "different_details": (
+                "They independently knew the incident, but their time, place, or person details conflicted "
+                "with yours. I couldn't treat your whole account as independently confirmed."
+                if corroboration_preference == "contact_preferred"
+                else "They independently knew the incident, but their details conflicted with yours. I don't "
+                "have enough reason to choose one complete account over the other."
+            ),
             "same_hearsay": (
                 "They'd heard it too, but only as a story passed along. That's not a second account."
             ),
@@ -2404,8 +3014,23 @@ def resolve_social_fact_dialogue(
             "no_contact": "I couldn't get hold of anyone I trusted to check it. I haven't verified it.",
         }
         line = lines.get(outcome, "I tried, but I didn't get an account I could put weight on.")
+        if outcome == "corroborated" and corroboration_scope == "incident_supported":
+            line = (
+                "They independently knew the incident happened. They couldn't confirm every detail you gave "
+                "me, but nothing in their own account contradicted it. I'm taking your account seriously."
+            )
+        elif (
+            outcome == "corroborated"
+            and corroboration_scope == "detail_conflict"
+            and corroboration_preference == "requester_preferred"
+        ):
+            line = (
+                "They independently knew the incident happened, but some details conflicted. I put more "
+                "weight on your account than theirs, so I'm still acting on your version."
+            )
         if outcome == "corroborated" and bool(consequence.get("warning_progress_reported", False)):
-            line = "The separate account held up. I'm taking it seriously."
+            if corroboration_scope == "detail_supported":
+                line = "The separate account held up. I'm taking it seriously."
         warning = social_fact_warning_report_for_thread(sim, thread_id, owner_eid=npc) or {}
         warning_status = _token(warning.get("warning_status"))
         warning_outcome = _token(warning.get("warning_outcome"))
@@ -2455,9 +3080,9 @@ def resolve_social_fact_dialogue(
             npc_spoken_text=line,
         )
         if corrected:
-            next_status = "corroborated" if outcome == "corroborated" else "disputed" if outcome == "different_account" else "retracted"
+            next_status = "corroborated" if outcome == "corroborated" else "disputed" if outcome in {"different_account", "different_details"} else "retracted"
         else:
-            next_status = "corroborated" if outcome == "corroborated" else "disputed" if outcome == "different_account" else "closed"
+            next_status = "corroborated" if outcome == "corroborated" else "disputed" if outcome in {"different_account", "different_details"} else "closed"
         advance_social_thread(
             sim,
             thread_id,
@@ -2533,6 +3158,37 @@ def resolve_social_fact_dialogue(
             spoken_text=_text(row.get("player_line")),
             dedupe_key=f"social-fact-dialogue:correction:{thread_id}",
         )
+        account_correction = None
+        if _thread_authored_distortion_kinds(sim, thread):
+            player_view = ensure_actor_incident_perspective(
+                sim,
+                player,
+                _int(metadata.get("incident_id"), 0),
+            )
+            if isinstance(player_view, dict):
+                account_correction = record_occurrence(
+                    sim,
+                    "incident_account_correction",
+                    actor_eids=(player, npc),
+                    proposition_ids=tuple(thread.get("proposition_ids", ()) or ()),
+                    source_occurrence_ids=tuple(
+                        source_id
+                        for source_id in (
+                            correction["id"],
+                            _text(metadata.get("account_claim_occurrence_id")),
+                        )
+                        if source_id
+                    ),
+                    payload={
+                        "speaker_eid": player,
+                        "audience_eid": npc,
+                        "incident_id": _int(metadata.get("incident_id"), 0),
+                        "corrected_account": incident_account_snapshot(player_view["record"]),
+                        "spoken_text": _text(row.get("player_line")),
+                    },
+                    flags=("speech", "attributed", "repair", "actor_owned"),
+                    dedupe_key=f"social-fact-dialogue:account-correction:{thread_id}",
+                )
         consequence_status = _token((consequence or {}).get("status")) if isinstance(consequence, dict) else ""
         consequence_outcome = _token((consequence or {}).get("outcome")) if isinstance(consequence, dict) else ""
         warning_status = _token((consequence or {}).get("warning_status")) if isinstance(consequence, dict) else ""
@@ -2594,6 +3250,14 @@ def resolve_social_fact_dialogue(
             status=correction_status,
             awaiting_actor_eid=None,
         )
+        if isinstance(account_correction, dict):
+            advance_social_thread(
+                sim,
+                thread_id,
+                occurrence_id=account_correction["id"],
+                status=correction_status,
+                awaiting_actor_eid=None,
+            )
         advance_social_thread(
             sim,
             thread_id,
@@ -2739,10 +3403,29 @@ def validate_social_fact_dialogue_boundaries(sim) -> tuple[str, ...]:
         claim = occurrence_record(sim, thread.get("origin_occurrence_id"))
         if not isinstance(claim, dict) or claim.get("kind") != "claim":
             errors.append(f"incident exchange {thread_id} has no originating claim")
+        account_claim = occurrence_record(sim, metadata.get("account_claim_occurrence_id"))
+        if not isinstance(account_claim, dict) or account_claim.get("kind") != "incident_account_claim":
+            errors.append(f"incident exchange {thread_id} has no attributed account claim")
+        elif not isinstance((account_claim.get("payload") or {}).get("account"), dict):
+            errors.append(f"incident exchange {thread_id} has no frozen spoken account")
+        authorship = occurrence_record(sim, metadata.get("account_authorship_occurrence_id"))
+        if not isinstance(authorship, dict) or authorship.get("kind") != "incident_account_authorship":
+            errors.append(f"incident exchange {thread_id} has no speaker-private account authorship")
+        else:
+            authorship_actors = tuple(authorship.get("actor_eids", ()) or ())
+            if authorship_actors != (player,):
+                errors.append(f"incident exchange {thread_id} exposes account authorship to its audience")
+            authorship_flags = set(authorship.get("flags", ()) or ())
+            distortion_kinds = tuple((authorship.get("payload") or {}).get("distortion_kinds", ()) or ())
+            if distortion_kinds and "distorted" not in authorship_flags:
+                errors.append(f"incident exchange {thread_id} loses its distortion attribution")
+            if not distortion_kinds and "faithful" not in authorship_flags:
+                errors.append(f"incident exchange {thread_id} loses its faithful authorship attribution")
         if _token(metadata.get("reaction_shape")) not in {
             "new_information",
             "recognition",
             "different_account",
+            "warning_recognition",
         }:
             errors.append(f"incident exchange {thread_id} has no bounded reaction shape")
     return tuple(errors)

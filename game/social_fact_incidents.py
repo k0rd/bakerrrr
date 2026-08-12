@@ -8,17 +8,20 @@ particular actors know without receiving material world truth as an input.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any
 
 from game.components import IncidentKnowledge
+from game.identity_evidence import transmitted_subject_account
 from game.social_fact_graph import (
     ensure_proposition,
     record_actor_evidence,
     record_occurrence,
     register_referent,
+    set_actor_perspective_attention,
 )
 
 
@@ -87,7 +90,12 @@ def incident_account_snapshot(record: Mapping[str, Any]) -> dict[str, Any]:
     """Freeze the actor-owned account used by a social occurrence."""
 
     account = record.get("subject_account")
-    account = account if isinstance(account, Mapping) else {}
+    account = copy.deepcopy(dict(account)) if isinstance(account, Mapping) else {}
+    participant_accounts = {
+        _token(role): copy.deepcopy(dict(participant_account))
+        for role, participant_account in dict(record.get("participant_accounts") or {}).items()
+        if _token(role) and isinstance(participant_account, Mapping)
+    }
     location = None
     if record.get("x") is not None and record.get("y") is not None:
         location = {
@@ -105,7 +113,14 @@ def incident_account_snapshot(record: Mapping[str, Any]) -> dict[str, Any]:
         "confidence": _unit(record.get("confidence"), 0.5),
         "propagation_depth": max(0, _int(record.get("propagation_depth"), 0)),
         "learned_tick": max(0, _int(record.get("learned_tick"), 0)),
+        "incident_tick": (
+            max(0, _int(record.get("incident_tick"), 0))
+            if record.get("incident_tick") is not None
+            else None
+        ),
         "subject_identification": _token(account.get("identification")) or "unknown",
+        "subject_account": account,
+        "participant_accounts": participant_accounts,
         "location": location,
     }
 
@@ -166,11 +181,17 @@ def ensure_actor_incident_perspective(sim, actor_eid: Any, incident_id: Any) -> 
         strength=snapshot["confidence"],
         exposure=exposure,
         source_actor_eid=snapshot["source_eid"],
+        tags=("incident_knowledge_adapter",),
+    )
+    perspective = set_actor_perspective_attention(
+        sim,
+        actor,
+        proposition["id"],
+        evidence["id"],
         salience=max(
             _unit(record.get("social_interest"), 0.0),
             _unit(record.get("urgency"), 0.0),
         ),
-        tags=("incident_knowledge_adapter",),
     )
     return {
         "incident_id": incident,
@@ -190,6 +211,7 @@ def project_heard_incident_account(
     source_record: Mapping[str, Any],
     *,
     thread_id: str = "",
+    preserve_existing_account: bool = False,
 ) -> dict[str, Any] | None:
     """Project a physically heard account into legacy actor knowledge.
 
@@ -206,15 +228,43 @@ def project_heard_incident_account(
     knowledge = incident_knowledge_for(sim, recipient, create=True)
     if knowledge is None:
         return None
+    existing_record = (knowledge.records or {}).get(incident_id)
+    preserve_owned_account = bool(
+        isinstance(existing_record, dict)
+        and (
+            bool(preserve_existing_account)
+            or bool(existing_record.get("firsthand", False))
+            or _token(existing_record.get("source_kind")) not in {"", "social_rumor", "social_warning"}
+        )
+    )
     source_confidence = _unit(source_record.get("confidence"), 0.5)
-    record = knowledge.remember(
+    propagation_depth = max(1, _int(source_record.get("propagation_depth"), 0) + 1)
+    subject_account = transmitted_subject_account(
+        source_record.get("subject_account"),
+        channel="face_to_face_claim",
+        source_eid=source,
+        confidence=source_confidence * 0.9,
+        propagation_depth=propagation_depth,
+    )
+    participant_accounts = {
+        _token(role): transmitted_subject_account(
+            account,
+            channel="face_to_face_claim",
+            source_eid=source,
+            confidence=source_confidence * 0.9,
+            propagation_depth=propagation_depth,
+        )
+        for role, account in dict(source_record.get("participant_accounts") or {}).items()
+        if _token(role) and isinstance(account, Mapping)
+    }
+    record = existing_record if bool(preserve_existing_account) and isinstance(existing_record, dict) else knowledge.remember(
         incident_id,
         learned_tick=_int(getattr(sim, "tick", 0), 0),
         source_kind="social_rumor",
         source_eid=source,
         confidence=source_confidence * 0.9,
         firsthand=False,
-        propagation_depth=max(1, _int(source_record.get("propagation_depth"), 0) + 1),
+        propagation_depth=propagation_depth,
         urgency=_unit(source_record.get("urgency"), 0.0) * 0.55,
         social_interest=max(0.2, _unit(source_record.get("social_interest"), 0.0) * 0.85),
         category=source_record.get("category", "social"),
@@ -225,15 +275,88 @@ def project_heard_incident_account(
         category_label=source_record.get("category_label"),
         kind_label=source_record.get("kind_label"),
         severity=_int(source_record.get("severity"), 0),
+        incident_tick=source_record.get("incident_tick"),
         x=source_record.get("x"),
         y=source_record.get("y"),
         z=source_record.get("z"),
+        subject_account=None if preserve_owned_account else subject_account,
+        participant_accounts=None if preserve_owned_account else participant_accounts,
     )
     if isinstance(record, dict):
+        heard_accounts = [
+            copy.deepcopy(row)
+            for row in tuple(record.get("heard_claim_accounts", ()) or ())
+            if isinstance(row, Mapping)
+        ]
+        heard_entry = {
+            "speaker_eid": source,
+            "heard_tick": _int(getattr(sim, "tick", 0), 0),
+            "thread_id": _text(thread_id) or None,
+            "account": incident_account_snapshot(source_record),
+        }
+        heard_key = (
+            source,
+            heard_entry["thread_id"],
+            json.dumps(heard_entry["account"], sort_keys=True, default=str),
+        )
+        if not any(
+            (
+                _int(row.get("speaker_eid"), 0),
+                _text(row.get("thread_id")) or None,
+                json.dumps(row.get("account", {}), sort_keys=True, default=str),
+            ) == heard_key
+            for row in heard_accounts
+        ):
+            heard_accounts.append(heard_entry)
+        record["heard_claim_accounts"] = tuple(heard_accounts[-8:])
         record["social_fact_contact_thread_id"] = _text(thread_id) or None
         record["heard_from_eid"] = source
         record["legacy_action_queued"] = False
     return record
+
+
+def project_heard_incident_snapshot(
+    sim,
+    recipient_eid: Any,
+    source_eid: Any,
+    snapshot: Mapping[str, Any],
+    *,
+    thread_id: str = "",
+) -> dict[str, Any] | None:
+    """Project an already-frozen account without consulting incident truth."""
+
+    if not isinstance(snapshot, Mapping):
+        return None
+    semantic = snapshot.get("semantic") if isinstance(snapshot.get("semantic"), Mapping) else {}
+    location = snapshot.get("location") if isinstance(snapshot.get("location"), Mapping) else {}
+    record = {
+        "incident_id": _int(snapshot.get("incident_id"), 0),
+        "source_kind": _token(snapshot.get("source_kind")) or "social_rumor",
+        "source_eid": _int(snapshot.get("source_eid"), 0) or None,
+        "confidence": _unit(snapshot.get("confidence"), 0.5),
+        "firsthand": bool(snapshot.get("firsthand", False)),
+        "propagation_depth": max(0, _int(snapshot.get("propagation_depth"), 0)),
+        "learned_tick": max(0, _int(snapshot.get("learned_tick"), 0)),
+        "incident_tick": snapshot.get("incident_tick"),
+        "category": "social",
+        "incident_kind": semantic.get("kind"),
+        "action": semantic.get("action"),
+        "context": semantic.get("context"),
+        "tags": tuple(semantic.get("tags", ()) or ()),
+        "kind_label": _text(snapshot.get("label")),
+        "x": location.get("x"),
+        "y": location.get("y"),
+        "z": location.get("z"),
+        "subject_account": copy.deepcopy(snapshot.get("subject_account") or {}),
+        "participant_accounts": copy.deepcopy(snapshot.get("participant_accounts") or {}),
+    }
+    return project_heard_incident_account(
+        sim,
+        recipient_eid,
+        source_eid,
+        record,
+        thread_id=thread_id,
+    )
 
 
 def project_heard_incident_packet(
@@ -268,9 +391,36 @@ def project_heard_incident_packet(
     knowledge = incident_knowledge_for(sim, recipient, create=True)
     if knowledge is None:
         return None
+    existing_record = (knowledge.records or {}).get(incident_id)
+    preserve_owned_account = bool(
+        isinstance(existing_record, dict)
+        and (
+            bool(existing_record.get("firsthand", False))
+            or _token(existing_record.get("source_kind")) not in {"", "social_rumor", "social_warning"}
+        )
+    )
     packet_confidence = _unit(packet.get("confidence"), 0.5)
     source_class = _token(packet.get("source_class"))
     independent = source_class in {"independent_account", "firsthand", "verified"}
+    propagation_depth = max(1, _int(account.get("propagation_depth"), 0) + 1)
+    subject_account = transmitted_subject_account(
+        account.get("subject_account"),
+        channel="social_warning",
+        source_eid=speaker,
+        confidence=packet_confidence,
+        propagation_depth=propagation_depth,
+    )
+    participant_accounts = {
+        _token(role): transmitted_subject_account(
+            participant_account,
+            channel="social_warning",
+            source_eid=speaker,
+            confidence=packet_confidence,
+            propagation_depth=propagation_depth,
+        )
+        for role, participant_account in dict(account.get("participant_accounts") or {}).items()
+        if _token(role) and isinstance(participant_account, Mapping)
+    }
     record = knowledge.remember(
         incident_id,
         learned_tick=_int(getattr(sim, "tick", 0), 0),
@@ -278,7 +428,7 @@ def project_heard_incident_packet(
         source_eid=speaker,
         confidence=packet_confidence * (0.88 if independent else 0.72),
         firsthand=False,
-        propagation_depth=max(1, _int(account.get("propagation_depth"), 0) + 1),
+        propagation_depth=propagation_depth,
         urgency=_unit(account.get("urgency"), 0.0) * 0.72,
         social_interest=max(0.25, _unit(account.get("social_interest"), 0.0) * 0.88),
         category=account.get("category", "social"),
@@ -289,9 +439,12 @@ def project_heard_incident_packet(
         category_label=account.get("category_label"),
         kind_label=account.get("kind_label") or account.get("label"),
         severity=_int(account.get("severity"), 0),
+        incident_tick=account.get("incident_tick"),
         x=location.get("x"),
         y=location.get("y"),
         z=location.get("z"),
+        subject_account=None if preserve_owned_account else subject_account,
+        participant_accounts=None if preserve_owned_account else participant_accounts,
     )
     if isinstance(record, dict):
         record["social_fact_warning_thread_id"] = _text(thread_id) or None

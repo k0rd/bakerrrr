@@ -79,6 +79,8 @@ PLAYER_FAVOR_TOPIC_IDS = frozenset({
     "favor_renegotiate",
     "favor_admit_failure",
     "favor_request_water",
+    "favor_request_food",
+    "favor_request_medical",
     "favor_request_check_in",
     "favor_check_status",
     "favor_refusal_why",
@@ -86,6 +88,94 @@ PLAYER_FAVOR_TOPIC_IDS = frozenset({
     "favor_ack_simple",
     "favor_ack_reserved",
 })
+
+ITEM_FAVOR_PROFILES = {
+    "bring_water": {
+        "need_attr": "thirst",
+        "threshold": 46.0,
+        "request_threshold": 72.0,
+        "base_score": 0.68,
+        "urgency": 0.76,
+        "deadline_ticks": 80,
+        "reason": "thirst",
+        "item_ids": ("bottled_water", "hydration_salts", "sealed_juice"),
+        "request_line": "I'm running dry. Could you spare some water?",
+        "reason_line": "I haven't had anything to drink in a while, and I'm feeling it.",
+        "summary": "someone asking a companion to bring over something to drink",
+        "detail": "a personal request for a drink",
+        "item_word": "water or another drink",
+        "cue": "They look dry-mouthed and keep swallowing before they speak.",
+        "offer_label": "Ask if they need something to drink",
+        "offer_line": "You look thirsty. Do you need something to drink?",
+        "ask_label": "Ask them to spare you something to drink",
+        "ask_line": "Could you spare me something to drink?",
+        "fulfill_line": "I brought you something to drink.",
+        "completion_quote": "I brought you something to drink.",
+        "completion_summary": "someone delivering a drink they had promised to bring",
+        "missing_line": "You don't have something to drink for them yet.",
+    },
+    "bring_food": {
+        "need_attr": "hunger",
+        "threshold": 48.0,
+        "request_threshold": 72.0,
+        "base_score": 0.66,
+        "urgency": 0.70,
+        "deadline_ticks": 100,
+        "reason": "hunger",
+        "item_ids": (
+            "street_ration",
+            "protein_wrap",
+            "noodle_cup",
+            "instant_soup_pack",
+            "energy_bar",
+            "fruit_cup",
+        ),
+        "request_line": "I haven't eaten enough today. Could you spare me something to eat?",
+        "reason_line": "I keep trying to ignore how hungry I am, but it is catching up with me.",
+        "summary": "someone asking a companion to bring over something to eat",
+        "detail": "a personal request for food",
+        "item_word": "food",
+        "cue": "They keep glancing at nearby food and rubbing at their stomach.",
+        "offer_label": "Ask if they need something to eat",
+        "offer_line": "You look like you have not eaten. Do you need something?",
+        "ask_label": "Ask them to spare you something to eat",
+        "ask_line": "Could you spare me something to eat?",
+        "fulfill_line": "I brought you something to eat.",
+        "completion_quote": "I brought you something to eat.",
+        "completion_summary": "someone delivering food they had promised to bring",
+        "missing_line": "You don't have something to eat for them yet.",
+    },
+    "bring_medical": {
+        "need_attr": "health",
+        "threshold": 58.0,
+        "request_threshold": 78.0,
+        "base_score": 0.72,
+        "urgency": 0.82,
+        "deadline_ticks": 72,
+        "reason": "injury",
+        "item_ids": ("med_gel", "micro_medkit", "trauma_foam", "field_dressing", "bandage_roll"),
+        "request_line": "I'm hurt. Could you spare some medical supplies?",
+        "reason_line": "I am trying to stay upright, but this is more than I can just shake off.",
+        "summary": "someone asking a companion to bring medical supplies",
+        "detail": "a personal request for medical supplies",
+        "item_word": "medical supplies",
+        "cue": "They are favoring an injury and trying not to show how much it hurts.",
+        "offer_label": "Ask if they need medical supplies",
+        "offer_line": "You look hurt. Do you need medical supplies?",
+        "ask_label": "Ask them to spare you medical supplies",
+        "ask_line": "Could you spare me some medical supplies?",
+        "fulfill_line": "I brought you medical supplies.",
+        "completion_quote": "I brought you medical supplies.",
+        "completion_summary": "someone delivering medical supplies they had promised to bring",
+        "missing_line": "You don't have medical supplies for them yet.",
+    },
+}
+ITEM_FAVOR_KINDS = frozenset(ITEM_FAVOR_PROFILES)
+PLAYER_ITEM_REQUEST_TOPICS = {
+    "favor_request_water": "bring_water",
+    "favor_request_food": "bring_food",
+    "favor_request_medical": "bring_medical",
+}
 
 _INTERRUPTIBLE_STATES = {
     "idle",
@@ -716,27 +806,124 @@ class NPCSocialRequestSystem(System):
         bond = (getattr(social, "bonds", {}) or {}).get(other) if social is not None else None
         return bond if isinstance(bond, dict) else {}
 
-    def _has_water(self, actor: int) -> dict[str, Any] | None:
+    def _item_favor_profile(self, kind: str) -> Mapping[str, Any] | None:
+        profile = ITEM_FAVOR_PROFILES.get(_token(kind))
+        return profile if isinstance(profile, Mapping) else None
+
+    def _is_item_favor(self, kind: str) -> bool:
+        return _token(kind) in ITEM_FAVOR_KINDS
+
+    def _item_favor_terms(self, kind: str, *, delay_ticks: int = 4) -> dict[str, Any]:
+        profile = self._item_favor_profile(kind)
+        if profile is None:
+            return {"delay_ticks": max(0, int(delay_ticks))}
+        item_ids = tuple(str(item_id).strip() for item_id in profile.get("item_ids", ()) if str(item_id).strip())
+        return {
+            "item_id": item_ids[0] if item_ids else "",
+            "acceptable_item_ids": item_ids,
+            "quantity": 1,
+            "delay_ticks": max(0, int(delay_ticks)),
+        }
+
+    def _request_item_ids(self, kind: str, terms: Mapping[str, Any] | None = None) -> tuple[str, ...]:
+        profile = self._item_favor_profile(kind)
+        profile_ids = tuple(
+            str(item_id).strip()
+            for item_id in (profile or {}).get("item_ids", ())
+            if str(item_id).strip()
+        )
+        terms = terms if isinstance(terms, Mapping) else {}
+        stored_ids = tuple(
+            str(item_id).strip()
+            for item_id in tuple(terms.get("acceptable_item_ids", ()) or ())
+            if str(item_id).strip()
+        )
+        item_id = str(terms.get("item_id", "") or "").strip()
+        allowed = stored_ids or profile_ids or ((item_id,) if item_id else ())
+        if item_id and item_id in allowed:
+            return (item_id,) + tuple(candidate for candidate in allowed if candidate != item_id)
+        return tuple(dict.fromkeys(allowed))
+
+    def _available_request_item(
+        self,
+        actor: int,
+        kind: str,
+        terms: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         inventory = self.sim.ecs.get(Inventory).get(actor)
         if inventory is None:
             return None
-        row = inventory.find(item_id="bottled_water")
-        return copy.deepcopy(row) if isinstance(row, dict) and _int(row.get("quantity"), 0) > 0 else None
+        request_terms = terms if isinstance(terms, Mapping) else {}
+        allowed_item_ids = self._request_item_ids(kind, request_terms)
+        instance_id = str(request_terms.get("item_instance_id", "") or "").strip()
+        if instance_id:
+            row = inventory.find(instance_id=instance_id)
+            if (
+                isinstance(row, dict)
+                and str(row.get("item_id", "") or "").strip() in allowed_item_ids
+                and _int(row.get("quantity"), 0) > 0
+            ):
+                return copy.deepcopy(row)
+        for item_id in allowed_item_ids:
+            row = inventory.find(item_id=item_id)
+            if isinstance(row, dict) and _int(row.get("quantity"), 0) > 0:
+                return copy.deepcopy(row)
+        return None
+
+    def _request_need_level(self, actor: int, kind: str) -> float:
+        profile = self._item_favor_profile(kind)
+        if profile is None:
+            return 100.0
+        need_attr = str(profile.get("need_attr", "") or "").strip()
+        if need_attr == "health":
+            vitality = self.sim.ecs.get(Vitality).get(actor)
+            if vitality is None:
+                return 100.0
+            maximum = max(1.0, _float(getattr(vitality, "max_hp", 1.0), 1.0))
+            return max(0.0, min(100.0, (_float(getattr(vitality, "hp", maximum), maximum) / maximum) * 100.0))
+        needs = self.sim.ecs.get(NPCNeeds).get(actor)
+        return max(0.0, min(100.0, _float(getattr(needs, need_attr, 100.0), 100.0)))
+
+    def _item_favor_candidates(self, requester: int) -> list[tuple[float, str, dict[str, Any], str]]:
+        candidates = []
+        for kind, profile in ITEM_FAVOR_PROFILES.items():
+            threshold = _float(profile.get("threshold"), 0.0)
+            level = self._request_need_level(requester, kind)
+            if level >= threshold:
+                continue
+            score = _float(profile.get("base_score"), 0.6) + max(0.0, (threshold - level) / 100.0)
+            candidates.append((
+                score,
+                kind,
+                self._item_favor_terms(kind),
+                str(profile.get("cue", "") or "").strip(),
+            ))
+        return candidates
+
+    def _request_reason(self, kind: str) -> str:
+        profile = self._item_favor_profile(kind)
+        return str((profile or {}).get("reason", "wants_company") or "wants_company")
+
+    def _request_urgency(self, kind: str) -> float:
+        profile = self._item_favor_profile(kind)
+        return _float((profile or {}).get("urgency", 0.58), 0.58)
+
+    def _request_deadline_ticks(self, kind: str) -> int:
+        profile = self._item_favor_profile(kind)
+        return max(1, _int((profile or {}).get("deadline_ticks", 140), 140))
 
     def _candidate_kind(self, requester: int, recipient: int, relation: str) -> tuple[str, dict[str, Any]] | None:
-        needs = self.sim.ecs.get(NPCNeeds).get(requester)
-        if needs is None:
-            return None
         bond = self._bond(requester, recipient)
         closeness = _float(bond.get("closeness"), 0.0)
         trust = _float(bond.get("trust"), 0.0)
         relation_key = _token(relation)
-        if _float(getattr(needs, "thirst", 100.0), 100.0) < 46.0 and trust >= 0.28:
-            return "bring_water", {
-                "item_id": "bottled_water",
-                "quantity": 1,
-                "delay_ticks": 4,
-            }
+        item_candidates = self._item_favor_candidates(requester)
+        if item_candidates and trust >= 0.28:
+            _score, kind, terms, _cue = max(item_candidates, key=lambda item: item[0])
+            return kind, terms
+        needs = self.sim.ecs.get(NPCNeeds).get(requester)
+        if needs is None:
+            return None
         if (
             _float(getattr(needs, "social", 100.0), 100.0) < 54.0
             and (relation_key in {"family", "partner", "friend"} or closeness >= 0.42)
@@ -745,7 +932,7 @@ class NPCSocialRequestSystem(System):
         return None
 
     def _response(self, requester: int, recipient: int, kind: str, *, forced: str | None = None) -> str:
-        if kind == "bring_water" and self._has_water(recipient) is None:
+        if self._is_item_favor(kind) and self._available_request_item(recipient, kind) is None:
             return "refused"
         forced_key = _token(forced)
         if forced_key in {"accepted", "refused"}:
@@ -772,17 +959,18 @@ class NPCSocialRequestSystem(System):
         return "accepted" if score >= 0.42 + (roll * 0.20) else "refused"
 
     def _request_lines(self, kind: str, response: str, response_reason: str) -> tuple[str, str, str, str]:
-        if kind == "bring_water":
-            request_line = "I'm running dry. Could you spare some water?"
-            summary = "someone asking a companion to bring over some water"
-            detail = "a personal request for water"
+        profile = self._item_favor_profile(kind)
+        if profile is not None:
+            request_line = str(profile.get("request_line", "") or "")
+            summary = str(profile.get("summary", "") or "")
+            detail = str(profile.get("detail", "") or "")
         else:
             request_line = "Could you come find me again later? I don't want to sit with this alone."
             summary = "someone asking for a later check-in"
             detail = "a personal promise to return and check on someone later"
         if response == "accepted":
             response_line = "I will. Give me a little while."
-        elif response_reason == "lacks_water":
+        elif str(response_reason or "").startswith("lacks_"):
             response_line = "I don't have any to spare."
         else:
             response_line = "I can't promise that today."
@@ -802,12 +990,16 @@ class NPCSocialRequestSystem(System):
         kind_key = _token(kind)
         now = _int(getattr(self.sim, "tick", 0), 0)
         request_terms = copy.deepcopy(dict(terms or {}))
+        if self._is_item_favor(kind_key):
+            defaults = self._item_favor_terms(kind_key)
+            defaults.update(request_terms)
+            request_terms = defaults
         # A caller may already know a candidate instance, but it belongs to the
         # recipient's answer rather than the requester's proposal.
         request_terms.pop("item_instance_id", None)
         delay = max(0, _int(request_terms.get("delay_ticks"), 0))
-        urgency = 0.76 if kind_key == "bring_water" else 0.58
-        reason = "thirst" if kind_key == "bring_water" else "wants_company"
+        urgency = self._request_urgency(kind_key)
+        reason = self._request_reason(kind_key)
         row = create_social_request(
             self.sim,
             requester_eid=requester,
@@ -818,19 +1010,20 @@ class NPCSocialRequestSystem(System):
             terms=request_terms,
             urgency=urgency,
             due_tick=now + delay,
-            deadline_tick=now + (80 if kind_key == "bring_water" else 140),
+            deadline_tick=now + self._request_deadline_ticks(kind_key),
         )
         response = self._response(requester, recipient, kind_key, forced=force_response)
         response_reason = "willing" if response == "accepted" else "cannot_commit"
-        if kind_key == "bring_water":
-            water = self._has_water(recipient)
-            if response == "accepted" and water is not None:
-                selected_instance = str(water.get("instance_id", ""))
+        if self._is_item_favor(kind_key):
+            supplied_item = self._available_request_item(recipient, kind_key, request_terms)
+            if response == "accepted" and supplied_item is not None:
+                selected_instance = str(supplied_item.get("instance_id", ""))
                 live_row = social_request_state(self.sim)["requests"].get(row["id"])
                 if isinstance(live_row, dict):
                     live_row.setdefault("terms", {})["item_instance_id"] = selected_instance
-            elif response == "refused" and water is None:
-                response_reason = "lacks_water"
+                    live_row.setdefault("terms", {})["item_id"] = str(supplied_item.get("item_id", "") or "")
+            elif response == "refused" and supplied_item is None:
+                response_reason = f"lacks_{self._request_reason(kind_key)}"
         answered = respond_to_social_request(
             self.sim,
             row["id"],
@@ -857,13 +1050,15 @@ class NPCSocialRequestSystem(System):
         }
 
     def _request_prompt(self, kind: str) -> str:
-        if _token(kind) == "bring_water":
-            return "I'm running dry. Could you spare some water?"
+        profile = self._item_favor_profile(kind)
+        if profile is not None:
+            return str(profile.get("request_line", "") or "")
         return "Could you come find me again later? I don't want to sit with this alone."
 
     def _request_reason_line(self, row: Mapping[str, Any]) -> str:
-        if _token(row.get("kind")) == "bring_water":
-            return "I haven't had anything to drink in a while, and I'm feeling it."
+        profile = self._item_favor_profile(_token(row.get("kind")))
+        if profile is not None:
+            return str(profile.get("reason_line", "") or "")
         return "I've been alone too long today. I don't want to keep carrying it by myself."
 
     def _record_dialogue_occurrence(
@@ -922,16 +1117,8 @@ class NPCSocialRequestSystem(System):
         needs = self.sim.ecs.get(NPCNeeds).get(npc)
         if needs is None:
             return None
-        thirst = _float(getattr(needs, "thirst", 100.0), 100.0)
         social = _float(getattr(needs, "social", 100.0), 100.0)
-        candidates = []
-        if thirst < 46.0:
-            candidates.append((
-                0.68 + max(0.0, (46.0 - thirst) / 80.0),
-                "bring_water",
-                {"item_id": "bottled_water", "quantity": 1, "delay_ticks": 4},
-                "They look dry-mouthed and keep swallowing before they speak.",
-            ))
+        candidates = self._item_favor_candidates(npc)
         if social < 54.0:
             candidates.append((
                 0.62 + max(0.0, (54.0 - social) / 100.0),
@@ -979,11 +1166,11 @@ class NPCSocialRequestSystem(System):
             recipient_eid=player,
             beneficiary_eid=npc,
             kind=kind_key,
-            reason="thirst" if kind_key == "bring_water" else "wants_company",
+            reason=self._request_reason(kind_key),
             terms=request_terms,
-            urgency=0.76 if kind_key == "bring_water" else 0.58,
+            urgency=self._request_urgency(kind_key),
             due_tick=now + delay,
-            deadline_tick=now + (80 if kind_key == "bring_water" else 140),
+            deadline_tick=now + self._request_deadline_ticks(kind_key),
         )
         self._mark_request_cooldowns(npc, player)
         return {
@@ -993,21 +1180,25 @@ class NPCSocialRequestSystem(System):
         }
 
     def _player_request_rows(self, player_eid: int, npc_eid: int) -> list[dict[str, Any]]:
+        rows = []
+        for topic_id, kind in PLAYER_ITEM_REQUEST_TOPICS.items():
+            profile = self._item_favor_profile(kind)
+            if profile is None:
+                continue
+            if self._request_need_level(player_eid, kind) >= _float(profile.get("request_threshold"), 100.0):
+                continue
+            if self._available_request_item(player_eid, kind) is not None:
+                continue
+            rows.append({
+                "id": topic_id,
+                "label": str(profile.get("ask_label", "Ask them for help") or "Ask them for help"),
+                "prompt_text": str(profile.get("ask_label", "Ask them for help") or "Ask them for help"),
+                "player_line": str(profile.get("ask_line", "Could you spare something?") or "Could you spare something?"),
+                "favor_kind": kind,
+            })
         needs = self.sim.ecs.get(NPCNeeds).get(player_eid)
         if needs is None:
-            return []
-        rows = []
-        if (
-            _float(getattr(needs, "thirst", 100.0), 100.0) < 72.0
-            and self._has_water(player_eid) is None
-        ):
-            rows.append({
-                "id": "favor_request_water",
-                "label": "Ask them to spare some water",
-                "prompt_text": "Ask them to spare some water",
-                "player_line": "Could you spare me some water?",
-                "favor_kind": "bring_water",
-            })
+            return rows
         if _float(getattr(needs, "social", 100.0), 100.0) < 60.0:
             rows.append({
                 "id": "favor_request_check_in",
@@ -1073,14 +1264,19 @@ class NPCSocialRequestSystem(System):
                 })
                 return rows
             if status in {"accepted", "in_progress"} and recipient == player:
-                if now >= _int(active.get("due_tick"), now + 1) and self._actors_adjacent(player, npc):
-                    if kind == "check_in_later" or self._has_water(player) is not None:
+                if self._actors_adjacent(player, npc):
+                    if kind == "check_in_later" or self._available_request_item(player, kind, active.get("terms")) is not None:
+                        profile = self._item_favor_profile(kind)
                         rows.append({
                             "id": "favor_fulfill",
-                            "label": "Keep your promise now",
+                            "label": (
+                                "Give them what they asked for"
+                                if profile is not None
+                                else "Keep your promise now"
+                            ),
                             "player_line": (
-                                "I brought you the water I promised."
-                                if kind == "bring_water"
+                                str(profile.get("fulfill_line", "I brought what you asked for.") or "I brought what you asked for.")
+                                if profile is not None
                                 else "I said I'd come back. How are you holding up?"
                             ),
                             "request_id": request_id,
@@ -1147,16 +1343,17 @@ class NPCSocialRequestSystem(System):
         rows = []
         candidate = self._player_offer_candidate(npc, player, context)
         if candidate:
+            profile = self._item_favor_profile(candidate["kind"])
             rows.append({
                 "id": "favor_invite",
                 "label": (
-                    "Ask if they need something to drink"
-                    if candidate["kind"] == "bring_water"
+                    str(profile.get("offer_label", "Ask if they need help") or "Ask if they need help")
+                    if profile is not None
                     else "Ask if they want you to check in later"
                 ),
                 "player_line": (
-                    "You look thirsty. Do you need something to drink?"
-                    if candidate["kind"] == "bring_water"
+                    str(profile.get("offer_line", "Do you need help?") or "Do you need help?")
+                    if profile is not None
                     else "You seem like you don't want to be alone. Should I come find you later?"
                 ),
                 "favor_kind": candidate["kind"],
@@ -1167,20 +1364,22 @@ class NPCSocialRequestSystem(System):
             rows.extend(self._player_request_rows(player, npc))
         return rows
 
-    def _bind_available_water(self, row: dict[str, Any], actor_eid: int) -> None:
-        water = self._has_water(actor_eid)
-        if not isinstance(water, dict):
+    def _bind_available_item(self, row: dict[str, Any], actor_eid: int) -> None:
+        supplied_item = self._available_request_item(
+            actor_eid,
+            _token(row.get("kind")),
+            row.get("terms"),
+        )
+        if not isinstance(supplied_item, dict):
             return
-        row.setdefault("terms", {})["item_instance_id"] = str(water.get("instance_id", ""))
+        row.setdefault("terms", {})["item_instance_id"] = str(supplied_item.get("instance_id", ""))
+        row.setdefault("terms", {})["item_id"] = str(supplied_item.get("item_id", "") or "")
 
     def _perform_player_favor(self, row: dict[str, Any], player_eid: int) -> tuple[bool, str]:
         if _int(row.get("recipient_eid"), 0) != int(player_eid):
             return False, "not_your_promise"
         if _token(row.get("status")) not in {"accepted", "in_progress"}:
             return False, "promise_not_active"
-        now = _int(getattr(self.sim, "tick", 0), 0)
-        if now < _int(row.get("due_tick"), now + 1):
-            return False, "too_early"
         requester = _int(row.get("requester_eid"), 0)
         if not self._actors_adjacent(player_eid, requester):
             return False, "requester_not_here"
@@ -1199,8 +1398,9 @@ class NPCSocialRequestSystem(System):
             return False, "already_renegotiated"
         requester = _int(row.get("requester_eid"), 0)
         needs = self.sim.ecs.get(NPCNeeds).get(requester)
-        if _token(row.get("kind")) == "bring_water" and _float(
-            getattr(needs, "thirst", 100.0), 100.0
+        if self._is_item_favor(_token(row.get("kind"))) and self._request_need_level(
+            requester,
+            _token(row.get("kind")),
         ) < 20.0:
             self._record_dialogue_occurrence(
                 row,
@@ -1249,13 +1449,13 @@ class NPCSocialRequestSystem(System):
             )
             return {"npc_lines": [opened["prompt"]], "favor_request_id": opened["request_id"]}
 
-        if topic in {"favor_request_water", "favor_request_check_in"}:
-            kind = "bring_water" if topic == "favor_request_water" else "check_in_later"
+        if topic in set(PLAYER_ITEM_REQUEST_TOPICS) | {"favor_request_check_in"}:
+            kind = PLAYER_ITEM_REQUEST_TOPICS.get(topic, "check_in_later")
             if not self._relationship_ready(context) or not self._request_cooldown_ready(player, npc):
                 return {"npc_lines": ["Not today. This isn't the moment for that."]}
             terms = (
-                {"item_id": "bottled_water", "quantity": 1, "delay_ticks": 4}
-                if kind == "bring_water"
+                self._item_favor_terms(kind)
+                if self._is_item_favor(kind)
                 else {"delay_ticks": 16}
             )
             payload = self.propose_at_contact(player, npc, kind=kind, terms=terms)
@@ -1272,8 +1472,8 @@ class NPCSocialRequestSystem(System):
             row["reason_explained_tick"] = _int(getattr(self.sim, "tick", 0), 0)
             return {"npc_lines": [self._request_reason_line(row)]}
         if topic == "favor_accept":
-            if _token(row.get("kind")) == "bring_water":
-                self._bind_available_water(row, player)
+            if self._is_item_favor(_token(row.get("kind"))):
+                self._bind_available_item(row, player)
             respond_to_social_request(self.sim, row["id"], actor_eid=player, outcome="accepted", reason="player_promised")
             return {"npc_lines": ["Thank you. I won't pretend that means nothing to me."]}
         if topic == "favor_counter_later":
@@ -1287,10 +1487,8 @@ class NPCSocialRequestSystem(System):
                 counter_terms={"delay_ticks": current_delay + 12},
                 reason="player_needs_more_time",
             )
-            needs = self.sim.ecs.get(NPCNeeds).get(npc)
-            too_urgent = _token(row.get("kind")) == "bring_water" and _float(
-                getattr(needs, "thirst", 100.0), 100.0
-            ) < 20.0
+            kind = _token(row.get("kind"))
+            too_urgent = self._is_item_favor(kind) and self._request_need_level(npc, kind) < 20.0
             respond_to_social_request(
                 self.sim,
                 row["id"],
@@ -1318,12 +1516,13 @@ class NPCSocialRequestSystem(System):
         if topic == "favor_fulfill":
             kept, reason = self._perform_player_favor(row, player)
             if not kept:
-                if reason == "promised_water_unavailable":
-                    return {"npc_lines": ["You don't have the water yet."]}
+                profile = self._item_favor_profile(_token(row.get("kind")))
+                if reason.startswith("promised_") and profile is not None:
+                    return {"npc_lines": [str(profile.get("missing_line", "You don't have what they asked for yet.") or "You don't have what they asked for yet.")]}
                 return {"npc_lines": ["We can't settle that promise here and now."]}
             return {"npc_lines": [
                 "Thank you. I needed that."
-                if _token(row.get("kind")) == "bring_water"
+                if self._is_item_favor(_token(row.get("kind")))
                 else "Better now that you're here."
             ]}
         if topic == "favor_renegotiate":
@@ -1338,15 +1537,18 @@ class NPCSocialRequestSystem(System):
             return {"npc_lines": ["I'm glad you told me. I'm still disappointed."]}
         if topic == "favor_check_status":
             self._record_dialogue_occurrence(row, "social_request_status_asked", actor_eid=player)
-            if _token(row.get("kind")) == "bring_water" and self._has_water(npc) is None:
-                return {"npc_lines": ["I haven't found water I can spare yet, but I haven't forgotten."]}
+            kind = _token(row.get("kind"))
+            if self._is_item_favor(kind) and self._available_request_item(npc, kind, row.get("terms")) is None:
+                return {"npc_lines": ["I haven't found something I can spare yet, but I haven't forgotten."]}
             return {"npc_lines": ["I said I would. I'm still working on it."]}
         if topic == "favor_refusal_why":
             self._record_dialogue_occurrence(row, "social_request_refusal_explained", actor_eid=npc)
             row["reason_explained_tick"] = _int(getattr(self.sim, "tick", 0), 0)
             reason = _token(row.get("response_reason"))
-            if reason == "lacks_water":
-                line = "I don't have any water to spare. Saying yes wouldn't change that."
+            if reason.startswith("lacks_"):
+                profile = self._item_favor_profile(_token(row.get("kind")))
+                item_word = "that" if profile is None else str(profile.get("item_word", "that") or "that")
+                line = f"I don't have any {item_word} to spare. Saying yes wouldn't change that."
             elif reason == "counter_too_slow":
                 line = "I needed help sooner than that. Waiting would not have helped me."
             else:
@@ -1468,12 +1670,13 @@ class NPCSocialRequestSystem(System):
         if candidate is None:
             return None
         kind, terms = candidate
-        needs = self.sim.ecs.get(NPCNeeds).get(speaker)
-        urgency = (
-            max(0.0, (50.0 - _float(getattr(needs, "thirst", 100.0), 100.0)) / 50.0)
-            if kind == "bring_water"
-            else max(0.0, (60.0 - _float(getattr(needs, "social", 100.0), 100.0)) / 60.0)
-        )
+        profile = self._item_favor_profile(kind)
+        if profile is not None:
+            threshold = max(1.0, _float(profile.get("threshold"), 50.0))
+            urgency = max(0.0, (threshold - self._request_need_level(speaker, kind)) / threshold)
+        else:
+            needs = self.sim.ecs.get(NPCNeeds).get(speaker)
+            urgency = max(0.0, (60.0 - _float(getattr(needs, "social", 100.0), 100.0)) / 60.0)
         chance = 0.12 + min(0.46, urgency * 0.6)
         roll = random.Random(
             f"{getattr(self.sim, 'seed', 0)}:social-request-offer:{speaker}:{partner}:{now // 6}:{kind}:{tone}"
@@ -1502,15 +1705,23 @@ class NPCSocialRequestSystem(System):
         recipient = _int(row.get("recipient_eid"), 0)
         beneficiary = _int(row.get("beneficiary_eid"), 0)
         terms = dict(row.get("terms", {}) or {})
+        kind = _token(row.get("kind"))
         item_id = str(terms.get("item_id", "") or "").strip()
-        instance_id = str(terms.get("item_instance_id", "") or "").strip()
         quantity = max(1, _int(terms.get("quantity"), 1))
         source = self.sim.ecs.get(Inventory).get(recipient)
         if source is None:
             return False
-        source_entry = source.find(instance_id=instance_id) if instance_id else source.find(item_id=item_id)
-        if not isinstance(source_entry, dict) or str(source_entry.get("item_id", "")) != item_id:
+        source_entry = self._available_request_item(recipient, kind, terms)
+        allowed_item_ids = self._request_item_ids(kind, terms)
+        if (
+            not isinstance(source_entry, dict)
+            or str(source_entry.get("item_id", "") or "").strip() not in allowed_item_ids
+            or (item_id and item_id not in allowed_item_ids)
+        ):
             return False
+        transferred_item_id = str(source_entry.get("item_id", "") or "").strip()
+        row.setdefault("terms", {})["item_id"] = transferred_item_id
+        row.setdefault("terms", {})["item_instance_id"] = str(source_entry.get("instance_id", "") or "")
         removed = source.remove_item(instance_id=source_entry.get("instance_id"), quantity=quantity)
         if not isinstance(removed, dict) or _int(removed.get("quantity"), 0) < quantity:
             return False
@@ -1519,9 +1730,9 @@ class NPCSocialRequestSystem(System):
         if target is None:
             target = Inventory(capacity=10)
             self.sim.ecs.add(beneficiary, target)
-        catalog = ITEM_CATALOG.get(item_id, {}) if isinstance(ITEM_CATALOG, dict) else {}
+        catalog = ITEM_CATALOG.get(transferred_item_id, {}) if isinstance(ITEM_CATALOG, dict) else {}
         added, _instance = target.add_item(
-            item_id,
+            transferred_item_id,
             quantity=quantity,
             stack_max=max(1, _int(catalog.get("stack_max"), 1)),
             instance_id=removed.get("instance_id"),
@@ -1532,7 +1743,7 @@ class NPCSocialRequestSystem(System):
         if added:
             return True
         source.add_item(
-            item_id,
+            transferred_item_id,
             quantity=quantity,
             stack_max=max(1, _int(catalog.get("stack_max"), 1)),
             instance_id=removed.get("instance_id"),
@@ -1546,9 +1757,9 @@ class NPCSocialRequestSystem(System):
         kind = _token(row.get("kind"))
         beneficiary = _int(row.get("beneficiary_eid"), 0)
         recipient = _int(row.get("recipient_eid"), 0)
-        if kind == "bring_water":
+        if self._is_item_favor(kind):
             if not self._transfer_promised_item(row):
-                return False, "promised_water_unavailable"
+                return False, f"promised_{self._request_reason(kind)}_unavailable"
         elif kind == "check_in_later":
             needs = self.sim.ecs.get(NPCNeeds).get(beneficiary)
             if needs is not None:
@@ -1562,10 +1773,11 @@ class NPCSocialRequestSystem(System):
 
     def _completion_payload(self, row: Mapping[str, Any], fulfilled: bool) -> dict[str, Any]:
         kind = _token(row.get("kind"))
-        if fulfilled and kind == "bring_water":
-            quote = "I brought the water I promised."
+        profile = self._item_favor_profile(kind)
+        if fulfilled and profile is not None:
+            quote = str(profile.get("completion_quote", "I brought what I promised.") or "I brought what I promised.")
             reply = "Thank you. I needed that."
-            summary = "someone delivering water they had promised to bring"
+            summary = str(profile.get("completion_summary", "someone delivering what they had promised to bring") or "someone delivering what they had promised to bring")
         elif fulfilled:
             quote = "I came back. How are you holding up?"
             reply = "Better now that you're here."

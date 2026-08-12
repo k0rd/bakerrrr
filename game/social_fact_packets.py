@@ -84,6 +84,9 @@ def create_actor_incident_fact_packet(
         "urgency": _unit(record.get("urgency"), 0.0),
         "social_interest": _unit(record.get("social_interest"), 0.0),
         "propagation_depth": max(0, _int(record.get("propagation_depth"), 0)),
+        "incident_tick": snapshot.get("incident_tick"),
+        "subject_account": copy.deepcopy(snapshot.get("subject_account") or {}),
+        "participant_accounts": copy.deepcopy(snapshot.get("participant_accounts") or {}),
     }
     initiating_actor = _int(initiating_actor_eid, 0) or None
     packet = {

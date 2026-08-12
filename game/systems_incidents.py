@@ -62,6 +62,17 @@ CAMERA_OWNER_CAREER_TOKENS = (
 SCENE_RESIDUE_RADIUS = 2
 PRECOMBAT_TRANSFER_WINDOW = 12
 CONTAINER_CAPTURE_KINDS = {"container", "scene"}
+INCIDENT_SCENE_PERSON_RADIUS = 8
+INCIDENT_SCENE_PERSON_LIMIT = 2
+DIRECT_PARTICIPANT_ACCOUNT_SOURCES = {
+    "self",
+    "witnessed",
+    "camera",
+    "linked_drone_camera",
+    "drone_radio_feed",
+    "private_bodyguard_witness",
+    "victim",
+}
 
 
 def _clamp_unit(value, default=0.0):
@@ -246,6 +257,86 @@ class IncidentKnowledgeSystem(System):
             ))
         )
 
+    def _human_scene_actor(self, eid):
+        identity = self.sim.ecs.get(CreatureIdentity).get(eid)
+        ai = self.sim.ecs.get(AI).get(eid)
+        if identity is None and ai is None:
+            return False
+        taxonomy = _text(getattr(identity, "taxonomy_class", "")).lower()
+        creature_type = _text(getattr(identity, "creature_type", "")).lower()
+        role = _text(getattr(ai, "role", "")).lower()
+        return bool(
+            taxonomy not in {"machine", "vehicle"}
+            and creature_type not in {"animal", "machine"}
+            and role != "wildlife"
+        )
+
+    def _visible_scene_person_accounts(self, observer_eid, incident, *, confidence=1.0):
+        """Freeze a few other visible people at the scene for this observer."""
+
+        observer_pos = self.sim.ecs.get(Position).get(observer_eid)
+        x = incident.get("x")
+        y = incident.get("y")
+        z = incident.get("z")
+        if observer_pos is None or x is None or y is None or z is None:
+            return {}
+        if int(observer_pos.z) != _safe_int(z, 0):
+            return {}
+
+        excluded = {observer_eid, incident.get("primary_actor_eid"), incident.get("victim_eid")}
+        witness_eids = {
+            _safe_int(raw_eid, -1)
+            for raw_eid in (
+                *tuple(incident.get("observer_eids", ()) or ()),
+                *tuple(incident.get("accountable_observer_eids", ()) or ()),
+            )
+            if raw_eid is not None
+        }
+        candidates = []
+        for candidate_eid in self.sim.entity_ids_in_radius(
+            _safe_int(x, 0),
+            _safe_int(y, 0),
+            _safe_int(z, 0),
+            INCIDENT_SCENE_PERSON_RADIUS,
+        ):
+            if candidate_eid in excluded or not self._human_scene_actor(candidate_eid):
+                continue
+            candidate_pos = self.sim.ecs.get(Position).get(candidate_eid)
+            if candidate_pos is None or int(candidate_pos.z) != int(observer_pos.z):
+                continue
+            distance = abs(int(candidate_pos.x) - int(observer_pos.x)) + abs(int(candidate_pos.y) - int(observer_pos.y))
+            if distance > INCIDENT_SCENE_PERSON_RADIUS:
+                continue
+            if not observer_can_see_position(
+                self.sim,
+                observer_eid,
+                int(observer_pos.x),
+                int(observer_pos.y),
+                int(observer_pos.z),
+                int(candidate_pos.x),
+                int(candidate_pos.y),
+                int(candidate_pos.z),
+                INCIDENT_SCENE_PERSON_RADIUS,
+            ):
+                continue
+            candidates.append((0 if candidate_eid in witness_eids else 1, distance, int(candidate_eid)))
+
+        rows = {}
+        role_counts = {"witness": 0, "bystander": 0}
+        for witness_rank, _distance, candidate_eid in sorted(candidates)[:INCIDENT_SCENE_PERSON_LIMIT]:
+            role_name = "witness" if witness_rank == 0 else "bystander"
+            role_counts[role_name] += 1
+            account = build_witness_subject_account(
+                self.sim,
+                observer_eid,
+                candidate_eid,
+                source_kind="witnessed",
+                confidence=confidence,
+            )
+            if isinstance(account, dict):
+                rows[f"{role_name}_{role_counts[role_name]}"] = account
+        return rows
+
     def _learn_incident(
         self,
         eid,
@@ -258,6 +349,8 @@ class IncidentKnowledgeSystem(System):
         propagation_depth=0,
         queue=True,
         subject_account=None,
+        participant_accounts=None,
+        incident_tick=None,
     ):
         incident = incident_record(self.sim, incident_id)
         if not isinstance(incident, dict):
@@ -266,24 +359,76 @@ class IncidentKnowledgeSystem(System):
             return None
 
         source_key = str(source_kind or "").strip().lower()
+        if incident_tick is None and source_key in DIRECT_PARTICIPANT_ACCOUNT_SOURCES:
+            incident_tick = incident.get("created_tick")
         if not isinstance(subject_account, dict):
             subject_account = None
         if subject_account is None and incident.get("primary_actor_eid") is not None:
-            if source_key in {
-                "self",
-                "witnessed",
-                "camera",
-                "linked_drone_camera",
-                "drone_radio_feed",
-                "private_bodyguard_witness",
-                "victim",
-            }:
+            if source_key in DIRECT_PARTICIPANT_ACCOUNT_SOURCES:
                 subject_account = build_witness_subject_account(
                     self.sim,
                     eid,
                     incident.get("primary_actor_eid"),
                     source_kind=source_key,
                     confidence=confidence,
+                )
+
+        carried_participants = (
+            {
+                str(role or "").strip().lower().replace(" ", "_"): dict(account)
+                for role, account in participant_accounts.items()
+                if str(role or "").strip() and isinstance(account, dict)
+            }
+            if isinstance(participant_accounts, dict)
+            else {}
+        )
+        victim_eid = incident.get("victim_eid")
+        if "victim" not in carried_participants and victim_eid is not None and source_key in DIRECT_PARTICIPANT_ACCOUNT_SOURCES:
+            victim_identity = self.sim.ecs.get(CreatureIdentity).get(victim_eid)
+            victim_ai = self.sim.ecs.get(AI).get(victim_eid)
+            taxonomy = _text(getattr(victim_identity, "taxonomy_class", "")).lower()
+            creature_type = _text(getattr(victim_identity, "creature_type", "")).lower()
+            victim_role = _text(getattr(victim_ai, "role", "")).lower()
+            victim_is_actor = victim_identity is not None or victim_ai is not None
+            if (
+                victim_is_actor
+                and taxonomy not in {"machine", "vehicle"}
+                and creature_type not in {"animal", "machine"}
+                and victim_role != "wildlife"
+            ):
+                victim_account = build_witness_subject_account(
+                    self.sim,
+                    eid,
+                    victim_eid,
+                    source_kind=source_key,
+                    confidence=confidence,
+                )
+                if isinstance(victim_account, dict):
+                    carried_participants["victim"] = victim_account
+        if source_key in {"self", "witnessed", "private_bodyguard_witness", "victim"}:
+            existing_knowledge = self._knowledge_for(eid, create=False)
+            existing_record = (
+                existing_knowledge.records.get(int(incident_id))
+                if existing_knowledge is not None
+                else None
+            )
+            existing_participants = (
+                dict(existing_record.get("participant_accounts") or {})
+                if isinstance(existing_record, dict)
+                and isinstance(existing_record.get("participant_accounts"), dict)
+                else {}
+            )
+            carried_participants = {**existing_participants, **carried_participants}
+            if not any(
+                _text(role).lower().startswith(("witness_", "bystander_"))
+                for role in carried_participants
+            ):
+                carried_participants.update(
+                    self._visible_scene_person_accounts(
+                        eid,
+                        incident,
+                        confidence=confidence,
+                    )
                 )
 
         knowledge = self._knowledge_for(eid, create=True)
@@ -317,6 +462,7 @@ class IncidentKnowledgeSystem(System):
             context=incident.get("context"),
             tags=incident.get("tags", ()),
             severity=int(incident.get("severity", 0) or 0),
+            incident_tick=incident_tick,
             x=incident.get("x"),
             y=incident.get("y"),
             z=incident.get("z"),
@@ -331,6 +477,7 @@ class IncidentKnowledgeSystem(System):
                 else None
             ),
             subject_account=subject_account,
+            participant_accounts=carried_participants,
         )
         update_incident_propagation(incident, propagation_depth)
 
@@ -1657,6 +1804,18 @@ class IncidentKnowledgeSystem(System):
                 propagation_depth=propagation_depth,
                 corruption_kind=event.data.get("corruption_kind", ""),
             )
+        participant_accounts = {}
+        for role, account in dict((source_record or {}).get("participant_accounts") or {}).items():
+            if not isinstance(account, dict):
+                continue
+            participant_accounts[str(role)] = transmitted_subject_account(
+                account,
+                channel="social_rumor",
+                source_eid=from_eid,
+                confidence=confidence,
+                propagation_depth=propagation_depth,
+                corruption_kind=event.data.get("corruption_kind", ""),
+            )
         self._learn_incident(
             to_eid,
             int(incident_id),
@@ -1666,6 +1825,8 @@ class IncidentKnowledgeSystem(System):
             confidence=confidence,
             propagation_depth=propagation_depth,
             subject_account=subject_account,
+            participant_accounts=participant_accounts,
+            incident_tick=(source_record or {}).get("incident_tick"),
         )
         target_knowledge = self._knowledge_for(to_eid, create=False)
         if target_knowledge is not None:

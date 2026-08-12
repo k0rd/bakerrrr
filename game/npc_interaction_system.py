@@ -1032,6 +1032,7 @@ class NPCInteractionSystem(System):
                 "street_buy_skipped_instance_ids": [],
                 "backup_cursor_mark": None,
                 "backup_cursor_pending_topic": "",
+                "social_fact_incident_draft": None,
             }
             self.sim.dialog_ui = state
         else:
@@ -1048,6 +1049,7 @@ class NPCInteractionSystem(System):
             state.setdefault("street_buy_offer", None)
             state.setdefault("street_buy_skipped_instance_ids", [])
             state.setdefault("backup_cursor_mark", None)
+            state.setdefault("social_fact_incident_draft", None)
             state.setdefault("backup_cursor_pending_topic", "")
         return state
 
@@ -12668,6 +12670,8 @@ class NPCInteractionSystem(System):
         social_fact_action = str(row.get("social_fact_action", "") or "").strip().lower()
         if social_fact_action in {"correct_claim", "withdraw"}:
             score += 0.28
+        elif social_fact_action == "tell_incident_distorted":
+            score -= 0.34
         elif social_fact_action == "ask_reaction":
             score -= 0.28
         if topic_id in self.CONVERSATION_SAFE_TOPICS or topic_id.startswith("service_"):
@@ -13694,6 +13698,7 @@ class NPCInteractionSystem(System):
             "machine_action": None,
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
+            "social_fact_incident_draft": None,
         })
         self._practice_dialogue_read(context, topics, read_text=read_text)
         memory["opened_count"] = max(0, int(memory.get("opened_count", 0))) + 1
@@ -13713,6 +13718,7 @@ class NPCInteractionSystem(System):
             "street_buy_skipped_instance_ids": [],
             "machine_action": None,
             "backup_cursor_pending_topic": "",
+            "social_fact_incident_draft": None,
         })
         return state
 
@@ -13740,6 +13746,7 @@ class NPCInteractionSystem(System):
             "machine_action": None,
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
+            "social_fact_incident_draft": None,
         })
         return state
 
@@ -15622,9 +15629,10 @@ class NPCInteractionSystem(System):
                 previous_topic_id=previous_topic_id,
                 total_asked=self._dialogue_total_topics_asked(context.get("npc_eid")),
             )
-        transcript.append(
-            self._dialogue_player_line(player_line)
-        )
+        if not bool(response.get("suppress_player_line", False)):
+            transcript.append(
+                self._dialogue_player_line(player_line)
+            )
         for line in response.get("narration_lines", ()) or ():
             formatted = self._dialogue_narration_line(line)
             if formatted:
@@ -16027,12 +16035,14 @@ class NPCInteractionSystem(System):
                     context,
                 )
         elif _is_social_fact_dialogue_topic(topic_id) and selected_row_matches:
-            self._dialogue_mark_topic(
-                npc_eid,
-                topic_id,
-                pressure_topic_id=pressure_topic_id,
-                pressure_family_id=pressure_family_id,
-            )
+            social_fact_action = str(selected_row.get("social_fact_action", "") or "").strip().lower()
+            if social_fact_action not in {"prepare_incident_distortion", "cancel_incident_distortion"}:
+                self._dialogue_mark_topic(
+                    npc_eid,
+                    topic_id,
+                    pressure_topic_id=pressure_topic_id,
+                    pressure_family_id=pressure_family_id,
+                )
             response = _resolve_social_fact_dialogue(
                 self.sim,
                 self.player_eid,
