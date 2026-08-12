@@ -937,6 +937,7 @@ class NPCBoundaryEnforcementSystem(System):
         ))
 
     def _emit_ejection_complied(self, key, row):
+        self._clear_enforcer_ejection_intent(row)
         self.sim.emit(Event(
             "npc_ejection_complied",
             npc_eid=_safe_int(row.get("enforcer_eid"), default=0),
@@ -951,6 +952,34 @@ class NPCBoundaryEnforcementSystem(System):
             origin_room_kind=row.get("origin_room_kind"),
         ))
         active_ejection_state(self.sim).pop(key, None)
+
+    def _clear_enforcer_ejection_intent(self, row):
+        """Release an ejector once the requested boundary has been respected."""
+        if not isinstance(row, dict):
+            return False
+        enforcer_eid = _safe_int(row.get("enforcer_eid"), default=0)
+        target_eid = _safe_int(row.get("target_eid"), default=0)
+        if enforcer_eid <= 0 or target_eid <= 0:
+            return False
+        ais = self.sim.ecs.get(AI)
+        wills = self.sim.ecs.get(NPCWill)
+        ai = ais.get(enforcer_eid) if ais else None
+        if (
+            ai is None
+            or _text(getattr(ai, "state", "")).lower() != "ejecting_target"
+            or _safe_int(getattr(ai, "target_eid", None), default=0) != target_eid
+        ):
+            return False
+        _sync_ai_intent(
+            ai,
+            wills.get(enforcer_eid) if wills else None,
+            self.sim.tick,
+            "idle",
+            score=0.0,
+            target=None,
+            target_eid=None,
+        )
+        return True
 
     def _refresh_follow_ejection(self, row):
         if not isinstance(row, dict) or not bool(row.get("follow_required", False)):

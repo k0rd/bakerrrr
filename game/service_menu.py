@@ -1187,6 +1187,20 @@ class ServiceMenuSystem(System):
         host_style = str(state.get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
         body_lines = list(lines or ())
         service_key = str(service or "").strip().lower()
+        result_return_wager = 0
+        wager_sources = [
+            art if isinstance(art, dict) else {},
+            state.get("session") if isinstance(state.get("session"), dict) else {},
+            self._selected_casino_row() or {},
+        ]
+        for source in wager_sources:
+            try:
+                candidate = int(source.get("wager", 0) or 0)
+            except (TypeError, ValueError, AttributeError):
+                candidate = 0
+            if candidate > 0:
+                result_return_wager = candidate
+                break
         body_focus_line = -1
         if service_key == "keno":
             for index, line in enumerate(body_lines):
@@ -1226,7 +1240,7 @@ class ServiceMenuSystem(System):
             body_focus_line=body_focus_line,
             rail_lines=rail_lines,
             rows=[],
-            hint="Space or Enter returns from the result screen.",
+            hint=f"Space or Enter returns to {_casino_game_title(service_key)} stakes.",
             close_pending=True,
             floor_page=state.get("floor_page", "games"),
             service=service,
@@ -1235,6 +1249,7 @@ class ServiceMenuSystem(System):
             return_to=str(state.get("return_to", "floor" if host_style == "floor" else "service_menu")).strip().lower(),
             return_option_id=str(state.get("return_option_id", service)).strip().lower(),
         )
+        state["result_return_wager"] = int(result_return_wager)
 
     def _advance_casino_action_time(self, prop, service, *, round_result=None):
         """Spend one world tick for a valid risk-bearing casino action.
@@ -6117,6 +6132,21 @@ class ServiceMenuSystem(System):
                     self._return_from_casino_host(prop)
                 return
             if mode == "result" or bool(state.get("close_pending")):
+                if isinstance(prop, dict) and service in CASINO_GAME_SERVICE_IDS and service != HOLDEM_CASH_SERVICE_ID:
+                    try:
+                        return_wager = int(state.get("result_return_wager", 0) or 0)
+                    except (TypeError, ValueError):
+                        return_wager = 0
+                    self._open_casino_wager(
+                        prop,
+                        service,
+                        host_style=host_style,
+                        return_to=str(
+                            state.get("return_to", "floor" if host_style == "floor" else "service_menu")
+                        ).strip().lower(),
+                        selected_id=f"wager:{return_wager}" if return_wager > 0 else "",
+                    )
+                    return
                 if host_style == "floor":
                     self._open_casino_floor(prop, page=state.get("floor_page", "games"))
                 else:

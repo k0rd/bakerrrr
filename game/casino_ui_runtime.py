@@ -56,6 +56,7 @@ def default_casino_ui_state():
         "art": None,
         "return_to": "",
         "return_option_id": "",
+        "result_return_wager": 0,
     }
 
 
@@ -87,4 +88,5 @@ def ensure_casino_ui_state(sim):
     state.setdefault("art", None)
     state.setdefault("return_to", "")
     state.setdefault("return_option_id", "")
+    state.setdefault("result_return_wager", 0)
     return state

@@ -34,6 +34,7 @@ from game.fashion_market import (
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor, item_entry_is_critical_quest_item
 from game.item_valuation import ITEM_BASE_VALUES as SHARED_ITEM_BASE_VALUES, item_fair_value
 from game.items import ITEM_CATALOG, world_distributed_item_pool
+from game.inventory_display import inventory_entry_equipment_display
 from game.organization_reputation import organization_instability_profile
 from game.organization_response import property_vigilante_denial
 from game.organizations import (
@@ -2892,6 +2893,17 @@ class TradeSystem(System):
             )
             item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "glyph": "*"})
             display_name = item_display_name_for_actor(self.sim, self.player_eid, entry, item_catalog=ITEM_CATALOG)
+            equipment_display = inventory_entry_equipment_display(
+                self.sim,
+                actor_eid,
+                entry,
+                item_catalog=ITEM_CATALOG,
+            )
+            row_color = interest.get("row_color")
+            if equipment_display:
+                row_color = equipment_display.get("equipment_row_color") or row_color
+            if item_entry_is_critical_quest_item(entry):
+                row_color = TRADE_CRITICAL_QUEST_ITEM_COLOR
             candidates.append({
                 "entry": entry,
                 "instance_id": entry.get("instance_id"),
@@ -2907,7 +2919,7 @@ class TradeSystem(System):
                 "interest_known": bool(interest.get("interest_known", True)),
                 "interest_actual": interest.get("interest_actual"),
                 "actual_label": interest.get("actual_label"),
-                "row_color": TRADE_CRITICAL_QUEST_ITEM_COLOR if item_entry_is_critical_quest_item(entry) else interest.get("row_color"),
+                "row_color": row_color,
                 "interest_reason": interest.get("reason", ""),
                 "interest_profile_summary": interest.get("profile_summary", ""),
                 "interest_price_mult": float(max(0.0, interest.get("price_mult", 1.0) or 1.0)),
@@ -2917,6 +2929,7 @@ class TradeSystem(System):
                 "trade_pressure_label": interest.get("trade_pressure_label", ""),
                 "trade_pressure_note": interest.get("trade_pressure_note", ""),
                 "trade_pressure_value": float(interest.get("trade_pressure_value", 0.0) or 0.0),
+                **equipment_display,
                 **self._fashion_row_fields(item_id, entry.get("metadata")),
             })
         if not owner_transfer:
@@ -3001,6 +3014,10 @@ class TradeSystem(System):
                 "trade_pressure_label": row.get("trade_pressure_label", ""),
                 "trade_pressure_note": row.get("trade_pressure_note", ""),
                 "trade_pressure_value": float(row.get("trade_pressure_value", 0.0) or 0.0),
+                "equipment_state": row.get("equipment_state", ""),
+                "equipment_kind": row.get("equipment_kind", ""),
+                "equipment_tag": row.get("equipment_tag", ""),
+                "equipment_note": row.get("equipment_note", ""),
                 "source_container": row.get("source_container", "inventory"),
                 "base_price": row.get("base_price"),
                 "wire_data_family": row.get("wire_data_family", ""),
@@ -3024,6 +3041,8 @@ class TradeSystem(System):
         state["selected_index"] = idx
         row = rows[idx]
         action_label = str(row.get("action_label", "")).strip().lower()
+        equipment_note = str(row.get("equipment_note", "") or "").strip()
+        equipment_text = f"; {equipment_note}" if equipment_note else ""
 
         if state.get("mode") == "buy":
             if action_label:
@@ -3058,7 +3077,7 @@ class TradeSystem(System):
                     _trade_item_line(row, (
                         f"{row.get('item_name', row.get('item_id', 'item'))} "
                         f"trade-in quote {int(row.get('price', 0))} credits "
-                        f"qty {int(row.get('quantity', 0))}"
+                        f"qty {int(row.get('quantity', 0))}{equipment_text}"
                     )),
                 )
             else:
@@ -3066,7 +3085,7 @@ class TradeSystem(System):
                     row.get("item_id"),
                     _trade_item_line(row, (
                         f"{row.get('item_name', row.get('item_id', 'item'))} "
-                        f"{action_label} into shelf stock qty {int(row.get('quantity', 0))}"
+                        f"{action_label} into shelf stock qty {int(row.get('quantity', 0))}{equipment_text}"
                     )),
                 )
             return
@@ -3091,7 +3110,7 @@ class TradeSystem(System):
             _trade_item_line(row, (
                 f"{row.get('item_name', row.get('item_id', 'item'))} "
                 f"offer {int(row.get('price', 0))} credits ({listed_text}) "
-                f"qty {int(row.get('quantity', 0))}{read_text}"
+                f"qty {int(row.get('quantity', 0))}{equipment_text}{read_text}"
             )),
         )
 

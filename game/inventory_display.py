@@ -22,6 +22,81 @@ INVENTORY_SORT_LABELS = {
     "name": "name",
 }
 
+INVENTORY_EQUIPMENT_ROW_COLORS = {
+    "armor": "inventory_equipped_consequence",
+    "disguise": "inventory_equipped_consequence",
+    "weapon": "inventory_equipped_weapon",
+    "container": "inventory_equipped_consequence",
+    "clothing": "inventory_equipped_clothing",
+}
+
+
+def inventory_entry_equipment_display(sim, actor_eid, entry, *, item_catalog=None):
+    """Describe carried equipment state for inventory-derived UI rows."""
+    if sim is None or not isinstance(entry, dict):
+        return {}
+    instance_id = str(entry.get("instance_id", "") or "").strip()
+    if not instance_id:
+        return {}
+    catalog = item_catalog or ITEM_CATALOG
+    item_id = str(entry.get("item_id", "") or "").strip().lower()
+    item_def = catalog.get(item_id, {}) if item_id else {}
+    equipment_kind = ""
+    is_player_actor = actor_eid == getattr(sim, "player_eid", None)
+
+    armor_loadout = sim.ecs.get(ArmorLoadout).get(actor_eid)
+    if armor_loadout and armor_loadout.is_equipped(instance_id):
+        equipment_kind = "armor"
+
+    if not equipment_kind:
+        active_disguise = getattr(sim, "disguise_state", None)
+        if (
+            is_player_actor
+            and isinstance(active_disguise, dict)
+            and str(active_disguise.get("instance_id", "") or "").strip() == instance_id
+        ):
+            equipment_kind = "disguise"
+
+    if not equipment_kind:
+        weapon_loadout = sim.ecs.get(WeaponLoadout).get(actor_eid)
+        weapon_id = _item_weapon_id(item_def)
+        weapon_instance = weapon_loadout.weapon_instances.get(weapon_id, {}) if weapon_loadout and weapon_id else {}
+        if (
+            weapon_loadout
+            and weapon_id
+            and weapon_loadout.current_weapon() == weapon_id
+            and isinstance(weapon_instance, dict)
+            and str(weapon_instance.get("inventory_instance_id", "") or "").strip() == instance_id
+        ):
+            equipment_kind = "weapon"
+
+    if not equipment_kind:
+        equipped_container = getattr(sim, "equipped_container", None)
+        if (
+            is_player_actor
+            and isinstance(equipped_container, dict)
+            and str(equipped_container.get("instance_id", "") or "").strip() == instance_id
+        ):
+            equipment_kind = "container"
+
+    if equipment_kind:
+        return {
+            "equipment_state": "equipped",
+            "equipment_kind": equipment_kind,
+            "equipment_tag": "EQUIPPED",
+            "equipment_note": "currently equipped",
+            "equipment_row_color": INVENTORY_EQUIPMENT_ROW_COLORS[equipment_kind],
+        }
+    if is_entry_worn(entry):
+        return {
+            "equipment_state": "worn",
+            "equipment_kind": "clothing",
+            "equipment_tag": "WORN",
+            "equipment_note": "currently worn",
+            "equipment_row_color": INVENTORY_EQUIPMENT_ROW_COLORS["clothing"],
+        }
+    return {}
+
 
 def normalize_inventory_sort_mode(mode):
     mode = str(mode or "default").strip().lower()

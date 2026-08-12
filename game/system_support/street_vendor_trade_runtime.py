@@ -16,6 +16,7 @@ from game.wire_distribution import wire_distribution_metadata, wire_street_vendo
 from game.wire_data_market import wire_data_street_sell_rows
 from game.item_semantics import item_entry_is_critical_quest_item, item_legal_status as _item_legal_status, item_tags as _item_tags
 from game.items import ITEM_CATALOG, is_credstick_item, item_display_name
+from game.inventory_display import inventory_entry_equipment_display
 from game.organizations import actor_org_memberships
 from game.property_runtime import property_is_vehicle as _property_is_vehicle, vehicle_label as _vehicle_label
 from game.system_support.npc_behavior_runtime import (
@@ -437,6 +438,14 @@ def street_vendor_sell_rows(sim, contact_eid, player_eid, profile=None):
         desired = bool(row.get("desired"))
         label = "premium wanted" if desired else _sell_note_for_kind((profile or {}).get("vendor_kind"))
         row_color = "property_service" if desired else ("item_illegal" if illegal else "item_tool")
+        equipment_display = inventory_entry_equipment_display(
+            sim,
+            player_eid,
+            source_entry,
+            item_catalog=ITEM_CATALOG,
+        )
+        if equipment_display:
+            row_color = equipment_display.get("equipment_row_color") or row_color
         if item_entry_is_critical_quest_item(source_entry):
             row_color = STREET_TRADE_CRITICAL_QUEST_ITEM_COLOR
         out.append({
@@ -452,6 +461,7 @@ def street_vendor_sell_rows(sim, contact_eid, player_eid, profile=None):
             "row_badge": "premium" if desired else ("contraband" if illegal else "wanted"),
             "risk_label": "contraband risk" if illegal else "",
             "source_kind": STREET_TRADE_SOURCE_KIND,
+            **equipment_display,
         })
     out.extend(wire_data_street_sell_rows(sim, contact_eid, player_eid, profile=profile))
     return out

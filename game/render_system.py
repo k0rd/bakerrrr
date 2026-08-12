@@ -5106,11 +5106,14 @@ class RenderSystem(System):
                         label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c stk {stock}{badge_text}"
                 else:
                     qty = int(row.get("quantity", 0))
+                    equipment_tag = str(row.get("equipment_tag", "") or "").strip().upper()
+                    equipment_badge = f"[{equipment_tag}] " if equipment_tag else ""
+                    row_prefix = f"{marker}{absolute + 1:02d} {glyph} {equipment_badge}"
                     if action_label:
                         if action_label == "trade-in":
-                            label = f"{marker}{absolute + 1:02d} {glyph} {item_name} trade-in {price}c x{qty}"
+                            row_suffix = f" trade-in {price}c x{qty}"
                         else:
-                            label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {action_label} x{qty}"
+                            row_suffix = f" {action_label} x{qty}"
                     else:
                         listed = "L" if row.get("listed") else "U"
                         interest = str(row.get("purchase_interest", "") or "").strip().lower()
@@ -5120,7 +5123,9 @@ class RenderSystem(System):
                             "unusual": "?",
                             "refused": "!",
                         }.get(interest, listed)
-                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c x{qty} {listed}/{interest_marker}"
+                        row_suffix = f" {price}c x{qty} {listed}/{interest_marker}"
+                    item_width = max(1, row_w - len(row_prefix) - len(row_suffix))
+                    label = f"{row_prefix}{_clip(item_name, item_width)}{row_suffix}"
                 row_color = row.get("row_color")
                 if row_color:
                     self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w), color=row_color)
@@ -5153,6 +5158,8 @@ class RenderSystem(System):
                             ),
                         )
                 else:
+                    equipment_note = str(selected.get("equipment_note", "") or "").strip()
+                    equipment_text = f"; {equipment_note}" if equipment_note else ""
                     if action_label:
                         if action_label == "trade-in":
                             inspect_text = _item_legend_line(
@@ -5160,7 +5167,7 @@ class RenderSystem(System):
                                 (
                                     f"{selected.get('item_name', selected.get('item_id', 'item'))} "
                                     f"trade-in quote {int(selected.get('price', 0))} credits "
-                                    f"qty {int(selected.get('quantity', 0))}"
+                                    f"qty {int(selected.get('quantity', 0))}{equipment_text}"
                                 ),
                             )
                         else:
@@ -5168,7 +5175,7 @@ class RenderSystem(System):
                                 selected.get("item_id"),
                                 (
                                     f"{selected.get('item_name', selected.get('item_id', 'item'))} "
-                                    f"{action_label} into shelf stock qty {int(selected.get('quantity', 0))}"
+                                    f"{action_label} into shelf stock qty {int(selected.get('quantity', 0))}{equipment_text}"
                                 ),
                             )
                     else:
@@ -5184,7 +5191,7 @@ class RenderSystem(System):
                             (
                                 f"{selected.get('item_name', selected.get('item_id', 'item'))} "
                                 f"offer {int(selected.get('price', 0))} credits ({listed_text}) "
-                                f"qty {int(selected.get('quantity', 0))}{read_text}"
+                                f"qty {int(selected.get('quantity', 0))}{equipment_text}{read_text}"
                             ),
                         )
 
