@@ -1646,7 +1646,8 @@ def _street_buy_candidate_rows_for_inventory(sim, actor_eid, inventory, *, distr
         if not matched:
             continue
         mult = float(terms.get("desired_mult", 1.0) if desired_item_id and item_id == desired_item_id else terms.get("generic_mult", 1.0))
-        price = _street_item_price(entry, mult=mult)
+        unit_entry = {**dict(entry), "quantity": 1}
+        price = _street_item_price(unit_entry, mult=mult)
         if price <= 0:
             continue
         rows.append({
@@ -1654,7 +1655,7 @@ def _street_buy_candidate_rows_for_inventory(sim, actor_eid, inventory, *, distr
             "instance_id": entry.get("instance_id"),
             "item_id": item_id,
             "item_name": item_display_name(item_id, metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG),
-            "quantity": int(max(1, entry.get("quantity", 1) or 1)),
+            "quantity": 1,
             "price": int(price),
             "desired": bool(desired_item_id and item_id == desired_item_id),
             "illegal": _item_legal_status(entry, item_catalog=ITEM_CATALOG) in {"illegal", "stolen"},

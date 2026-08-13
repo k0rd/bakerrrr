@@ -529,6 +529,9 @@ class InputSystem(System):
                 "backup_cursor_mark": None,
                 "backup_cursor_pending_topic": "",
                 "social_fact_incident_draft": None,
+                "dialogue_menu_stack": [],
+                "dialogue_available_topic_ids": [],
+                "dialogue_available_topics": [],
             }
         ensure_casino_ui_state(self.sim)
         if not hasattr(self.sim, "help_ui"):
@@ -772,6 +775,9 @@ class InputSystem(System):
                 "backup_cursor_mark": None,
                 "backup_cursor_pending_topic": "",
                 "social_fact_incident_draft": None,
+                "dialogue_menu_stack": [],
+                "dialogue_available_topic_ids": [],
+                "dialogue_available_topics": [],
             }
             self.sim.dialog_ui = state
         else:
@@ -789,6 +795,9 @@ class InputSystem(System):
             state.setdefault("backup_cursor_mark", None)
             state.setdefault("backup_cursor_pending_topic", "")
             state.setdefault("social_fact_incident_draft", None)
+            state.setdefault("dialogue_menu_stack", [])
+            state.setdefault("dialogue_available_topic_ids", [])
+            state.setdefault("dialogue_available_topics", [])
         return state
 
     def _casino_state(self):
@@ -5255,6 +5264,22 @@ class InputSystem(System):
                 return True
             if key in (ord("o"), ord("O"), ord("y"), ord("Y"), ord("L"), ord("D"), ord("m"), ord("M")):
                 return True
+
+        if (
+            key == 27
+            and dialog_kind == "conversation"
+            and (
+                bool(state.get("dialogue_menu_stack"))
+                or isinstance(state.get("social_fact_incident_draft"), dict)
+            )
+        ):
+            self.sim.emit(Event(
+                "dialog_topic_request",
+                eid=self.player_eid,
+                npc_eid=state.get("npc_eid"),
+                topic_id="dialogue_menu_back",
+            ))
+            return True
 
         if key in (27, ord("q"), ord("Q")):
             self._close_dialog_ui()

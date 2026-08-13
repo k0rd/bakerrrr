@@ -693,6 +693,24 @@ def _incident_rank(record: Mapping[str, Any]) -> tuple[float, int, int]:
     )
 
 
+def _incident_recency_rank(record: Mapping[str, Any]) -> tuple[int, int, int, float]:
+    learned_tick = _int(
+        record.get("last_learned_tick"),
+        _int(record.get("learned_tick"), 0),
+    )
+    incident_tick = (
+        _int(record.get("incident_tick"), 0)
+        if record.get("incident_tick") is not None
+        else learned_tick
+    )
+    return (
+        incident_tick,
+        learned_tick,
+        _int(record.get("incident_id"), 0),
+        _incident_rank(record)[0],
+    )
+
+
 def _exchange_threads(sim, player_eid: int, npc_eid: int) -> tuple[dict[str, Any], ...]:
     rows = []
     for thread in social_threads_for_actor(sim, player_eid):
@@ -1109,7 +1127,7 @@ def social_fact_dialogue_rows(
                 <= _TELLABLE_INCIDENT_MAX_AGE_DAYS * 24 * _ticks_per_hour(sim)
             )
         ]
-        candidates.sort(key=_incident_rank, reverse=True)
+        candidates.sort(key=_incident_recency_rank, reverse=True)
     added = 0
     for record in candidates:
         adapted = ensure_actor_incident_perspective(sim, player, record.get("incident_id"))
@@ -1133,6 +1151,10 @@ def social_fact_dialogue_rows(
             player_line,
             social_fact_incident_id=incident_id,
             social_fact_proposition_id=proposition_id,
+            social_fact_incident_menu_label=(
+                f"{label[:1].upper() + label[1:]} "
+                f"({_incident_choice_detail(sim, player, adapted)})."
+            ),
         ))
         rows.append(_row(
             f"sfg_prepare_distortion_{proposition_id}",
@@ -1141,6 +1163,10 @@ def social_fact_dialogue_rows(
             "",
             social_fact_incident_id=incident_id,
             social_fact_proposition_id=proposition_id,
+            social_fact_incident_menu_label=(
+                f"{label[:1].upper() + label[1:]} "
+                f"({_incident_choice_detail(sim, player, adapted)})."
+            ),
         ))
         added += 1
         if added >= max(0, int(limit)):

@@ -6402,18 +6402,18 @@ class PygameView:
             elif garment == "thong":
                 for side in (-1, 1):
                     outer_x = mid_x + side * basewear_hip_half
-                    self.pygame.draw.line(overlay, fill, (outer_x, waist_y), (mid_x + side, hip_line_y -1), 1)
+                    self.pygame.draw.line(overlay, fill, (outer_x, waist_y), (mid_x + side, hip_line_y ), 1)
                     if "strappy" in detail and px >= 20:
-                        self.pygame.draw.line(overlay, edge, (outer_x, waist_y - 1), (mid_x + side, hip_line_y - 2), 1)
+                        self.pygame.draw.line(overlay, edge, (outer_x, waist_y - 1), (mid_x + side, hip_line_y -1), 1)
                 self.pygame.draw.polygon(overlay, fill, [(mid_x - 1, hip_line_y), (mid_x + 1, hip_line_y), (mid_x, lower_y)])
             elif garment in {"bikini_panties", "cheeky_panties"}:
                 panel_half = center_half + (1 if garment == "cheeky_panties" and px >= 20 else 0)
                 for side in (-1, 1):
                     outer_x = mid_x + side * basewear_hip_half
                     inner_x = mid_x + side * panel_half
-                    self.pygame.draw.line(overlay, fill, (outer_x, waist_y), (inner_x, hip_line_y-1), 1)
+                    self.pygame.draw.line(overlay, fill, (outer_x, waist_y), (inner_x, hip_line_y), 1)
                     if "strappy" in detail and px >= 20:
-                        self.pygame.draw.line(overlay, edge, (outer_x, waist_y - 1), (inner_x, hip_line_y - 2), 1)
+                        self.pygame.draw.line(overlay, edge, (outer_x, waist_y - 1), (inner_x, hip_line_y -1), 1)
                 panel = [
                     (mid_x - panel_half, hip_line_y),
                     (mid_x + panel_half, hip_line_y),

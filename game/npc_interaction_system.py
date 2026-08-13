@@ -614,9 +614,47 @@ class NPCInteractionSystem(System):
         "leverage_falsify_record",
         "leverage_arrange_meeting",
     }
-    MENU_REPEAT_ROW_BUDGET = 3
     DIALOGUE_TOPIC_REPEAT_COOLDOWN_HOURS = 1.0
     DIALOGUE_FAMILY_REPEAT_COOLDOWN_HOURS = 1.0
+    DIALOGUE_MENU_BACK_ID = "dialogue_menu_back"
+    DIALOGUE_MENU_GROUP_LABELS = {
+        "incidents": "Tell them about a recent incident...",
+        "service_locations": "Ask about the location of services...",
+        "places": "Ask where something is...",
+        "job": "Ask a question about their job...",
+        "personal": "Ask a personal question...",
+    }
+    DIALOGUE_MENU_JOB_TOPICS = frozenset({
+        "job",
+        "job_feel",
+        "routine",
+        "workplace",
+        "organization",
+        "supervisor",
+        "coworkers",
+        "services",
+        "hours",
+        "owner",
+        "security",
+        "access",
+        "entry",
+        "keyholder",
+        "weak_point",
+    })
+    DIALOGUE_MENU_PERSONAL_TOPICS = frozenset({
+        "history",
+        "roots",
+        "rapport",
+        "check_in",
+        "day_feel",
+        "off_shift",
+        "care_about",
+        "read_player",
+    })
+    DIALOGUE_MENU_INCIDENT_ACTIONS = frozenset({
+        "tell_incident",
+        "prepare_incident_distortion",
+    })
     REPEAT_PRESSURE_SKIP_TOPICS = {
         "bye",
         "trade",
@@ -1033,6 +1071,9 @@ class NPCInteractionSystem(System):
                 "backup_cursor_mark": None,
                 "backup_cursor_pending_topic": "",
                 "social_fact_incident_draft": None,
+                "dialogue_menu_stack": [],
+                "dialogue_available_topic_ids": [],
+                "dialogue_available_topics": [],
             }
             self.sim.dialog_ui = state
         else:
@@ -1051,6 +1092,9 @@ class NPCInteractionSystem(System):
             state.setdefault("backup_cursor_mark", None)
             state.setdefault("social_fact_incident_draft", None)
             state.setdefault("backup_cursor_pending_topic", "")
+            state.setdefault("dialogue_menu_stack", [])
+            state.setdefault("dialogue_available_topic_ids", [])
+            state.setdefault("dialogue_available_topics", [])
         return state
 
     def _dialogue_history_map(self):
@@ -1736,27 +1780,6 @@ class NPCInteractionSystem(System):
             repeat_slot = 0
         return (topic_id, pressure_topic_id, repeat_slot)
 
-    def _dialogue_shuffle_rng(self, context, *, row_count=0):
-        npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
-        memory = self._dialogue_memory(npc_eid)
-        topic_counts = memory.get("topic_counts", {}) if isinstance(memory.get("topic_counts"), dict) else {}
-        signature_bits = []
-        for topic_id, count in sorted(topic_counts.items()):
-            clean_topic = str(topic_id).strip().lower()
-            if not clean_topic:
-                continue
-            try:
-                clean_count = max(0, int(count))
-            except (TypeError, ValueError):
-                clean_count = 0
-            signature_bits.append(f"{clean_topic}:{clean_count}")
-        signature = "|".join(signature_bits)
-        return random.Random(
-            f"{self.sim.seed}:dialog-menu:{npc_eid}:{int(memory.get('opened_count', 0))}:"
-            f"{self._dialogue_total_topics_asked(npc_eid)}:{str(memory.get('last_topic_id', '')).strip().lower()}:"
-            f"{int(row_count)}:{signature}"
-        )
-
     def _restore_dialog_selection(self, rows, *, preferred_row=None, fallback_index=0):
         state = self._dialog_ui_state()
         rows = list(rows or ())
@@ -1793,6 +1816,8 @@ class NPCInteractionSystem(System):
         return rows[selected_index]
 
     def _augment_repeat_dialogue_rows(self, context, rows):
+        """Replace a recently used question with one explicit re-ask row."""
+
         npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
         if npc_eid is None:
             return list(rows or ())
@@ -1800,9 +1825,7 @@ class NPCInteractionSystem(System):
         if not base_rows:
             return []
 
-        last_topic_id = str(self._dialogue_memory(npc_eid).get("last_topic_id", "")).strip().lower()
-        ranked = []
-        for index, row in enumerate(base_rows):
+        for row in base_rows:
             topic_id = str(row.get("id", "")).strip().lower()
             if not topic_id:
                 continue
@@ -1810,91 +1833,223 @@ class NPCInteractionSystem(System):
             pressure_family_id = str(row.get("pressure_family_id", "") or "").strip().lower() or self._dialogue_pressure_family_key(topic_id, context)
             ask_count = self._dialogue_recent_topic_count(npc_eid, topic_id, pressure_topic_id=pressure_topic_id)
             family_count = self._dialogue_recent_topic_family_count(npc_eid, topic_id, pressure_family_id=pressure_family_id)
-            extra = self._dialogue_repeat_row_count(context, topic_id, ask_count, pressure_family_id=pressure_family_id)
-            if extra <= 0:
-                continue
-            ranked.append((
-                0 if topic_id == last_topic_id else 1,
-                -max(ask_count, family_count),
-                index,
+            if self._dialogue_repeat_row_count(
+                context,
                 topic_id,
-                extra,
-            ))
-
-        ranked.sort()
-        extras_by_topic = {}
-        budget = max(0, int(self.MENU_REPEAT_ROW_BUDGET))
-        for _recent_rank, _neg_count, _index, topic_id, extra in ranked:
-            if budget <= 0:
-                break
-            take = min(int(extra), budget)
-            if take <= 0:
+                ask_count,
+                pressure_family_id=pressure_family_id,
+            ) <= 0:
                 continue
-            extras_by_topic[topic_id] = take
-            budget -= take
+            label = _repeated_topic_label(
+                row.get("label", row.get("id", "topic")),
+                topic_id=topic_id,
+                repeat_slot=1,
+                ask_count=ask_count,
+                family_count=family_count,
+            )
+            row["label"] = label
+            row["prompt_text"] = label
+            row["repeat_reask"] = True
+        return base_rows
 
-        if not extras_by_topic:
-            return base_rows
+    def _dialogue_menu_stack(self):
+        state = self._dialog_ui_state()
+        raw_stack = state.get("dialogue_menu_stack", [])
+        if not isinstance(raw_stack, list):
+            raw_stack = list(raw_stack or ()) if isinstance(raw_stack, (tuple, set)) else []
+        stack = [str(value or "").strip().lower() for value in raw_stack if str(value or "").strip()]
+        state["dialogue_menu_stack"] = stack
+        return stack
 
-        base_indexes = {
-            str(row.get("id", "")).strip().lower(): idx
-            for idx, row in enumerate(base_rows)
-            if str(row.get("id", "")).strip()
+    def _dialogue_menu_group_for_row(self, row):
+        if not isinstance(row, dict):
+            return ""
+        if bool(row.get("dialogue_menu_pinned")):
+            return ""
+        topic_id = str(row.get("id", "") or "").strip().lower()
+        action = str(row.get("social_fact_action", "") or "").strip().lower()
+        if action in self.DIALOGUE_MENU_INCIDENT_ACTIONS:
+            return "incidents"
+        if topic_id in self.SERVICE_LOCATOR_TOPICS:
+            return "service_locations"
+        if topic_id == "where_place":
+            return "places"
+        if topic_id in self.DIALOGUE_MENU_JOB_TOPICS:
+            return "job"
+        if topic_id in self.DIALOGUE_MENU_PERSONAL_TOPICS:
+            return "personal"
+        return ""
+
+    def _dialogue_menu_open_row(self, target, label, child_rows):
+        target = str(target or "").strip().lower()
+        return {
+            "id": f"dialogue_menu_open_{target.replace(':', '_')}",
+            "label": str(label or "Choose a topic...").strip(),
+            "prompt_text": str(label or "Choose a topic...").strip(),
+            "dialogue_menu_action": "open",
+            "dialogue_menu_target": target,
+            "dialogue_menu_child_topic_ids": tuple(
+                str((row or {}).get("id", "") or "").strip().lower()
+                for row in tuple(child_rows or ())
+                if str((row or {}).get("id", "") or "").strip()
+            ),
         }
-        extra_rows = []
-        for row in base_rows:
-            topic_id = str(row.get("id", "")).strip().lower()
-            for repeat_slot in range(extras_by_topic.get(topic_id, 0)):
-                clone = dict(row)
-                clone["repeat_slot"] = repeat_slot + 1
-                clone["label"] = _repeated_topic_label(
-                    row.get("label", row.get("id", "topic")),
-                    topic_id=topic_id,
-                    repeat_slot=repeat_slot + 1,
-                    ask_count=self._dialogue_recent_topic_count(
-                        npc_eid,
-                        topic_id,
-                        pressure_topic_id=str(row.get("pressure_topic_id", "") or "").strip().lower() or self._dialogue_pressure_topic_key(topic_id, context),
-                    ),
-                    family_count=self._dialogue_recent_topic_family_count(
-                        npc_eid,
-                        topic_id,
-                        pressure_family_id=str(row.get("pressure_family_id", "") or "").strip().lower() or self._dialogue_pressure_family_key(topic_id, context),
-                    ),
+
+    def _dialogue_menu_back_row(self, stack):
+        parent = stack[-2] if len(stack) >= 2 else ""
+        labels = {
+            "incidents": "Back to recent incidents.",
+            "service_locations": "Back to service questions.",
+            "places": "Back to place questions.",
+            "job": "Back to job questions.",
+            "personal": "Back to personal questions.",
+        }
+        return {
+            "id": self.DIALOGUE_MENU_BACK_ID,
+            "label": labels.get(parent, "Back to conversation topics."),
+            "prompt_text": labels.get(parent, "Back to conversation topics."),
+            "dialogue_menu_action": "back",
+        }
+
+    def _dialogue_incident_target_rows(self, rows):
+        by_incident = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            action = str(row.get("social_fact_action", "") or "").strip().lower()
+            if action not in self.DIALOGUE_MENU_INCIDENT_ACTIONS:
+                continue
+            try:
+                incident_id = int(row.get("social_fact_incident_id", 0) or 0)
+            except (TypeError, ValueError):
+                incident_id = 0
+            if incident_id <= 0:
+                continue
+            by_incident.setdefault(incident_id, []).append(row)
+        targets = []
+        for incident_id, child_rows in by_incident.items():
+            menu_label = next(
+                (
+                    str(row.get("social_fact_incident_menu_label", "") or "").strip()
+                    for row in child_rows
+                    if str(row.get("social_fact_incident_menu_label", "") or "").strip()
+                ),
+                f"Incident {incident_id}.",
+            )
+            targets.append(self._dialogue_menu_open_row(
+                f"incident:{incident_id}",
+                menu_label,
+                child_rows,
+            ))
+        return targets
+
+    def _dialogue_menu_topics(self, context, rows):
+        rows = [dict(row) for row in list(rows or ()) if isinstance(row, dict)]
+        state = self._dialog_ui_state()
+        stack = self._dialogue_menu_stack()
+        draft = state.get("social_fact_incident_draft")
+        if isinstance(draft, dict) and not stack:
+            return rows
+
+        while stack:
+            target = stack[-1]
+            if target == "incidents":
+                children = self._dialogue_incident_target_rows(rows)
+            elif target.startswith("incident:"):
+                try:
+                    incident_id = int(target.split(":", 1)[1])
+                except (TypeError, ValueError):
+                    incident_id = 0
+                children = []
+                for row in rows:
+                    try:
+                        row_incident_id = int(row.get("social_fact_incident_id", 0) or 0)
+                    except (TypeError, ValueError):
+                        row_incident_id = 0
+                    if row_incident_id != incident_id:
+                        continue
+                    action = str(row.get("social_fact_action", "") or "").strip().lower()
+                    if isinstance(draft, dict) or action in self.DIALOGUE_MENU_INCIDENT_ACTIONS:
+                        children.append(row)
+            else:
+                children = [row for row in rows if self._dialogue_menu_group_for_row(row) == target]
+            if children:
+                return children + [self._dialogue_menu_back_row(stack)]
+            stack.pop()
+
+        grouped = []
+        emitted = set()
+        for row in rows:
+            group = self._dialogue_menu_group_for_row(row)
+            if not group:
+                grouped.append(row)
+                continue
+            if group in emitted:
+                continue
+            child_rows = [candidate for candidate in rows if self._dialogue_menu_group_for_row(candidate) == group]
+            grouped.append(self._dialogue_menu_open_row(
+                group,
+                self.DIALOGUE_MENU_GROUP_LABELS[group],
+                child_rows,
+            ))
+            emitted.add(group)
+        return grouped
+
+    def _refresh_dialogue_menu_navigation(self, context):
+        state = self._dialog_ui_state()
+        raw_topics = [
+            dict(row)
+            for row in list(state.get("dialogue_available_topics", ()) or ())
+            if isinstance(row, dict)
+        ]
+        if not raw_topics:
+            raw_topics = self._prioritize_dialog_topics(self._available_dialog_topics(context))
+            state["dialogue_available_topics"] = list(raw_topics)
+        state["dialogue_available_topic_ids"] = [
+            str(row.get("id", "") or "").strip().lower()
+            for row in raw_topics
+            if str(row.get("id", "") or "").strip()
+        ]
+        visible_topics = self._dialogue_menu_topics(context, raw_topics)
+        state["topics"] = self._annotate_dialog_topics(context, visible_topics, new_topic_ids=())
+        state["selected_index"] = 0
+        state["new_topic_ids"] = []
+        read_text = self._dialogue_hint_text(context, topics=state["topics"])
+        if self._dialogue_menu_stack() or isinstance(state.get("social_fact_incident_draft"), dict):
+            read_text = f"{read_text} Esc: Back." if read_text else "Esc: Back."
+        state["hint"] = read_text
+        state["conversation_read"] = read_text
+        return state["topics"]
+
+    def _handle_dialogue_menu_navigation(self, context, topic_id, selected_row):
+        state = self._dialog_ui_state()
+        topic_id = str(topic_id or "").strip().lower()
+        selected_row = selected_row if isinstance(selected_row, dict) else {}
+        selected_matches = str(selected_row.get("id", "") or "").strip().lower() == topic_id
+
+        if topic_id == self.DIALOGUE_MENU_BACK_ID:
+            if isinstance(state.get("social_fact_incident_draft"), dict):
+                state["social_fact_incident_draft"] = None
+                state["dialogue_available_topics"] = self._prioritize_dialog_topics(
+                    self._available_dialog_topics(context)
                 )
-                extra_rows.append(clone)
+            else:
+                stack = self._dialogue_menu_stack()
+                if not stack:
+                    return False
+                stack.pop()
+            self._refresh_dialogue_menu_navigation(context)
+            return True
 
-        if not extra_rows:
-            return base_rows
-
-        rng = self._dialogue_shuffle_rng(
-            context,
-            row_count=len(base_rows) + len(extra_rows),
-        )
-        slots = [[] for _ in range(len(base_rows) + 1)]
-        all_slot_indexes = list(range(len(slots)))
-        for clone in extra_rows:
-            topic_id = str(clone.get("id", "")).strip().lower()
-            base_index = base_indexes.get(topic_id)
-            candidate_slots = list(all_slot_indexes)
-            if base_index is not None and len(candidate_slots) > 2:
-                candidate_slots = [
-                    slot_index
-                    for slot_index in candidate_slots
-                    if slot_index not in {base_index, base_index + 1}
-                ] or candidate_slots
-            slot_index = rng.choice(candidate_slots)
-            slots[slot_index].append(clone)
-
-        for bucket in slots:
-            rng.shuffle(bucket)
-
-        augmented = []
-        for idx, row in enumerate(base_rows):
-            augmented.extend(slots[idx])
-            augmented.append(row)
-        augmented.extend(slots[-1])
-        return augmented
+        if selected_matches and str(selected_row.get("dialogue_menu_action", "") or "").strip().lower() == "open":
+            target = str(selected_row.get("dialogue_menu_target", "") or "").strip().lower()
+            if not target:
+                return False
+            stack = self._dialogue_menu_stack()
+            stack.append(target)
+            self._refresh_dialogue_menu_navigation(context)
+            return True
+        return False
 
     def _bond_tone(self, bond):
         if not bond:
@@ -12775,7 +12930,15 @@ class NPCInteractionSystem(System):
             else:
                 marker_safety = "neutral"
 
-            marker_visible = bool(topic_id in new_ids and conversation >= 2.5)
+            child_ids = {
+                str(child_id or "").strip().lower()
+                for child_id in tuple(row.get("dialogue_menu_child_topic_ids", ()) or ())
+                if str(child_id or "").strip()
+            }
+            marker_visible = bool(
+                conversation >= 2.5
+                and (topic_id in new_ids or bool(child_ids & new_ids))
+            )
             row["conversation_risk"] = safety
             row["conversation_risk_score"] = round(float(score), 3)
             row["conversation_marker_risk"] = marker_safety
@@ -13671,10 +13834,24 @@ class NPCInteractionSystem(System):
             current_tick=current_tick,
             reason="dialog_open",
         )
-        topics = self._prioritize_dialog_topics(
+        raw_topics = self._prioritize_dialog_topics(
             self._available_dialog_topics(context),
             highlight_topic_ids=highlight_topic_ids,
         )
+        if highlight_topic_ids:
+            highlight = {
+                str(topic_id or "").strip().lower()
+                for topic_id in tuple(highlight_topic_ids or ())
+                if str(topic_id or "").strip()
+            }
+            raw_topics = [
+                {**dict(row), "dialogue_menu_pinned": True}
+                if str(row.get("id", "") or "").strip().lower() in highlight
+                else row
+                for row in raw_topics
+            ]
+        state["dialogue_menu_stack"] = []
+        topics = self._dialogue_menu_topics(context, raw_topics)
         topics = self._annotate_dialog_topics(context, topics, new_topic_ids=())
         read_text = self._dialogue_hint_text(context, topics=topics)
         state.update({
@@ -13699,6 +13876,13 @@ class NPCInteractionSystem(System):
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
             "social_fact_incident_draft": None,
+            "dialogue_menu_stack": [],
+            "dialogue_available_topic_ids": [
+                str(row.get("id", "") or "").strip().lower()
+                for row in raw_topics
+                if str(row.get("id", "") or "").strip()
+            ],
+            "dialogue_available_topics": list(raw_topics),
         })
         self._practice_dialogue_read(context, topics, read_text=read_text)
         memory["opened_count"] = max(0, int(memory.get("opened_count", 0))) + 1
@@ -13719,6 +13903,9 @@ class NPCInteractionSystem(System):
             "machine_action": None,
             "backup_cursor_pending_topic": "",
             "social_fact_incident_draft": None,
+            "dialogue_menu_stack": [],
+            "dialogue_available_topic_ids": [],
+            "dialogue_available_topics": [],
         })
         return state
 
@@ -13747,6 +13934,9 @@ class NPCInteractionSystem(System):
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
             "social_fact_incident_draft": None,
+            "dialogue_menu_stack": [],
+            "dialogue_available_topic_ids": [],
+            "dialogue_available_topics": [],
         })
         return state
 
@@ -15964,7 +16154,6 @@ class NPCInteractionSystem(System):
         npc_eid = state.get("npc_eid")
         if npc_eid is None:
             return
-        self._remember_opportunity_npc_interaction(npc_eid)
         topic_id = str(event.data.get("topic_id", "") or "").strip().lower()
         if not topic_id:
             return
@@ -15984,16 +16173,25 @@ class NPCInteractionSystem(System):
             selected_row = topic_row or selected_row
         previous_index = int(state.get("selected_index", 0))
         previous_topic_ids = {
-            str(row.get("id", "")).strip().lower()
-            for row in list(state.get("topics", ()) or ())
-            if str(row.get("id", "")).strip()
+            str(topic_id or "").strip().lower()
+            for topic_id in tuple(state.get("dialogue_available_topic_ids", ()) or ())
+            if str(topic_id or "").strip()
         }
+        if not previous_topic_ids:
+            previous_topic_ids = {
+                str(row.get("id", "")).strip().lower()
+                for row in list(state.get("topics", ()) or ())
+                if str(row.get("id", "")).strip()
+            }
         allow_distant = bool(state.get("allow_distant"))
         context = self._dialogue_context(npc_eid, allow_distant=allow_distant)
         if not context:
             self._close_dialog()
             self.sim.log.add("The conversation slips away.", channel="social", priority="low")
             return
+        if self._handle_dialogue_menu_navigation(context, topic_id, selected_row):
+            return
+        self._remember_opportunity_npc_interaction(npc_eid)
         player_line_override = ""
         selected_prompt_text = ""
         if topic_id in self.MISSTEP_TOPICS and isinstance(topic_row, dict):
@@ -16022,6 +16220,7 @@ class NPCInteractionSystem(System):
             if selected_row_matches
             else ""
         ) or self._dialogue_pressure_family_key(topic_id, context)
+        social_fact_action = ""
         if topic_id in PLAYER_FAVOR_TOPIC_IDS and selected_row_matches:
             request_system = getattr(self.sim, "social_request_system", None)
             if request_system is None:
@@ -16095,22 +16294,41 @@ class NPCInteractionSystem(System):
             highlight_topic_ids = ("side_job_accept", "side_job_decline")
         elif pending_hire_offer:
             highlight_topic_ids = ("hire_accept", "hire_decline")
-        refreshed_topics = self._prioritize_dialog_topics(
+        if highlight_topic_ids or social_fact_action in {"tell_incident", "tell_incident_distorted"}:
+            state["dialogue_menu_stack"] = []
+        raw_refreshed_topics = self._prioritize_dialog_topics(
             self._available_dialog_topics(refreshed),
             highlight_topic_ids=highlight_topic_ids,
         )
+        if highlight_topic_ids:
+            highlight = set(highlight_topic_ids)
+            raw_refreshed_topics = [
+                {**dict(row), "dialogue_menu_pinned": True}
+                if str(row.get("id", "") or "").strip().lower() in highlight
+                else row
+                for row in raw_refreshed_topics
+            ]
         new_topic_ids = [
             str(row.get("id", "")).strip().lower()
-            for row in list(refreshed_topics or ())
+            for row in list(raw_refreshed_topics or ())
             if str(row.get("id", "")).strip().lower() not in previous_topic_ids
         ]
         state["new_topic_ids"] = [topic for topic in new_topic_ids if topic]
+        state["dialogue_available_topic_ids"] = [
+            str(row.get("id", "") or "").strip().lower()
+            for row in raw_refreshed_topics
+            if str(row.get("id", "") or "").strip()
+        ]
+        state["dialogue_available_topics"] = list(raw_refreshed_topics)
+        refreshed_topics = self._dialogue_menu_topics(refreshed, raw_refreshed_topics)
         state["topics"] = self._annotate_dialog_topics(
             refreshed,
             refreshed_topics,
             new_topic_ids=state["new_topic_ids"],
         )
         read_text = self._dialogue_hint_text(refreshed, topics=state["topics"])
+        if self._dialogue_menu_stack() or isinstance(state.get("social_fact_incident_draft"), dict):
+            read_text = f"{read_text} Esc: Back." if read_text else "Esc: Back."
         state["hint"] = read_text
         state["conversation_read"] = read_text
         self._practice_dialogue_read(
