@@ -14,7 +14,6 @@ from game.property_runtime import property_distance, property_infrastructure_rol
 
 
 SIGNAL_JAMMER_RADIUS = 10
-SIGNAL_JAMMER_COOLDOWN_TICKS = 75
 SIGNAL_JAMMER_IFF_TARGET_RADIUS = 10
 
 SIGNAL_JAMMER_EFFECTS = {
@@ -387,7 +386,6 @@ def jammer_iff_target_for_drone(sim, drone_eid, state, *, radius=SIGNAL_JAMMER_I
 
 __all__ = [
     "JAMMABLE_ELECTRONIC_ROLES",
-    "SIGNAL_JAMMER_COOLDOWN_TICKS",
     "SIGNAL_JAMMER_EFFECTS",
     "SIGNAL_JAMMER_RADIUS",
     "activate_signal_jammer_pulse",

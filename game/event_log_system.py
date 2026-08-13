@@ -6214,13 +6214,6 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, "You need restorative medical aid while downed.", kind="interaction")
         elif reason == "item_not_usable":
             _log_player_feedback(self.sim, f"{item_name} cannot be used.", kind="interaction")
-        elif reason == "signal_jammer_recharging":
-            remaining = _int_or_default(event.data.get("remaining"), 0)
-            _log_player_feedback(
-                self.sim,
-                f"{item_name} is still dumping heat and charge ({remaining} ticks).",
-                kind="interaction",
-            )
         elif reason == "item_not_throwable":
             _log_player_feedback(self.sim, f"{item_name} is not something you can throw usefully.", kind="interaction")
         elif reason == "no_throw_target":

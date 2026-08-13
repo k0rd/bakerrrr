@@ -1206,6 +1206,54 @@ class RenderSystem(System):
             use_theme=self._modal_theme_enabled(),
         )
 
+    def _draw_inventory_inspect_modal(self, inventory_ui, *, screen_w, map_h, modal_theme):
+        if not isinstance(inventory_ui, dict) or not bool(inventory_ui.get("inspect_open")):
+            return
+
+        inspect_text = inventory_ui.get("inspect_text", "")
+        if not _line_text(inspect_text).strip():
+            return
+        panel_w = _modal_panel_width(screen_w, fraction=0.60, min_width=42)
+        body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
+        wrapped = list(_wrap_display_lines(inspect_text, body_w) or [""])
+        page_cap = max(1, min(10, int(map_h) - 4))
+        visible_count = max(1, min(page_cap, len(wrapped)))
+        panel_h = min(int(map_h), max(5, visible_count + 4))
+        page_size = max(1, panel_h - 4)
+        scroll_max = max(0, len(wrapped) - page_size)
+        scroll = max(0, min(int(inventory_ui.get("inspect_scroll", 0) or 0), scroll_max))
+        inventory_ui["inspect_scroll"] = int(scroll)
+        inventory_ui["inspect_scroll_max"] = int(scroll_max)
+        inventory_ui["inspect_page_size"] = int(page_size)
+
+        panel_x = max(0, (int(screen_w) - panel_w) // 2)
+        panel_y = max(0, (int(map_h) - panel_h) // 2)
+        self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
+
+        title = str(inventory_ui.get("inspect_title", "Item") or "Item").strip() or "Item"
+        title_line = _clip_display_line(f" Inspect: {title} ", body_w)
+        self._draw_display_line(panel_x + 2, panel_y, title_line, body_cell_w, attrs=A_BOLD)
+
+        for idx, line in enumerate(wrapped[scroll: scroll + page_size]):
+            self._draw_display_line(
+                panel_x + 2,
+                panel_y + 2 + idx,
+                _clip_display_line(line, body_w),
+                body_cell_w,
+            )
+
+        if scroll_max > 0:
+            position = f"{scroll + 1}-{min(len(wrapped), scroll + page_size)}/{len(wrapped)}"
+            hint = f"Up/Down scroll  {position}  E/Enter/Esc close"
+        else:
+            hint = "E/Enter/Esc close"
+        self.view.draw_text(
+            panel_x + 2,
+            panel_y + panel_h - 2,
+            _clip_display_line(hint, body_w),
+            color=self._theme_color(modal_theme, "footer"),
+        )
+
     def _draw_action_menu(self, action_menu_ui, *, player_screen_x, player_screen_y, map_w, map_h, modal_theme):
         if not isinstance(action_menu_ui, dict) or not bool(action_menu_ui.get("open")):
             return
@@ -5041,6 +5089,12 @@ class RenderSystem(System):
                 hint = "U use/equip/stow  R drop  S sort  E inspect  O ops  Y notebooks  L log  D debug  I close"
             hint = release_control_text(hint, self.sim)
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
+            self._draw_inventory_inspect_modal(
+                inventory_ui,
+                screen_w=screen_w,
+                map_h=map_h,
+                modal_theme=modal_theme,
+            )
         elif trade_ui.get("open"):
             panel_w = _modal_panel_width(screen_w, fraction=0.75, min_width=52)
             panel_x = max(0, (screen_w - panel_w) // 2)

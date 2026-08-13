@@ -136,7 +136,7 @@ from game.drone_runtime import (
     drone_state_has_capability,
 )
 from game.drone_combat import drone_weapon_status
-from game.signal_jammer_runtime import SIGNAL_JAMMER_COOLDOWN_TICKS, SIGNAL_JAMMER_RADIUS
+from game.signal_jammer_runtime import SIGNAL_JAMMER_RADIUS
 from game.drone_recon import (
     DRONE_LINKED_CAMERA_RADIUS,
     apply_linked_camera_knowledge,
@@ -499,6 +499,9 @@ class InputSystem(System):
                 "sort_mode": "default",
                 "selected_index": 0,
                 "inspect_text": "",
+                "inspect_open": False,
+                "inspect_title": "",
+                "inspect_scroll": 0,
             }
         if not hasattr(self.sim, "trade_ui"):
             self.sim.trade_ui = {
@@ -712,6 +715,9 @@ class InputSystem(System):
                 "sort_mode": "default",
                 "selected_index": 0,
                 "inspect_text": "",
+                "inspect_open": False,
+                "inspect_title": "",
+                "inspect_scroll": 0,
             }
             self.sim.inventory_ui = state
         if str(state.get("panel_kind", "")).strip().lower() == "cache":
@@ -733,6 +739,9 @@ class InputSystem(System):
         state.setdefault("container_view", "pack")
         state["cache_view"] = "pack" if str(state.get("container_view", "pack")).strip().lower() == "pack" else "cache"
         state.setdefault("note_text", "")
+        state.setdefault("inspect_open", False)
+        state.setdefault("inspect_title", "")
+        state.setdefault("inspect_scroll", 0)
         state["sort_mode"] = normalize_inventory_sort_mode(state.get("sort_mode", "default"))
         return state
 
@@ -6972,6 +6981,11 @@ class InputSystem(System):
             state["selected_index"] = 0
         if reset_inspect:
             state["inspect_text"] = ""
+            state["inspect_open"] = False
+            state["inspect_title"] = ""
+            state["inspect_scroll"] = 0
+            state.pop("inspect_scroll_max", None)
+            state.pop("inspect_page_size", None)
 
     def _emit_inventory_panel_toggled(self, *, open_state):
         state = self._inventory_state()
@@ -7224,6 +7238,7 @@ class InputSystem(System):
         state = self._inventory_state()
         entry = self._selected_inventory_entry()
         if not entry:
+            state["inspect_open"] = False
             if self._inventory_panel_kind() == "container":
                 view = self._inventory_container_view()
                 note = str(state.get("note_text", "")).strip()
@@ -7272,6 +7287,9 @@ class InputSystem(System):
                 entry,
                 item_catalog=self.catalog,
             )
+            state["inspect_open"] = True
+            state["inspect_title"] = item_name
+            state["inspect_scroll"] = 0
             self.sim.emit(Event(
                 "inventory_inspected",
                 eid=self.player_eid,
@@ -7327,13 +7345,7 @@ class InputSystem(System):
                 f"random r{SIGNAL_JAMMER_RADIUS} pulse: blackout / shutdown / "
                 "all-hostile IFF / drones hunt you"
             )
-            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-            ready_tick = _int_or_default(metadata.get("signal_jammer_ready_tick"), 0)
-            remaining = max(0, ready_tick - int(getattr(self.sim, "tick", 0) or 0))
-            if remaining > 0:
-                effect_labels.append(f"recharging {remaining}t")
-            else:
-                effect_labels.append(f"recharge {SIGNAL_JAMMER_COOLDOWN_TICKS}t")
+            effect_labels.append("consumed on use")
 
         mechanical_catalog = load_mechanical_recipe_catalog()
         if item_is_mechanical_plan(item_def, item_catalog=self.catalog):
@@ -7505,6 +7517,9 @@ class InputSystem(System):
             entry["item_id"],
             f"{item_name} x{entry['quantity']} [{legal_status}] - {effect_text}",
         )
+        state["inspect_open"] = True
+        state["inspect_title"] = item_name
+        state["inspect_scroll"] = 0
 
         self.sim.emit(Event(
             "inventory_inspected",
@@ -7527,6 +7542,33 @@ class InputSystem(System):
     def _handle_inventory_input(self, key):
         state = self._inventory_state()
         panel_kind = self._inventory_panel_kind()
+
+        if bool(state.get("inspect_open")):
+            if key in ENTER_KEYS or key in (27, ord("e"), ord("E"), ord("x"), ord("X"), ord("q"), ord("Q")):
+                state["inspect_open"] = False
+                state["inspect_scroll"] = 0
+                return True
+            if key in (KEY_UP, ord("k"), ord("K")):
+                state["inspect_scroll"] = max(0, int(state.get("inspect_scroll", 0) or 0) - 1)
+                return True
+            if key in (KEY_DOWN, ord("j"), ord("J")):
+                state["inspect_scroll"] = int(state.get("inspect_scroll", 0) or 0) + 1
+                return True
+            if key == KEY_HOME:
+                state["inspect_scroll"] = 0
+                return True
+            if key == KEY_END:
+                state["inspect_scroll"] = 10**9
+                return True
+            if key == KEY_PAGE_UP:
+                page_size = max(1, int(state.get("inspect_page_size", 6) or 6))
+                state["inspect_scroll"] = max(0, int(state.get("inspect_scroll", 0) or 0) - page_size)
+                return True
+            if key == KEY_PAGE_DOWN:
+                page_size = max(1, int(state.get("inspect_page_size", 6) or 6))
+                state["inspect_scroll"] = int(state.get("inspect_scroll", 0) or 0) + page_size
+                return True
+            return True
 
         if key in (27, ord("i"), ord("I")):
             self._close_inventory_ui()
