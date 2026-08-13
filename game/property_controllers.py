@@ -12,6 +12,7 @@ from game import systems as _systems
 from game.knowledge_notebook import note_property_notebook_mutation
 from game.property_runtime import remember_property_lead_for_actor
 from game.property_doors import _door_tile_is_occupied
+from game.signal_jammer_runtime import electronic_fixture_interference_status
 from game.system_support.access_checks import (
     _maybe_damage_access_tool,
     _resolve_access_skill_check,
@@ -574,13 +575,19 @@ class PropertySystem(System):
 
     def _handle_access_panel_interaction(self, eid, panel_prop):
         panel_metadata = _property_metadata(panel_prop)
-        if bool(panel_metadata.get("fixture_broken")) or panel_metadata.get("fixture_usable") is False:
+        jammed = electronic_fixture_interference_status(self.sim, panel_prop)
+        if (
+            bool(panel_metadata.get("fixture_broken"))
+            or panel_metadata.get("fixture_usable") is False
+            or jammed.get("active")
+        ):
             self.sim.emit(Event(
                 "access_panel_blocked",
                 eid=eid,
                 property_id=panel_prop.get("id"),
                 property_name=str(panel_prop.get("name", panel_prop.get("id", "access panel"))).strip() or "access panel",
-                reason="offline",
+                reason="signal_interference" if jammed.get("active") else "offline",
+                remaining=int(jammed.get("remaining", 0) or 0),
             ))
             return
         target_prop = _systems._infrastructure_target_property(self.sim, panel_prop)

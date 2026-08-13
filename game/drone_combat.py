@@ -18,9 +18,11 @@ from game.drone_runtime import (
     drone_hull_damage_absorb,
     drone_link_disruption_status,
     drone_profile_for_item,
+    drone_sensor_suppression_status,
     drone_state_controlled_by_actor,
     drone_state_has_capability,
 )
+from game.signal_jammer_runtime import drone_iff_disruption_status, drone_shutdown_status
 from game.system_support.actor_runtime import _apply_downed_actor_state
 from game.system_support.combat_targeting_runtime import (
     _entity_is_weapon_targetable,
@@ -488,12 +490,19 @@ def fire_drone_weapon(
         return _block(sim, controller_eid, drone_eid, "unknown_weapon", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
     if not drone_state_controlled_by_actor(state, controller_eid):
         return _block(sim, controller_eid, drone_eid, "not_controller", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
+    tick = int(getattr(sim, "tick", 0) or 0)
+    if drone_shutdown_status(state, tick=tick).get("active"):
+        return _block(sim, controller_eid, drone_eid, "jammer_shutdown", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
+    if require_remote and drone_iff_disruption_status(state, tick=tick).get("active"):
+        return _block(sim, controller_eid, drone_eid, "iff_scrambled", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
     if require_remote and drone_link_disruption_status(state, tick=int(getattr(sim, "tick", 0) or 0)).get("active"):
         return _block(sim, controller_eid, drone_eid, "link_disrupted", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
     if require_remote and not drone_state_has_capability(state, "remote_control", item_catalog=item_catalog):
         return _block(sim, controller_eid, drone_eid, "no_remote_control", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
     if require_camera and not drone_has_camera_sensor(state, item_catalog=item_catalog):
         return _block(sim, controller_eid, drone_eid, "no_camera", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
+    if require_camera and drone_sensor_suppression_status(state, tick=tick).get("active"):
+        return _block(sim, controller_eid, drone_eid, "sensor_suppressed", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
     if _module_by_id(state, spec["module_id"]) is None:
         return _block(sim, controller_eid, drone_eid, "missing_weapon", weapon_kind=weapon_kind, x=pos.x, y=pos.y, z=pos.z)
     resource_module = _module_by_id(state, spec["resource_module_id"])

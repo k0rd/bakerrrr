@@ -32,6 +32,7 @@ from game.drone_runtime import (
     drone_deploy_tile_open,
     drone_profile_for_item,
 )
+from game.signal_jammer_runtime import drone_iff_disruption_status, drone_shutdown_status
 from game.items import ITEM_CATALOG
 from game.organization_production import (
     organization_manufacturing_identity,
@@ -1141,6 +1142,11 @@ def tick_faction_drone_combat(sim, drone_system):
     positions = sim.ecs.get(Position)
     for drone_eid, state in list(sim.ecs.get(DroneState).items()):
         if _clean(getattr(state, "source_metadata", {}).get("source_context")) != DRONE_FACTION_SOURCE_CONTEXT:
+            continue
+        tick = int(getattr(sim, "tick", 0) or 0)
+        if drone_shutdown_status(state, tick=tick).get("active"):
+            continue
+        if drone_iff_disruption_status(state, tick=tick).get("active"):
             continue
         owner_eid = getattr(state, "owner_eid", None) or getattr(state, "controller_eid", None)
         if owner_eid is None:

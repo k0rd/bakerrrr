@@ -30,6 +30,12 @@ from game.drone_procedures import (
 )
 from game.drone_programs import active_drone_program, run_drone_program_step, sync_drone_program_metadata
 from game.drone_recon import apply_autonomous_mapping_knowledge
+from game.signal_jammer_runtime import (
+    clear_expired_drone_jammer_effects,
+    drone_iff_disruption_status,
+    drone_shutdown_status,
+    jammer_iff_target_for_drone,
+)
 from game.movement_runtime import try_move_entity
 from game.physical_target_runtime import apply_physical_property_damage, weapon_targetable_property_at
 from game.property_runtime import property_is_vehicle, vehicle_label, vehicle_profile_from_property
@@ -582,6 +588,11 @@ class DroneSystem(System):
         state = _deployed_drone_state(self.sim, drone_eid)
         if state is None:
             return {"ok": False, "reason": "not_deployed"}
+        tick = int(getattr(self.sim, "tick", 0) or 0)
+        if drone_shutdown_status(state, tick=tick).get("active"):
+            return {"ok": False, "reason": "jammer_shutdown"}
+        if drone_iff_disruption_status(state, tick=tick).get("active"):
+            return {"ok": False, "reason": "iff_scrambled"}
         program = active_drone_program(state)
         if program is not None and str(getattr(state, "procedure_status", "") or "").strip().lower() in {"", "running", "blocked"}:
             controller_eid = self._controller_for_state(state)
@@ -597,7 +608,6 @@ class DroneSystem(System):
                 self._sync_procedure_metadata(state, procedure_key=procedure_key)
         if not procedure_key:
             return {"ok": True, "reason": None, "procedure_key": ""}
-        tick = int(getattr(self.sim, "tick", 0) or 0)
         if _int(getattr(state, "source_metadata", {}).get("procedure_skip_tick"), -1) == tick:
             return {"ok": True, "reason": "skipped", "procedure_key": procedure_key}
         controller_eid = self._controller_for_state(state)
@@ -628,10 +638,67 @@ class DroneSystem(System):
         for drone_eid in list(self.sim.ecs.get(DroneState).keys()):
             state = self.sim.ecs.get(DroneState).get(drone_eid)
             if state is not None:
+                clear_expired_drone_jammer_effects(
+                    state,
+                    tick=int(getattr(self.sim, "tick", 0) or 0),
+                )
                 self._expire_external_link_disruption(drone_eid, state)
                 tick_drone_weapon_cooldowns(state, tick=int(getattr(self.sim, "tick", 0) or 0))
+                if drone_shutdown_status(state, tick=int(getattr(self.sim, "tick", 0) or 0)).get("active"):
+                    continue
+                if drone_iff_disruption_status(state, tick=int(getattr(self.sim, "tick", 0) or 0)).get("active"):
+                    self._run_jammer_iff_behavior(drone_eid, state)
+                    continue
             self.run_drone_procedure(drone_eid)
         tick_faction_drone_combat(self.sim, self)
+
+    def _run_jammer_iff_behavior(self, drone_eid, state):
+        """Give a scrambled drone one bounded hostile action."""
+
+        controller_eid = self._controller_for_state(state)
+        if controller_eid is None:
+            return {"ok": False, "reason": "missing_controller"}
+        target_eid = jammer_iff_target_for_drone(self.sim, drone_eid, state)
+        if target_eid is None:
+            return {"ok": True, "reason": "no_jammer_target", "action": "hold"}
+        target_pos = self.sim.ecs.get(Position).get(target_eid)
+        if target_pos is None:
+            return {"ok": False, "reason": "missing_target"}
+        state.target_eid = target_eid
+        state.target = (int(target_pos.x), int(target_pos.y), int(target_pos.z))
+
+        from game.drone_combat import drone_weapon_status
+
+        weapon = drone_weapon_status(
+            state,
+            tick=int(getattr(self.sim, "tick", 0) or 0),
+        )
+        if weapon.get("armed"):
+            result = self.fire_drone_weapon(
+                controller_eid,
+                drone_eid,
+                target_eid=target_eid,
+                weapon_kind=weapon.get("primary_weapon") or "auto",
+                require_remote=False,
+                require_camera=True,
+                consume_turn=False,
+            )
+            if result.get("ok"):
+                return result
+        drone_pos = self.sim.ecs.get(Position).get(drone_eid)
+        if (
+            drone_pos is not None
+            and int(drone_pos.z) == int(target_pos.z)
+            and abs(int(drone_pos.x) - int(target_pos.x))
+            + abs(int(drone_pos.y) - int(target_pos.y)) <= 1
+        ):
+            return {"ok": True, "reason": "jammer_target_adjacent", "action": "hold"}
+        return self.move_drone_toward(
+            controller_eid,
+            drone_eid,
+            (int(target_pos.x), int(target_pos.y), int(target_pos.z)),
+            jammer_override=True,
+        )
 
     def _expire_external_link_disruption(self, drone_eid, state):
         metadata = getattr(state, "source_metadata", None)
@@ -751,7 +818,7 @@ class DroneSystem(System):
             "z": int(z),
         }
 
-    def move_drone(self, controller_eid, drone_eid, dx, dy):
+    def move_drone(self, controller_eid, drone_eid, dx, dy, *, jammer_override=False):
         step = _cardinal_step(dx, dy)
         if step is None:
             return self._movement_blocked(controller_eid, drone_eid, "invalid_direction", dx=dx, dy=dy)
@@ -762,6 +829,12 @@ class DroneSystem(System):
             return self._movement_blocked(controller_eid, drone_eid, "not_deployed", dx=dx, dy=dy)
         if not drone_state_controlled_by_actor(state, controller_eid):
             return self._movement_blocked(controller_eid, drone_eid, "not_controller", dx=dx, dy=dy)
+
+        tick = int(getattr(self.sim, "tick", 0) or 0)
+        if drone_shutdown_status(state, tick=tick).get("active"):
+            return self._movement_blocked(controller_eid, drone_eid, "jammer_shutdown", dx=dx, dy=dy)
+        if not jammer_override and drone_iff_disruption_status(state, tick=tick).get("active"):
+            return self._movement_blocked(controller_eid, drone_eid, "iff_scrambled", dx=dx, dy=dy)
 
         pos = self.sim.ecs.get(Position).get(drone_eid)
         if pos is None:
@@ -837,7 +910,7 @@ class DroneSystem(System):
         ))
         return {"ok": True, "reason": None, "x": int(pos.x), "y": int(pos.y), "z": int(pos.z)}
 
-    def move_drone_toward(self, controller_eid, drone_eid, target):
+    def move_drone_toward(self, controller_eid, drone_eid, target, *, jammer_override=False):
         """Take one ordinary drone step toward a factual world coordinate."""
 
         pos = self.sim.ecs.get(Position).get(drone_eid)
@@ -865,7 +938,13 @@ class DroneSystem(System):
             alternate = _bounded_drone_path_step(self.sim, drone_eid, state, start, target)
             if alternate is not None:
                 step = alternate
-        return self.move_drone(controller_eid, drone_eid, step[0], step[1])
+        return self.move_drone(
+            controller_eid,
+            drone_eid,
+            step[0],
+            step[1],
+            jammer_override=jammer_override,
+        )
 
     def _command_blocked(self, controller_eid, drone_eid, reason, *, command=None, x=None, y=None, z=None):
         self.sim.emit(Event(
@@ -928,6 +1007,27 @@ class DroneSystem(System):
                 controller_eid,
                 drone_eid,
                 "not_controller",
+                command=command,
+                x=getattr(pos, "x", None),
+                y=getattr(pos, "y", None),
+                z=getattr(pos, "z", None),
+            )
+        tick = int(getattr(self.sim, "tick", 0) or 0)
+        if drone_shutdown_status(state, tick=tick).get("active"):
+            return self._command_blocked(
+                controller_eid,
+                drone_eid,
+                "jammer_shutdown",
+                command=command,
+                x=getattr(pos, "x", None),
+                y=getattr(pos, "y", None),
+                z=getattr(pos, "z", None),
+            )
+        if drone_iff_disruption_status(state, tick=tick).get("active"):
+            return self._command_blocked(
+                controller_eid,
+                drone_eid,
+                "iff_scrambled",
                 command=command,
                 x=getattr(pos, "x", None),
                 y=getattr(pos, "y", None),

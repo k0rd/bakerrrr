@@ -8,12 +8,15 @@ from game.drone_runtime import (
     deployed_drone_common_name,
     deployed_drone_render_spec,
     drone_loadout_summary,
+    drone_link_disruption_status,
     drone_profile_for_item,
+    drone_sensor_suppression_status,
     drone_state_controlled_by_actor,
     is_packed_drone_entry,
     normalize_packed_drone_metadata,
     packed_drone_metadata_from_state,
 )
+from game.signal_jammer_runtime import drone_iff_disruption_status, drone_shutdown_status
 from game.drone_distribution import drone_paint_palette, normalize_drone_paint_word
 from game.drone_programs import drone_program_sheet_rows
 from game.drone_workshop import (
@@ -365,6 +368,7 @@ def drone_workshop_chassis_records(sim, player_eid, *, item_catalog=None):
             "accessible": True,
             "label": f"{chassis_class}-class chassis" if chassis_class else "workshop chassis",
             "summary": summary,
+            "tick": int(getattr(sim, "tick", 0) or 0),
         })
     return sorted(records, key=lambda row: (str(row.get("label", "")), str(row.get("workshop_chassis_instance_id", ""))))
 
@@ -490,6 +494,22 @@ def drone_sheet_status_lines(record, *, item_catalog=None):
     ]
     source_metadata = getattr(state, "source_metadata", None)
     source_metadata = source_metadata if isinstance(source_metadata, dict) else {}
+    tick = _int(record.get("tick"), 0)
+    shutdown = drone_shutdown_status(state, tick=tick)
+    iff = drone_iff_disruption_status(state, tick=tick)
+    link = drone_link_disruption_status(state, tick=tick)
+    sensors = drone_sensor_suppression_status(state, tick=tick)
+    if shutdown.get("active"):
+        lines.append(f"Interference: hard shutdown ({shutdown.get('remaining', 0)} ticks remaining)")
+    elif iff.get("active"):
+        iff_label = "PLAYER HOSTILE" if iff.get("mode") == "player_hostile" else "EVERYONE HOSTILE"
+        lines.append(f"Interference: IFF {iff_label} ({iff.get('remaining', 0)} ticks remaining)")
+    elif link.get("active") and sensors.get("active"):
+        lines.append(f"Interference: link and sensors blacked out ({max(link.get('remaining', 0), sensors.get('remaining', 0))} ticks remaining)")
+    elif link.get("active"):
+        lines.append(f"Interference: external link down ({link.get('remaining', 0)} ticks remaining)")
+    elif sensors.get("active"):
+        lines.append(f"Interference: sensors suppressed ({sensors.get('remaining', 0)} ticks remaining)")
     manufacturer = str(source_metadata.get("manufacturer", "") or "").strip()
     if manufacturer:
         motif = str(source_metadata.get("product_motif", "") or "").strip()

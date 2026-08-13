@@ -2690,6 +2690,10 @@ class EventLogSystem(System):
             else:
                 self.sim.log.add(f"{panel_name} has no live link.")
             return
+        if reason == "signal_interference":
+            remaining = _int_or_default(event.data.get("remaining"), 0)
+            self.sim.log.add(f"Static washes over {panel_name}; its link is down for about {remaining} more ticks.")
+            return
         if reason == "panel_intrusion_failed":
             self.sim.log.add(f"You fail to land the {intrusion_label} on {panel_name}; {target_name} stays secured.")
             return
@@ -5161,6 +5165,8 @@ class EventLogSystem(System):
             "invalid_direction": f"{drone_label} needs a single cardinal move.",
             "not_deployed": "No deployed drone responds.",
             "not_controller": f"{drone_label} does not answer your controller.",
+            "jammer_shutdown": f"{drone_label} is cold under the jammer pulse.",
+            "iff_scrambled": f"{drone_label}'s IFF is scrambled and ignoring commands.",
             "missing_position": f"{drone_label} has no usable position.",
             "battery_depleted": f"{drone_label}'s battery is depleted.",
             "no_range_anchor": f"{drone_label} has no range anchor.",
@@ -5258,6 +5264,8 @@ class EventLogSystem(System):
             "not_controller": f"{drone_label} does not answer your controller.",
             "no_remote_control": f"{drone_label} has no remote receiver.",
             "link_disrupted": f"{drone_label}'s external link is disrupted. Inspect it physically; an adjacent owner can use Shift+W to resync.",
+            "jammer_shutdown": f"{drone_label} is cold under the jammer pulse.",
+            "iff_scrambled": f"{drone_label}'s IFF is scrambled and rejecting commands.",
             "unknown_command": f"{drone_label} does not know that command.",
         }
         _log_player_feedback(self.sim, messages.get(reason, f"{drone_label} cannot accept commands right now."), kind="interaction")
@@ -5307,6 +5315,10 @@ class EventLogSystem(System):
             "not_deployed": "No deployed drone weapon responds.",
             "not_controller": f"{drone_label} does not answer your controller.",
             "no_remote_control": f"{drone_label} has no remote receiver.",
+            "jammer_shutdown": f"{drone_label} is cold under the jammer pulse.",
+            "iff_scrambled": f"{drone_label}'s IFF is scrambled and rejecting fire control.",
+            "link_disrupted": f"{drone_label}'s external link is disrupted.",
+            "sensor_suppressed": f"{drone_label}'s sensors cannot guide a shot through the static.",
             "no_camera": f"{drone_label} needs a camera or sensor to aim.",
             "camera_unavailable": f"{drone_label}'s camera cannot guide a shot.",
             "no_camera_los": f"{drone_label}'s camera has no line of sight.",
@@ -5905,6 +5917,37 @@ class EventLogSystem(System):
                     else:
                         _log_player_feedback(self.sim, f"{item_name} does not tell you anything new.", kind="interaction")
                 return
+            if usage_kind == "signal_jammer_pulse":
+                effect_id = str(event.data.get("effect_id", "") or "").strip().lower()
+                radius = _int_or_default(event.data.get("radius"), 0)
+                drone_count = _int_or_default(event.data.get("drone_count"), 0)
+                electronic_count = _int_or_default(event.data.get("electronic_count"), 0)
+                target_text = f"{drone_count} drone(s) and {electronic_count} fixture(s)"
+                messages = {
+                    "signal_blackout": (
+                        f"{item_name} throws a {radius}-tile static bloom. "
+                        f"External links and sensors drop across {target_text}."
+                    ),
+                    "hard_shutdown": (
+                        f"{item_name} lands a hard shutdown pulse across {radius} tiles. "
+                        f"{drone_count} drone(s) go cold; {electronic_count} fixture(s) stutter offline."
+                    ),
+                    "iff_frenzy": (
+                        f"{item_name} corrupts IFF across {radius} tiles. "
+                        f"{drone_count} drone(s) classify every nearby person as hostile; "
+                        f"{electronic_count} fixture(s) drop offline."
+                    ),
+                    "player_lock": (
+                        f"{item_name}'s pulse feeds back across {radius} tiles. "
+                        f"{drone_count} drone(s) lock onto you; {electronic_count} fixture(s) drop offline."
+                    ),
+                }
+                _log_player_feedback(
+                    self.sim,
+                    messages.get(effect_id, f"{item_name} floods the nearby spectrum with interference."),
+                    kind="danger" if bool(event.data.get("adverse")) or effect_id in {"iff_frenzy", "player_lock"} else "interaction",
+                )
+                return
             if usage_kind == "justice_radio_scan":
                 try:
                     mechanics = float(event.data.get("mechanics", 0.0) or 0.0)
@@ -6171,6 +6214,13 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, "You need restorative medical aid while downed.", kind="interaction")
         elif reason == "item_not_usable":
             _log_player_feedback(self.sim, f"{item_name} cannot be used.", kind="interaction")
+        elif reason == "signal_jammer_recharging":
+            remaining = _int_or_default(event.data.get("remaining"), 0)
+            _log_player_feedback(
+                self.sim,
+                f"{item_name} is still dumping heat and charge ({remaining} ticks).",
+                kind="interaction",
+            )
         elif reason == "item_not_throwable":
             _log_player_feedback(self.sim, f"{item_name} is not something you can throw usefully.", kind="interaction")
         elif reason == "no_throw_target":

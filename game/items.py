@@ -934,7 +934,7 @@ DEFAULT_ITEM_CATALOG = {
         "name": "Signal Jammer",
         "glyph": ")",
         "stack_max": 1,
-        "tags": ["tool", "restricted"],
+        "tags": ["tool", "electronic", "restricted"],
         "legal_status": "restricted",
         "effects": [],
         "tool_profiles": [

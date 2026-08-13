@@ -195,6 +195,7 @@ from game.service_runtime import (
     _vehicle_sale_stats_text,
 )
 from game.skills import skill_label as _skill_label
+from game.signal_jammer_runtime import electronic_fixture_interference_status
 from game.system_support.building_repair_runtime import owned_repairable_buildings as _owned_repairable_buildings
 from game.system_support.npc_behavior_runtime import (
     _nutrition_capabilities_for_property,
@@ -6044,11 +6045,19 @@ class ServiceMenuSystem(System):
 
         metadata = _property_metadata(prop)
         if infrastructure_role == "service_terminal" and (
-            bool(metadata.get("fixture_broken")) or metadata.get("fixture_usable") is False
+            bool(metadata.get("fixture_broken"))
+            or metadata.get("fixture_usable") is False
+            or electronic_fixture_interference_status(self.sim, prop).get("active")
         ):
             event.data["handled"] = True
             name = str(prop.get("name", prop.get("id", "Terminal")) or "Terminal").strip()
-            self._present_service_result(name, ["The terminal is dark and unresponsive."], property_id=prop.get("id"))
+            jammed = electronic_fixture_interference_status(self.sim, prop)
+            line = (
+                "Signal interference has the terminal dark and unresponsive."
+                if jammed.get("active")
+                else "The terminal is dark and unresponsive."
+            )
+            self._present_service_result(name, [line], property_id=prop.get("id"))
             return
 
         pos = self._position_for(eid)

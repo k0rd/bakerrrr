@@ -56,6 +56,10 @@ from game.item_semantics import (
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name, item_inventory_slot_cost, item_lead_profile
 from game.meaningful_objects_runtime import nearest_item_backed_object_fixture, pickup_meaningful_object_fixture
 from game.quick_travel_ramps import local_interactions_suspended_for_actor
+from game.signal_jammer_runtime import (
+    SIGNAL_JAMMER_COOLDOWN_TICKS,
+    activate_signal_jammer_pulse,
+)
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_runtime import (
     property_covering as _property_covering,
@@ -1066,6 +1070,69 @@ class ItemActionRuntime:
         tags = _item_tags(item_def)
         return item_id in {"phone", "burner_phone", "cell_phone"} or "phone" in tags or "cellular" in tags
 
+    def _use_signal_jammer(self, eid, x, y, z, inventory, entry, item_def, *, reason="manual"):
+        item_id = str(entry.get("item_id", item_def.get("id", "")) or "").strip().lower()
+        if item_id != "signal_jammer":
+            return None
+
+        item_name = self._display_name_for_actor(eid, entry)
+        metadata = dict(entry.get("metadata") or {}) if isinstance(entry.get("metadata"), dict) else {}
+        now = int(getattr(self.sim, "tick", 0) or 0)
+        ready_tick = int(metadata.get("signal_jammer_ready_tick", 0) or 0)
+        if ready_tick > now:
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="signal_jammer_recharging",
+                item_id=item_id,
+                item_name=item_name,
+                ready_tick=ready_tick,
+                remaining=max(0, ready_tick - now),
+            ))
+            return False
+
+        activation_index = max(0, int(metadata.get("signal_jammer_activation_count", 0) or 0)) + 1
+        result = activate_signal_jammer_pulse(
+            self.sim,
+            eid,
+            int(x),
+            int(y),
+            int(z),
+            source_instance_id=str(entry.get("instance_id", "") or ""),
+            activation_index=activation_index,
+        )
+        metadata["signal_jammer_activation_count"] = int(activation_index)
+        metadata["signal_jammer_last_effect_id"] = str(result.get("effect_id", "") or "")
+        metadata["signal_jammer_last_used_tick"] = int(now)
+        metadata["signal_jammer_ready_tick"] = int(now + SIGNAL_JAMMER_COOLDOWN_TICKS)
+        inventory.update_item_metadata(entry.get("instance_id"), metadata=metadata, replace=True)
+
+        self.item_system._emit_action_offense(
+            eid=eid,
+            action="use_item",
+            context="tamper",
+            x=int(x),
+            y=int(y),
+            z=int(z),
+            jammer_effect_id=result.get("effect_id"),
+            jammer_radius=result.get("radius"),
+        )
+        self.sim.emit(Event(
+            "item_used",
+            eid=eid,
+            item_id=item_id,
+            item_name=item_name,
+            reason=reason,
+            usage_kind="signal_jammer_pulse",
+            success=True,
+            consumed=False,
+            cooldown=int(SIGNAL_JAMMER_COOLDOWN_TICKS),
+            ready_tick=int(now + SIGNAL_JAMMER_COOLDOWN_TICKS),
+            item_metadata=dict(metadata),
+            **result,
+        ))
+        return True
+
     def _nearest_alarm_fixture(self, x, y, z, *, radius=1):
         for prop in self.sim.properties_in_radius(int(x), int(y), int(z), r=int(radius)):
             if _property_infrastructure_role(prop) == "alarm_target":
@@ -1637,6 +1704,19 @@ class ItemActionRuntime:
                 item_name=item_name,
             ))
             return False
+
+        signal_jammer_result = self._use_signal_jammer(
+            eid,
+            x,
+            y,
+            z,
+            inventory,
+            entry,
+            item_def,
+            reason=reason,
+        )
+        if signal_jammer_result is not None:
+            return bool(signal_jammer_result)
 
         alarm_tool_result = self._use_alarm_disable_tool(
             eid,

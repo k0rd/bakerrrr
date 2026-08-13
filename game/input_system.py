@@ -136,6 +136,7 @@ from game.drone_runtime import (
     drone_state_has_capability,
 )
 from game.drone_combat import drone_weapon_status
+from game.signal_jammer_runtime import SIGNAL_JAMMER_COOLDOWN_TICKS, SIGNAL_JAMMER_RADIUS
 from game.drone_recon import (
     DRONE_LINKED_CAMERA_RADIUS,
     apply_linked_camera_knowledge,
@@ -7320,6 +7321,19 @@ class InputSystem(System):
                         limit=3,
                     )
                 )
+
+        if str(entry.get("item_id", "") or "").strip().lower() == "signal_jammer":
+            effect_labels.append(
+                f"random r{SIGNAL_JAMMER_RADIUS} pulse: blackout / shutdown / "
+                "all-hostile IFF / drones hunt you"
+            )
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            ready_tick = _int_or_default(metadata.get("signal_jammer_ready_tick"), 0)
+            remaining = max(0, ready_tick - int(getattr(self.sim, "tick", 0) or 0))
+            if remaining > 0:
+                effect_labels.append(f"recharging {remaining}t")
+            else:
+                effect_labels.append(f"recharge {SIGNAL_JAMMER_COOLDOWN_TICKS}t")
 
         mechanical_catalog = load_mechanical_recipe_catalog()
         if item_is_mechanical_plan(item_def, item_catalog=self.catalog):
