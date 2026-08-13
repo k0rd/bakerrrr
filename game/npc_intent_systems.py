@@ -5863,6 +5863,7 @@ class NPCInvestigateSystem(System):
         if _property_is_vehicle(vehicle_prop):
             _sync_vehicle_property_heading(vehicle_prop, state)
         state.set_in_vehicle(False, tick=getattr(self.sim, "tick", 0))
+        self.sim.track_vehicle_exit(eid, vehicle_id=vehicle_id)
         if _property_is_vehicle(vehicle_prop) and pos is not None:
             _sync_vehicle_property_position(self.sim, vehicle_prop, int(pos.x), int(pos.y), int(pos.z))
             vehicle_id = str(vehicle_prop.get("id", vehicle_id) or vehicle_id)
@@ -6255,6 +6256,7 @@ class NPCInvestigateSystem(System):
             self.sim.ecs.add(eid, state)
         state.set_active_vehicle(vehicle_id, tick=getattr(self.sim, "tick", 0))
         state.set_in_vehicle(True, tick=getattr(self.sim, "tick", 0))
+        self.sim.track_vehicle_entry(eid, vehicle_id)
         dx = 1 if route_target[0] > int(pos.x) else -1 if route_target[0] < int(pos.x) else 0
         dy = 1 if route_target[1] > int(pos.y) else -1 if route_target[1] < int(pos.y) else 0
         state.set_heading(dx, dy, tick=getattr(self.sim, "tick", 0))
@@ -6290,6 +6292,7 @@ class NPCInvestigateSystem(System):
             if _property_is_vehicle(vehicle_prop):
                 _sync_vehicle_property_heading(vehicle_prop, state)
             state.set_in_vehicle(False, tick=getattr(self.sim, "tick", 0))
+            self.sim.track_vehicle_exit(eid)
             if _property_is_vehicle(vehicle_prop):
                 _sync_vehicle_property_position(self.sim, vehicle_prop, int(pos.x), int(pos.y), int(pos.z))
         vehicle_id = str(getattr(ai, "vehicle_commute_vehicle_id", "") or "").strip()

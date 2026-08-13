@@ -3028,12 +3028,15 @@ class RenderSystem(System):
         occupied_vehicle_choices = {}
         hidden_vehicle_occupants = set()
         if zoom_mode != "overworld":
-            for occupant_eid, raw_state in tuple(vehicle_states.items()):
+            vehicle_by_occupant = getattr(self.sim, "vehicle_by_occupant", {})
+            primary_occupants = getattr(self.sim, "vehicle_primary_occupants", {})
+            for occupant_eid, indexed_vehicle_id in tuple(vehicle_by_occupant.items()):
+                raw_state = vehicle_states.get(occupant_eid)
                 state = ensure_vehicle_motion_state(raw_state)
                 if not state or not bool(getattr(state, "in_vehicle", False)):
                     continue
                 vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
-                if not vehicle_id:
+                if not vehicle_id or vehicle_id != str(indexed_vehicle_id):
                     continue
                 vehicle_prop = self.sim.properties.get(vehicle_id)
                 if not _property_is_vehicle(vehicle_prop):
@@ -3044,16 +3047,16 @@ class RenderSystem(System):
                 if not renders.get(occupant_eid):
                     continue
                 hidden_vehicle_occupants.add(occupant_eid)
+                if primary_occupants.get(vehicle_id) != occupant_eid:
+                    continue
                 choice_key = (0 if occupant_eid == self.player_eid else 1, int(occupant_eid))
-                current = occupied_vehicle_choices.get(vehicle_id)
-                if current is None or choice_key < current[0]:
-                    occupied_vehicle_choices[vehicle_id] = (
-                        choice_key,
-                        occupant_eid,
-                        state,
-                        vehicle_prop,
-                        occupant_pos,
-                    )
+                occupied_vehicle_choices[vehicle_id] = (
+                    choice_key,
+                    occupant_eid,
+                    state,
+                    vehicle_prop,
+                    occupant_pos,
+                )
         occupied_vehicle_by_driver = {
             occupant_eid: (state, vehicle_prop)
             for _vehicle_id, (_choice_key, occupant_eid, state, vehicle_prop, _pos) in occupied_vehicle_choices.items()
@@ -3760,7 +3763,15 @@ class RenderSystem(System):
 
             active_quest_target = active_final_operation_target_property_id(self.sim)
 
-            for prop in self.sim.properties.values():
+            visible_properties = self.sim.properties_in_rect(
+                camera_x - 1,
+                camera_y - 1,
+                camera_x + map_w,
+                camera_y + map_h,
+                active_z,
+                include_covering=True,
+            )
+            for prop in visible_properties:
                 prop_id = str(prop.get("id", "") or "").strip()
                 occupied_choice = occupied_vehicle_choices.get(prop_id)
                 if occupied_choice is not None:
@@ -3815,9 +3826,14 @@ class RenderSystem(System):
                     light_tint=_surface_light_tint(display_pos[0], display_pos[1], active_z) if visible_now else None,
                 )
 
-            for ground in self.sim.ground_items.values():
-                if ground["z"] != active_z:
-                    continue
+            visible_ground_items = self.sim.ground_items_in_rect(
+                camera_x,
+                camera_y,
+                camera_x + map_w - 1,
+                camera_y + map_h - 1,
+                active_z,
+            )
+            for ground in visible_ground_items:
                 screen_x = ground["x"] - camera_x
                 screen_y = ground["y"] - camera_y
                 if not (0 <= screen_x < map_w and 0 <= screen_y < map_h):

@@ -187,6 +187,8 @@ def _clear_vehicle_occupants(sim, vehicle_id):
         else:
             state.active_vehicle_id = None
             state.last_changed_tick = now
+        if hasattr(sim, "track_vehicle_exit"):
+            sim.track_vehicle_exit(eid, vehicle_id=vehicle_id)
         cleared_any = True
         if was_inside:
             inside.append(eid)

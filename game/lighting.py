@@ -850,12 +850,14 @@ def _active_vehicle_light_cache_key(sim):
         return ()
 
     rows = []
-    for eid, raw_state in tuple(vehicle_states.items()):
+    vehicle_by_occupant = getattr(sim, "vehicle_by_occupant", {})
+    for eid, indexed_vehicle_id in tuple(vehicle_by_occupant.items()):
+        raw_state = vehicle_states.get(eid)
         state = raw_state.ensure_motion_defaults() if hasattr(raw_state, "ensure_motion_defaults") else raw_state
         if not state or not bool(getattr(state, "in_vehicle", False)):
             continue
         vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
-        if not vehicle_id:
+        if not vehicle_id or vehicle_id != str(indexed_vehicle_id):
             continue
         pos = positions.get(eid)
         if not pos:
@@ -882,13 +884,17 @@ def _vehicle_headlight_sources(sim):
 
     bounds = _loaded_property_bounds(sim)
     sources = []
-    for eid, raw_state in tuple(vehicle_states.items()):
+    vehicle_by_occupant = getattr(sim, "vehicle_by_occupant", {})
+    for eid, indexed_vehicle_id in tuple(vehicle_by_occupant.items()):
+        raw_state = vehicle_states.get(eid)
         state = raw_state.ensure_motion_defaults() if hasattr(raw_state, "ensure_motion_defaults") else raw_state
         if not state or not bool(getattr(state, "in_vehicle", False)):
             continue
         if not bool(getattr(state, "headlights_on", True)):
             continue
         vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
+        if not vehicle_id or vehicle_id != str(indexed_vehicle_id):
+            continue
         vehicle_prop = getattr(sim, "properties", {}).get(vehicle_id) if vehicle_id else None
         if not isinstance(vehicle_prop, dict) or str(vehicle_prop.get("kind", "") or "").strip().lower() != "vehicle":
             continue

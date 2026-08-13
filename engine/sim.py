@@ -10,7 +10,7 @@ from .world import World, normalize_building_levels
 from .eventlog import EventLog
 from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
-from game.components import AI, CreatureIdentity, DroneState, PlayerAssets, Position
+from game.components import AI, CreatureIdentity, DroneState, PlayerAssets, Position, VehicleState
 from game.items import prepare_ground_item_stack_metadata
 from game.property_access import COMMON_AREA_ROOM_KINDS
 from game.system_support.actor_attention_runtime import actor_attention_state, warmth_protected_chunks
@@ -62,6 +62,7 @@ class Simulation:
         self.property_order = {}
         self.next_property_order = 0
         self._properties_in_radius_cache = {}
+        self._properties_in_rect_cache = {}
         self._mechanical_device_ids = set()
         self.mechanical_known_recipes = {}
         self._derived_fact_state = {}
@@ -80,6 +81,10 @@ class Simulation:
         self.ground_item_index = {}
         self.ground_item_order = {}
         self.next_ground_item_order = 0
+        self._ground_items_in_rect_cache = {}
+        self.vehicle_occupants = {}
+        self.vehicle_by_occupant = {}
+        self.vehicle_primary_occupants = {}
         self.next_ground_item_id = 1
         self.next_item_instance_id = 1
         self.flora_patches = {}
@@ -193,6 +198,16 @@ class Simulation:
             self.entity_identity_records = {}
         if not isinstance(getattr(self, "_properties_in_radius_cache", None), dict):
             self._properties_in_radius_cache = {}
+        if not isinstance(getattr(self, "_properties_in_rect_cache", None), dict):
+            self._properties_in_rect_cache = {}
+        if not isinstance(getattr(self, "_ground_items_in_rect_cache", None), dict):
+            self._ground_items_in_rect_cache = {}
+        if not isinstance(getattr(self, "vehicle_occupants", None), dict):
+            self.vehicle_occupants = {}
+        if not isinstance(getattr(self, "vehicle_by_occupant", None), dict):
+            self.vehicle_by_occupant = {}
+        if not isinstance(getattr(self, "vehicle_primary_occupants", None), dict):
+            self.vehicle_primary_occupants = {}
         if not isinstance(getattr(self, "_mechanical_device_ids", None), set):
             self._mechanical_device_ids = set()
         if not isinstance(getattr(self, "mechanical_known_recipes", None), dict):
@@ -1334,6 +1349,7 @@ class Simulation:
         bucket = self.ground_item_index.setdefault(key, [])
         if ground_item_id not in bucket:
             bucket.append(ground_item_id)
+        self._invalidate_ground_items_in_rect_cache()
 
     def _unindex_ground_item_record(self, ground_item_id, item, drop_order=False):
         key = self._coord_key(item.get("x"), item.get("y"), item.get("z", 0)) if isinstance(item, dict) else None
@@ -1345,6 +1361,7 @@ class Simulation:
                     self.ground_item_index.pop(key, None)
         if drop_order:
             self.ground_item_order.pop(ground_item_id, None)
+        self._invalidate_ground_items_in_rect_cache()
 
     def rebuild_spatial_indexes(self):
         self.rebuild_chunk_entity_index()
@@ -1359,8 +1376,10 @@ class Simulation:
         self.ground_item_index = {}
         self.ground_item_order = {}
         self.next_ground_item_order = 0
+        self._invalidate_ground_items_in_rect_cache()
         for ground_item_id, item in self.ground_items.items():
             self._index_ground_item_record(str(ground_item_id), item)
+        self.rebuild_vehicle_occupancy()
         mark_derived_fact_changed(self, "transit_nodes")
 
     def move_property(self, property_id, x, y, z=0):
@@ -1471,12 +1490,97 @@ class Simulation:
             cache.clear()
         else:
             self._properties_in_radius_cache = {}
+        rect_cache = getattr(self, "_properties_in_rect_cache", None)
+        if isinstance(rect_cache, dict):
+            rect_cache.clear()
+        else:
+            self._properties_in_rect_cache = {}
+
+    def _invalidate_ground_items_in_rect_cache(self):
+        cache = getattr(self, "_ground_items_in_rect_cache", None)
+        if isinstance(cache, dict):
+            cache.clear()
+        else:
+            self._ground_items_in_rect_cache = {}
 
     def _ordered_ground_item_ids(self, ground_item_ids):
         return sorted(
             set(str(ground_item_id) for ground_item_id in ground_item_ids),
             key=lambda ground_item_id: self.ground_item_order.get(ground_item_id, 10**9),
         )
+
+    def _vehicle_occupant_choice_key(self, eid):
+        try:
+            eid = int(eid)
+        except (TypeError, ValueError):
+            return (2, 10**18)
+        return (0 if eid == getattr(self, "player_eid", None) else 1, eid)
+
+    def _refresh_vehicle_primary_occupant(self, vehicle_id):
+        vehicle_id = str(vehicle_id or "").strip()
+        occupants = self.vehicle_occupants.get(vehicle_id)
+        if not vehicle_id or not occupants:
+            self.vehicle_occupants.pop(vehicle_id, None)
+            self.vehicle_primary_occupants.pop(vehicle_id, None)
+            return None
+        primary = min(occupants, key=self._vehicle_occupant_choice_key)
+        self.vehicle_primary_occupants[vehicle_id] = primary
+        return primary
+
+    def track_vehicle_entry(self, eid, vehicle_id):
+        """Maintain the occupied-vehicle tally at the enter/exit boundary."""
+        try:
+            eid = int(eid)
+        except (TypeError, ValueError):
+            return False
+        vehicle_id = str(vehicle_id or "").strip()
+        if not vehicle_id:
+            return self.track_vehicle_exit(eid)
+
+        previous_vehicle_id = self.vehicle_by_occupant.get(eid)
+        if previous_vehicle_id and previous_vehicle_id != vehicle_id:
+            previous_occupants = self.vehicle_occupants.get(previous_vehicle_id)
+            if isinstance(previous_occupants, set):
+                previous_occupants.discard(eid)
+            self._refresh_vehicle_primary_occupant(previous_vehicle_id)
+
+        occupants = self.vehicle_occupants.setdefault(vehicle_id, set())
+        occupants.add(eid)
+        self.vehicle_by_occupant[eid] = vehicle_id
+        self._refresh_vehicle_primary_occupant(vehicle_id)
+        return True
+
+    def track_vehicle_exit(self, eid, vehicle_id=None):
+        """Remove one actor from the occupied-vehicle tally."""
+        try:
+            eid = int(eid)
+        except (TypeError, ValueError):
+            return False
+        indexed_vehicle_id = self.vehicle_by_occupant.pop(eid, None)
+        requested_vehicle_id = str(vehicle_id or "").strip() or None
+        vehicle_ids = {value for value in (indexed_vehicle_id, requested_vehicle_id) if value}
+        removed = indexed_vehicle_id is not None
+        for current_vehicle_id in vehicle_ids:
+            occupants = self.vehicle_occupants.get(current_vehicle_id)
+            if isinstance(occupants, set) and eid in occupants:
+                occupants.discard(eid)
+                removed = True
+            self._refresh_vehicle_primary_occupant(current_vehicle_id)
+        return removed
+
+    def rebuild_vehicle_occupancy(self):
+        """Reconcile the derived tally after bulk construction or save restore."""
+        self.vehicle_occupants = {}
+        self.vehicle_by_occupant = {}
+        self.vehicle_primary_occupants = {}
+        vehicle_states = self.ecs.get(VehicleState) if getattr(self, "ecs", None) is not None else {}
+        for eid, state in vehicle_states.items():
+            if not bool(getattr(state, "in_vehicle", False)):
+                continue
+            vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
+            if vehicle_id:
+                self.track_vehicle_entry(eid, vehicle_id)
+        return len(self.vehicle_by_occupant)
 
     def structure_at(self, x, y, z=0):
         return self.structure_cells.get((int(x), int(y), int(z)))
@@ -3298,6 +3402,49 @@ class Simulation:
             for property_id in property_ids
         ]
 
+    def properties_in_rect(self, left, top, right, bottom, z=0, *, include_covering=True):
+        """Return properties indexed in a bounded world-space rectangle."""
+        try:
+            left = int(left)
+            top = int(top)
+            right = int(right)
+            bottom = int(bottom)
+            z = int(z)
+        except (TypeError, ValueError):
+            return []
+        left, right = min(left, right), max(left, right)
+        top, bottom = min(top, bottom), max(top, bottom)
+
+        cache = getattr(self, "_properties_in_rect_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._properties_in_rect_cache = cache
+        cache_key = (left, top, right, bottom, z, bool(include_covering))
+        property_ids = cache.get(cache_key)
+        if property_ids is not None:
+            return [
+                self.properties[property_id]
+                for property_id in property_ids
+                if property_id in self.properties
+            ]
+
+        matched_ids = []
+        for y in range(top, bottom + 1):
+            for x in range(left, right + 1):
+                key = (x, y, z)
+                matched_ids.extend(self.property_anchor_index.get(key, ()))
+                if include_covering:
+                    matched_ids.extend(self.property_cover_index.get(key, ()))
+        property_ids = tuple(
+            property_id
+            for property_id in self._ordered_property_ids(matched_ids)
+            if property_id in self.properties
+        )
+        if len(cache) >= 512:
+            cache.clear()
+        cache[cache_key] = property_ids
+        return [self.properties[property_id] for property_id in property_ids]
+
     def new_item_instance_id(self):
         iid = f"item-{self.next_item_instance_id}"
         self.next_item_instance_id += 1
@@ -3369,6 +3516,7 @@ class Simulation:
                 continue
         self.ground_item_order[ground_item_id] = max_order + 1
         self.next_ground_item_order = max_order + 2
+        self._invalidate_ground_items_in_rect_cache()
         return True
 
     def ground_items_at(self, x, y, z=0):
@@ -3398,6 +3546,46 @@ class Simulation:
             if ground_item_id in self.ground_items
         ]
 
+    def ground_items_in_rect(self, left, top, right, bottom, z=0):
+        """Return ground items indexed in a bounded world-space rectangle."""
+        try:
+            left = int(left)
+            top = int(top)
+            right = int(right)
+            bottom = int(bottom)
+            z = int(z)
+        except (TypeError, ValueError):
+            return []
+        left, right = min(left, right), max(left, right)
+        top, bottom = min(top, bottom), max(top, bottom)
+
+        cache = getattr(self, "_ground_items_in_rect_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._ground_items_in_rect_cache = cache
+        cache_key = (left, top, right, bottom, z)
+        ground_item_ids = cache.get(cache_key)
+        if ground_item_ids is not None:
+            return [
+                self.ground_items[ground_item_id]
+                for ground_item_id in ground_item_ids
+                if ground_item_id in self.ground_items
+            ]
+
+        matched_ids = []
+        for y in range(top, bottom + 1):
+            for x in range(left, right + 1):
+                matched_ids.extend(self.ground_item_index.get((x, y, z), ()))
+        ground_item_ids = tuple(
+            ground_item_id
+            for ground_item_id in self._ordered_ground_item_ids(matched_ids)
+            if ground_item_id in self.ground_items
+        )
+        if len(cache) >= 512:
+            cache.clear()
+        cache[cache_key] = ground_item_ids
+        return [self.ground_items[ground_item_id] for ground_item_id in ground_item_ids]
+
     def register_projectile(self, projectile):
         projectile_id = f"proj-{self.next_projectile_id}"
         self.next_projectile_id += 1
@@ -3417,6 +3605,7 @@ class Simulation:
             self.tilemap.remove_entity(eid, position.x, position.y, position.z)
 
         self.untrack_population_entity(eid)
+        self.track_vehicle_exit(eid)
 
         removed = False
         for bucket in self.ecs.components.values():

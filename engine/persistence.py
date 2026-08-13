@@ -64,6 +64,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "property_order",
     "next_property_order",
     "_properties_in_radius_cache",
+    "_properties_in_rect_cache",
     "_mechanical_device_ids",
     "_derived_fact_state",
     "_organization_runtime_cache",
@@ -82,6 +83,10 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "ground_item_index",
     "ground_item_order",
     "next_ground_item_order",
+    "_ground_items_in_rect_cache",
+    "vehicle_occupants",
+    "vehicle_by_occupant",
+    "vehicle_primary_occupants",
     "_pending_stream_unloads",
     "_stream_unload_flush_active",
 }

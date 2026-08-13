@@ -2816,6 +2816,7 @@ class TradeSystem(System):
         if vehicle_state and str(vehicle_state.active_vehicle_id or "").strip() == vehicle_id:
             vehicle_state.set_active_vehicle(None, tick=self.sim.tick)
             vehicle_state.set_in_vehicle(False, tick=self.sim.tick)
+            self.sim.track_vehicle_exit(eid, vehicle_id=vehicle_id)
 
         assets.credits = int(max(0, int(assets.credits) + payout))
 

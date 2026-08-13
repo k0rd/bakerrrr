@@ -771,6 +771,7 @@ class PlayerTravelRuntime:
         state.set_active_vehicle(vehicle_id, tick=self.sim.tick)
         set_vehicle_heading(state, *vehicle_property_heading(vehicle_prop), tick=self.sim.tick)
         state.set_in_vehicle(True, tick=self.sim.tick)
+        self.sim.track_vehicle_entry(eid, vehicle_id)
         state.medium = medium
         set_vehicle_speed(state, 0, tick=self.sim.tick)
         if wire_ignition_authorized:
@@ -835,6 +836,7 @@ class PlayerTravelRuntime:
             sync_vehicle_property_heading(vehicle_prop, state)
         if state:
             state.set_in_vehicle(False, tick=self.sim.tick)
+            self.sim.track_vehicle_exit(eid)
             set_vehicle_speed(state, 0, tick=self.sim.tick)
         local_drive = getattr(self.sim, "local_drive_ui", None)
         if isinstance(local_drive, dict):
