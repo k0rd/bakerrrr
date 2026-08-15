@@ -150,6 +150,7 @@ from game.movement_runtime import (
     _movement_allows_auto_open,
     try_move_entity,
 )
+from game.vertical_navigation import next_vertical_route_segment, try_vertical_transition
 from game.system_support.altered_state_runtime import bonus_move_available, control_lapse_active, spend_bonus_move
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
@@ -6904,19 +6905,45 @@ class NPCInvestigateSystem(System):
                             ty = int(tactical_target["y"])
                             tz = int(tactical_target["z"])
 
+            vertical_segment = None
             if pos.z != tz:
-                if ai.state == "casing_target":
-                    ai.observation_context = finish_purposeful_observation(
-                        getattr(ai, "observation_context", None),
-                        current_tick=self.sim.tick,
-                        reason="floor_changed",
+                identity = identities.get(eid)
+                is_humanoid = str(getattr(identity, "taxonomy_class", "") or "").strip().lower() == "hominid"
+                if is_humanoid:
+                    vertical_segment = next_vertical_route_segment(
+                        self.sim,
+                        (pos.x, pos.y, pos.z),
+                        (tx, ty, tz),
                     )
-                ai.state = "idle"
-                ai.target = None
-                ai.target_eid = None
-                if live_timeskip_active:
-                    self._unschedule_move_due(eid)
-                continue
+                if vertical_segment is None:
+                    if ai.state == "casing_target":
+                        ai.observation_context = finish_purposeful_observation(
+                            getattr(ai, "observation_context", None),
+                            current_tick=self.sim.tick,
+                            reason="floor_changed",
+                        )
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
+                    if live_timeskip_active:
+                        self._unschedule_move_due(eid)
+                    continue
+                if (int(pos.x), int(pos.y), int(pos.z)) == vertical_segment.source:
+                    try_vertical_transition(
+                        self.sim,
+                        eid,
+                        vertical_segment,
+                        reason=f"npc_{str(ai.state or 'travel').strip().lower()}",
+                    )
+                    next_tick = int(self.sim.tick) + 1
+                    if throttle:
+                        throttle.next_move_tick = max(int(getattr(throttle, "next_move_tick", 0) or 0), next_tick)
+                    else:
+                        self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), next_tick)
+                    if live_timeskip_active:
+                        self._schedule_move_due(eid, next_tick)
+                    continue
+                tx, ty, tz = vertical_segment.source
 
             if self._compact_resolve_offscreen_movement(
                 eid,
@@ -6943,13 +6970,15 @@ class NPCInvestigateSystem(System):
                 "shopping",
                 "resting",
             }
-            commute_target = self._maybe_start_vehicle_commute(
-                eid,
-                ai,
-                pos,
-                (tx, ty, tz),
-                routine_path_state=routine_path_state,
-            )
+            commute_target = None
+            if vertical_segment is None:
+                commute_target = self._maybe_start_vehicle_commute(
+                    eid,
+                    ai,
+                    pos,
+                    (tx, ty, tz),
+                    routine_path_state=routine_path_state,
+                )
             if commute_target is not None:
                 tx, ty, tz = commute_target
 

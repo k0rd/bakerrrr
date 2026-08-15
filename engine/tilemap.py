@@ -156,6 +156,8 @@ class TileMap:
         # floor transition index:
         # maps (x,y,z,dz) -> {"x":tx, "y":ty, "z":tz, "kind":kind}
         self.floor_links = {}
+        self.floor_links_by_floor = {}
+        self.floor_link_revision = 0
 
     def _key(self, x, y, z=0):
         return (x, y, z)
@@ -303,8 +305,36 @@ class TileMap:
             "z": from_z,
             "kind": kind,
         }
+        index = getattr(self, "floor_links_by_floor", None)
+        if not isinstance(index, dict):
+            index = {}
+            self.floor_links_by_floor = index
+            for key in self.floor_links:
+                index.setdefault((int(key[2]), int(key[3])), set()).add(key)
+        else:
+            index.setdefault((int(from_z), int(dz_up)), set()).add((x, y, from_z, dz_up))
+            index.setdefault((int(to_z), int(dz_down)), set()).add((x, y, to_z, dz_down))
+        self.floor_link_revision = int(getattr(self, "floor_link_revision", 0) or 0) + 1
         self.mark_visual_changed(x, y, from_z)
         self.mark_visual_changed(x, y, to_z)
+
+    def floor_links_from(self, z, dz):
+        """Return only links departing one floor/direction, rebuilding old saves lazily."""
+
+        index = getattr(self, "floor_links_by_floor", None)
+        indexed_count = (
+            sum(len(keys) for keys in index.values() if isinstance(keys, (set, tuple, list)))
+            if isinstance(index, dict)
+            else -1
+        )
+        if not isinstance(index, dict) or indexed_count != len(getattr(self, "floor_links", {})):
+            index = {}
+            for key in getattr(self, "floor_links", {}):
+                if isinstance(key, tuple) and len(key) >= 4:
+                    index.setdefault((int(key[2]), int(key[3])), set()).add(key)
+            self.floor_links_by_floor = index
+        keys = tuple(index.get((int(z), int(dz)), ()) or ())
+        return tuple((key, self.floor_links.get(key)) for key in keys if key in self.floor_links)
 
     def floor_transition(self, x, y, z, dz):
         return self.floor_links.get((x, y, z, dz))

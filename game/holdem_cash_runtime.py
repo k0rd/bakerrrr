@@ -17,7 +17,10 @@ from game.components import (
     CreatureIdentity,
     FinancialProfile,
     Inventory,
+    ItemUseProfile,
+    LeisureDrive,
     NPCNeeds,
+    NPCTraits,
     NPCWill,
     Occupation,
     PlayerAssets,
@@ -25,8 +28,10 @@ from game.components import (
     Vitality,
 )
 from game.population import _spawn_human
+from game.movement_runtime import try_move_entity
 from game.property_access import (
     HOLDEM_CASH_SERVICE_ID,
+    property_is_open,
     site_services_for_property,
     site_services_with_holdem_mode,
 )
@@ -40,6 +45,7 @@ from game.system_support.npc_income_runtime import (
     inventory_liquid_credits,
     spend_npc_wallet_credits,
 )
+from game.vertical_navigation import next_vertical_route_segment, vertical_route_available
 
 
 HOLDEM_CASH_MAX_SEATS = 8
@@ -49,6 +55,8 @@ HOLDEM_CASH_BUY_IN = 40
 HOLDEM_CASH_ACTION_DELAY_TICKS = 6
 HOLDEM_CASH_PLAYER_CLOCK_TICKS = 300
 HOLDEM_CASH_BETWEEN_HAND_TICKS = 14
+HOLDEM_CASH_LEISURE_ID = "holdem_cash"
+HOLDEM_CASH_GUEST_APPROACH_RANGE = 14
 
 # Eight real player chairs around a five-by-three table, plus the dealer.
 _SEAT_OFFSETS = (
@@ -284,6 +292,8 @@ def _create_table_for_property(sim, prop):
             "street_bet": 0,
             "total_bet": 0,
             "leaving_after_hand": False,
+            "hands_played": 0,
+            "session_hand_limit": 0,
             "reserved_eid": None,
             "reserved_tick": 0,
             "last_action": "",
@@ -332,6 +342,7 @@ def _stamp_table(sim, table):
             tile is not None
             and str(getattr(tile, "semantic_id", "") or "") == semantic_id
             and bool(getattr(tile, "walkable", False)) is bool(walkable)
+            and str(getattr(tile, "layer", "") or "").strip().lower() == "ground_overlay"
         )
 
     def _may_stamp(x, y, z, semantic_id):
@@ -355,7 +366,7 @@ def _stamp_table(sim, table):
             glyph="=",
             color="casino_felt",
             semantic_id="fixture_holdem_cash_felt",
-            layer="fixture",
+            layer="ground_overlay",
             priority=34,
         ), z=z)
     for seat in list(table.get("seats", ()) or ()):
@@ -372,7 +383,7 @@ def _stamp_table(sim, table):
             glyph="o",
             color="casino_gold",
             semantic_id="fixture_holdem_cash_seat",
-            layer="fixture",
+            layer="ground_overlay",
             priority=35,
         ), z=z)
     dealer = table.get("dealer_cell")
@@ -388,7 +399,7 @@ def _stamp_table(sim, table):
             glyph="d",
             color="casino_gold",
             semantic_id="fixture_holdem_cash_dealer",
-            layer="fixture",
+            layer="ground_overlay",
             priority=35,
         ), z=z)
 
@@ -408,12 +419,12 @@ def holdem_cash_seat_at(sim, x, y, z=0, *, include_surface=True):
     return None, None
 
 
-def _open_seat_near(table, x, y, z):
+def _open_seat_near(table, x, y, z, *, same_floor=True):
     candidates = []
     for seat in list(table.get("seats", ()) or ()):
         if seat.get("actor_eid") is not None or seat.get("reserved_eid") is not None:
             continue
-        if _int(seat.get("z")) != _int(z):
+        if same_floor and _int(seat.get("z")) != _int(z):
             continue
         distance = abs(_int(seat.get("x")) - _int(x)) + abs(_int(seat.get("y")) - _int(y))
         candidates.append((distance, _int(seat.get("index")), seat))
@@ -449,12 +460,102 @@ def _move_actor_to_seat(sim, actor_eid, seat):
     return True
 
 
+def _stand_actor_from_seat(sim, table, actor_eid, seat):
+    pos = sim.ecs.get(Position).get(actor_eid)
+    if pos is None:
+        return False
+    seat_point = (_int(seat.get("x")), _int(seat.get("y")), _int(seat.get("z")))
+    if (int(pos.x), int(pos.y), int(pos.z)) != seat_point:
+        return True
+    center = tuple(table.get("center", seat_point))
+    occupied_table_cells = {
+        (_int(row.get("x")), _int(row.get("y")), _int(row.get("z")))
+        for row in list(table.get("seats", ()) or ())
+        if isinstance(row, dict)
+    }
+    occupied_table_cells.update(
+        tuple(_int(bit) for bit in raw[:3])
+        for raw in list(table.get("surface_cells", ()) or ())
+        if isinstance(raw, (list, tuple)) and len(raw) >= 3
+    )
+    candidates = [
+        (seat_point[0] + 1, seat_point[1]),
+        (seat_point[0] - 1, seat_point[1]),
+        (seat_point[0], seat_point[1] + 1),
+        (seat_point[0], seat_point[1] - 1),
+    ]
+    candidates.sort(
+        key=lambda point: (
+            -(abs(point[0] - _int(center[0])) + abs(point[1] - _int(center[1]))),
+            point[1],
+            point[0],
+        )
+    )
+    for x, y in candidates:
+        if (x, y, seat_point[2]) in occupied_table_cells:
+            continue
+        moved, _reason = try_move_entity(
+            sim,
+            actor_eid,
+            x,
+            y,
+            seat_point[2],
+            reason="leave_holdem_cash_seat",
+        )
+        if moved:
+            return True
+    return False
+
+
 def _player_assets(sim, actor_eid):
     return sim.ecs.get(PlayerAssets).get(actor_eid)
 
 
 def _npc_wallet(sim, actor_eid):
     return inventory_liquid_credits(sim.ecs.get(Inventory).get(actor_eid))
+
+
+def _leisure_drive_for(sim, actor_eid, *, create=True):
+    drives = sim.ecs.get(LeisureDrive)
+    drive = drives.get(actor_eid)
+    if drive is not None or not create:
+        return drive
+    rng = random.Random(f"{getattr(sim, 'seed', 0)}:leisure:{HOLDEM_CASH_LEISURE_ID}:{int(actor_eid)}")
+    drive = LeisureDrive(affinities={HOLDEM_CASH_LEISURE_ID: rng.uniform(0.18, 0.94)})
+    sim.ecs.add(actor_eid, drive)
+    return drive
+
+
+def _poker_approach_distance(sim, pos, table, prop):
+    center = tuple(table.get("center", (0, 0, 0)))
+    try:
+        destination = (_int(center[0]), _int(center[1]), _int(center[2]))
+    except (TypeError, IndexError):
+        return None
+    origin = (int(pos.x), int(pos.y), int(pos.z))
+    if origin[2] == destination[2]:
+        return abs(origin[0] - destination[0]) + abs(origin[1] - destination[1])
+    metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+    building_id = str(metadata.get("building_id", "") or "").strip()
+    segment = next_vertical_route_segment(
+        sim,
+        origin,
+        destination,
+        destination_building_id=building_id,
+    )
+    if segment is None:
+        return None
+    approach_distance = abs(origin[0] - segment.source_x) + abs(origin[1] - segment.source_y)
+    if approach_distance > HOLDEM_CASH_GUEST_APPROACH_RANGE:
+        return approach_distance
+    if not vertical_route_available(
+        sim,
+        origin,
+        destination,
+        destination_building_id=building_id,
+    ):
+        return None
+    return approach_distance
 
 
 def holdem_cash_join(sim, table_or_id, actor_eid, *, seat_index=None, actor_kind="npc", house_funded=False):
@@ -497,6 +598,8 @@ def holdem_cash_join(sim, table_or_id, actor_eid, *, seat_index=None, actor_kind
         "street_bet": 0,
         "total_bet": 0,
         "leaving_after_hand": False,
+        "hands_played": 0,
+        "session_hand_limit": 0,
         "reserved_eid": None,
         "reserved_tick": 0,
         "last_action": "sits in",
@@ -513,6 +616,14 @@ def holdem_cash_join(sim, table_or_id, actor_eid, *, seat_index=None, actor_kind
         will.target = ai.target if ai is not None else None
         will.target_eid = None
         will.last_tick = _int(getattr(sim, "tick", 0))
+    if kind == "npc" and not house_funded:
+        drive = _leisure_drive_for(sim, actor_eid)
+        if drive is not None:
+            drive.urges[HOLDEM_CASH_LEISURE_ID] = 0.0
+        rng = random.Random(
+            f"{getattr(sim, 'seed', 0)}:{table.get('id')}:session:{actor_eid}:{_int(getattr(sim, 'tick', 0))}"
+        )
+        seat["session_hand_limit"] = rng.randint(2, 5)
     table["revision"] = _int(table.get("revision")) + 1
     sim.emit(Event("holdem_cash_actor_seated", table_id=table.get("id"), property_id=table.get("property_id"), actor_eid=actor_eid, seat_index=seat.get("index"), house_regular=bool(house_funded)))
     return {"ok": True, "table": table, "seat": seat}
@@ -544,6 +655,18 @@ def _cash_out(sim, table, seat):
             property_name=table.get("property_name", "Casino"),
             emit_event=False,
         )
+    if kind == "npc":
+        drive = _leisure_drive_for(sim, actor_eid, create=False)
+        if drive is not None:
+            rng = random.Random(
+                f"{getattr(sim, 'seed', 0)}:{table.get('id')}:cooldown:{actor_eid}:{_int(getattr(sim, 'tick', 0))}"
+            )
+            drive.resolve(
+                HOLDEM_CASH_LEISURE_ID,
+                tick=_int(getattr(sim, "tick", 0)),
+                cooldown_ticks=rng.randint(240, 480),
+                residual=0.08,
+            )
     ai = sim.ecs.get(AI).get(actor_eid)
     will = sim.ecs.get(NPCWill).get(actor_eid)
     if ai is not None and str(getattr(ai, "state", "") or "") in {"playing_poker", "seeking_poker_table"}:
@@ -555,6 +678,7 @@ def _cash_out(sim, table, seat):
         will.target = None
         will.target_eid = None
         will.last_tick = _int(getattr(sim, "tick", 0))
+    _stand_actor_from_seat(sim, table, actor_eid, seat)
     sim.emit(Event("holdem_cash_actor_left", table_id=table.get("id"), property_id=table.get("property_id"), actor_eid=actor_eid, seat_index=seat.get("index"), chips=chips))
     seat.update({
         "actor_eid": None,
@@ -568,6 +692,8 @@ def _cash_out(sim, table, seat):
         "street_bet": 0,
         "total_bet": 0,
         "leaving_after_hand": False,
+        "hands_played": 0,
+        "session_hand_limit": 0,
         "reserved_eid": None,
         "reserved_tick": 0,
         "last_action": "",
@@ -933,6 +1059,16 @@ def _settle_showdown(sim, table):
 
 def _finish_settlement(sim, table):
     for seat in list(table.get("seats", ()) or ()):
+        if (
+            str(seat.get("actor_kind", "") or "").strip().lower() == "npc"
+            and seat.get("actor_eid") is not None
+            and bool(seat.get("hole"))
+        ):
+            seat["hands_played"] = _int(seat.get("hands_played")) + 1
+            hand_limit = max(1, _int(seat.get("session_hand_limit"), 3))
+            if _int(seat.get("hands_played")) >= hand_limit:
+                seat["leaving_after_hand"] = True
+                seat["last_action"] = "racks up after the hand"
         seat["hole"] = []
         seat["street_bet"] = 0
         seat["total_bet"] = 0
@@ -1224,6 +1360,24 @@ class HoldemCashSystem(System):
                 continue
             seat["reserved_eid"] = None
             seat["reserved_tick"] = 0
+            ai = self.sim.ecs.get(AI).get(reserved)
+            if ai is not None and str(getattr(ai, "state", "") or "") == "seeking_poker_table":
+                ai.state = "idle"
+                ai.target = None
+                ai.target_eid = None
+            will = self.sim.ecs.get(NPCWill).get(reserved)
+            if will is not None and str(getattr(will, "intent", "") or "") == "seeking_poker_table":
+                will.intent = "idle"
+                will.target = None
+                will.target_eid = None
+            drive = _leisure_drive_for(self.sim, reserved, create=False)
+            if drive is not None:
+                drive.resolve(
+                    HOLDEM_CASH_LEISURE_ID,
+                    tick=now,
+                    cooldown_ticks=120,
+                    residual=0.35,
+                )
             table["revision"] = _int(table.get("revision")) + 1
 
     def _invite_guests(self):
@@ -1232,13 +1386,17 @@ class HoldemCashSystem(System):
         identities = self.sim.ecs.get(CreatureIdentity)
         occupations = self.sim.ecs.get(Occupation)
         needs_map = self.sim.ecs.get(NPCNeeds)
+        traits_map = self.sim.ecs.get(NPCTraits)
+        use_profiles = self.sim.ecs.get(ItemUseProfile)
+        now = _int(getattr(self.sim, "tick", 0))
         seated = {seat.get("actor_eid") for table in _tables(self.sim, create=False).values() for seat in list(table.get("seats", ()) or ()) if isinstance(seat, dict)}
         dealers = {table.get("dealer_eid") for table in _tables(self.sim, create=False).values() if isinstance(table, dict)}
         for table in list(_tables(self.sim, create=False).values()):
             prop = getattr(self.sim, "properties", {}).get(table.get("property_id"))
             if not isinstance(prop, dict) or len(_occupied(table)) >= HOLDEM_CASH_MAX_SEATS:
                 continue
-            center = table.get("center", (0, 0, 0))
+            if property_is_open(self.sim, prop) is False:
+                continue
             candidates = []
             for eid, pos in positions.items():
                 if eid in seated or eid in dealers or eid == getattr(self.sim, "player_eid", None):
@@ -1249,25 +1407,42 @@ class HoldemCashSystem(System):
                     continue
                 if str(getattr(ai, "state", "") or "") not in {"idle", "lounging", "socializing"}:
                     continue
-                if int(pos.z) != _int(center[2]) or abs(int(pos.x) - _int(center[0])) + abs(int(pos.y) - _int(center[1])) > 14:
+                approach_distance = _poker_approach_distance(self.sim, pos, table, prop)
+                if approach_distance is None or approach_distance > HOLDEM_CASH_GUEST_APPROACH_RANGE:
                     continue
                 career = str(getattr(occupations.get(eid), "career", "") or "").strip().lower()
                 if career in {"table_dealer", "proposition_player"} or _npc_wallet(self.sim, eid) < _int(table.get("buy_in")):
                     continue
-                social = float(getattr(needs_map.get(eid), "social", 50.0) or 50.0)
-                rng = random.Random(f"{getattr(self.sim, 'seed', 0)}:{table.get('id')}:guest:{eid}:{_int(getattr(self.sim, 'tick', 0)) // 60}")
-                desire = 0.05 + max(0.0, (65.0 - social) / 250.0)
-                if rng.random() <= desire:
-                    candidates.append((rng.random(), int(eid), pos))
+                drive = _leisure_drive_for(self.sim, eid)
+                if drive is None or not drive.available(HOLDEM_CASH_LEISURE_ID, now):
+                    continue
+                affinity = drive.affinity_for(HOLDEM_CASH_LEISURE_ID)
+                needs = needs_map.get(eid)
+                social = float(getattr(needs, "social", 50.0)) if needs is not None else 50.0
+                social_need = max(0.0, min(1.0, (70.0 - social) / 70.0))
+                traits = traits_map.get(eid)
+                discipline = max(0.0, min(1.0, float(getattr(traits, "discipline", 0.5))))
+                profile = use_profiles.get(eid)
+                risk = max(0.0, min(1.0, float(getattr(profile, "risk_tolerance", 0.4))))
+                proximity = 1.0 - (
+                    min(float(HOLDEM_CASH_GUEST_APPROACH_RANGE), float(approach_distance))
+                    / float(HOLDEM_CASH_GUEST_APPROACH_RANGE)
+                )
+                gain = 0.045 + affinity * 0.075 + social_need * 0.065 + risk * 0.045
+                gain += (1.0 - discipline) * 0.025 + proximity * 0.025
+                urge = drive.add_urge(HOLDEM_CASH_LEISURE_ID, gain)
+                threshold = 0.74 - affinity * 0.17 - risk * 0.07 - social_need * 0.05
+                if urge >= threshold:
+                    candidates.append((-urge, -affinity, int(approach_distance), int(eid), pos, drive))
             if not candidates:
                 continue
             candidates.sort()
-            _roll, eid, pos = candidates[0]
-            seat = _open_seat_near(table, pos.x, pos.y, pos.z)
+            _urge_sort, _affinity_sort, _distance, eid, pos, drive = candidates[0]
+            seat = _open_seat_near(table, pos.x, pos.y, pos.z, same_floor=False)
             if seat is None:
                 continue
             seat["reserved_eid"] = eid
-            seat["reserved_tick"] = _int(getattr(self.sim, "tick", 0))
+            seat["reserved_tick"] = now
             ai = ais.get(eid)
             will = self.sim.ecs.get(NPCWill).get(eid)
             target = (_int(seat.get("x")), _int(seat.get("y")), _int(seat.get("z")))
@@ -1280,8 +1455,17 @@ class HoldemCashSystem(System):
                 will.intent = "seeking_poker_table"
                 will.target = target
                 will.target_eid = None
-                will.last_tick = _int(getattr(self.sim, "tick", 0))
+                will.last_tick = now
             table["revision"] = _int(table.get("revision")) + 1
+            self.sim.emit(Event(
+                "npc_leisure_urge_committed",
+                npc_eid=eid,
+                activity=HOLDEM_CASH_LEISURE_ID,
+                table_id=table.get("id"),
+                property_id=table.get("property_id"),
+                target=target,
+                urge=drive.urge_for(HOLDEM_CASH_LEISURE_ID),
+            ))
 
     def on_npc_seat_arrived(self, event):
         eid = event.data.get("npc_eid")
@@ -1295,6 +1479,14 @@ class HoldemCashSystem(System):
             if seat is not None and seat.get("reserved_eid") == eid:
                 seat["reserved_eid"] = None
                 seat["reserved_tick"] = 0
+            drive = _leisure_drive_for(self.sim, eid, create=False)
+            if drive is not None:
+                drive.resolve(
+                    HOLDEM_CASH_LEISURE_ID,
+                    tick=_int(getattr(self.sim, "tick", 0)),
+                    cooldown_ticks=120,
+                    residual=0.35,
+                )
 
     def on_entity_damaged(self, event):
         target_eid = event.data.get("target_eid")

@@ -879,6 +879,49 @@ class NPCNeeds:
         self.critical = set()
 
 
+class LeisureDrive:
+    """Sparse persistent wants for voluntary leisure activities.
+
+    Activity runtimes own their particular scoring.  The component only keeps
+    stable affinity, accumulated urge, and cooldown state so a person can want
+    something over time instead of being selected by a one-tick random roll.
+    """
+
+    def __init__(self, affinities=None, urges=None, cooldown_until=None):
+        self.affinities = {
+            str(key): max(0.0, min(1.0, float(value)))
+            for key, value in dict(affinities or {}).items()
+        }
+        self.urges = {
+            str(key): max(0.0, min(1.0, float(value)))
+            for key, value in dict(urges or {}).items()
+        }
+        self.cooldown_until = {
+            str(key): int(value)
+            for key, value in dict(cooldown_until or {}).items()
+        }
+
+    def affinity_for(self, activity, default=0.5):
+        return float(self.affinities.get(str(activity), default))
+
+    def urge_for(self, activity):
+        return float(self.urges.get(str(activity), 0.0))
+
+    def add_urge(self, activity, amount):
+        key = str(activity)
+        value = max(0.0, min(1.0, self.urge_for(key) + float(amount)))
+        self.urges[key] = value
+        return value
+
+    def available(self, activity, tick):
+        return int(tick) >= int(self.cooldown_until.get(str(activity), 0))
+
+    def resolve(self, activity, *, tick, cooldown_ticks, residual=0.0):
+        key = str(activity)
+        self.urges[key] = max(0.0, min(1.0, float(residual)))
+        self.cooldown_until[key] = int(tick) + max(0, int(cooldown_ticks))
+
+
 class NPCTraits:
     def __init__(self, bravery=0.5, empathy=0.5, loyalty=0.5, discipline=0.5):
         self.bravery = float(bravery)

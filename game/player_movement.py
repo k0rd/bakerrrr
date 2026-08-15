@@ -22,6 +22,9 @@ _BUMP_YIELD_BLOCKING_STATES = frozenset({
     "protecting",
     "warning",
 })
+_BUMP_ANCHORED_STATES = frozenset({
+    "playing_poker",
+})
 
 
 def _manhattan(ax, ay, bx, by):
@@ -71,10 +74,14 @@ def _npc_should_yield_to_bump(sim, npc_eid, player_eid):
         return False
 
     state = str(getattr(ai, "state", "") or "").strip().lower()
+    if state in _BUMP_ANCHORED_STATES:
+        return False
     if state in _BUMP_YIELD_BLOCKING_STATES and _same_eid(getattr(ai, "target_eid", None), player_eid):
         return False
     will = sim.ecs.get(NPCWill).get(npc_eid)
     intent = str(getattr(will, "intent", "") or "").strip().lower() if will is not None else ""
+    if intent in _BUMP_ANCHORED_STATES:
+        return False
     if intent in _BUMP_YIELD_BLOCKING_STATES and _same_eid(getattr(will, "target_eid", None), player_eid):
         return False
     return True
