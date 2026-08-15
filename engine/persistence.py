@@ -815,7 +815,18 @@ def snapshot_simulation(sim):
     }
 
 
-def restore_simulation(snapshot):
+def _report_load_progress(callback, stage, completed, total, detail=""):
+    if not callable(callback):
+        return
+    try:
+        callback(str(stage), int(completed), int(total), str(detail or ""))
+    except Exception:
+        # Save integrity must not depend on a best-effort presentation callback.
+        return
+
+
+def restore_simulation(snapshot, *, progress_callback=None):
+    _report_load_progress(progress_callback, "save_restore", 0, 6, "Validating saved city")
     if not isinstance(snapshot, dict):
         raise ValueError("save snapshot must be a dictionary")
     version = int(snapshot.get("version", 0) or 0)
@@ -837,6 +848,7 @@ def restore_simulation(snapshot):
         active_chunk_radius = 2
         loaded_chunk_radius = 3
 
+    _report_load_progress(progress_callback, "save_restore", 1, 6, "Allocating simulation")
     sim = Simulation(
         seed=state.get("seed", 1234),
         map_width=int(getattr(tilemap, "width", 64) or 64),
@@ -864,6 +876,7 @@ def restore_simulation(snapshot):
     if hasattr(sim, "_bind_runtime_state"):
         sim._bind_runtime_state()
 
+    _report_load_progress(progress_callback, "save_restore", 2, 6, "Rebinding saved state")
     if hasattr(sim, "tilemap") and hasattr(sim.tilemap, "tiles_by_floor"):
         sim.tilemap.tiles = sim.tilemap.tiles_by_floor.get(0, {})
     if not hasattr(sim, "chunk_saved_states"):
@@ -885,6 +898,7 @@ def restore_simulation(snapshot):
     _restore_active_vehicle_properties(sim)
     if hasattr(sim, "rebuild_spatial_indexes"):
         sim.rebuild_spatial_indexes()
+    _report_load_progress(progress_callback, "save_restore", 4, 6, "Restoring doors and organizations")
     if hasattr(sim, "reapply_door_states"):
         sim.reapply_door_states()
     refresh_loaded_organization_branch_briefings(
@@ -892,6 +906,7 @@ def restore_simulation(snapshot):
         property_ids=tuple(getattr(sim, "properties", {}).keys()),
         reason="save_restore",
     )
+    _report_load_progress(progress_callback, "save_restore", 6, 6, "Saved city restored")
     return sim
 
 
@@ -919,10 +934,29 @@ def save_character_run(sim, name, save_dir=SAVE_DIR):
     return path
 
 
-def load_character_run(name, save_dir=SAVE_DIR, delete_on_load=True):
+def load_character_run(name, save_dir=SAVE_DIR, delete_on_load=True, *, progress_callback=None):
     path = character_save_path(name, save_dir=save_dir)
-    payload = pickle.loads(path.read_bytes())
-    sim = restore_simulation(payload)
+    total_bytes = max(1, int(path.stat().st_size))
+    payload_bytes = bytearray()
+    _report_load_progress(progress_callback, "save_read", 0, total_bytes, "Reading saved city")
+    with path.open("rb") as save_file:
+        while True:
+            chunk = save_file.read(1024 * 1024)
+            if not chunk:
+                break
+            payload_bytes.extend(chunk)
+            _report_load_progress(
+                progress_callback,
+                "save_read",
+                len(payload_bytes),
+                total_bytes,
+                "Reading saved city",
+            )
+    _report_load_progress(progress_callback, "save_decode", 0, 1, "Opening saved city")
+    payload = pickle.loads(bytes(payload_bytes))
+    _report_load_progress(progress_callback, "save_decode", 1, 1, "Saved city opened")
+    sim = restore_simulation(payload, progress_callback=progress_callback)
     if delete_on_load:
         delete_character_save(name, save_dir=save_dir)
+    _report_load_progress(progress_callback, "save_ready", 1, 1, "Save restoration ready")
     return sim

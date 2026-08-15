@@ -604,7 +604,106 @@ def _ensure_loaded_player_identity(view, sim, character_name):
     return True
 
 
-def _register_runtime_systems(sim, view, player):
+class _StartupProgress:
+    """Small Pygame bootstrap display driven by completed startup work."""
+
+    def __init__(self, view):
+        self.view = view
+        self.fraction = 0.0
+        self.label = "Preparing your run"
+        self.detail = ""
+        self._last_drawn_percent = -1
+        self._last_draw_at = 0.0
+
+    def report(self, fraction, label=None, detail=None, *, force=False):
+        try:
+            resolved_fraction = max(0.0, min(1.0, float(fraction)))
+        except (TypeError, ValueError):
+            resolved_fraction = self.fraction
+        self.fraction = max(self.fraction, resolved_fraction)
+        if label is not None:
+            self.label = str(label or "Preparing your run")
+        if detail is not None:
+            self.detail = str(detail or "")
+
+        percent = int(round(self.fraction * 100.0))
+        now = time.perf_counter()
+        percent_delta = percent - self._last_drawn_percent
+        if not force and percent_delta <= 0:
+            return
+        if not force and percent_delta < 2 and (now - self._last_draw_at) < 0.025:
+            return
+        self._draw(percent)
+        self._last_drawn_percent = percent
+        self._last_draw_at = now
+
+    def _draw(self, percent):
+        width, height = self.view.size()
+        width = max(1, int(width))
+        height = max(1, int(height))
+        inner_width = max(8, min(48, width - 10))
+        filled = int(round(inner_width * self.fraction))
+        bar = f"[{'#' * filled}{'-' * (inner_width - filled)}] {percent:3d}%"
+        rows = (
+            ("LOADING BAKERRRR", "objective"),
+            (self.label, "default"),
+            (bar, "scout"),
+            (self.detail, "muted"),
+            ("Still working - startup has not frozen.", "muted"),
+        )
+        start_y = max(0, (height - len(rows)) // 2)
+        self.view.clear()
+        for offset, (raw_text, color) in enumerate(rows):
+            text = str(raw_text or "")[:width]
+            if not text:
+                continue
+            x = max(0, (width - len(text)) // 2)
+            self.view.draw_text(x, start_y + offset, text, color=color)
+        self.view.refresh()
+
+
+def _mapped_startup_callback(progress, start, end, stage_ranges):
+    if progress is None:
+        return None
+    start = float(start)
+    span = max(0.0, float(end) - start)
+
+    def callback(stage, completed, total, detail=""):
+        phase_start, phase_end, label = stage_ranges.get(
+            str(stage),
+            (0.0, 1.0, str(stage or "Preparing your run").replace("_", " ").title()),
+        )
+        try:
+            ratio = max(0.0, min(1.0, float(completed) / max(1.0, float(total))))
+        except (TypeError, ValueError):
+            ratio = 0.0
+        local_fraction = float(phase_start) + (float(phase_end) - float(phase_start)) * ratio
+        progress.report(start + span * local_fraction, label, detail)
+
+    return callback
+
+
+_SAVE_STARTUP_STAGES = {
+    "save_read": (0.00, 0.18, "Reading your saved city"),
+    "save_decode": (0.18, 0.32, "Opening your saved city"),
+    "save_restore": (0.32, 0.98, "Restoring the living city"),
+    "save_ready": (0.98, 1.00, "Saved city restored"),
+}
+
+_WORLD_STARTUP_STAGES = {
+    "world_bootstrap": (0.00, 1.00, "Growing your starting district"),
+}
+
+_AUDIO_STARTUP_STAGES = {
+    "audio_prepare": (0.00, 0.03, "Preparing procedural audio"),
+    "audio_synthesize": (0.03, 0.68, "Synthesizing music and sound layers"),
+    "audio_validate": (0.68, 0.85, "Checking the sound bank"),
+    "audio_decode": (0.85, 0.99, "Loading sounds into memory"),
+    "audio_ready": (0.99, 1.00, "Sound bank ready"),
+}
+
+
+def _register_runtime_systems(sim, view, player, *, audio_progress_callback=None):
     def _live_timeskip_stride(system, stride):
         setattr(system, "live_timeskip_tick_stride", int(stride))
         return system
@@ -716,6 +815,7 @@ def _register_runtime_systems(sim, view, player):
             pygame_module,
             player,
             mixer_buffer=getattr(view, "audio_mixer_buffer", 512),
+            progress_callback=audio_progress_callback,
         )
     sim.item_system = item_system
     sim.item_action_system = item_system.item_actions
@@ -2827,7 +2927,17 @@ def _show_custom_content_notices(view, content_result):
             show_final_notice(view, wait=True, **notice)
 
 
-def _run_new_game(view, character_name, gender_identity, *, debug_mode=False, custom_content_result=None):
+def _run_new_game(
+    view,
+    character_name,
+    gender_identity,
+    *,
+    debug_mode=False,
+    custom_content_result=None,
+    startup_progress=None,
+):
+    if startup_progress is not None:
+        startup_progress.report(0.07, "Preparing a new city", "Sizing the playable world")
     screen_w, screen_h = view.size()
 
     map_width = max(24, min(96, screen_w))
@@ -2836,6 +2946,8 @@ def _run_new_game(view, character_name, gender_identity, *, debug_mode=False, cu
     if custom_content_result is not None:
         apply_custom_content(custom_content_result)
 
+    if startup_progress is not None:
+        startup_progress.report(0.10, "Creating the simulation", "Setting the run seed and world rules")
     sim = Simulation(
         seed=_resolve_run_seed(),
         map_width=map_width,
@@ -2862,6 +2974,8 @@ def _run_new_game(view, character_name, gender_identity, *, debug_mode=False, cu
     prime_run_echoes_runtime(sim)
     prime_ecology_registry(sim)
     prime_fashion_market(sim)
+    if startup_progress is not None:
+        startup_progress.report(0.17, "Priming world memory", "Bones, echoes, ecology, and fashion")
     run_nonce = _resolve_run_nonce()
     run_rng = random.Random(run_nonce)
     sim.world_traits["playtest_start"] = {"nonce": run_nonce}
@@ -2871,12 +2985,32 @@ def _run_new_game(view, character_name, gender_identity, *, debug_mode=False, cu
         character_name,
         run_rng,
         gender_identity=gender_identity,
+        progress_callback=_mapped_startup_callback(
+            startup_progress,
+            0.18,
+            0.66,
+            _WORLD_STARTUP_STAGES,
+        ),
     )
     set_debug_mode(sim, debug_mode, source="startup" if debug_mode else "public")
     if hasattr(sim, "reapply_door_states"):
         sim.reapply_door_states()
-    _register_runtime_systems(sim, view, bootstrap.player_eid)
+    if startup_progress is not None:
+        startup_progress.report(0.68, "Wiring the living city", "Connecting simulation systems")
+    _register_runtime_systems(
+        sim,
+        view,
+        bootstrap.player_eid,
+        audio_progress_callback=_mapped_startup_callback(
+            startup_progress,
+            0.70,
+            0.98,
+            _AUDIO_STARTUP_STAGES,
+        ),
+    )
 
+    if startup_progress is not None:
+        startup_progress.report(0.99, "Finishing your arrival", "Writing the opening city log")
     sim.log.add("You arrive with a bag, a pulse, and no curated landing.")
     sim.log.add(f"Character: {character_name}.")
     sim.log.add(f"World seed: {sim.seed}.")
@@ -2939,11 +3073,26 @@ def _run_new_game(view, character_name, gender_identity, *, debug_mode=False, cu
     else:
         sim.log.add("Combat is forgiving: being downed costs credits and resets HP instead of ending the run.")
 
+    if startup_progress is not None:
+        startup_progress.report(1.0, "City ready", "Entering the street", force=True)
     return _run_loop(sim, view, character_name)
 
 
-def _run_loaded_game(view, character_name, *, debug_mode=False):
-    sim = load_character_run(character_name, delete_on_load=False)
+def _run_loaded_game(view, character_name, *, debug_mode=False, startup_progress=None):
+    if startup_progress is not None:
+        startup_progress.report(0.02, "Finding your saved city", "The save remains intact until resume is ready", force=True)
+    sim = load_character_run(
+        character_name,
+        delete_on_load=False,
+        progress_callback=_mapped_startup_callback(
+            startup_progress,
+            0.03,
+            0.50,
+            _SAVE_STARTUP_STAGES,
+        ),
+    )
+    if startup_progress is not None:
+        startup_progress.report(0.52, "Checking saved content", "Matching the run to installed custom content")
     content_result = validate_custom_content_for_resume(getattr(sim, "custom_content_manifest", None))
     _show_custom_content_notices(view, content_result)
     if bool(getattr(content_result, "blocking", False)):
@@ -2966,6 +3115,8 @@ def _run_loaded_game(view, character_name, *, debug_mode=False):
     prime_run_echoes_runtime(sim)
     prime_ecology_registry(sim)
     prime_fashion_market(sim)
+    if startup_progress is not None:
+        startup_progress.report(0.59, "Rebuilding runtime memory", "Ecology, fashion, and run echoes")
     if not isinstance(getattr(sim, "world_traits", None), dict):
         sim.world_traits = {}
     if sim.character_name:
@@ -2990,22 +3141,56 @@ def _run_loaded_game(view, character_name, *, debug_mode=False):
         return None
     set_debug_mode(sim, debug_mode, source="startup" if debug_mode else "public")
 
+    if startup_progress is not None:
+        startup_progress.report(0.63, "Streaming your neighborhood", "Restoring the world around your operator")
     player_pos = sim.ecs.get(Position).get(player)
     if player_pos:
         sim.stream_world(player_pos.x, player_pos.y)
         sim.ensure_loaded_chunk_terrain()
 
-    _register_runtime_systems(sim, view, player)
+    if startup_progress is not None:
+        startup_progress.report(0.68, "Wiring the living city", "Connecting simulation systems")
+    _register_runtime_systems(
+        sim,
+        view,
+        player,
+        audio_progress_callback=_mapped_startup_callback(
+            startup_progress,
+            0.70,
+            0.98,
+            _AUDIO_STARTUP_STAGES,
+        ),
+    )
+    if startup_progress is not None:
+        startup_progress.report(0.99, "Finalizing resume", "Consuming the one-use save after successful setup")
     delete_character_save(character_name)
     sim.log.add(f"Resumed character: {sim.character_name or character_name}.")
     sim.log.add("Save file consumed after resume setup. Quit again to write a fresh save.")
+    if startup_progress is not None:
+        startup_progress.report(1.0, "City restored", "Returning to the street", force=True)
     return _run_loop(sim, view, sim.character_name or character_name)
 
 
-def _run_character_session(view, character_name, gender_identity=None, *, debug_mode=False):
+def _run_character_session(
+    view,
+    character_name,
+    gender_identity=None,
+    *,
+    debug_mode=False,
+    startup_progress=None,
+):
     """Launch either a resumed run or a fresh run for a given view backend."""
+    if startup_progress is not None:
+        startup_progress.report(0.01, "Checking for a saved city", character_name, force=True)
     if character_save_exists(character_name):
-        return _run_loaded_game(view, character_name, debug_mode=debug_mode)
+        return _run_loaded_game(
+            view,
+            character_name,
+            debug_mode=debug_mode,
+            startup_progress=startup_progress,
+        )
+    if startup_progress is not None:
+        startup_progress.report(0.03, "Checking custom content", "Preparing a fresh run")
     custom_content_result = load_custom_content_for_new_run()
     _show_custom_content_notices(view, custom_content_result)
     if bool(getattr(custom_content_result, "blocking", False)):
@@ -3041,6 +3226,7 @@ def _run_character_session(view, character_name, gender_identity=None, *, debug_
         resolved_identity,
         debug_mode=debug_mode,
         custom_content_result=custom_content_result,
+        startup_progress=startup_progress,
     )
 
 
@@ -3097,7 +3283,15 @@ def _run_pygame(*, debug_mode=False):
             if not selected_identity:
                 return None
         view.pygame.display.set_caption(f"bakerrrr - {character_name}")
-        run_end = _run_character_session(view, character_name, selected_identity, debug_mode=debug_mode)
+        startup_progress = _StartupProgress(view)
+        startup_progress.report(0.0, "Preparing your run", "Startup progress follows completed work", force=True)
+        run_end = _run_character_session(
+            view,
+            character_name,
+            selected_identity,
+            debug_mode=debug_mode,
+            startup_progress=startup_progress,
+        )
         show_run_end_notice(view, run_end, wait=True, print_notice=True)
         return run_end
     finally:

@@ -1036,6 +1036,7 @@ def build_cues(
     sample_rate: int = DEFAULT_SAMPLE_RATE,
     channel_count: int = DEFAULT_CHANNEL_COUNT,
     music_profile: dict[str, object] | None = None,
+    progress_callback=None,
 ) -> tuple[RenderedCue, ...]:
     sample_rate = max(8_000, int(sample_rate))
     channel_count = max(1, min(2, int(channel_count)))
@@ -1045,7 +1046,8 @@ def build_cues(
         + _music_cue_definitions(music_profile or DEFAULT_MUSIC_PROFILE)
         + AMBIENT_CUE_DEFINITIONS
     )
-    for definition in definitions:
+    _report_audio_progress(progress_callback, "audio_synthesize", 0, len(definitions), "Preparing sound bank")
+    for index, definition in enumerate(definitions, start=1):
         samples = definition.builder(definition.duration, sample_rate)
         pcm, peak = _pcm_bytes(samples, channel_count)
         rendered.append(RenderedCue(
@@ -1056,11 +1058,19 @@ def build_cues(
             channel_count=channel_count,
             peak=peak,
         ))
+        _report_audio_progress(
+            progress_callback,
+            "audio_synthesize",
+            index,
+            len(definitions),
+            definition.name.replace("_", " "),
+        )
     return tuple(rendered)
 
 
-def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
+def validate_cues(cues: Iterable[RenderedCue], *, progress_callback=None) -> dict[str, float | int]:
     cues = tuple(cues)
+    _report_audio_progress(progress_callback, "audio_validate", 0, len(cues), "Checking sound bank")
     names = [cue.definition.name for cue in cues]
     if len(names) != len(set(names)):
         raise AssertionError("cue names must be unique")
@@ -1097,7 +1107,7 @@ def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
         raise AssertionError("ambient cue groups drifted from the cached bank")
     total_pcm = 0
     largest_peak = 0
-    for cue in cues:
+    for index, cue in enumerate(cues, start=1):
         with wave.open(io.BytesIO(cue.wav), "rb") as wav_file:
             if wav_file.getnchannels() != cue.channel_count:
                 raise AssertionError(f"{cue.definition.name}: wrong channel count")
@@ -1119,6 +1129,13 @@ def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
             raise AssertionError(f"{cue.definition.name}: loop boundary is not at zero")
         total_pcm += len(cue.pcm)
         largest_peak = max(largest_peak, audible_peak)
+        _report_audio_progress(
+            progress_callback,
+            "audio_validate",
+            index,
+            len(cues),
+            cue.definition.name.replace("_", " "),
+        )
 
     bytes_per_second = cues[0].sample_rate * cues[0].channel_count * SAMPLE_WIDTH if cues else 1
     if total_pcm > bytes_per_second * 130:
@@ -1128,6 +1145,16 @@ def validate_cues(cues: Iterable[RenderedCue]) -> dict[str, float | int]:
         "total_pcm_bytes": total_pcm,
         "largest_pcm_peak": largest_peak,
     }
+
+
+def _report_audio_progress(callback, stage, completed, total, detail=""):
+    if not callable(callback):
+        return
+    try:
+        callback(str(stage), int(completed), int(total), str(detail or ""))
+    except Exception:
+        # Loading feedback must never be allowed to disable otherwise-valid audio.
+        return
 
 
 def _env_enabled(name: str, default: bool = True) -> bool:
@@ -1412,6 +1439,7 @@ class PygameAudioRuntime:
         *,
         mixer_buffer: int = DEFAULT_MIXER_BUFFER,
         start_music: bool | None = None,
+        progress_callback=None,
     ):
         self.sim = sim
         self.pygame = pygame
@@ -1477,18 +1505,22 @@ class PygameAudioRuntime:
         self._descriptor_coord = None
         self._descriptor_cache: dict[str, object] = {}
 
+        _report_audio_progress(progress_callback, "audio_prepare", 0, 1, "Checking audio mixer")
         if not self.enabled:
             self.disabled_reason = "BAKERRRR_AUDIO disabled"
+            _report_audio_progress(progress_callback, "audio_ready", 1, 1, "Audio disabled")
             return
         mixer_init = pygame.mixer.get_init()
         if not mixer_init:
             self.enabled = False
             self.disabled_reason = "pygame mixer unavailable"
+            _report_audio_progress(progress_callback, "audio_ready", 1, 1, "Audio mixer unavailable")
             return
         self.sample_rate, self.sample_size, self.channel_count = (int(value) for value in mixer_init)
         if self.sample_size != -16 or self.channel_count not in {1, 2}:
             self.enabled = False
             self.disabled_reason = f"unsupported mixer format {mixer_init}"
+            _report_audio_progress(progress_callback, "audio_ready", 1, 1, "Audio format unsupported")
             return
 
         self._music_profile = music_profile_for_run(
@@ -1504,8 +1536,9 @@ class PygameAudioRuntime:
             sample_rate=self.sample_rate,
             channel_count=self.channel_count,
             music_profile=self._music_profile,
+            progress_callback=progress_callback,
         )
-        stats = validate_cues(cues)
+        stats = validate_cues(cues, progress_callback=progress_callback)
         self.generation_ms = (time.perf_counter() - started) * 1_000.0
         self.bank_bytes = int(stats["total_pcm_bytes"])
         self._definitions = {cue.definition.name: cue.definition for cue in cues}
@@ -1517,10 +1550,16 @@ class PygameAudioRuntime:
             group: pygame.mixer.Channel(index)
             for group, index in AMBIENT_CHANNEL_INDEX.items()
         }
-        self._sounds = {
-            cue.definition.name: pygame.mixer.Sound(file=io.BytesIO(cue.wav))
-            for cue in cues
-        }
+        _report_audio_progress(progress_callback, "audio_decode", 0, len(cues), "Loading cached sounds")
+        for index, cue in enumerate(cues, start=1):
+            self._sounds[cue.definition.name] = pygame.mixer.Sound(file=io.BytesIO(cue.wav))
+            _report_audio_progress(
+                progress_callback,
+                "audio_decode",
+                index,
+                len(cues),
+                cue.definition.name.replace("_", " "),
+            )
         for event_type in EVENT_CUE_MAP.keys() | EVENT_CUE_VARIANTS.keys() | WORLD_SOUND_EVENTS | ENVIRONMENT_DIRTY_EVENTS | CASINO_SOUND_EVENTS:
             sim.events.subscribe(event_type, self.on_event)
         sim.events.subscribe("quit_requested", self.on_quit_requested)
@@ -1534,6 +1573,7 @@ class PygameAudioRuntime:
             f"mixer={self.sample_rate}Hz/{self.sample_size}/{self.channel_count}ch "
             f"buffer={self.mixer_buffer} bank={self.bank_bytes}B generation={self.generation_ms:.1f}ms"
         )
+        _report_audio_progress(progress_callback, "audio_ready", 1, 1, "Sound bank ready")
 
     def _trace(self, message: str) -> None:
         if self.debug:

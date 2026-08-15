@@ -1337,7 +1337,17 @@ def bootstrap_normal_run(
     *,
     gender_identity="nonbinary",
     profile=DEFAULT_NORMAL_RUN_BOOTSTRAP_PROFILE,
+    progress_callback=None,
 ):
+    def report(completed, detail):
+        if not callable(progress_callback):
+            return
+        try:
+            progress_callback("world_bootstrap", int(completed), 6, str(detail or ""))
+        except Exception:
+            return
+
+    report(0, "Selecting a starting district")
     if not isinstance(run_rng, random.Random):
         run_rng = random.Random(str(run_rng))
 
@@ -1350,8 +1360,10 @@ def bootstrap_normal_run(
     start_focus_x += max(2, sim.chunk_size // 2)
     start_focus_y += max(2, sim.chunk_size // 2)
 
+    report(1, "Building the starting district")
     sim.stream_world(start_focus_x, start_focus_y)
     sim.ensure_loaded_chunk_terrain()
+    report(2, "Registering places and street finds")
     property_records = _register_streamed_chunk_properties(sim, sim.active_chunk)
     sim.chunk_property_records[(sim.active_chunk["cx"], sim.active_chunk["cy"])] = list(property_records)
     world_item_count = _seed_world_items(sim, property_records)
@@ -1362,6 +1374,7 @@ def bootstrap_normal_run(
     sim.world_traits["bootstrap_player_opportunity_intel"] = bool(profile.bootstrap_player_opportunity_intel)
     seed_run_objective(sim, run_rng, visible=bool(profile.objective_visible))
 
+    report(3, "Creating your operator")
     player_pos = _pick_chunk_street_spawn(sim, sim.active_chunk, run_rng)
     _ensure_walkable(sim, player_pos[0], player_pos[1], player_pos[2], glyph=".")
 
@@ -1526,10 +1539,12 @@ def bootstrap_normal_run(
     if run_rng.random() < float(profile.vehicle_seed_chance):
         vehicle = _ensure_starter_vehicle(sim, player, player_pos, run_rng)
 
+    report(4, "Populating the neighborhood")
     ambient_npc_count = len(spawn_chunk_npcs(sim, sim.active_chunk, property_records, reserved_property_ids=set()))
     ambient_npc_count += len(spawn_chunk_special_population(sim, sim.active_chunk, property_records))
     ensure_chunk_flora(sim, sim.active_chunk, property_records=property_records)
 
+    report(5, "Opening local opportunities")
     sim.stream_world(player_pos[0], player_pos[1])
     sim.ensure_loaded_chunk_terrain()
     seed_run_opportunities(sim, player_eid=player, rng=run_rng)
@@ -1571,6 +1586,7 @@ def bootstrap_normal_run(
         "starter_armor_item_id": starter_armor_item_id,
     }
 
+    report(6, "Starting district ready")
     return NormalRunBootstrapResult(
         player_eid=player,
         world_item_count=int(world_item_count),
