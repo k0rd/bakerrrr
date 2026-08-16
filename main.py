@@ -649,7 +649,7 @@ class _StartupProgress:
             (self.label, "default"),
             (bar, "scout"),
             (self.detail, "muted"),
-            ("Still working - startup has not frozen.", "muted"),
+            ("bakerrrr is loading necessary data, please wait.", "muted"),
         )
         start_y = max(0, (height - len(rows)) // 2)
         self.view.clear()
