@@ -1894,6 +1894,77 @@ class PygameView:
             self.pygame.draw.circle(overlay, self._lightened_rgba(frame, 118, amount=0.42), (leaf_x - max(0, r // 2), leaf_y - max(0, r // 2)), max(1, r // 2))
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_tree_overlay(self, x, y, color=None, attrs=0, *, kind="tree"):
+        """Draw blocking forest terrain as a tree rather than a wall block."""
+
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+        px = self.cell_px
+        seed = self._tile_visual_seed(x, y, "tree")
+        mid_x = px // 2
+        trunk_w = max(2, px // 9)
+        trunk_top = max(5, px // 2)
+        trunk = (104, 76, 48, 220)
+        trunk_edge = (62, 48, 34, 196)
+        self._draw_contact_shadow(
+            overlay,
+            self.pygame.Rect(max(2, px // 7), px - max(3, px // 7), px - max(4, px // 4), max(2, px // 10)),
+            alpha=94,
+        )
+        self.pygame.draw.rect(
+            overlay,
+            trunk_edge,
+            (mid_x - trunk_w // 2 - 1, trunk_top, trunk_w + 2, max(3, px - trunk_top - 2)),
+            border_radius=max(1, trunk_w // 3),
+        )
+        self.pygame.draw.rect(
+            overlay,
+            trunk,
+            (mid_x - trunk_w // 2, trunk_top, trunk_w, max(3, px - trunk_top - 3)),
+            border_radius=max(1, trunk_w // 3),
+        )
+
+        kind = str(kind or "tree").strip().lower()
+        if kind == "sapling":
+            crown_r = max(3, px // 6)
+            self.pygame.draw.circle(overlay, self._darkened_rgba(frame, 164, amount=0.58), (mid_x + 1, trunk_top), crown_r + 1)
+            self.pygame.draw.circle(overlay, (frame[0], frame[1], frame[2], 214), (mid_x, trunk_top - 1), crown_r)
+            self.surface.blit(overlay, (cell_x, cell_y))
+            return
+
+        conifer = (seed % 3) != 0
+        deep = self._darkened_rgba(frame, 188, amount=0.54)
+        light = self._lightened_rgba(frame, 214, amount=0.28)
+        if conifer:
+            tiers = (
+                (max(1, px // 10), max(5, px // 4)),
+                (max(3, px // 5), max(7, px // 3)),
+                (max(5, px // 3), max(9, px // 2)),
+            )
+            for top_y, half_w in tiers:
+                points = (
+                    (mid_x, top_y),
+                    (max(1, mid_x - half_w), min(px - 3, top_y + max(6, px // 3))),
+                    (min(px - 2, mid_x + half_w), min(px - 3, top_y + max(6, px // 3))),
+                )
+                self.pygame.draw.polygon(overlay, deep, [(point[0] + 1, point[1] + 1) for point in points])
+                self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 224), points)
+            self.pygame.draw.line(overlay, light, (mid_x, max(2, px // 10)), (mid_x - max(2, px // 8), px // 2), max(1, px // 24))
+        else:
+            crown_r = max(4, px // 4)
+            centers = (
+                (mid_x, max(4, px // 3)),
+                (mid_x - max(3, px // 5), max(6, px // 2)),
+                (mid_x + max(3, px // 5), max(6, px // 2)),
+            )
+            for cx, cy in centers:
+                self.pygame.draw.circle(overlay, deep, (cx + 1, cy + 1), crown_r)
+                self.pygame.draw.circle(overlay, (frame[0], frame[1], frame[2], 216), (cx, cy), crown_r)
+            self.pygame.draw.circle(overlay, light, (mid_x - max(2, px // 8), max(3, px // 4)), max(2, px // 10))
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _draw_flora_overlay(self, x, y, color=None, attrs=0, *, kind="flower"):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
         cell_x = int(x) * self.cell_px
@@ -8326,6 +8397,15 @@ class PygameView:
         if semantic_key == "terrain_block" or (glyph == "#" and color_key == "terrain_block"):
             self._draw_block_overlay(x, y, color=color, attrs=attrs)
             return "terrain_block"
+        if semantic_key == "terrain_tree":
+            self._draw_tree_overlay(x, y, color=color, attrs=attrs, kind="tree")
+            return semantic_key
+        if semantic_key == "terrain_tree_sapling":
+            self._draw_tree_overlay(x, y, color=color, attrs=attrs, kind="sapling")
+            return semantic_key
+        if semantic_key in {"terrain_tree_seedling", "terrain_reforest_spreader"}:
+            self._draw_brush_overlay(x, y, color=color, attrs=attrs)
+            return semantic_key
         if semantic_key.startswith("flora_") or color_key.startswith("flora_"):
             flora_kind = semantic_key.removeprefix("flora_") if semantic_key.startswith("flora_") else color_key.removeprefix("flora_")
             self._draw_flora_overlay(x, y, color=color, attrs=attrs, kind=flora_kind or "flower")

@@ -171,7 +171,7 @@ from game.property_access import (
     site_services_with_holdem_mode,
     world_hour as _world_hour,
 )
-from game.quick_travel_ramps import generate_quick_travel_ramp_records
+from game.quick_travel_ramps import generate_quick_travel_ramp_records, map_mode_active
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
     building_id_from_structure as _building_id_from_structure,
@@ -1421,13 +1421,20 @@ class WorldStreamingSystem(System):
         spawn_chunk_special_population(self.sim, chunk, records)
 
     def update(self):
+        # Overworld travel advances an abstract descriptor cursor.  Keeping the
+        # local stream untouched here makes consecutive map steps independent
+        # of the size of an established save; local chunks are realized once
+        # when the player returns to city view.
+        if map_mode_active(self.sim):
+            return
+
         positions = self.sim.ecs.get(Position)
         focus = positions.get(self.focus_eid)
         if not focus:
             return
 
         report = self.sim.stream_world(focus.x, focus.y)
-        self.sim.ensure_loaded_chunk_terrain()
+        self.sim.ensure_active_chunk_terrain()
         for (loaded_cx, loaded_cy), loaded_data in tuple(self.sim.world.loaded_chunks.items()):
             detail = str((loaded_data or {}).get("detail", "coarse") or "").strip().lower() or "coarse"
             if detail != "active":

@@ -6,6 +6,8 @@ world cell. Properties and chunks only derive summary state from these cells.
 
 from __future__ import annotations
 
+import random
+
 from engine.derived_facts import mark_derived_fact_changed
 from engine.events import Event
 from engine.tilemap import Tile
@@ -69,6 +71,9 @@ VEGETATION_SEMANTICS = {
     "terrain_brush",
     "floor_wilderness",
     "floor_frontier",
+    "terrain_tree_seedling",
+    "terrain_tree_sapling",
+    "terrain_reforest_spreader",
 }
 VEGETATION_COLORS = {
     "terrain_brush",
@@ -77,6 +82,18 @@ VEGETATION_COLORS = {
 }
 VEGETATION_GLYPHS = {",", ";", "\""}
 TREE_SEMANTICS = {"terrain_tree"}
+REFORESTATION_SEMANTICS = {
+    "terrain_tree_seedling",
+    "terrain_tree_sapling",
+    "terrain_reforest_spreader",
+}
+TREE_SEED_DELAY_TICKS = 6 * 600
+TREE_SAPLING_DELAY_TICKS = 18 * 600
+TREE_MATURITY_DELAY_TICKS = 48 * 600
+TREE_SPREADER_DELAY_TICKS = 12 * 600
+TREE_SPREADER_MAX_TILES = 3
+TREE_SPREADER_MAX_CHECKS = 8
+TREE_REFOREST_RETRY_TICKS = 600
 _STATE_DICT_KEYS = (
     "chunk_index",
     "property_index",
@@ -88,6 +105,7 @@ _STATE_DICT_KEYS = (
     "spent_cells",
     "response_seed_ids",
     "environmental_candidate_cache",
+    "reforestation",
 )
 _STATE_SET_KEYS = ("last_active_properties", "last_smoke_properties")
 
@@ -939,9 +957,274 @@ def mark_fire_cell_spent(sim, x, y, z=0, *, cell=None, behavior=None, reason="bu
         "spent_tick": _safe_int(getattr(sim, "tick", 0), 0),
     }
     state.get("spent_cells", {})[key] = record
-    if "vegetation" in set(tags) or "brush" in set(tags) or "tree" in set(tags):
+    tag_set = set(tags)
+    tile = sim.tilemap.tile_at(key[0], key[1], key[2]) if hasattr(sim, "tilemap") else None
+    tree_semantic = _text(getattr(tile, "semantic_id", "")).lower()
+    if "vegetation" in tag_set or "brush" in tag_set or "tree" in tag_set:
         _mark_terrain_burned(sim, key, behavior=behavior)
+    if "tree" in tag_set or tree_semantic in TREE_SEMANTICS:
+        schedule_tree_reforestation(sim, key, tree_semantic=tree_semantic)
+    elif tree_semantic in REFORESTATION_SEMANTICS:
+        state.get("reforestation", {}).pop(key, None)
     return record
+
+
+def _tree_seed_site_available(sim, key):
+    if sim is None or key is None or not hasattr(sim, "tilemap"):
+        return False
+    tile = sim.tilemap.tile_at(key[0], key[1], key[2])
+    if tile is None:
+        return False
+    semantic = _text(getattr(tile, "semantic_id", "")).lower()
+    color = _text(getattr(tile, "color", "")).lower()
+    if semantic != "terrain_burned" and color != "terrain_burned":
+        return False
+    if not bool(getattr(tile, "walkable", False)):
+        return False
+    if hasattr(sim, "structure_at") and sim.structure_at(key[0], key[1], key[2]) is not None:
+        return False
+    if hasattr(sim, "property_covering") and sim.property_covering(key[0], key[1], key[2]) is not None:
+        return False
+    return True
+
+
+def _tree_seed_site_will_be_burned(sim, key):
+    if _tree_seed_site_available(sim, key):
+        return True
+    state = fire_state(sim)
+    return _safe_int((state.get("cells", {}).get(key) or {}).get("fire_intensity"), 0) > 0
+
+
+def schedule_tree_reforestation(sim, key, *, tree_semantic="terrain_tree"):
+    """Seed one successor tree and one bounded post-fire spreading line."""
+
+    key = _coord_key(key[0], key[1], key[2]) if isinstance(key, (tuple, list)) and len(key) >= 3 else None
+    if sim is None or key is None:
+        return ()
+    state = fire_state(sim)
+    records = state.setdefault("reforestation", {})
+    # Mature trees remain the existing generic tree terrain.  Visual variety is
+    # coordinate-derived by the renderer rather than creating micro-species in
+    # the simulation or save state.
+    semantic = "terrain_tree"
+    now = _safe_int(getattr(sim, "tick", 0), 0)
+    neighbors = [
+        (key[0] + dx, key[1] + dy, key[2])
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1))
+    ]
+    random.Random(
+        f"{getattr(sim, 'seed', 0)}:tree-seed:{now}:{key[0]}:{key[1]}:{key[2]}"
+    ).shuffle(neighbors)
+    scheduled = []
+    seed_specs = [(key, "tree")]
+    spreader_site = next(
+        (candidate for candidate in neighbors if _tree_seed_site_will_be_burned(sim, candidate)),
+        None,
+    )
+    if spreader_site is not None:
+        seed_specs.append((spreader_site, "spreader"))
+    for candidate, seed_kind in seed_specs:
+        if isinstance(records.get(candidate), dict):
+            scheduled.append(candidate)
+            continue
+        germinate_tick = now + TREE_SEED_DELAY_TICKS
+        records[candidate] = {
+            "x": int(candidate[0]),
+            "y": int(candidate[1]),
+            "z": int(candidate[2]),
+            "source_x": int(key[0]),
+            "source_y": int(key[1]),
+            "source_z": int(key[2]),
+            "tree_semantic": semantic,
+            "seed_kind": seed_kind,
+            "spread_count": 0,
+            "spread_checks": 0,
+            "stage": "seed_bank",
+            "seeded_tick": int(now),
+            "next_tick": int(germinate_tick),
+        }
+        scheduled.append(candidate)
+    if scheduled:
+        state["reforestation_next_tick"] = min(
+            _safe_int(state.get("reforestation_next_tick"), now + TREE_SEED_DELAY_TICKS),
+            now + TREE_SEED_DELAY_TICKS,
+        )
+    return tuple(scheduled)
+
+
+def _set_reforestation_tile(sim, key, *, glyph, color, semantic_id, walkable, transparent, effect):
+    tile = sim.tilemap.tile_at(key[0], key[1], key[2])
+    if tile is None:
+        return False
+    visibility_changed = bool(getattr(tile, "transparent", True)) != bool(transparent)
+    sim.tilemap.set_tile_appearance(
+        key[0],
+        key[1],
+        key[2],
+        glyph=glyph,
+        color=color,
+        semantic_id=semantic_id,
+        effects=(effect,),
+    )
+    tile.walkable = bool(walkable)
+    tile.transparent = bool(transparent)
+    if visibility_changed and hasattr(sim.tilemap, "mark_visibility_changed"):
+        sim.tilemap.mark_visibility_changed(key[0], key[1], key[2])
+    return True
+
+
+def _reforestation_maturity_blocked(sim, key):
+    if hasattr(sim, "structure_at") and sim.structure_at(key[0], key[1], key[2]) is not None:
+        return True
+    if hasattr(sim, "property_covering") and sim.property_covering(key[0], key[1], key[2]) is not None:
+        return True
+    if hasattr(sim, "ground_items_at") and sim.ground_items_at(key[0], key[1], key[2]):
+        return True
+    try:
+        return bool(sim.tilemap.entities_at(key[0], key[1], key[2]))
+    except Exception:
+        return False
+
+
+def advance_tree_reforestation(sim, *, current_tick=None):
+    """Advance sparse post-fire tree seeds through brush, sapling, and tree."""
+
+    state = fire_state(sim)
+    records = state.setdefault("reforestation", {})
+    if not records:
+        state["reforestation_next_tick"] = 0
+        return {"advanced": 0, "matured": 0}
+    now = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, 0)
+    if now < _safe_int(state.get("reforestation_next_tick"), 0):
+        return {"advanced": 0, "matured": 0}
+
+    loaded = getattr(getattr(sim, "world", None), "loaded_chunks", {})
+    advanced = 0
+    matured = 0
+    for key, record in tuple(records.items()):
+        if not isinstance(record, dict) or now < _safe_int(record.get("next_tick"), now):
+            continue
+        if isinstance(loaded, dict) and loaded and sim.chunk_coords(key[0], key[1]) not in loaded:
+            record["next_tick"] = now + TREE_REFOREST_RETRY_TICKS
+            continue
+        if _safe_int((state.get("cells", {}).get(key) or {}).get("fire_intensity"), 0) > 0:
+            record["next_tick"] = now + TREE_REFOREST_RETRY_TICKS
+            continue
+        stage = _text(record.get("stage")).lower() or "seed_bank"
+        if stage == "seed_bank":
+            if not _tree_seed_site_available(sim, key):
+                records.pop(key, None)
+                continue
+            state.get("spent_cells", {}).pop(key, None)
+            seed_kind = _text(record.get("seed_kind")).lower() or "tree"
+            if seed_kind == "spreader":
+                _set_reforestation_tile(
+                    sim,
+                    key,
+                    glyph=",",
+                    color="terrain_brush",
+                    semantic_id="terrain_reforest_spreader",
+                    walkable=True,
+                    transparent=True,
+                    effect="post_fire_pioneer",
+                )
+                record["stage"] = "spreader"
+                record["next_tick"] = now + TREE_SPREADER_DELAY_TICKS
+                advanced += 1
+                continue
+            _set_reforestation_tile(
+                sim,
+                key,
+                glyph=",",
+                color="terrain_brush",
+                semantic_id="terrain_tree_seedling",
+                walkable=True,
+                transparent=True,
+                effect="tree_seedling",
+            )
+            record["stage"] = "seedling"
+            record["next_tick"] = now + TREE_SAPLING_DELAY_TICKS
+            advanced += 1
+            continue
+        if stage == "spreader":
+            spread_count = max(0, _safe_int(record.get("spread_count"), 0))
+            spread_checks = max(0, _safe_int(record.get("spread_checks"), 0)) + 1
+            record["spread_checks"] = int(spread_checks)
+            if spread_count < TREE_SPREADER_MAX_TILES:
+                candidates = [
+                    (key[0] + dx, key[1] + dy, key[2])
+                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1))
+                ]
+                random.Random(
+                    f"{getattr(sim, 'seed', 0)}:post-fire-spread:{spread_count}:{key[0]}:{key[1]}:{key[2]}"
+                ).shuffle(candidates)
+                child = next(
+                    (
+                        candidate
+                        for candidate in candidates
+                        if candidate not in records and _tree_seed_site_available(sim, candidate)
+                    ),
+                    None,
+                )
+                if child is not None:
+                    state.get("spent_cells", {}).pop(child, None)
+                    _set_reforestation_tile(
+                        sim,
+                        child,
+                        glyph=",",
+                        color="terrain_brush",
+                        semantic_id="terrain_reforest_spreader",
+                        walkable=True,
+                        transparent=True,
+                        effect="post_fire_pioneer",
+                    )
+                    spread_count += 1
+                    record["spread_count"] = int(spread_count)
+            if spread_count >= TREE_SPREADER_MAX_TILES or spread_checks >= TREE_SPREADER_MAX_CHECKS:
+                records.pop(key, None)
+            else:
+                record["next_tick"] = now + TREE_SPREADER_DELAY_TICKS
+            advanced += 1
+            continue
+        if stage == "seedling":
+            _set_reforestation_tile(
+                sim,
+                key,
+                glyph=",",
+                color="terrain_brush",
+                semantic_id="terrain_tree_sapling",
+                walkable=True,
+                transparent=True,
+                effect="tree_sapling",
+            )
+            record["stage"] = "sapling"
+            record["next_tick"] = now + TREE_MATURITY_DELAY_TICKS
+            advanced += 1
+            continue
+        if _reforestation_maturity_blocked(sim, key):
+            record["next_tick"] = now + TREE_REFOREST_RETRY_TICKS
+            continue
+        _set_reforestation_tile(
+            sim,
+            key,
+            glyph="#",
+            color="terrain_brush",
+            semantic_id="terrain_tree",
+            walkable=False,
+            transparent=False,
+            effect="mature_tree",
+        )
+        records.pop(key, None)
+        advanced += 1
+        matured += 1
+
+    future = [
+        _safe_int(record.get("next_tick"), now + TREE_REFOREST_RETRY_TICKS)
+        for record in records.values()
+        if isinstance(record, dict)
+    ]
+    state["reforestation_next_tick"] = min(future) if future else 0
+    return {"advanced": int(advanced), "matured": int(matured)}
 
 
 def _mark_terrain_burned(sim, key, *, behavior=None):

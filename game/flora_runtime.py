@@ -8,6 +8,7 @@ reauthoring plants.
 from __future__ import annotations
 
 import json
+import math
 import random
 from functools import lru_cache
 from pathlib import Path
@@ -124,6 +125,17 @@ FLORA_REGROWTH_RARITY_MULTIPLIER = {
     "common": 1.0,
     "uncommon": 1.5,
     "rare": 2.5,
+}
+FLORA_FIRE_INTEGRITY_BY_FORM = {
+    "flower": 3,
+    "grass": 4,
+    "reed": 5,
+    "moss": 2,
+    "lichen": 3,
+    "vine": 6,
+    "shrub": 8,
+    "fern": 5,
+    "fungus": 2,
 }
 
 
@@ -1174,6 +1186,131 @@ def update_flora_patch(sim, record_id, updates):
     return updated
 
 
+def flora_fire_integrity_max(record):
+    """Return a small persistent heat budget for one flora patch."""
+
+    if not isinstance(record, dict):
+        return 1
+    traits = _record_traits(record)
+    configured = record.get("fire_integrity_max", traits.get("fire_integrity"))
+    fallback = FLORA_FIRE_INTEGRITY_BY_FORM.get(_str_key(record.get("growth_form")), 4)
+    return max(1, _safe_int(configured, fallback))
+
+
+def apply_flora_fire_damage(sim, record, amount, *, fire_intensity=1, source_eid=None):
+    """Scorch one canonical flora-layer patch and persist the result.
+
+    Flora deliberately remains outside ECS and property durability.  Failed
+    plants stay on their own render layer as visible withered remains, while a
+    destruction event gives ecology systems a clean reaction seam.
+    """
+
+    if not isinstance(record, dict):
+        return {"damaged": False, "reason": "missing_flora"}
+    record_id = str(record.get("id") or "").strip()
+    canonical = getattr(sim, "flora_patches", {}).get(record_id)
+    if isinstance(canonical, dict):
+        record = canonical
+    if not record_id or bool(record.get("fire_destroyed")):
+        return {"damaged": False, "reason": "already_destroyed"}
+
+    profile = _catalog_row_for_record(record)
+    traits = _record_traits(record)
+    spread_profile = {}
+    for source in ((profile or {}).get("spread_profile"), record.get("spread_profile")):
+        if isinstance(source, dict):
+            spread_profile.update(source)
+    try:
+        resistance = float(
+            record.get(
+                "fire_resistance",
+                traits.get("fire_resistance", spread_profile.get("fire_resistance", 1.0)),
+            )
+            or 1.0
+        )
+    except (TypeError, ValueError):
+        resistance = 1.0
+    resistance = max(0.25, min(4.0, resistance))
+    requested = max(0, _safe_int(amount, 0))
+    loss = max(1, int(math.ceil(float(requested) / resistance))) if requested > 0 else 0
+    maximum = flora_fire_integrity_max(record)
+    before = max(0, min(maximum, _safe_int(record.get("fire_integrity"), maximum)))
+    after = max(0, before - loss)
+    applied = max(0, before - after)
+    if applied <= 0:
+        return {"damaged": False, "reason": "no_damage"}
+
+    tick = _safe_int(getattr(sim, "tick", 0), 0)
+    updated = dict(record)
+    updated.update({
+        "fire_integrity_max": int(maximum),
+        "fire_integrity": int(after),
+        "last_fire_damage_tick": int(tick),
+        "last_fire_intensity": max(1, _safe_int(fire_intensity, 1)),
+        "last_fire_source_eid": source_eid,
+    })
+    destroyed = after <= 0
+    if destroyed:
+        updated.update({
+            "stage": "failed",
+            "failure_kind": "fire",
+            "fire_destroyed": True,
+            "fire_destroyed_tick": int(tick),
+            "harvest_count": flora_harvest_limit(updated),
+            "harvest_remaining": 0,
+            "harvest_exhausted": True,
+            "fertility_remaining": 0,
+        })
+    _store_flora_record(sim, updated)
+
+    cultivation_id = str(updated.get("cultivation_id") or "").strip()
+    cultivation = getattr(sim, "cultivation_records", None)
+    if cultivation_id and isinstance(cultivation, dict) and isinstance(cultivation.get(cultivation_id), dict):
+        cultivation[cultivation_id].update({
+            "fire_integrity_max": int(maximum),
+            "fire_integrity": int(after),
+            "last_fire_damage_tick": int(tick),
+        })
+        if destroyed:
+            cultivation[cultivation_id].update({
+                "stage": "failed",
+                "failure_kind": "fire",
+                "fire_destroyed": True,
+                "fire_destroyed_tick": int(tick),
+                "harvest_remaining": 0,
+                "fertility_remaining": 0,
+            })
+
+    payload = {
+        "flora_id": record_id,
+        "plant_id": updated.get("plant_id"),
+        "plant_name": updated.get("name") or updated.get("plant_name"),
+        "growth_form": updated.get("growth_form"),
+        "damage": int(applied),
+        "integrity_before": int(before),
+        "integrity": int(after),
+        "max_integrity": int(maximum),
+        "fire_intensity": max(1, _safe_int(fire_intensity, 1)),
+        "source_eid": source_eid,
+        "x": _safe_int(updated.get("x"), 0),
+        "y": _safe_int(updated.get("y"), 0),
+        "z": _safe_int(updated.get("z"), 0),
+        "flora_record": dict(updated),
+    }
+    sim.emit(Event("flora_fire_damaged", **payload))
+    if destroyed and before > 0:
+        sim.emit(Event("flora_destroyed_by_fire", **payload))
+    return {
+        "damaged": True,
+        "flora_id": record_id,
+        "damage": int(applied),
+        "integrity_before": int(before),
+        "integrity": int(after),
+        "max_integrity": int(maximum),
+        "destroyed": bool(destroyed),
+    }
+
+
 def ensure_chunk_flora(sim, chunk, *, property_records=None):
     patches, chunk_records = ensure_flora_state(sim)
     key = _chunk_key_from_chunk(chunk)
@@ -1269,13 +1406,35 @@ def flora_records_in_rect(sim, min_x, min_y, max_x, max_y, z=0):
 
 def flora_at(sim, x, y, z=0):
     ensure_flora_state(sim)
+    try:
+        target = (int(x), int(y), int(z))
+        chunk = sim.chunk_coords(target[0], target[1])
+    except (TypeError, ValueError, AttributeError):
+        return ()
     rows = []
-    for record in getattr(sim, "flora_patches", {}).values():
+    patches = getattr(sim, "flora_patches", {})
+    chunk_records = getattr(sim, "chunk_flora_records", {})
+    indexed = isinstance(chunk_records, dict) and chunk in chunk_records
+    source_rows = tuple(chunk_records.get(chunk, ()) or ()) if indexed else tuple(patches.values())
+    seen = set()
+    for stored in source_rows:
+        record_id = str((stored or {}).get("id") or "").strip() if isinstance(stored, dict) else ""
+        record = patches.get(record_id) if record_id else None
+        if not isinstance(record, dict):
+            record = stored
         if not isinstance(record, dict):
             continue
+        if record_id and record_id in seen:
+            continue
         try:
-            if int(record.get("x", 0) or 0) == int(x) and int(record.get("y", 0) or 0) == int(y) and int(record.get("z", 0) or 0) == int(z):
+            if (
+                int(record.get("x", 0) or 0),
+                int(record.get("y", 0) or 0),
+                int(record.get("z", 0) or 0),
+            ) == target:
                 rows.append(record)
+                if record_id:
+                    seen.add(record_id)
         except (TypeError, ValueError):
             continue
     return tuple(sorted(rows, key=lambda row: str(row.get("id", ""))))

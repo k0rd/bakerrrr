@@ -8,6 +8,12 @@ from engine.events import Event
 from engine.systems import System
 from game.components import Collider, DroneState, NPCNeeds, Render, StatusEffects, Vitality
 from game.items import apply_item_fire_damage, item_display_name, split_item_stack_metadata
+from game.flora_runtime import apply_flora_fire_damage, flora_at
+from game.physical_target_runtime import (
+    apply_physical_property_damage,
+    physical_property_profile,
+    property_is_fire_damageable,
+)
 from game.property_runtime import property_metadata
 from game.system_support.actor_runtime import _apply_downed_actor_state
 from game.system_support.business_event_state import _business_event_seed_state
@@ -18,6 +24,7 @@ from game.system_support.fire_runtime import (
     FUEL_FIXTURE_TYPES,
     RISKY_ARCHETYPES,
     RISKY_ROOM_KINDS,
+    advance_tree_reforestation,
     chunk_environmental_ignition_day,
     chunk_fire_summary,
     clear_frozen_fire_boundary,
@@ -914,6 +921,45 @@ class FireSystem(System):
             event_payload["quantity_after"] = int(quantity)
             self.sim.emit(Event("ground_item_fire_damaged", **event_payload))
 
+    def _apply_fire_to_world_layers(self, coord, cell):
+        """Damage exact-cell properties and flora without broad world scans."""
+
+        fire_intensity = max(0, _safe_int(cell.get("fire_intensity"), 0))
+        if fire_intensity <= 0:
+            return
+
+        properties = getattr(self.sim, "properties", {})
+        anchor_index = getattr(self.sim, "property_anchor_index", {})
+        for property_id in tuple(anchor_index.get(coord, ()) or ()):
+            prop = properties.get(property_id)
+            if not property_is_fire_damageable(prop):
+                continue
+            profile = physical_property_profile(prop, allow_ordinary_fixture=True)
+            if not profile or bool(profile.get("broken")):
+                continue
+            apply_physical_property_damage(
+                self.sim,
+                prop,
+                max(1, 5 + fire_intensity),
+                damage_kind="fire",
+                weapon_id="fire:open_flame",
+                source_eid=None,
+                x=coord[0],
+                y=coord[1],
+                z=coord[2],
+                allow_ordinary_fixture=True,
+            )
+
+        flora_damage = max(1, 1 + fire_intensity)
+        for record in flora_at(self.sim, coord[0], coord[1], coord[2]):
+            apply_flora_fire_damage(
+                self.sim,
+                record,
+                flora_damage,
+                fire_intensity=fire_intensity,
+                source_eid=cell.get("source_eid"),
+            )
+
     def _attempt_spread_to_neighbor(self, source_coord, source_cell, target_coord):
         target_chunk = self.sim.chunk_coords(target_coord[0], target_coord[1])
         if not self._chunk_is_loaded(target_chunk):
@@ -1204,6 +1250,7 @@ class FireSystem(System):
             if fire_intensity > 0:
                 self._mark_structural_damage(coord, cell, behavior)
                 self._apply_fire_to_ground_items(coord, cell)
+                self._apply_fire_to_world_layers(coord, cell)
                 for target in _neighbor_coords(coord[0], coord[1], coord[2]):
                     self._attempt_spread_to_neighbor(coord, cell, target)
                 cell["smoke_intensity"] = max(smoke_intensity, max(1, fire_intensity))
@@ -1334,6 +1381,7 @@ class FireSystem(System):
             self._review_environmental_ignitions()
             self._advance_boundary_pressure()
             self._advance_cells()
+            advance_tree_reforestation(self.sim, current_tick=getattr(self.sim, "tick", 0))
             self._apply_entity_exposure()
             state = fire_state(self.sim)
             tick = _safe_int(getattr(self.sim, "tick", 0), 0)

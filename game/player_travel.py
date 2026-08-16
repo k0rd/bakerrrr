@@ -6,6 +6,11 @@ from engine.events import Event
 
 from game.components import NPCNeeds, PlayerAssets, PlayerControlled, VehicleState
 from game.items import ITEM_CATALOG
+from game.overworld_runtime import (
+    _clear_player_overworld_chunk,
+    _player_overworld_chunk,
+    _set_player_overworld_chunk,
+)
 from game.property_keys import is_public_owner_tag, property_lock_state
 from game.property_runtime import (
     property_is_vehicle as _property_is_vehicle,
@@ -1088,15 +1093,9 @@ class PlayerTravelRuntime:
             self.sim.city_anchor_by_chunk[current_chunk] = (pos.x, pos.y, pos.z)
             self.sim.zoom_mode = "overworld"
             self._set_overworld_view_only(eid, view_only)
+            _set_player_overworld_chunk(self.sim, eid, current_chunk)
             if state:
                 set_vehicle_speed(state, 0, tick=self.sim.tick)
-            tx, ty = self._chunk_center(current_chunk)
-            self.sim.stream_world(tx, ty)
-            self.sim.ensure_loaded_chunk_terrain()
-            tx, ty = self._find_walkable_near(tx, ty, z=0, radius=6)
-            self._teleport_entity(eid, pos, tx, ty, 0, reason="zoom_overworld")
-            if not view_only and vehicle_prop:
-                self._sync_vehicle_property_position(vehicle_prop, tx, ty, 0)
             self.action_system._clear_cover(eid, reason="zoom")
             desc = self.sim.world.overworld_descriptor(current_chunk[0], current_chunk[1])
             interest = self.sim.world.overworld_interest(current_chunk[0], current_chunk[1], descriptor=desc)
@@ -1140,9 +1139,10 @@ class PlayerTravelRuntime:
             ))
             return
 
-        chunk = self.sim.world.get_chunk(current_chunk[0], current_chunk[1])
-        district = chunk.get("district", {})
-        area_type = str(district.get("area_type", "city")).lower()
+        physical_chunk = current_chunk
+        current_chunk = _player_overworld_chunk(self.sim, eid, pos=pos)
+        desc = self.sim.world.overworld_descriptor(current_chunk[0], current_chunk[1])
+        area_type = str(desc.get("area_type", "city")).lower()
         state = self._vehicle_state_for(eid)
         vehicle_prop = self._active_vehicle_property(eid)
         vehicle_medium = vehicle_medium_for_property(vehicle_prop) if vehicle_prop else "land"
@@ -1154,8 +1154,15 @@ class PlayerTravelRuntime:
             anchor = (ax, ay, 0)
 
         tx, ty, tz = int(anchor[0]), int(anchor[1]), int(anchor[2])
+        # Cross-chunk map travel keeps the physical actor and vehicle at their
+        # last local anchor.  Move them exactly once at the local-world
+        # boundary, before unloading the old chunk can archive the active car.
+        if current_chunk != physical_chunk:
+            self._teleport_entity(eid, pos, tx, ty, tz, reason="zoom_city_stage")
+            if state and state.in_vehicle and vehicle_prop:
+                self._sync_vehicle_property_position(vehicle_prop, tx, ty, tz)
         self.sim.stream_world(tx, ty)
-        self.sim.ensure_loaded_chunk_terrain()
+        self.sim.ensure_active_chunk_terrain()
         if (
             state
             and state.in_vehicle
@@ -1176,6 +1183,8 @@ class PlayerTravelRuntime:
         self._teleport_entity(eid, pos, tx, ty, tz, reason="zoom_city")
         if state and state.in_vehicle and vehicle_prop:
             self._sync_vehicle_property_position(vehicle_prop, tx, ty, tz)
+        self.sim.city_anchor_by_chunk[current_chunk] = (int(tx), int(ty), int(tz))
+        _clear_player_overworld_chunk(self.sim, eid)
         self.action_system._clear_cover(eid, reason="zoom")
         self.sim.emit(Event(
             "zoom_mode_changed",
@@ -1204,7 +1213,7 @@ class PlayerTravelRuntime:
         if step_x == 0 and step_y == 0:
             return
 
-        from_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        from_chunk = _player_overworld_chunk(self.sim, eid, pos=pos)
         target_chunk = (from_chunk[0] + step_x, from_chunk[1] + step_y)
         desc = self.sim.world.overworld_descriptor(target_chunk[0], target_chunk[1])
         interest = self.sim.world.overworld_interest(target_chunk[0], target_chunk[1], descriptor=desc)
@@ -1245,19 +1254,10 @@ class PlayerTravelRuntime:
 
         self.action_system._overworld_visit_state_for(eid).add((int(from_chunk[0]), int(from_chunk[1])))
         self.action_system._remember_overworld_chunk_memory(eid, from_chunk, source="visit")
-        tx, ty = self._chunk_center(target_chunk)
-
-        self.sim.stream_world(tx, ty)
-        self.sim.ensure_loaded_chunk_terrain()
-        tx, ty = self._find_walkable_near(tx, ty, z=0, radius=6)
-        self.sim.city_anchor_by_chunk[target_chunk] = (int(tx), int(ty), 0)
-        self._teleport_entity(eid, pos, tx, ty, 0, reason="overworld_travel")
-        self._sync_vehicle_property_position(vehicle_prop, tx, ty, 0)
+        _set_player_overworld_chunk(self.sim, eid, target_chunk)
         set_vehicle_speed(state, 0, tick=self.sim.tick)
         self.action_system._clear_cover(eid, reason="zoom")
 
-        chunk = self.sim.world.get_chunk(target_chunk[0], target_chunk[1])
-        district = chunk.get("district", {})
         energy_cost = int(travel.get("energy_cost", 0))
         safety_cost = int(travel.get("safety_cost", 0))
         social_cost = int(travel.get("social_cost", 0))
@@ -1290,8 +1290,8 @@ class PlayerTravelRuntime:
             eid=eid,
             from_chunk=from_chunk,
             to_chunk=target_chunk,
-            area_type=district.get("area_type", "city"),
-            district_type=district.get("district_type", "unknown"),
+            area_type=desc.get("area_type", "city"),
+            district_type=desc.get("district_type", "unknown"),
             terrain=desc.get("terrain"),
             path=desc.get("path"),
             region_name=desc.get("region_name"),

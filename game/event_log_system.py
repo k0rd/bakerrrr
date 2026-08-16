@@ -1333,6 +1333,9 @@ class EventLogSystem(System):
             return "Animals do not pass through doorways on their own."
         if tile and not tile.walkable:
             glyph = str(getattr(tile, "glyph", "") or "")[:1]
+            semantic = str(getattr(tile, "semantic_id", "") or "").strip().lower()
+            if semantic == "terrain_tree":
+                return "A tree blocks the way here."
             if glyph in {"#", "B", "b"}:
                 return "You cannot walk through the wall here."
             if glyph in {"+", "/"}:

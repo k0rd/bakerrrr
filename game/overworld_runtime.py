@@ -42,6 +42,82 @@ def _chunk_tuple(chunk):
         return None
 
 
+def _overworld_travel_chunk_state(sim):
+    """Return the persisted actor -> abstract map-position registry.
+
+    Quick travel deliberately keeps this separate from ``Position``.  A map
+    step should be able to discover and describe a chunk without moving the
+    local actor, vehicle property, or any chunk-owned simulation state.
+    """
+
+    state = getattr(sim, "overworld_travel_chunk_by_eid", None)
+    if not isinstance(state, dict):
+        state = {}
+        sim.overworld_travel_chunk_by_eid = state
+    return state
+
+
+def _set_player_overworld_chunk(sim, eid, chunk):
+    chunk_key = _chunk_tuple(chunk)
+    if chunk_key is None:
+        return None
+    try:
+        actor_key = int(eid)
+    except (TypeError, ValueError):
+        actor_key = eid
+    _overworld_travel_chunk_state(sim)[actor_key] = chunk_key
+    return chunk_key
+
+
+def _clear_player_overworld_chunk(sim, eid):
+    try:
+        actor_key = int(eid)
+    except (TypeError, ValueError):
+        actor_key = eid
+    state = _overworld_travel_chunk_state(sim)
+    removed = state.pop(actor_key, None)
+    if actor_key != eid:
+        state.pop(eid, None)
+    return _chunk_tuple(removed)
+
+
+def _player_overworld_chunk(sim, eid, *, pos=None):
+    """Resolve the actor's map position without requiring local realization.
+
+    The physical position remains the fallback for old saves and ordinary
+    local mode.  New quick-travel sessions persist an explicit chunk so saves
+    made while the map is open remain safe and deterministic.
+    """
+
+    try:
+        actor_key = int(eid)
+    except (TypeError, ValueError):
+        actor_key = eid
+    state = _overworld_travel_chunk_state(sim)
+    chunk = _chunk_tuple(state.get(actor_key))
+    if chunk is None and actor_key != eid:
+        chunk = _chunk_tuple(state.get(eid))
+    if chunk is not None:
+        return chunk
+
+    # Pre-descriptor saves and reduced test/runtime fixtures represented map
+    # position through the active stream focus.  Honor that only as a legacy
+    # overworld fallback; new sessions always have the explicit registry above.
+    if str(getattr(sim, "zoom_mode", "city") or "city").strip().lower() == "overworld":
+        active = _chunk_tuple(getattr(sim, "active_chunk_coord", None))
+        if active is not None:
+            return active
+
+    if pos is None and sim is not None and eid is not None:
+        pos = sim.ecs.get(Position).get(eid)
+    if pos is not None:
+        try:
+            return _chunk_tuple(sim.chunk_coords(int(pos.x), int(pos.y))) or (0, 0)
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return _chunk_tuple(getattr(sim, "active_chunk_coord", None)) or (0, 0)
+
+
 def _overworld_fill_semantic_id(area, district, terrain):
     area = str(area or "").strip().lower() or "city"
     district = str(district or "").strip().lower() or "residential"
@@ -358,9 +434,7 @@ def _overworld_lead_chunks(sim, eid, *, current_chunk=None):
 def _overworld_chunk_knowledge(sim, eid, *, current_chunk=None):
     current = _chunk_tuple(current_chunk)
     if current is None and sim is not None and eid is not None:
-        pos = sim.ecs.get(Position).get(eid)
-        if pos:
-            current = _chunk_tuple(sim.chunk_coords(pos.x, pos.y))
+        current = _player_overworld_chunk(sim, eid)
     if current is None:
         active = getattr(sim, "active_chunk_coord", None)
         current = _chunk_tuple(active) or (0, 0)
@@ -1133,7 +1207,7 @@ class PlayerOverworldRuntime:
         return True
 
     def _handle_overworld_marker_add(self, eid, pos):
-        current_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        current_chunk = _player_overworld_chunk(self.sim, eid, pos=pos)
         self._set_overworld_marker(eid=eid, chunk=current_chunk)
 
     def _handle_overworld_marker_list(self, eid, pos, limit=8):
@@ -1142,7 +1216,7 @@ class PlayerOverworldRuntime:
             self.sim.emit(Event("overworld_marker_none", eid=eid))
             return
 
-        origin_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        origin_chunk = _player_overworld_chunk(self.sim, eid, pos=pos)
         knowledge = _overworld_chunk_knowledge(self.sim, eid, current_chunk=origin_chunk)
         rows = []
         for marker in markers:
@@ -1172,7 +1246,7 @@ class PlayerOverworldRuntime:
             self.sim.emit(Event("overworld_marker_none", eid=eid))
             return
 
-        origin_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        origin_chunk = _player_overworld_chunk(self.sim, eid, pos=pos)
         knowledge = _overworld_chunk_knowledge(self.sim, eid, current_chunk=origin_chunk)
         rows = []
         for marker in markers:
@@ -1195,7 +1269,7 @@ class PlayerOverworldRuntime:
         ))
 
     def _describe_overworld_cursor(self, eid, pos, cx, cy):
-        origin_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        origin_chunk = _player_overworld_chunk(self.sim, eid, pos=pos)
         knowledge = _overworld_chunk_knowledge(self.sim, eid, current_chunk=origin_chunk)
         return self._overworld_chunk_inspect_line(
             eid,
@@ -1238,7 +1312,7 @@ class PlayerOverworldRuntime:
         return False
 
     def handle_cursor_examine(self, eid, pos, event, *, announce=False, purpose="inspect"):
-        default_cx, default_cy = self.sim.chunk_coords(pos.x, pos.y)
+        default_cx, default_cy = _player_overworld_chunk(self.sim, eid, pos=pos)
         cx = int(event.data.get("cursor_chunk_x", default_cx))
         cy = int(event.data.get("cursor_chunk_y", default_cy))
         look_state = getattr(self.sim, "look_ui", None)
@@ -1261,7 +1335,7 @@ class PlayerOverworldRuntime:
         ))
 
     def handle_scan_action(self, eid, pos):
-        cx, cy = self.sim.chunk_coords(pos.x, pos.y)
+        cx, cy = _player_overworld_chunk(self.sim, eid, pos=pos)
         sampled = [
             ("Here", cx, cy),
             ("North", cx, cy - 1),

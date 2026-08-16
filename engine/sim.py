@@ -102,6 +102,9 @@ class Simulation:
         self.turn_advance_requested = False
         self.zoom_mode = "city"
         self.city_anchor_by_chunk = {}
+        # Map travel is descriptor-level until local zoom-in.  This registry
+        # keeps its chunk position out of local actor/property indexes.
+        self.overworld_travel_chunk_by_eid = {}
         self.npc_move_tick_stride = 1
         self.world_traits = {}
         # Persistent, versioned social history.  The graph module owns schema
@@ -3241,6 +3244,23 @@ class Simulation:
         changed = False
         changed_chunks = []
         for cx, cy in self.world.loaded_chunks.keys():
+            if self.ensure_chunk_terrain(cx, cy):
+                changed = True
+                changed_chunks.append((int(cx), int(cy)))
+        if changed_chunks:
+            for chunk in changed_chunks:
+                self.reapply_door_states(chunk=chunk)
+        return changed
+
+    def ensure_active_chunk_terrain(self):
+        """Realize the local simulation window, leaving coarse map chunks abstract."""
+
+        changed = False
+        changed_chunks = []
+        for (cx, cy), loaded_data in tuple(self.world.loaded_chunks.items()):
+            detail = str((loaded_data or {}).get("detail", "coarse") or "coarse").strip().lower()
+            if detail != "active":
+                continue
             if self.ensure_chunk_terrain(cx, cy):
                 changed = True
                 changed_chunks.append((int(cx), int(cy)))

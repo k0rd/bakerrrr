@@ -79,6 +79,27 @@ def property_is_weapon_targetable(prop):
     return property_infrastructure_role(prop) in ATTACKABLE_INFRASTRUCTURE_ROLES
 
 
+def property_is_fire_damageable(prop):
+    """Return whether an anchored property has material fire integrity.
+
+    Ordinary fixtures are intentionally broader than deliberate weapon targets:
+    a bench or streetlamp can burn without becoming aim-assist clutter.  Authored
+    content can opt out explicitly for abstract markers and indestructible
+    traversal infrastructure.
+    """
+
+    if not isinstance(prop, dict):
+        return False
+    if property_is_vehicle(prop):
+        return True
+    if _property_kind(prop) not in {"fixture", "asset"}:
+        return False
+    metadata = property_metadata(prop)
+    if metadata.get("fire_damageable") is False or metadata.get("damageable") is False:
+        return False
+    return True
+
+
 def _property_target_priority(prop):
     if property_is_vehicle(prop):
         return 0
@@ -146,8 +167,10 @@ def weapon_targetable_property_at(sim, x, y, z=0):
     return candidates[0]
 
 
-def physical_property_profile(prop):
-    if not property_is_weapon_targetable(prop):
+def physical_property_profile(prop, *, allow_ordinary_fixture=False):
+    if not property_is_weapon_targetable(prop) and not (
+        allow_ordinary_fixture and property_is_fire_damageable(prop)
+    ):
         return {}
     metadata = property_metadata(prop)
     if property_is_vehicle(prop):
@@ -186,6 +209,8 @@ def _vehicle_durability_loss(raw_damage, damage_kind, weapon_id):
     kind = _clean(damage_kind).lower()
     if "explosive" in tags or kind in {"explosive", "explosion", "vehicle_explosion"}:
         return max(3, int(math.ceil(raw_damage / 8.0)))
+    if kind in {"fire", "burning", "thermal"}:
+        return max(1, int(math.ceil(raw_damage / 10.0))) if raw_damage > 0 else 0
     if "demolition" in tags:
         return max(2, int(math.ceil(raw_damage / 8.0)))
     if kind == "impact" or "collision" in kind:
@@ -224,10 +249,11 @@ def apply_physical_property_damage(
     x=None,
     y=None,
     z=None,
+    allow_ordinary_fixture=False,
 ):
     """Damage one anchored object and return a stable result payload."""
 
-    profile = physical_property_profile(prop)
+    profile = physical_property_profile(prop, allow_ordinary_fixture=allow_ordinary_fixture)
     if not profile:
         return {"damaged": False, "reason": "not_attackable"}
     property_id = _clean(prop.get("id"))

@@ -3,6 +3,7 @@
 import re
 
 from game.components import VehicleState
+from game.overworld_runtime import _player_overworld_chunk
 from game.quick_travel_ramps import QUICK_TRAVEL_RAMP_INTERACT_RADIUS, quick_travel_ramp_near
 from game.service_runtime import _int_or_default
 from game.system_support.status_runtime import (
@@ -49,6 +50,12 @@ def _hud_status_label(text, fallback="Unknown"):
 
 def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting_state, area_type, district_type, security):
     chunk_coord = getattr(sim, "active_chunk_coord", None)
+    if zoom_mode == "overworld":
+        chunk_coord = _player_overworld_chunk(
+            sim,
+            getattr(sim, "player_eid", None),
+            pos=player_pos,
+        )
     if chunk_coord:
         chunk_text = f"{int(chunk_coord[0])},{int(chunk_coord[1])}"
     else:

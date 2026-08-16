@@ -160,6 +160,7 @@
       "building_roof_secure": "terrain_building_roof",
       "building_roof_entertainment": "terrain_building_roof",
       "building_edge": "wall_building",
+      "terrain_brush": "terrain_tree",
       "terrain_block": "terrain_block",
       "default": "wall_generic"
     },

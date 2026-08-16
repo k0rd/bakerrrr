@@ -157,6 +157,7 @@ from game.overworld_runtime import (
     _overworld_hud_lines,
     _overworld_legend_line_from_snapshot,
     _overworld_render_style_from_snapshot,
+    _player_overworld_chunk,
     _player_overworld_visit_state,
     _remember_overworld_chunk_memory,
 )
@@ -2992,12 +2993,11 @@ class RenderSystem(System):
         camera_y = (player_pos.y - (map_h // 2)) if player_pos else 0
 
         def _overworld_anchor_chunk():
-            active = _chunk_tuple(getattr(self.sim, "active_chunk_coord", None))
-            if active is not None:
-                return active
-            if player_pos:
-                return self.sim.chunk_coords(player_pos.x, player_pos.y)
-            return (0, 0)
+            return _player_overworld_chunk(
+                self.sim,
+                self.player_eid,
+                pos=player_pos,
+            )
 
         look_purpose = str(look_ui.get("purpose", "inspect")).lower()
         visibility_state = getattr(self.sim, "visibility_state", {})
@@ -4145,6 +4145,12 @@ class RenderSystem(System):
         area_type = district.get("area_type", "city")
         district_type = district.get("district_type", "unknown")
         security = district.get("security_level", "?")
+        if zoom_mode == "overworld":
+            map_chunk = _overworld_anchor_chunk()
+            map_desc = self.sim.world.overworld_descriptor(map_chunk[0], map_chunk[1])
+            area_type = map_desc.get("area_type", "city")
+            district_type = map_desc.get("district_type", "unknown")
+            security = "?"
 
         assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
         player_needs = self.sim.ecs.get(NPCNeeds).get(self.player_eid)

@@ -2941,7 +2941,10 @@ class World:
             support_tags.update(city_support)
             opportunity_counts.update(city_support)
 
-            district = self.get_chunk(cx, cy).get("district", {})
+            # Security is part of the deterministic district seed, so the map
+            # can preview it without generating blocks, buildings, sites, or
+            # any other local chunk plan.
+            district = self.generate_district(cx, cy, self.chunk_rng(cx, cy))
             try:
                 security_level = int(district.get("security_level", 5))
             except (TypeError, ValueError):

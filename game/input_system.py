@@ -80,6 +80,7 @@ from game.item_semantics import (
     item_unknown_inspect_text_for_actor,
 )
 from game.opportunities import _item_label
+from game.overworld_runtime import _player_overworld_chunk
 from game.player_action_system import PlayerActionSystem
 from game.player_interactions import (
     CAMPFIRE_HERB_CACHE_CAPACITY,
@@ -4095,7 +4096,7 @@ class InputSystem(System):
             return False
 
         target_chunk = (int(chunk[0]), int(chunk[1]))
-        current_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        current_chunk = _player_overworld_chunk(self.sim, self.player_eid, pos=pos)
         label = str(marker.get("label", "") or "").strip() or f"M{int(marker.get('id', 0))}"
 
         self._stop_auto_walk(reason="stopped", announce=False)
@@ -4488,7 +4489,7 @@ class InputSystem(System):
             self._stop_auto_drive(reason="stopped", announce=False)
             return False
 
-        current_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        current_chunk = _player_overworld_chunk(self.sim, self.player_eid, pos=pos)
         target_chunk = (
             int(state.get("target_chunk_x", current_chunk[0])),
             int(state.get("target_chunk_y", current_chunk[1])),
@@ -4735,7 +4736,7 @@ class InputSystem(System):
             return False
 
         current_zoom = str(getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
-        target_chunk = tuple(target.get("chunk", self.sim.chunk_coords(pos.x, pos.y)))
+        target_chunk = tuple(target.get("chunk", _player_overworld_chunk(self.sim, self.player_eid, pos=pos)))
         focus_x, focus_y, focus_z = target.get("focus", (pos.x, pos.y, pos.z))
         detail = str(self.sim.detail_for_xy(int(focus_x), int(focus_y))).strip().lower() or "unloaded"
 
@@ -5630,7 +5631,7 @@ class InputSystem(System):
         zoom_mode = str(zoom_mode).lower()
         state["mode"] = zoom_mode
         if zoom_mode == "overworld":
-            cx, cy = self.sim.chunk_coords(pos.x, pos.y)
+            cx, cy = _player_overworld_chunk(self.sim, self.player_eid, pos=pos)
             state["chunk_x"] = int(cx)
             state["chunk_y"] = int(cy)
             state["z"] = 0
@@ -6034,7 +6035,7 @@ class InputSystem(System):
         if not pos:
             return False
 
-        current_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        current_chunk = _player_overworld_chunk(self.sim, self.player_eid, pos=pos)
         state = self._look_state()
         if bool(state.get("active")) and str(state.get("mode", "")).strip().lower() == "overworld":
             current_chunk = (
