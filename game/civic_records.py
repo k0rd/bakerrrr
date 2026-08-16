@@ -48,7 +48,7 @@ LICENSE_FEES = {
     "bounty": 125,
 }
 LICENSE_RESTRICTIONS = {
-    "hunting": ("eligible game only", "declared seasons and culls only for protected lines"),
+    "hunting": ("eligible game only", "declared seasons and culls only for protected species"),
     "cultivation": ("registered cultivation and plant commerce",),
     "bounty": (
         "matching posted alive-recovery assignments only",

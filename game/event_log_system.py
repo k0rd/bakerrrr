@@ -2998,21 +2998,33 @@ class EventLogSystem(System):
         size_class = str(event.data.get("animal_size_class") or "").replace("_", " ").strip()
         output_name = str(event.data.get("output_item_name", "meat")).strip() or "meat"
         quantity = int(event.data.get("quantity", 0) or 0)
+        pelt_name = str(event.data.get("pelt_item_name") or "").strip()
+        pelt_quantity = int(event.data.get("pelt_quantity", 0) or 0)
         tool_id = str(event.data.get("tool_item_id") or "").strip().lower()
         tool_name = item_display_name(tool_id, item_catalog=ITEM_CATALOG) if tool_id else "a blade"
         tool_phrase = f"with your {tool_name}" if tool_id else f"with {tool_name}"
         animal_text = f"the {size_class} {animal}" if size_class else animal
         output_label = output_name.lower() if output_name else "meat"
         if bool(event.data.get("kill_bag_used")):
+            pelt_note = (
+                f" You also preserve {pelt_quantity} {pelt_name.lower()}."
+                if pelt_quantity > 0 and pelt_name and str(event.data.get("output_item_id")) != str(event.data.get("pelt_item_id"))
+                else ""
+            )
             _log_player_feedback(
                 self.sim,
-                f"You cut and bagged {quantity} piece{'s' if quantity != 1 else ''} of {output_label} from the remains of {animal_text} {tool_phrase}.",
+                f"You cut and bagged {quantity} piece{'s' if quantity != 1 else ''} of {output_label} from the remains of {animal_text} {tool_phrase}.{pelt_note}",
                 kind="craft",
             )
             return
+        pelt_note = (
+            f" You also preserve {pelt_quantity} {pelt_name.lower()}."
+            if pelt_quantity > 0 and pelt_name and str(event.data.get("output_item_id")) != str(event.data.get("pelt_item_id"))
+            else ""
+        )
         _log_player_feedback(
             self.sim,
-            f"You were able to cut {quantity} piece{'s' if quantity != 1 else ''} of {output_label} from the remains of {animal_text} {tool_phrase}.",
+            f"You were able to cut {quantity} piece{'s' if quantity != 1 else ''} of {output_label} from the remains of {animal_text} {tool_phrase}.{pelt_note}",
             kind="craft",
         )
 
@@ -4957,7 +4969,7 @@ class EventLogSystem(System):
             self._warn_once("unsafe_hunting", "Warning: a hunting license does not cover urban shots or hunting on occupied property.")
         elif context == "protected_wildlife_hunting":
             summary = f"Protected wildlife harmed{site_text}: {action_label}{wildlife_text}."
-            self._warn_once("protected_wildlife_hunting", "Warning: endangered and protected lines require an active civic cull declaration as well as a hunting license.")
+            self._warn_once("protected_wildlife_hunting", "Warning: endangered and protected species require an active civic cull declaration as well as a hunting license.")
         elif context == "unarmed_assault":
             summary = f"Violence witnessed{site_text}: {action_label}."
             self._warn_once(

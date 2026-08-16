@@ -157,6 +157,7 @@ def _entity_generic_display_name(sim, eid, title_case=False):
 
     role = actor_presentation_role(sim, eid, ai=ai, occupation=occupation).replace("_", " ").strip()
     if identity:
+        phenotype = str(getattr(identity, "phenotype_descriptor", "") or "").replace("_", " ").strip()
         common = str(getattr(identity, "common_name", "") or "").replace("_", " ").strip()
         creature_type = str(getattr(identity, "creature_type", "") or "").replace("_", " ").strip()
         taxonomy = str(getattr(identity, "taxonomy_class", "") or "").replace("_", " ").strip()
@@ -173,7 +174,7 @@ def _entity_generic_display_name(sim, eid, title_case=False):
             else:
                 label = "person"
         else:
-            label = common or creature_type or species or taxonomy
+            label = phenotype or common or creature_type or species or taxonomy
     elif ai:
         label = role or "entity"
     elif hasattr(sim, "entity_identity_record"):

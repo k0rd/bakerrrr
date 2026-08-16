@@ -4706,7 +4706,13 @@ class ServiceMenuSystem(System):
 
     def _open_civic_culls(self, prop):
         state = self._dialog_ui_state()
-        rows = ecology_species_registry_rows(self.sim, "fauna")
+        lineage_rows = ecology_species_registry_rows(self.sim, "fauna")
+        populations = {}
+        for row in lineage_rows:
+            population_key = str(row.get("population_key") or row.get("native_id") or "").strip()
+            group = populations.setdefault(population_key, {**dict(row), "line_names": []})
+            group["line_names"].append(str(row.get("name") or "local creature"))
+        rows = tuple(populations.values())
         authority = civic_records_authority(self.sim, prop)
         topics = [{"id": "civic_records:root", "label": "Back to civic records"}]
         for row in rows:
@@ -4715,18 +4721,18 @@ class ServiceMenuSystem(System):
             suffix = "declared this run" if row.get("cull_active_this_run") else f"{abundance}% {status}"
             topics.append({
                 "id": f"civic_records:cull_review|{row['native_id']}",
-                "label": f"{row['name']} — {suffix}",
+                "label": f"{str(row.get('population_name') or row['name']).title()} — {suffix}",
             })
         transcript = [
-            f"{authority['authority_name']} accepts one cull declaration per fauna line per run.",
-            "A declaration lowers installation abundance by one 20-point tier and opens that line to licensed hunting for this run.",
+            f"{authority['authority_name']} accepts one cull declaration per fauna species per run.",
+            "A declaration lowers the whole species population by one 20-point tier; coat, pattern, and other micro-variations remain members of it.",
             "Five deliberate declarations across five distinct runs can end in extinction; the registry never treats repeated clicks as population history.",
         ]
         if not rows:
-            transcript.append("No installation-native fauna lines are registered for population policy yet.")
+            transcript.append("No installation-native fauna species are registered for population policy yet.")
         state.update({
             "title": "Fauna Cull Declarations",
-            "subtitle": f"{len(rows)} registered line{'s' if len(rows) != 1 else ''}",
+            "subtitle": f"{len(rows)} registered species population{'s' if len(rows) != 1 else ''}",
             "transcript": transcript,
             "topics": topics,
             "selected_index": 0,
@@ -4738,32 +4744,41 @@ class ServiceMenuSystem(System):
 
     def _open_civic_cull_review(self, prop, native_id):
         state = self._dialog_ui_state()
-        row = next((row for row in ecology_species_registry_rows(self.sim, "fauna") if str(row.get("native_id")) == str(native_id)), None)
+        registry_rows = ecology_species_registry_rows(self.sim, "fauna")
+        row = next((row for row in registry_rows if str(row.get("native_id")) == str(native_id)), None)
         if row is None:
             self._open_civic_culls(prop)
             return
         before = int(row.get("abundance", 100) or 0)
         after = max(0, before - 20)
         already = bool(row.get("cull_active_this_run"))
+        related_lines = [
+            candidate for candidate in registry_rows
+            if str(candidate.get("population_key") or "") == str(row.get("population_key") or "")
+        ]
+        population_name = str(row.get("population_name") or row["name"]).replace("_", " ").strip().title()
+        line_names = ", ".join(str(candidate.get("name") or "local line") for candidate in related_lines[:4])
         transcript = [
-            f"Line: {row['name']} — {row['appearance']}.",
+            f"Species population: {population_name}.",
+            f"Known lines in this population: {line_names}.",
+            f"Selected line appearance: {row['appearance']}.",
             f"Current population: {before}% ({str(row.get('population_status', 'common')).replace('_', ' ')}).",
         ]
         if before <= 0:
-            transcript.append("This line is extinct. Its historical record remains, but no further cull can be declared.")
+            transcript.append("This species is extinct. Its historical lines remain recorded, but no further cull can be declared.")
         elif already:
-            transcript.append("A cull has already been declared for this line during this run.")
+            transcript.append("A cull has already been declared for this species during this run.")
         else:
             transcript.extend([
                 f"Declaration effect: {before}% -> {after}% installation abundance.",
                 f"Filing fee: {FAUNA_CULL_FEE}c. This cannot be reversed inside the current run.",
-                "The declaration authorizes licensed hunting of this line for the current run; it does not excuse unsafe urban shots or unrelated offenses.",
+                "The declaration authorizes licensed hunting across this species population for the current run; it does not excuse unsafe urban shots or unrelated offenses.",
             ])
         topics = [{"id": "civic_records:culls", "label": "Back to fauna culls"}]
         if before > 0 and not already:
-            topics.append({"id": f"civic_records:cull_confirm|{row['native_id']}", "label": f"Confirm cull of {row['name']}"})
+            topics.append({"id": f"civic_records:cull_confirm|{row['native_id']}", "label": f"Confirm cull of {population_name}"})
         state.update({
-            "title": f"Cull Review: {row['name']}",
+            "title": f"Cull Review: {population_name}",
             "subtitle": "Durable installation policy",
             "transcript": transcript,
             "topics": topics,
@@ -4785,7 +4800,7 @@ class ServiceMenuSystem(System):
         )
         if result.get("ok"):
             lines = [
-                f"Cull declared for {result.get('lineage_name', 'the selected fauna line')}.",
+                f"Species cull declared from the {result.get('lineage_name', 'selected fauna')} record.",
                 f"Installation abundance moved {int(result.get('before_abundance', 0))}% -> {int(result.get('after_abundance', 0))}% ({str(result.get('status', '')).replace('_', ' ')}).",
                 f"Scarcity value is now x{float(result.get('value_multiplier', 1.0) or 1.0):g}; {int(result.get('fee', 0))}c filing fee paid.",
                 "Licensed hunters may act under this declaration during the current run. The next population step requires a later run and a new declaration.",
@@ -4797,9 +4812,9 @@ class ServiceMenuSystem(System):
             elif reason == "no_credits":
                 lines = [f"The cull filing costs {int(result.get('fee', FAUNA_CULL_FEE))}c; you have {int(result.get('credits', 0))}c."]
             elif reason == "already_declared":
-                lines = ["This fauna line has already moved one population tier during the current run."]
+                lines = ["This fauna species has already moved one population tier during the current run."]
             elif reason == "extinct":
-                lines = ["That fauna line is already extinct; only its historical registry remains."]
+                lines = ["That fauna species is already extinct; only its historical registry remains."]
             else:
                 lines = ["That cull declaration could not be filed."]
         state.update({
@@ -4809,7 +4824,7 @@ class ServiceMenuSystem(System):
             "topics": [{"id": "civic_records:culls", "label": "Back to fauna culls"}],
             "selected_index": 0,
             "scroll": 0,
-            "hint": "Population, protection, hunting legality, and provenance now read from the same durable line record.",
+            "hint": "Population and culling are species-level; line identity and pelt provenance remain more specific.",
             "service_menu_mode": "civic_records:cull_result",
         })
 

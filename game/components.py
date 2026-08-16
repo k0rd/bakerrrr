@@ -710,6 +710,8 @@ class CreatureIdentity:
         pronoun_set=None,
         name_gender_score=None,
         gender_inference_source=None,
+        phenotype_descriptor=None,
+        fauna_line_name=None,
     ):
         self.taxonomy_class = str(taxonomy_class or "other").strip().lower() or "other"
         self.species = str(species or "unknown species").strip().lower() or "unknown species"
@@ -733,15 +735,28 @@ class CreatureIdentity:
             if gender_inference_source
             else None
         )
+        # Animals receive this from their expressed genome.  It deliberately
+        # contains only outwardly readable traits; hidden alleles and lineage
+        # bookkeeping never leak through an ordinary entity label.
+        self.phenotype_descriptor = (
+            str(phenotype_descriptor).replace("_", " ").strip().lower()
+            if phenotype_descriptor
+            else None
+        )
+        self.fauna_line_name = (
+            str(fauna_line_name).replace("_", " ").strip().lower()
+            if fauna_line_name
+            else None
+        )
 
     def taxonomy_glyph(self, fallback="N"):
         return self.GLYPH_BY_TAXONOMY.get(self.taxonomy_class, str(fallback or "N")[:1].upper() or "N")
 
     def display_name(self):
-        return self.personal_name or self.common_name or self.creature_type
+        return self.personal_name or getattr(self, "phenotype_descriptor", None) or self.common_name or self.creature_type
 
     def descriptive_name(self):
-        return self.common_name or self.creature_type
+        return getattr(self, "phenotype_descriptor", None) or self.common_name or self.creature_type
 
     def label(self):
         creature = self.display_name()
@@ -2140,6 +2155,8 @@ class WildlifeBehavior:
         flocking=False,
         activity_period="any",
         rest_bias=0.3,
+        threat_response="flee",
+        movement_style="roam",
     ):
         self.home_radius = max(1, int(home_radius))
         self.flee_radius = max(1, int(flee_radius))
@@ -2154,6 +2171,10 @@ class WildlifeBehavior:
         except (TypeError, ValueError):
             rest_bias = 0.3
         self.rest_bias = max(0.0, min(1.0, rest_bias))
+        response = str(threat_response or "flee").strip().lower() or "flee"
+        self.threat_response = response if response in {"flee", "freeze_bolt", "brace", "display"} else "flee"
+        movement = str(movement_style or "roam").strip().lower() or "roam"
+        self.movement_style = movement if movement in {"roam", "dart", "stalk", "amble"} else "roam"
 
 
 @dataclass

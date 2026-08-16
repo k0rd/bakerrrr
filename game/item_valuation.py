@@ -19,6 +19,7 @@ CORE_ITEM_BASE_VALUES = {
     "street_ration": 10,
     "protein_wrap": 11,
     "raw_game_meat": 6,
+    "raw_animal_pelt": 18,
     "bagged_game_meat": 8,
     "cooked_game_meat": 10,
     "packaged_game_meat": 14,

@@ -84,6 +84,8 @@ _DEFENSIVE_HUMAN_AGGRESSION_SPECIES = {
     "rattlesnake",
     "water_moccasin",
     "wolf",
+    "bobcat",
+    "red_fox",
 }
 
 _WILDLIFE_DAMAGE_REACTION_TTL = 8
@@ -321,6 +323,33 @@ def _wildlife_damage_reaction_feedback(sim, eid, identity, intent, reason, pos):
         priority="normal",
         dedupe_window=6,
         dedupe_key=f"wildlife_damage_reaction:{eid}:{intent}",
+    )
+
+
+def _wildlife_posture_feedback(sim, eid, identity, style, pos):
+    if not _wildlife_visible_to_player(sim, pos):
+        return
+    animal = str(
+        getattr(identity, "phenotype_descriptor", "")
+        or getattr(identity, "common_name", "")
+        or getattr(identity, "species", "")
+        or "animal"
+    ).replace("_", " ").strip().lower()
+    messages = {
+        "freeze_bolt": f"The {animal} goes perfectly still, ready to bolt.",
+        "brace": f"The {animal} tucks in and braces against the threat.",
+        "display": f"The {animal} raises a warning display instead of fleeing at once.",
+    }
+    message = messages.get(str(style or "").strip().lower())
+    if not message:
+        return
+    _log_player_feedback(
+        sim,
+        message,
+        kind="interaction",
+        priority="normal",
+        dedupe_window=24,
+        dedupe_key=f"wildlife_posture:{eid}:{style}",
     )
 
 
@@ -1998,6 +2027,23 @@ def _wildlife_ecology_intent(sim, eid, pos, routine, behavior, identity, needs):
         return defensive_attack
 
     if best_threat and best_threat["score"] >= 34.0:
+        response_style = str(getattr(behavior, "threat_response", "flee") or "flee").strip().lower()
+        threat_distance = int(best_threat.get("distance", 99) or 99)
+        styled_hold = (
+            response_style == "freeze_bolt" and threat_distance >= 3 and best_threat["score"] < 70.0
+        ) or (
+            response_style == "brace" and best_threat["score"] < 84.0
+        ) or (
+            response_style == "display" and threat_distance >= 2 and best_threat["score"] < 78.0
+        )
+        if styled_hold:
+            _wildlife_posture_feedback(sim, eid, identity, response_style, pos)
+            return {
+                "intent": "holding",
+                "score": min(88.0, max(44.0, best_threat["score"] + 6.0)),
+                "target": (int(pos.x), int(pos.y), int(pos.z)),
+                "target_eid": None,
+            }
         guardian_bonus = _wildlife_guardian_bonus(sim, eid, pos, identity, ecology, behavior)
         pack_support = _wildlife_pack_support(sim, eid, pos, identity, ecology, behavior)
         hold_drive = float(getattr(ecology, "territorial_score", 0.0) or 0.0) * (1.15 if bool(getattr(context, "territorial_context", False)) else 0.45)
@@ -2177,7 +2223,12 @@ def _pick_wildlife_patrol_target(sim, eid, pos, routine, behavior, identity):
     if not home:
         return None
 
+    movement_style = str(getattr(behavior, "movement_style", "roam") or "roam").strip().lower()
     radius = max(2, int(getattr(behavior, "home_radius", 4)))
+    if movement_style == "dart":
+        radius += 1
+    elif movement_style == "amble":
+        radius = max(2, radius - 1)
     candidates = _wildlife_walkable_tiles(
         sim,
         home,
@@ -2205,6 +2256,12 @@ def _pick_wildlife_patrol_target(sim, eid, pos, routine, behavior, identity):
         score -= float(dist_from_home) * rest_bias * 0.22
         if dist_from_pos <= 1:
             score -= 0.75
+        if movement_style == "dart":
+            score += min(1.4, float(dist_from_pos) * 0.2)
+        elif movement_style == "stalk":
+            score += max(0.0, 1.1 - abs(float(dist_from_pos) - 3.0) * 0.28)
+        elif movement_style == "amble":
+            score -= float(dist_from_pos) * 0.16
         if flock_anchor:
             cluster_dist = _manhattan(tx, ty, flock_anchor[0], flock_anchor[1])
             score += max(0.0, float(getattr(behavior, "flock_radius", 3)) - float(cluster_dist)) * 0.35

@@ -21,6 +21,7 @@ RAW_MEAT_ITEM_ID = "raw_game_meat"
 BAGGED_MEAT_ITEM_ID = "bagged_game_meat"
 COOKED_MEAT_ITEM_ID = "cooked_game_meat"
 PACKAGED_MEAT_ITEM_ID = "packaged_game_meat"
+RAW_PELT_ITEM_ID = "raw_animal_pelt"
 KILL_BAG_ITEM_ID = "kill_bag"
 FIELD_KNIFE_ITEM_ID = "field_knife"
 
@@ -35,6 +36,31 @@ BASE_MEAT_UNITS_BY_SIZE = {
     "medium": 2,
     "large": 4,
     "huge": 6,
+}
+BASE_PELT_UNITS_BY_SIZE = {
+    "tiny": 1,
+    "small": 1,
+    "medium": 1,
+    "large": 2,
+    "huge": 3,
+}
+FUR_BEARING_ROOTS = {
+    "burrow_grazer",
+    "burrow_scavenger",
+    "great_prowler",
+    "heavy_forager",
+    "herd_grazer",
+    "masked_scavenger",
+    "mid_prowler",
+    "quilled_forager",
+    "rooting_tank",
+    "small_grazer",
+    "small_prowler",
+    "solitary_canid",
+    "street_pack",
+    "tree_forager",
+    "warning_scavenger",
+    "water_prowler",
 }
 HUNTABLE_SPECIES = {
     "deer",
@@ -143,10 +169,12 @@ def _payload_huntable(payload):
     if creature_type and creature_type != "animal":
         return False
     size_class = animal_size_class_for_score(payload.get("size_score", 0.0), juvenile=bool(payload.get("juvenile", False)))
-    if BASE_MEAT_UNITS_BY_SIZE.get(size_class, 0) <= 0:
+    root_id = str(payload.get("root_animal_id", "") or "").strip().lower()
+    has_pelt = root_id in FUR_BEARING_ROOTS and BASE_PELT_UNITS_BY_SIZE.get(size_class, 0) > 0
+    if BASE_MEAT_UNITS_BY_SIZE.get(size_class, 0) <= 0 and not has_pelt:
         return False
     taxonomy = str(payload.get("taxonomy_class", "") or "").strip().lower()
-    if str(payload.get("root_animal_id", "") or "").strip():
+    if root_id:
         return True
     if taxonomy in HUNTABLE_TAXONOMY:
         return True
@@ -159,7 +187,9 @@ def hunting_yield_profile(sim, animal_eid=None, *, payload=None):
         return None
     size_class = animal_size_class_for_score(payload.get("size_score", 0.0), juvenile=bool(payload.get("juvenile", False)))
     base_units = int(BASE_MEAT_UNITS_BY_SIZE.get(size_class, 0))
-    if base_units <= 0:
+    root_id = str(payload.get("root_animal_id", "") or "").strip().lower()
+    pelt_units = int(BASE_PELT_UNITS_BY_SIZE.get(size_class, 0)) if root_id in FUR_BEARING_ROOTS else 0
+    if base_units <= 0 and pelt_units <= 0:
         return None
     species_label = (
         str(payload.get("common_name", "") or "").strip()
@@ -170,12 +200,13 @@ def hunting_yield_profile(sim, animal_eid=None, *, payload=None):
     return {
         "animal_size_class": size_class,
         "base_units": base_units,
+        "pelt_units": pelt_units,
         "species_label": species_label,
         "species_key": sorted(_payload_species_tokens(payload))[0] if _payload_species_tokens(payload) else "wildlife",
         "taxonomy_class": str(payload.get("taxonomy_class", "") or "").strip().lower() or "other",
         "size_score": float(_safe_float(payload.get("size_score", 0.0), 0.0)),
         "juvenile": bool(payload.get("juvenile", False)),
-        "root_animal_id": str(payload.get("root_animal_id", "") or "").strip().lower(),
+        "root_animal_id": root_id,
         "fauna_lineage_id": str(payload.get("fauna_lineage_id", "") or "").strip().lower(),
         "fauna_genetics": copy.deepcopy(dict(payload.get("fauna_genetics") or {})),
     }
@@ -259,6 +290,7 @@ def hunting_legality_snapshot(sim, actor_eid, animal_eid=None, *, payload=None, 
         "license_status": license_status,
         "inspection_grade": inspection_grade,
         "fauna_lineage_id": native_id,
+        "fauna_population_key": str(population.get("population_key", "") or "").strip().lower(),
         "population_status": population_status,
         "population_abundance": int(population.get("abundance", 100) or 0),
         "ecology_value_multiplier": float(population.get("value_multiplier", 1.0) or 1.0),
@@ -312,6 +344,7 @@ def create_hunting_carcass(sim, *, animal_eid=None, x=0, y=0, z=0, source_eid=No
         "size_score": profile["size_score"],
         "animal_size_class": profile["animal_size_class"],
         "base_units": int(profile["base_units"]),
+        "pelt_units": int(profile.get("pelt_units", 0) or 0),
         "root_animal_id": profile.get("root_animal_id"),
         "fauna_lineage_id": profile.get("fauna_lineage_id"),
         "fauna_genetics": copy.deepcopy(dict(profile.get("fauna_genetics") or {})),
@@ -375,10 +408,16 @@ def hunting_carcass_look_text(record):
     size_class = str(record.get("animal_size_class", "") or "animal").replace("_", " ")
     species = str(record.get("species_label", "") or record.get("animal_name", "") or "wildlife").strip()
     units = int(record.get("base_units", 0) or 0)
+    pelt_units = int(record.get("pelt_units", 0) or 0)
     claim_note = "; hunter claim" if record.get("claimed_by_event_id") else ""
-    if units <= 0:
+    if units <= 0 and pelt_units <= 0:
         return f"carcass:{size_class} {species}{claim_note}; no usable cuts"
-    return f"carcass:{size_class} {species}{claim_note}; field dress with a blade, about {units} meat"
+    yields = []
+    if units > 0:
+        yields.append(f"about {units} meat")
+    if pelt_units > 0:
+        yields.append(f"{pelt_units} pelt" + ("s" if pelt_units != 1 else ""))
+    return f"carcass:{size_class} {species}{claim_note}; field dress with a blade, " + " and ".join(yields)
 
 
 def _inventory_for(sim, eid):
@@ -495,6 +534,51 @@ def _inventory_can_accept(inventory, item_id, quantity, *, metadata=None, owner_
     return bool(added)
 
 
+def _inventory_can_accept_outputs(inventory, outputs, *, owner_eid=None, owner_tag=None):
+    if not inventory:
+        return False
+    clone = _clone_inventory(inventory)
+    for item_id, quantity, metadata in tuple(outputs or ()):
+        if int(quantity or 0) <= 0:
+            continue
+        item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower(), {})
+        added, _instance_id = clone.add_item(
+            item_id,
+            quantity=max(1, int(quantity)),
+            stack_max=max(1, int(item_def.get("stack_max", 1) or 1)),
+            owner_eid=owner_eid,
+            owner_tag=owner_tag,
+            metadata=metadata or {},
+        )
+        if not added:
+            return False
+    return True
+
+
+def _pelt_metadata(record, common_metadata, *, tool_quality):
+    genetics = record.get("fauna_genetics") if isinstance(record.get("fauna_genetics"), dict) else {}
+    expressed = genetics.get("expressed") if isinstance(genetics.get("expressed"), dict) else {}
+    color = str(expressed.get("color_word", "") or "").replace("_", " ").strip().lower()
+    pattern = str(expressed.get("pattern", "") or "").replace("_", " ").strip().lower()
+    species = str(record.get("species_label", "") or record.get("animal_name", "") or "animal").strip().lower()
+    name_parts = []
+    if color and color not in species.replace("-", " ").split():
+        name_parts.append(color)
+    if pattern and pattern != "plain" and pattern not in species.replace("-", " ").split():
+        name_parts.append("banded" if pattern == "warning bands" else pattern)
+    name_parts.extend((species, "pelt"))
+    metadata = copy.deepcopy(dict(common_metadata or {}))
+    metadata.update({
+        "display_name": " ".join(name_parts).title(),
+        "source_context": "field_dressed_pelt",
+        "pelt_color_word": color or None,
+        "pelt_pattern": pattern or "plain",
+        "quality": "good" if float(tool_quality or 0.0) >= 0.95 else "poor",
+        "instance_tags": ("clothing", "fashion", "fur", "hunting", "material"),
+    })
+    return metadata
+
+
 def _add_inventory_item(sim, inventory, item_id, quantity, *, metadata=None, owner_eid=None, owner_tag=None):
     item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower(), {})
     return inventory.add_item(
@@ -523,11 +607,12 @@ def field_dress_carcass(sim, eid, carcass_id=None):
         sim.emit(Event("hunting_carcass_blocked", eid=eid, carcass_id=record.get("carcass_id"), reason="no_tool", animal_name=record.get("animal_name")))
         return False
     base_units = max(0, int(record.get("base_units", 0) or 0))
-    if base_units <= 0:
-        sim.emit(Event("hunting_carcass_blocked", eid=eid, carcass_id=record.get("carcass_id"), reason="no_usable_meat", animal_name=record.get("animal_name")))
+    pelt_units = max(0, int(record.get("pelt_units", 0) or 0))
+    if base_units <= 0 and pelt_units <= 0:
+        sim.emit(Event("hunting_carcass_blocked", eid=eid, carcass_id=record.get("carcass_id"), reason="no_usable_harvest", animal_name=record.get("animal_name")))
         return False
     quality = float(tool.get("quality", 1.0) or 1.0)
-    quantity = max(1, int(base_units if quality >= 0.95 else round(base_units * 0.65)))
+    quantity = max(1, int(base_units if quality >= 0.95 else round(base_units * 0.65))) if base_units > 0 else 0
     kill_bag = _has_kill_bag(inventory)
     if kill_bag and base_units >= 2:
         quantity += 1
@@ -558,10 +643,17 @@ def field_dress_carcass(sim, eid, carcass_id=None):
         "cull_active_at_hunt": bool(hunt_legality.get("cull_active", False)),
         "source_fauna_root_animal_id": record.get("root_animal_id"),
         "source_fauna_lineage_id": record.get("fauna_lineage_id"),
+        "source_fauna_population_key": hunt_legality.get("fauna_population_key"),
         "source_fauna_genetics": copy.deepcopy(dict(record.get("fauna_genetics") or {})),
     }
     owner_eid, owner_tag = _inventory_owner_for(sim, eid)
-    if not _inventory_can_accept(inventory, output_item_id, quantity, metadata=metadata, owner_eid=owner_eid, owner_tag=owner_tag):
+    pelt_metadata = _pelt_metadata(record, metadata, tool_quality=quality) if pelt_units > 0 else None
+    outputs = []
+    if quantity > 0:
+        outputs.append((output_item_id, quantity, metadata))
+    if pelt_units > 0:
+        outputs.append((RAW_PELT_ITEM_ID, pelt_units, pelt_metadata))
+    if not _inventory_can_accept_outputs(inventory, outputs, owner_eid=owner_eid, owner_tag=owner_tag):
         sim.emit(Event(
             "hunting_carcass_blocked",
             eid=eid,
@@ -569,27 +661,40 @@ def field_dress_carcass(sim, eid, carcass_id=None):
             animal_name=record.get("animal_name"),
             reason="inventory_full",
             output_item_id=output_item_id,
-            quantity=quantity,
+            quantity=sum(int(row[1]) for row in outputs),
         ))
         return False
-    added, _instance_id = _add_inventory_item(sim, inventory, output_item_id, quantity, metadata=metadata, owner_eid=owner_eid, owner_tag=owner_tag)
-    if not added:
-        sim.emit(Event("hunting_carcass_blocked", eid=eid, carcass_id=record.get("carcass_id"), reason="inventory_full"))
-        return False
+    for harvest_item_id, harvest_quantity, harvest_metadata in outputs:
+        added, _instance_id = _add_inventory_item(
+            sim,
+            inventory,
+            harvest_item_id,
+            harvest_quantity,
+            metadata=harvest_metadata,
+            owner_eid=owner_eid,
+            owner_tag=owner_tag,
+        )
+        if not added:
+            sim.emit(Event("hunting_carcass_blocked", eid=eid, carcass_id=record.get("carcass_id"), reason="inventory_full"))
+            return False
     record["harvested"] = True
     record["harvested_tick"] = _safe_int(getattr(sim, "tick", 0), 0)
     record["harvested_by_eid"] = eid
-    record["output_item_id"] = output_item_id
-    record["output_quantity"] = int(quantity)
-    output_item_name = item_display_name(output_item_id, metadata=metadata, item_catalog=ITEM_CATALOG)
-    _emit_claimed_carcass_take_events(
-        sim,
-        eid,
-        record,
-        output_item_id=output_item_id,
-        output_item_name=output_item_name,
-        quantity=int(quantity),
-    )
+    primary_item_id, primary_quantity, primary_metadata = outputs[0]
+    record["output_item_id"] = primary_item_id
+    record["output_quantity"] = int(primary_quantity)
+    record["pelt_item_id"] = RAW_PELT_ITEM_ID if pelt_units > 0 else None
+    record["pelt_quantity"] = int(pelt_units)
+    output_item_name = item_display_name(primary_item_id, metadata=primary_metadata, item_catalog=ITEM_CATALOG)
+    for harvest_item_id, harvest_quantity, harvest_metadata in outputs:
+        _emit_claimed_carcass_take_events(
+            sim,
+            eid,
+            record,
+            output_item_id=harvest_item_id,
+            output_item_name=item_display_name(harvest_item_id, metadata=harvest_metadata, item_catalog=ITEM_CATALOG),
+            quantity=int(harvest_quantity),
+        )
     sim.emit(Event(
         "hunting_carcass_harvested",
         eid=eid,
@@ -597,9 +702,12 @@ def field_dress_carcass(sim, eid, carcass_id=None):
         animal_name=record.get("animal_name"),
         species_label=record.get("species_label"),
         animal_size_class=record.get("animal_size_class"),
-        output_item_id=output_item_id,
+        output_item_id=primary_item_id,
         output_item_name=output_item_name,
-        quantity=int(quantity),
+        quantity=int(primary_quantity),
+        pelt_item_id=RAW_PELT_ITEM_ID if pelt_units > 0 else None,
+        pelt_item_name=item_display_name(RAW_PELT_ITEM_ID, metadata=pelt_metadata, item_catalog=ITEM_CATALOG) if pelt_units > 0 else None,
+        pelt_quantity=int(pelt_units),
         tool_item_id=tool.get("item_id"),
         kill_bag_used=bool(kill_bag),
         permit_verified=permit_verified,
@@ -630,6 +738,7 @@ def _meat_provenance_signature(entry):
         _safe_int(metadata.get("hunter_eid"), -1),
         str(metadata.get("animal_species", "") or "").strip().lower(),
         str(metadata.get("source_fauna_lineage_id", "") or "").strip().lower(),
+        str(metadata.get("source_fauna_population_key", "") or "").strip().lower(),
         str(metadata.get("source_fauna_population_status", "unmanaged") or "unmanaged").strip().lower(),
         _safe_int(metadata.get("source_fauna_abundance"), 100),
         float(metadata.get("ecology_value_multiplier", 1.0) or 1.0),
@@ -751,6 +860,7 @@ def convert_meat_stack(sim, eid, mode, *, max_units=None):
         "animal_species": source_metadata.get("animal_species"),
         "source_fauna_root_animal_id": source_metadata.get("source_fauna_root_animal_id"),
         "source_fauna_lineage_id": source_metadata.get("source_fauna_lineage_id"),
+        "source_fauna_population_key": source_metadata.get("source_fauna_population_key"),
         "source_fauna_genetics": copy.deepcopy(dict(source_metadata.get("source_fauna_genetics") or {})),
         "source_fauna_population_status": source_metadata.get("source_fauna_population_status", "unmanaged"),
         "source_fauna_abundance": int(source_metadata.get("source_fauna_abundance", 100) or 0),

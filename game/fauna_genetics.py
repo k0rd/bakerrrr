@@ -19,6 +19,7 @@ from game.color_words import (
     normalize_color_word,
 )
 from game.components import AnimalGenome
+from game.fauna_naming import apply_fauna_phenotype_descriptor
 
 
 FAUNA_GENETICS_SCHEMA_VERSION = 1
@@ -62,7 +63,6 @@ PATTERN_VALUES = (
 BUILD_VALUES = ("slight", "lean", "balanced", "heavy", "broad")
 DISPLAY_VALUES = ("none", "crest", "fan", "horns", "plates", "quills", "sail")
 
-
 # Current authored animals are presentations of these generic roots.  Future
 # content can provide ``root_animal_id`` directly and need not use these names.
 ROOT_ANIMAL_BY_PROFILE = {
@@ -91,6 +91,24 @@ ROOT_ANIMAL_BY_PROFILE = {
     "shore_crab": "shore_scuttler",
     "raccoon": "masked_scavenger",
     "alley_possum": "masked_scavenger",
+    "eastern_cottontail": "small_grazer",
+    "snowshoe_hare": "small_grazer",
+    "gray_squirrel": "tree_forager",
+    "fox_squirrel": "tree_forager",
+    "red_fox": "solitary_canid",
+    "swift_fox": "solitary_canid",
+    "bobcat": "mid_prowler",
+    "wild_turkey": "ground_flock",
+    "bobwhite_quail": "ground_flock",
+    "box_turtle": "armored_crawler",
+    "snapping_turtle": "armored_crawler",
+    "striped_skunk": "warning_scavenger",
+    "porcupine": "quilled_forager",
+    "nine_banded_armadillo": "armored_forager",
+    "groundhog": "burrow_grazer",
+    "barn_owl": "night_hunter",
+    "river_otter": "water_prowler",
+    "little_brown_bat": "echo_flier",
 }
 
 PROFILE_COLOR_WORDS = {
@@ -119,6 +137,24 @@ PROFILE_COLOR_WORDS = {
     "shore_crab": ("coral", "rust", "sand"),
     "raccoon": ("gray", "charcoal", "black"),
     "alley_possum": ("gray", "white", "charcoal"),
+    "eastern_cottontail": ("brown", "tan", "gray"),
+    "snowshoe_hare": ("white", "gray", "brown"),
+    "gray_squirrel": ("gray", "charcoal", "rust"),
+    "fox_squirrel": ("rust", "brown", "gray"),
+    "red_fox": ("rust", "orange", "silver"),
+    "swift_fox": ("tan", "sand", "gray"),
+    "bobcat": ("tan", "sand", "rust"),
+    "wild_turkey": ("brown", "bronze", "charcoal"),
+    "bobwhite_quail": ("brown", "cream", "rust"),
+    "box_turtle": ("olive", "brown", "amber"),
+    "snapping_turtle": ("olive", "charcoal", "brown"),
+    "striped_skunk": ("black", "white", "cream"),
+    "porcupine": ("brown", "charcoal", "cream"),
+    "nine_banded_armadillo": ("gray", "slate", "sand"),
+    "groundhog": ("brown", "rust", "gray"),
+    "barn_owl": ("cream", "white", "tan"),
+    "river_otter": ("brown", "charcoal", "umber"),
+    "little_brown_bat": ("brown", "charcoal", "rust"),
 }
 
 PROFILE_BASE_ABILITIES = {
@@ -127,6 +163,24 @@ PROFILE_BASE_ABILITIES = {
     "shore_crab": ("exoskeleton",),
     "water_moccasin": ("venomous_bite",),
     "rattlesnake": ("venomous_bite",),
+    "eastern_cottontail": ("fleet_limb",),
+    "snowshoe_hare": ("fleet_limb",),
+    "gray_squirrel": ("fleet_limb",),
+    "fox_squirrel": ("fleet_limb",),
+    "red_fox": ("keen_senses",),
+    "swift_fox": ("keen_senses",),
+    "bobcat": ("keen_senses",),
+    "wild_turkey": ("herd_mind",),
+    "bobwhite_quail": ("herd_mind",),
+    "box_turtle": ("exoskeleton",),
+    "snapping_turtle": ("exoskeleton",),
+    "striped_skunk": ("fright_display",),
+    "porcupine": ("exoskeleton", "fright_display"),
+    "nine_banded_armadillo": ("exoskeleton",),
+    "groundhog": ("keen_senses",),
+    "barn_owl": ("keen_senses",),
+    "river_otter": ("fleet_limb",),
+    "little_brown_bat": ("keen_senses",),
 }
 
 
@@ -870,6 +924,7 @@ def apply_animal_genome_expression(sim, eid, genome=None, *, baseline_is_express
         # and native lines have a direct phenotype color for Look/UI copy.
         if int(getattr(genome, "generation", 0) or 0) > 0 or not getattr(identity, "coat_variant", None):
             identity.coat_variant = color_word
+        apply_fauna_phenotype_descriptor(identity, genome)
 
     render = sim.ecs.get(Render).get(eid)
     if render is not None:

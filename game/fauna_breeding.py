@@ -42,6 +42,7 @@ from game.fauna_genetics import (
     fauna_genomes_compatible,
     inherit_animal_genome,
 )
+from game.fauna_naming import apply_fauna_phenotype_descriptor, generate_fauna_line_name
 
 
 BREEDING_UPDATE_INTERVAL = 120
@@ -296,13 +297,22 @@ def _spawn_fauna_offspring(sim, carrier_eid, co_parent_eid, co_parent_genome_pay
     parent_noise = sim.ecs.get(NoiseProfile).get(carrier_eid)
     adult_size = _average(parent_physical, co_parent_physical, "size_score", 18.0)
     adult_speed = _average(parent_physical, co_parent_physical, "speed_score", 32.0)
-    common_name = str(getattr(parent_identity, "common_name", "") or getattr(co_parent_identity, "common_name", "") or "local creature").strip()
+    parent_common_names = (
+        str(getattr(parent_identity, "fauna_line_name", "") or getattr(parent_identity, "common_name", "") or "local creature").strip(),
+        str(getattr(co_parent_identity, "fauna_line_name", "") or getattr(co_parent_identity, "common_name", "") or "local creature").strip(),
+    )
+    line_name = generate_fauna_line_name(
+        child_genome,
+        parent_names=parent_common_names,
+        seed_token=token,
+    )
     identity = CreatureIdentity(
         taxonomy_class=str(getattr(parent_identity, "taxonomy_class", "other") or "other"),
         species=str(getattr(parent_identity, "species", "local creature") or "local creature"),
         creature_type="animal",
-        common_name=f"young {common_name}" if not common_name.lower().startswith("young ") else common_name,
+        common_name=f"young {line_name}",
         coat_variant=None,
+        fauna_line_name=line_name,
     )
     physical = AnimalPhysicalProfile(
         size_score=max(1.0, adult_size * 0.58),
@@ -310,7 +320,7 @@ def _spawn_fauna_offspring(sim, carrier_eid, co_parent_eid, co_parent_genome_pay
         juvenile=True,
     )
     ecology = EcologyProfile(
-        species=str(getattr(parent_ecology, "species", "") or getattr(co_parent_ecology, "species", "") or common_name).strip().lower(),
+        species=str(getattr(parent_ecology, "species", "") or getattr(co_parent_ecology, "species", "") or line_name).strip().lower(),
         predator_score=_average(parent_ecology, co_parent_ecology, "predator_score", 10.0),
         prey_score=_average(parent_ecology, co_parent_ecology, "prey_score", 24.0),
         scavenger_score=_average(parent_ecology, co_parent_ecology, "scavenger_score", 18.0),
@@ -460,6 +470,10 @@ class FaunaBreedingSystem(System):
                 common = str(getattr(identity, "common_name", "") or "").strip()
                 if common.lower().startswith("young "):
                     identity.common_name = common[6:].strip() or common
+                apply_fauna_phenotype_descriptor(
+                    identity,
+                    self.sim.ecs.get(AnimalGenome).get(eid),
+                )
             self.sim.emit(Event("fauna_matured", eid=eid))
             matured += 1
         return matured

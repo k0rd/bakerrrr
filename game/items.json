@@ -817,6 +817,21 @@
     "legal_status": "legal",
     "effects": []
   },
+  "raw_animal_pelt": {
+    "name": "Raw Animal Pelt",
+    "glyph": "{",
+    "stack_max": 2,
+    "tags": [
+      "clothing",
+      "fashion",
+      "fur",
+      "hunting",
+      "legal",
+      "material"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
   "bagged_game_meat": {
     "name": "Bagged Game Meat",
     "glyph": "%",

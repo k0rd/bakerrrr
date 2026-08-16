@@ -26,6 +26,7 @@ from game.components import (
     PlayerAssets,
     Position,
     Vitality,
+    WildlifeBehavior,
 )
 from game.fauna_genetics import animal_genome_payload
 from game.flora_genetics import normalize_flora_genetics
@@ -437,6 +438,63 @@ def _fauna_population_payload(record):
     }
 
 
+def _fauna_population_key(record, native_id=""):
+    record = record if isinstance(record, Mapping) else {}
+    explicit = _key(record.get("population_key"))
+    if explicit:
+        return explicit
+    presentation = record.get("presentation") if isinstance(record.get("presentation"), Mapping) else {}
+    ecology = presentation.get("ecology") if isinstance(presentation.get("ecology"), Mapping) else {}
+    species = _key(ecology.get("species") or presentation.get("species"))
+    if species:
+        return f"species:{species}"
+    root_id = _key(record.get("root_animal_id"))
+    if root_id:
+        return f"root:{root_id}"
+    return f"lineage:{_key(native_id, 'unknown')}"
+
+
+def _fauna_population_records(registry, population_key):
+    population_key = _key(population_key)
+    if not isinstance(registry, Mapping) or not population_key:
+        return ()
+    return tuple(
+        (str(native_id), record)
+        for native_id, record in (registry.get("fauna") or {}).items()
+        if isinstance(record, Mapping)
+        and _fauna_population_key(record, native_id) == population_key
+    )
+
+
+def _shared_fauna_population_payload(registry, population_key, *, fallback_record=None):
+    records = _fauna_population_records(registry, population_key)
+    if not records:
+        return _fauna_population_payload(fallback_record or {})
+    payloads = [_fauna_population_payload(record) for _native_id, record in records]
+    abundance = min(int(payload.get("abundance", 100) or 0) for payload in payloads)
+    history = []
+    seen = set()
+    for payload in payloads:
+        for row in tuple(payload.get("cull_history", ()) or ()):
+            signature = (
+                _safe_int(row.get("run_seed"), -1),
+                _safe_int(row.get("tick"), -1),
+                str(row.get("action", "") or "").strip().lower(),
+                _safe_int(row.get("after_abundance"), -1),
+            )
+            if signature in seen:
+                continue
+            seen.add(signature)
+            history.append(copy.deepcopy(dict(row)))
+    history.sort(key=lambda row: (_safe_int(row.get("tick"), 0), _safe_int(row.get("run_seed"), 0)))
+    return {
+        "abundance": abundance,
+        "status": fauna_abundance_status(abundance),
+        "value_multiplier": fauna_value_multiplier(abundance),
+        "cull_history": history[-16:],
+    }
+
+
 def fauna_population_snapshot(sim, native_id):
     native_id = str(native_id or "").strip().lower()
     registry = ecology_registry_for_sim(sim)
@@ -444,12 +502,18 @@ def fauna_population_snapshot(sim, native_id):
     if not isinstance(record, Mapping):
         return {
             "native_id": native_id,
+            "population_key": "",
             "abundance": 100,
             "status": "unmanaged",
             "value_multiplier": 1.0,
             "cull_history": (),
         }
-    return {"native_id": native_id, **_fauna_population_payload(record)}
+    population_key = _fauna_population_key(record, native_id)
+    return {
+        "native_id": native_id,
+        "population_key": population_key,
+        **_shared_fauna_population_payload(registry, population_key, fallback_record=record),
+    }
 
 
 def fauna_cull_active_for_run(sim, native_id):
@@ -473,9 +537,9 @@ def initiate_fauna_cull(
     fee=FAUNA_CULL_FEE,
     require_hunting_license=True,
 ):
-    """Declare one durable 20-point fauna cull for this run.
+    """Declare one durable 20-point species-population cull for this run.
 
-    A lineage can move only one population tier per run seed.  Reaching zero
+    A species can move only one population tier per run seed.  Reaching zero
     therefore requires deliberate policy across five distinct runs rather than
     repeated clicks at one counter.
     """
@@ -485,7 +549,12 @@ def initiate_fauna_cull(
     record = (registry.get("fauna") or {}).get(native_id) if registry is not None and native_id else None
     if not isinstance(record, dict):
         return {"ok": False, "reason": "unknown_lineage", "native_id": native_id}
-    population = _fauna_population_payload(record)
+    population_key = _fauna_population_key(record, native_id)
+    population = _shared_fauna_population_payload(
+        registry,
+        population_key,
+        fallback_record=record,
+    )
     before = int(population["abundance"])
     if before <= 0:
         return {"ok": False, "reason": "extinct", "native_id": native_id, **population}
@@ -526,24 +595,34 @@ def initiate_fauna_cull(
     population["status"] = fauna_abundance_status(after)
     population["value_multiplier"] = fauna_value_multiplier(after)
     population["cull_history"] = (list(population.get("cull_history", ())) + [history_row])[-16:]
-    record["population"] = population
+    population_records = _fauna_population_records(registry, population_key) or ((native_id, record),)
+    affected_native_ids = []
+    for population_native_id, population_record in population_records:
+        if not isinstance(population_record, dict):
+            continue
+        population_record["population_key"] = population_key
+        population_record["population"] = copy.deepcopy(population)
+        affected_native_ids.append(str(population_native_id))
     if fee and assets is not None:
         assets.credits = max(0, credits - fee)
     if after <= 0:
         registry.setdefault("eradication_history", []).append({
             "native_id": native_id,
+            "population_key": population_key,
             "lineage_name": lineage_name,
             **history_row,
         })
         registry["eradication_history"] = registry["eradication_history"][-128:]
     _save_runtime_registry(
         sim,
-        lineage_keys=(("fauna", native_id),),
+        lineage_keys=tuple(("fauna", value) for value in affected_native_ids),
         history_dirty=after <= 0,
     )
     payload = {
         "ok": True,
         "native_id": native_id,
+        "population_key": population_key,
+        "affected_native_ids": tuple(affected_native_ids),
         "lineage_name": lineage_name,
         "before_abundance": before,
         "after_abundance": after,
@@ -780,6 +859,7 @@ def register_native_fauna_line(sim, eid, genome=None, *, source="natural_breedin
     physical = sim.ecs.get(AnimalPhysicalProfile).get(eid)
     ecology = sim.ecs.get(EcologyProfile).get(eid)
     social = sim.ecs.get(AnimalSocialProfile).get(eid)
+    behavior = sim.ecs.get(WildlifeBehavior).get(eid)
     reproduction = sim.ecs.get(AnimalReproduction).get(eid)
     vitality = sim.ecs.get(Vitality).get(eid)
     existing = (registry.get("fauna") or {}).get(native_id) or {}
@@ -791,16 +871,25 @@ def register_native_fauna_line(sim, eid, genome=None, *, source="natural_breedin
     adult_ecology = getattr(reproduction, "adult_ecology_profile", None)
     adult_ecology = adult_ecology if isinstance(adult_ecology, Mapping) else {}
     adult_max_hp = int(getattr(reproduction, "adult_max_hp", getattr(vitality, "max_hp", max(6, round(adult_size * 0.5)))) or max(6, round(adult_size * 0.5)))
+    population_species = _key(getattr(ecology, "species", "") or getattr(identity, "species", ""), "local_creature")
+    population_key = f"species:{population_species}"
+    shared_population = _shared_fauna_population_payload(
+        registry,
+        population_key,
+        fallback_record=existing,
+    )
     record = {
         "native_id": native_id,
         "domain": "fauna",
         "source": _key(source, "natural_breeding"),
         "root_animal_id": _key(getattr(genome, "root_animal_id", ""), "other_root"),
+        "population_key": population_key,
         "genome": animal_genome_payload(genome),
         "presentation": {
             "taxonomy_class": _key(getattr(identity, "taxonomy_class", ""), "other"),
             "species": str(getattr(identity, "species", "") or "local creature").strip().lower(),
             "common_name": common_name,
+            "fauna_line_name": str(getattr(identity, "fauna_line_name", "") or common_name).strip().lower(),
             "coat_variant": _key(getattr(identity, "coat_variant", "")),
             "size_score": adult_size,
             "speed_score": adult_speed,
@@ -823,10 +912,20 @@ def register_native_fauna_line(sim, eid, genome=None, *, source="natural_breedin
                 "companionship_drive": float(getattr(social, "companionship_drive", 10.0) or 0.0) if social is not None else 10.0,
                 "follow_drive": float(getattr(social, "follow_drive", 4.0) or 0.0) if social is not None else 4.0,
             },
+            "behavior": {
+                "home_radius": max(1, _safe_int(getattr(behavior, "home_radius", 4), 4)),
+                "flee_radius": max(1, _safe_int(getattr(behavior, "flee_radius", 5), 5)),
+                "flock_radius": max(1, _safe_int(getattr(behavior, "flock_radius", 3), 3)),
+                "flocking": bool(getattr(behavior, "flocking", False)),
+                "activity_period": _key(getattr(behavior, "activity_period", "any"), "any"),
+                "rest_bias": float(getattr(behavior, "rest_bias", 0.3) or 0.3),
+                "threat_response": _key(getattr(behavior, "threat_response", "flee"), "flee"),
+                "movement_style": _key(getattr(behavior, "movement_style", "roam"), "roam"),
+            },
         },
         "habitat": _fauna_area_profile(sim, eid),
         "times_realized": max(1, _safe_int(existing.get("times_realized"), 0) + 1),
-        "population": _fauna_population_payload(existing),
+        "population": shared_population,
     }
     record["genome"]["native_lineage_id"] = native_id
     registry.setdefault("fauna", {})[native_id] = record
@@ -859,6 +958,7 @@ def native_fauna_profiles(sim):
         habitat = record.get("habitat") if isinstance(record.get("habitat"), Mapping) else {}
         ecology = presentation.get("ecology") if isinstance(presentation.get("ecology"), Mapping) else {}
         social = presentation.get("social") if isinstance(presentation.get("social"), Mapping) else {}
+        behavior = presentation.get("behavior") if isinstance(presentation.get("behavior"), Mapping) else {}
         genome = record.get("genome") if isinstance(record.get("genome"), Mapping) else {}
         native_slug = _key(native_id).replace(":", "_")[-52:]
         common_name = str(presentation.get("common_name") or record.get("root_animal_id") or "local creature").strip()
@@ -873,6 +973,7 @@ def native_fauna_profiles(sim):
             "taxonomy_class": _key(presentation.get("taxonomy_class"), "other"),
             "species": str(presentation.get("species") or "local creature").strip().lower(),
             "common_names": (common_name,),
+            "fauna_line_name": str(presentation.get("fauna_line_name") or common_name).strip().lower(),
             "coat_variant": _key(presentation.get("coat_variant")),
             "areas": dict(habitat.get("areas") or {"wilderness": 0.45, "frontier": 0.35}),
             "terrains": dict(habitat.get("terrains") or {}),
@@ -884,6 +985,20 @@ def native_fauna_profiles(sim):
             "physical_profile": {"size_score": size, "speed_score": speed},
             "ecology_profile": dict(ecology),
             "social_profile": dict(social),
+            **{
+                key: behavior[key]
+                for key in (
+                    "home_radius",
+                    "flee_radius",
+                    "flock_radius",
+                    "flocking",
+                    "activity_period",
+                    "rest_bias",
+                    "threat_response",
+                    "movement_style",
+                )
+                if key in behavior
+            },
             "trait_budget": _safe_int(genome.get("trait_budget"), 6),
             "native_weight": 0.44 * (abundance / 100.0),
             "population_abundance": abundance,
@@ -956,9 +1071,11 @@ def ecology_species_registry_rows(sim, domain):
         population = None
         if domain == "fauna":
             presentation = record.get("presentation") if isinstance(record.get("presentation"), Mapping) else {}
+            ecology = presentation.get("ecology") if isinstance(presentation.get("ecology"), Mapping) else {}
             name = str(record.get("lineage_name") or presentation.get("common_name") or "local creature").strip()
             appearance = _fauna_registry_appearance(record)
-            population = _fauna_population_payload(record)
+            population = fauna_population_snapshot(sim, native_id)
+            population_name = str(ecology.get("species") or presentation.get("species") or name).replace("_", " ").strip()
         else:
             identity = record.get("identity") if isinstance(record.get("identity"), Mapping) else {}
             name = str(record.get("lineage_name") or identity.get("name") or identity.get("plant_name") or "local plant").strip()
@@ -972,6 +1089,8 @@ def ecology_species_registry_rows(sim, domain):
             **(
                 {
                     "abundance": population["abundance"],
+                    "population_key": population.get("population_key") or _fauna_population_key(record, native_id),
+                    "population_name": population_name,
                     "population_status": population["status"],
                     "value_multiplier": population["value_multiplier"],
                     "cull_active_this_run": fauna_cull_active_for_run(sim, native_id),
