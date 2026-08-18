@@ -714,13 +714,17 @@ class PlayerMovementRuntime:
         )
         if current_pos is not None:
             visits = self.action_system._overworld_visit_state_for(eid)
-            for chunk in (
-                self.sim.chunk_coords(origin_x, origin_y),
-                self.sim.chunk_coords(current_pos.x, current_pos.y),
-            ):
-                chunk_key = (int(chunk[0]), int(chunk[1]))
-                visits.add(chunk_key)
-                self.action_system._remember_overworld_chunk_memory(eid, chunk_key, source="visit")
+            origin_chunk = self.sim.chunk_coords(origin_x, origin_y)
+            current_chunk = self.sim.chunk_coords(current_pos.x, current_pos.y)
+            origin_key = (int(origin_chunk[0]), int(origin_chunk[1]))
+            current_key = (int(current_chunk[0]), int(current_chunk[1]))
+            first_visit = current_key not in visits
+            visits.add(origin_key)
+            visits.add(current_key)
+            # Overworld summaries describe chunks, not individual local steps.
+            # Refresh only when this move establishes or crosses a chunk visit.
+            if first_visit or current_key != origin_key:
+                self.action_system._remember_overworld_chunk_memory(eid, current_key, source="visit")
 
     def handle_floor_change(self, eid, pos, *, dz, zoom_mode):
         if str(zoom_mode).lower() == "overworld":

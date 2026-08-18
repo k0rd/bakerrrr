@@ -11407,6 +11407,11 @@ class PygameView:
     def pump_window(self):
         self.pygame.event.pump()
 
+    def queue_window_inputs(self):
+        """Pump OS events without applying commands to a partial world tick."""
+        self._pump_inputs(include_repeat=False)
+        return len(self.input_queue)
+
     def held_movement_delta(self):
         self.pygame.event.pump()
         pressed = self.pygame.key.get_pressed()

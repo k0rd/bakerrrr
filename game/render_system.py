@@ -107,6 +107,7 @@ from game.lighting import (
     LIGHT_COLOR_PROFILES,
     ambient_snapshot as _lighting_ambient_snapshot,
     lighting_state as _lighting_state,
+    prepare_ambient_sampling as _prepare_ambient_sampling,
     update_lighting_state as _update_lighting_state,
 )
 import game.report_debug_ui as _report_debug_ui
@@ -215,7 +216,7 @@ from game.system_support.combat_pacing_runtime import (
     _combat_turn_pacing_active,
     _set_manual_combat_pacing,
 )
-from game.system_support.altered_state_runtime import hallucinated_tile_visual
+from game.system_support.altered_state_runtime import hallucinated_tile_visual, hallucination_intensity
 from game.system_support.combat_targeting_runtime import (
     _entity_uses_melee_aim,
     _entity_visible_to_player,
@@ -3008,10 +3009,6 @@ class RenderSystem(System):
         if not isinstance(player_explored, set):
             player_explored = set(player_explored or ())
         player_tile_memory = _player_tile_memory_state(self.sim)
-        if player_tile_memory and player_explored:
-            stale_keys = [key for key in player_tile_memory.keys() if key not in player_explored]
-            for key in stale_keys:
-                player_tile_memory.pop(key, None)
 
         def _is_visible(x, y, z):
             return (int(x), int(y), int(z)) in player_visible
@@ -3065,6 +3062,7 @@ class RenderSystem(System):
         lighting_state = _lighting_state(self.sim)
         if int(lighting_state.get("tick", -1)) != int(getattr(self.sim, "tick", 0)):
             lighting_state = _update_lighting_state(self.sim, player_pos=player_pos)
+        ambient_sampling = _prepare_ambient_sampling(self.sim, clock=lighting_state)
         if debug_ui.get("open"):
             debug_panel = _build_debug_overlay(
                 self.sim,
@@ -3082,7 +3080,14 @@ class RenderSystem(System):
             cached = ambient_cache.get(key)
             if isinstance(cached, dict):
                 return cached
-            sampled = _lighting_ambient_snapshot(self.sim, x, y, z, clock=lighting_state)
+            sampled = _lighting_ambient_snapshot(
+                self.sim,
+                x,
+                y,
+                z,
+                clock=lighting_state,
+                sampling=ambient_sampling,
+            )
             ambient_cache[key] = sampled
             return sampled
 
@@ -3656,6 +3661,10 @@ class RenderSystem(System):
                         self.view.draw_text(0, footer_y, _line_text(edge_footer), layer="ui_overlay", priority=90)
         else:
             revealed_building_id = _viewer_revealed_building_id(self.sim, self.player_eid, z=active_z)
+            # Hallucination strength is actor state, not tile state.  Resolve it
+            # once for the frame; the per-tile helper still owns the seeded
+            # spatial roll, so active hallucinations keep their exact pattern.
+            tile_hallucination_intensity = hallucination_intensity(self.sim, self.player_eid)
             for sy in range(map_h):
                 for sx in range(map_w):
                     wx = camera_x + sx
@@ -3705,7 +3714,16 @@ class RenderSystem(System):
                         )
                     self._draw_appearance(sx, sy, appearance, attrs=attrs)
                     if visible_now:
-                        hallucination = hallucinated_tile_visual(self.sim, self.player_eid, wx, wy, active_z)
+                        hallucination = None
+                        if tile_hallucination_intensity > 0.0:
+                            hallucination = hallucinated_tile_visual(
+                                self.sim,
+                                self.player_eid,
+                                wx,
+                                wy,
+                                active_z,
+                                intensity=tile_hallucination_intensity,
+                            )
                         if hallucination:
                             self._draw(
                                 sx,

@@ -727,7 +727,12 @@ def register_native_flora_line(sim, profile, *, source="bred"):
         "effect_channel": effect_channel,
         "times_realized": max(1, _safe_int(existing.get("times_realized"), 0) + 1),
     }
+    effect_channel_changed = dict(existing.get("effect_channel") or {}) != effect_channel
     registry.setdefault("flora", {})[native_id] = record
+    if effect_channel_changed:
+        runtime = getattr(sim, "ecology_registry_runtime", None)
+        if isinstance(runtime, dict):
+            runtime.pop("flora_effect_marker", None)
     _save_runtime_registry(sim, lineage_keys=(("flora", native_id),))
     # The hybrid is already a complete current-run profile. Mark and register
     # only this cultivar instead of rebuilding every installation-native flora

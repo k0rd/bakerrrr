@@ -3086,15 +3086,54 @@ def property_access_transition(
             z=to_z,
             breach_severity=getattr(ingress, "breach_severity", 0.0),
         )
-    origin_access = evaluate_property_access(
-        sim,
-        actor_eid,
-        prop,
-        x=from_x,
-        y=from_y,
-        z=from_z,
-        breach_severity=0.0,
+    origin_room = None
+    if (
+        bool(getattr(ingress, "from_inside", False))
+        and bool(getattr(ingress, "to_inside", False))
+        and bool(getattr(destination_access, "inside_bounds", False))
+    ):
+        origin_room = room_access_context(
+            sim,
+            prop,
+            x=from_x,
+            y=from_y,
+            z=from_z,
+        )
+    same_access_context = bool(
+        origin_room is not None
+        and _clean_key(getattr(destination_access, "property_id", ""))
+        == _clean_key(getattr(origin_room, "property_id", ""))
+        and _clean_key(getattr(destination_access, "access_level", ""))
+        == _clean_key(getattr(origin_room, "effective_access_level", ""))
+        and _clean_key(getattr(destination_access, "property_access_level", ""))
+        == _clean_key(getattr(origin_room, "property_access_level", ""))
+        and _clean_key(getattr(destination_access, "room_kind", ""))
+        == _clean_key(getattr(origin_room, "room_kind", ""))
+        and _clean_key(getattr(destination_access, "room_access_level", ""))
+        == _clean_key(getattr(origin_room, "room_access_level", ""))
+        and _clean_key(getattr(destination_access, "room_access_reason", ""))
+        == _clean_key(getattr(origin_room, "room_access_reason", ""))
+        and _clean_key(getattr(destination_access, "common_area_kind", ""))
+        == _clean_key(getattr(origin_room, "common_area_kind", ""))
+        and int(getattr(destination_access, "room_floor", 0) or 0)
+        == int(getattr(origin_room, "floor", 0) or 0)
     )
+    if same_access_context:
+        # Access depends on actor, property, time, authority, and room context.
+        # All but room context are shared by the two sides of this one atomic
+        # movement.  Reuse is therefore exact for movement within one room;
+        # real room/property crossings still derive both sides independently.
+        origin_access = destination_access
+    else:
+        origin_access = evaluate_property_access(
+            sim,
+            actor_eid,
+            prop,
+            x=from_x,
+            y=from_y,
+            z=from_z,
+            breach_severity=0.0,
+        )
 
     origin_inside = bool(getattr(origin_access, "inside_bounds", False))
     destination_inside = bool(getattr(destination_access, "inside_bounds", False))

@@ -366,8 +366,9 @@ def hallucinated_entity_label(sim, eid, target_eid, x, y, z, base_text):
     return _CREATURE_READS[rng.randrange(len(_CREATURE_READS))]
 
 
-def hallucinated_tile_visual(sim, eid, x, y, z):
-    intensity = hallucination_intensity(sim, eid)
+def hallucinated_tile_visual(sim, eid, x, y, z, *, intensity=None):
+    if intensity is None:
+        intensity = hallucination_intensity(sim, eid)
     if intensity <= 0.0:
         return None
     chance = _clamp01(0.08 + (float(intensity) * 0.10))

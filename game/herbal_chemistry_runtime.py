@@ -460,9 +460,57 @@ def _herbal_flora_catalog(sim):
     return catalog
 
 
+def _dynamic_herbal_catalog_marker(sim):
+    """Compact identity for membership in the run-wide herbal pool.
+
+    Chemistry is assigned per plant line. Individual patch state and cosmetic
+    mutations remain live on their records, but do not change that membership.
+    """
+
+    return tuple(sorted(
+        (
+            _key(plant_id),
+            bool((profile or {}).get("herbal_pool_allowed", True)) if isinstance(profile, Mapping) else False,
+        )
+        for plant_id, profile in ensure_dynamic_flora_profiles(sim).items()
+        if _key(plant_id)
+    ))
+
+
+def _native_flora_effect_marker(sim):
+    runtime = getattr(sim, "ecology_registry_runtime", None)
+    if not isinstance(runtime, dict) or not bool(runtime.get("primed")):
+        return ""
+    cached = runtime.get("flora_effect_marker")
+    if isinstance(cached, str):
+        return cached
+    registry = runtime.get("registry") if isinstance(runtime.get("registry"), dict) else {}
+    marker = repr(tuple(
+        (
+            str(native_id),
+            _key((record.get("effect_channel") or {}).get("chemistry_class")),
+            tuple(_key(value) for value in tuple((record.get("effect_channel") or {}).get("secondary_traits") or ())),
+        )
+        for native_id, record in sorted((registry.get("flora") or {}).items())
+        if isinstance(record, Mapping)
+    ))
+    runtime["flora_effect_marker"] = marker
+    return marker
+
+
 def herbal_chemistry_profiles(sim):
     state = getattr(sim, "herbal_chemistry_profiles", None)
     seed = int(getattr(sim, "seed", 0) or 0)
+    dynamic_marker = _dynamic_herbal_catalog_marker(sim)
+    native_marker = _native_flora_effect_marker(sim)
+    if (
+        isinstance(state, dict)
+        and state.get("seed") == seed
+        and state.get("dynamic_catalog_marker") == dynamic_marker
+        and state.get("fast_native_effect_marker") == native_marker
+    ):
+        return dict(state.get("plants", {}) or {})
+
     catalog = _herbal_flora_catalog(sim)
     catalog_marker = ",".join(sorted(catalog.keys()))
     native_channels = native_flora_effect_channels(sim)
@@ -535,6 +583,8 @@ def herbal_chemistry_profiles(sim):
 
     sim.herbal_chemistry_profiles = {
         "seed": seed,
+        "dynamic_catalog_marker": dynamic_marker,
+        "fast_native_effect_marker": native_marker,
         "catalog_marker": catalog_marker,
         "native_effect_marker": effect_marker,
         "plants": dict(assignments),
@@ -591,6 +641,19 @@ def _secondary_trait_fallback(seed, plant_id, class_id, row):
 def herbal_secondary_trait_profiles(sim):
     state = getattr(sim, "herbal_secondary_trait_profiles", None)
     seed = int(getattr(sim, "seed", 0) or 0)
+    dynamic_marker = _dynamic_herbal_catalog_marker(sim)
+    native_marker = _native_flora_effect_marker(sim)
+    if (
+        isinstance(state, dict)
+        and state.get("seed") == seed
+        and state.get("dynamic_catalog_marker") == dynamic_marker
+        and state.get("fast_native_effect_marker") == native_marker
+    ):
+        return {
+            _key(plant_id): tuple(_key(trait) for trait in tuple(traits or ()) if _key(trait) in SECONDARY_TRAITS)
+            for plant_id, traits in (state.get("plants", {}) or {}).items()
+        }
+
     catalog = _herbal_flora_catalog(sim)
     catalog_marker = _catalog_marker(catalog)
     native_channels = native_flora_effect_channels(sim)
@@ -687,6 +750,8 @@ def herbal_secondary_trait_profiles(sim):
 
     sim.herbal_secondary_trait_profiles = {
         "seed": seed,
+        "dynamic_catalog_marker": dynamic_marker,
+        "fast_native_effect_marker": native_marker,
         "catalog_marker": catalog_marker,
         "chemistry_marker": chemistry_marker,
         "native_effect_marker": effect_marker,

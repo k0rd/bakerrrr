@@ -982,12 +982,16 @@ def _local_light_sources(sim, clock=None):
     return sources
 
 
-def _local_light_sources_near(sim, x, y, z, *, clock=None):
+def _local_light_sources_near(sim, x, y, z, *, clock=None, sampling=None):
     """Return only sources whose exact radius covers the sampled cell."""
 
-    sources = _local_light_sources(sim, clock=clock)
     state = lighting_state(sim)
-    source_key = tuple(state.get("source_cache_key", ()))
+    if isinstance(sampling, dict) and sampling.get("sim") is sim:
+        sources = tuple(sampling.get("sources", ()) or ())
+        source_key = tuple(sampling.get("source_key", ()))
+    else:
+        sources = _local_light_sources(sim, clock=clock)
+        source_key = tuple(state.get("source_cache_key", ()))
     if tuple(state.get("source_spatial_cache_key", ())) != source_key:
         spatial = {}
         for source in sources:
@@ -1114,7 +1118,17 @@ def _world_grid_light_event_key(sim):
     return tuple(sorted(rows))
 
 
-def _local_light_contributions(sim, x, y, z=0, inside=False, aperture_bleed=0.0, clock=None):
+def _local_light_contributions(
+    sim,
+    x,
+    y,
+    z=0,
+    inside=False,
+    aperture_bleed=0.0,
+    clock=None,
+    *,
+    sampling=None,
+):
     if clock is None:
         clock = clock_snapshot(sim)
 
@@ -1128,7 +1142,7 @@ def _local_light_contributions(sim, x, y, z=0, inside=False, aperture_bleed=0.0,
     contributions = []
     sample_building_id = _structure_building_id(sim, x, y, z) if inside else None
     outside_bleed = _clamp_unit(aperture_bleed, default=0.0)
-    for source in _local_light_sources_near(sim, x, y, z, clock=clock):
+    for source in _local_light_sources_near(sim, x, y, z, clock=clock, sampling=sampling):
         try:
             sx = int(source.get("x"))
             sy = int(source.get("y"))
@@ -1256,19 +1270,11 @@ def _local_light_level(sim, x, y, z=0, inside=False, aperture_bleed=0.0, clock=N
     )
 
 
-def ambient_snapshot(sim, x, y, z=0, clock=None):
+def prepare_ambient_sampling(sim, *, clock=None):
     if clock is None:
         clock = clock_snapshot(sim)
-    try:
-        x, y, z = int(x), int(y), int(z)
-    except (TypeError, ValueError):
-        x, y, z = 0, 0, 0
 
-    # Rendering and perception frequently ask the same exact lighting question
-    # several times while simulation time is paused.  All dependencies below
-    # are canonical revisions or compact state signatures; the cached answer is
-    # discarded immediately when fire, fixtures, topology, or time changes.
-    _local_light_sources(sim, clock=clock)
+    sources = _local_light_sources(sim, clock=clock)
     state = lighting_state(sim)
     tilemap = getattr(sim, "tilemap", None)
     cache_signature = (
@@ -1285,6 +1291,35 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
     if not isinstance(ambient_cache, dict):
         ambient_cache = {}
         state["ambient_cache"] = ambient_cache
+    return {
+        "sim": sim,
+        "clock": clock,
+        "sources": sources,
+        "source_key": tuple(state.get("source_cache_key", ())),
+        "ambient_cache": ambient_cache,
+        "signature": cache_signature,
+    }
+
+
+def ambient_snapshot(sim, x, y, z=0, clock=None, *, sampling=None):
+    if not isinstance(sampling, dict) or sampling.get("sim") is not sim:
+        sampling = prepare_ambient_sampling(sim, clock=clock)
+    clock = sampling.get("clock") if isinstance(sampling.get("clock"), dict) else clock
+    if clock is None:
+        clock = clock_snapshot(sim)
+    try:
+        x, y, z = int(x), int(y), int(z)
+    except (TypeError, ValueError):
+        x, y, z = 0, 0, 0
+
+    # Rendering and perception frequently ask the same exact lighting question
+    # several times while simulation time is paused.  The sampling context
+    # validates canonical fire, fixture, topology, vehicle, flora, and time
+    # dependencies once for the caller's coherent observation window.
+    ambient_cache = sampling.get("ambient_cache")
+    if not isinstance(ambient_cache, dict):
+        sampling = prepare_ambient_sampling(sim, clock=clock)
+        ambient_cache = sampling["ambient_cache"]
     cache_key = (x, y, z)
     cached = ambient_cache.get(cache_key)
     if isinstance(cached, dict):
@@ -1296,7 +1331,16 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
     )
     inside = bool(is_interior_tile(sim, x, y, z))
     if not inside:
-        contributions = _local_light_contributions(sim, x, y, z, inside=False, aperture_bleed=0.0, clock=clock)
+        contributions = _local_light_contributions(
+            sim,
+            x,
+            y,
+            z,
+            inside=False,
+            aperture_bleed=0.0,
+            clock=clock,
+            sampling=sampling,
+        )
         local_light = _combine_local_light(contributions)
         light_tint, light_sources = _light_tint_from_contributions(contributions)
         ambient = _clamp_unit(outdoor_ambient + ((1.0 - outdoor_ambient) * local_light), default=outdoor_ambient)
@@ -1316,7 +1360,16 @@ def ambient_snapshot(sim, x, y, z=0, clock=None):
     interior_base = max(0.12, min(0.48, outdoor_ambient * 0.58))
     bleed = _neighbor_aperture_bonus(sim, x, y, z)
     interior = interior_base + ((outdoor_ambient - interior_base) * (0.7 * bleed))
-    contributions = _local_light_contributions(sim, x, y, z, inside=True, aperture_bleed=bleed, clock=clock)
+    contributions = _local_light_contributions(
+        sim,
+        x,
+        y,
+        z,
+        inside=True,
+        aperture_bleed=bleed,
+        clock=clock,
+        sampling=sampling,
+    )
     local_light = _combine_local_light(contributions)
     light_tint, light_sources = _light_tint_from_contributions(contributions)
     interior = _clamp_unit(interior + ((1.0 - interior) * local_light), default=interior_base)

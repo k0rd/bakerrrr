@@ -89,6 +89,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "vehicle_primary_occupants",
     "_pending_stream_unloads",
     "_stream_unload_flush_active",
+    "_incremental_update_state",
 }
 _SKIP_SNAPSHOT_VALUE = object()
 

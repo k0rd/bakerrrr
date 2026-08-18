@@ -950,10 +950,31 @@ def find_nearest_color_word(
     rgb = parse_color_value(value)
     if rgb is None:
         return normalize_color_word(value, default=default) or default
+    nearest = _nearest_color_word_cached(
+        tuple(rgb),
+        bool(include_reserved),
+        bool(include_imported),
+    )
+    return nearest or default
+
+
+@lru_cache(maxsize=8192)
+def _nearest_color_word_cached(
+    rgb: tuple[int, int, int],
+    include_reserved: bool,
+    include_imported: bool,
+) -> str:
+    """Resolve one immutable catalogue lookup once.
+
+    The palettes are loaded as module-level tuples.  Caching the deterministic
+    nearest match preserves every color choice while keeping actor rendering
+    from rescanning thousands of imported words each frame.
+    """
+
     candidates = approved_color_words(include_reserved=include_reserved, include_imported=include_imported)
     if not candidates:
-        return default
-    best_word = default
+        return ""
+    best_word = ""
     best_distance: int | None = None
     for word in candidates:
         candidate_rgb = color_word_rgb(word)

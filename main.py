@@ -1032,6 +1032,33 @@ def _observe_audio_frame(sim, elapsed_seconds, *, phase="play"):
         observe(elapsed_seconds, phase=phase)
 
 
+def _incremental_update_active(sim):
+    active = getattr(sim, "incremental_update_active", None)
+    return bool(active()) if callable(active) else False
+
+
+def _queue_inputs_during_incremental_update(view):
+    queue_inputs = getattr(view, "queue_window_inputs", None)
+    if callable(queue_inputs):
+        queue_inputs()
+        return
+    pump_window = getattr(view, "pump_window", None)
+    if callable(pump_window):
+        pump_window()
+
+
+def _advance_incremental_world_update(sim, view, time_budget_seconds, *, begin=False):
+    if begin:
+        started = sim.begin_incremental_update()
+        if not started:
+            return {"active": False, "completed": True, "systems_run": 0}
+    else:
+        # The simulation is already partly through its ordered system list.
+        # Queue commands, but do not apply them against that partial state.
+        _queue_inputs_during_incremental_update(view)
+    return sim.advance_incremental_update(time_budget_seconds)
+
+
 def _run_loop(sim, view, character_name):
     set_active_debug_sim(sim)
     frame_seconds = 1.0 / 20.0
@@ -1047,22 +1074,50 @@ def _run_loop(sim, view, character_name):
     LIVE_TIMESKIP_TARGET_SLICES = 6
     LIVE_TIMESKIP_SLICE_BUDGET_SECONDS = 0.02
     LIVE_TIMESKIP_MIN_YIELD_SECONDS = 0.001
+    WORLD_TICK_SLICE_BUDGET_SECONDS = 0.02
     _frame = 0
     while True:
-        if _consume_view_close_requested(view):
-            _request_session_quit(sim, source="window_close")
-            break
-        if not sim.running:
-            break
+        incremental_active = _incremental_update_active(sim)
+        if not incremental_active:
+            if _consume_view_close_requested(view):
+                _request_session_quit(sim, source="window_close")
+                break
+            if not sim.running:
+                break
 
         site_service_system = getattr(sim, "site_service_system", None)
-        if site_service_system is not None:
+        if not incremental_active and site_service_system is not None:
             try:
                 site_service_system.finalize_live_timeskip_result_if_ready()
             except AttributeError:
                 pass
 
         frame_start = time.perf_counter()
+
+        if incremental_active:
+            _frame += 1
+            update_result = _advance_incremental_world_update(
+                sim,
+                view,
+                WORLD_TICK_SLICE_BUDGET_SECONDS,
+            )
+            # RenderSystem is the final registered system.  Until it runs,
+            # refresh only presents the last fully rendered surface while the
+            # simulation transaction continues behind it.
+            view.refresh()
+            if bool(update_result.get("completed")):
+                if _consume_view_close_requested(view):
+                    _request_session_quit(sim, source="window_close")
+                    break
+                if not sim.running:
+                    break
+            elapsed = time.perf_counter() - frame_start
+            _observe_audio_frame(sim, elapsed, phase="play")
+            elapsed = time.perf_counter() - frame_start
+            sleep_for = frame_seconds - elapsed
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            continue
 
         live_timeskip = getattr(sim, "live_timeskip", {})
         if isinstance(live_timeskip, dict) and bool(live_timeskip.get("active")):
@@ -1121,14 +1176,27 @@ def _run_loop(sim, view, character_name):
         throttled = (_frame % WORLD_TICK_DIVISOR != 0) and not sim.turn_based
         if throttled:
             sim.set_time_paused(True, reason="tick_throttle")
-        sim.update()
-        if throttled:
-            sim.set_time_paused(False, reason="tick_throttle")
+        try:
+            if sim.is_time_paused():
+                sim.update()
+            else:
+                _advance_incremental_world_update(
+                    sim,
+                    view,
+                    WORLD_TICK_SLICE_BUDGET_SECONDS,
+                    begin=True,
+                )
+        finally:
+            if throttled:
+                sim.set_time_paused(False, reason="tick_throttle")
 
         view.refresh()
-        if _consume_view_close_requested(view):
-            _request_session_quit(sim, source="window_close")
-            break
+        if not _incremental_update_active(sim):
+            if _consume_view_close_requested(view):
+                _request_session_quit(sim, source="window_close")
+                break
+            if not sim.running:
+                break
 
         elapsed = time.perf_counter() - frame_start
         _observe_audio_frame(sim, elapsed, phase="play")

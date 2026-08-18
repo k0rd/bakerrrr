@@ -1,4 +1,5 @@
 import random
+import time
 
 from .buildings import layout_chunk_building, world_building_id
 from .derived_facts import mark_derived_fact_changed
@@ -76,6 +77,8 @@ class Simulation:
         self.wildlife_damage_reactions = {}
         self.disguise_state = None
         self.structure_cells = {}
+        self.structure_cells_by_building = {}
+        self._structure_building_index_cell_count = 0
         self.next_property_id = 1
         self.ground_items = {}
         self.ground_item_index = {}
@@ -161,6 +164,10 @@ class Simulation:
         return int(getattr(self, "tick", 0))
 
     def _bind_runtime_state(self):
+        # A paced update is a presentation-time cursor over one ordinary,
+        # ordered simulation tick.  It must never survive save/load or be
+        # mistaken for persistent world state.
+        self._incremental_update_state = None
         if isinstance(getattr(self, "log", None), EventLog):
             self.log.default_tick_source = self._log_tick
         if not isinstance(getattr(self, "door_states", None), dict):
@@ -213,6 +220,10 @@ class Simulation:
             self.vehicle_primary_occupants = {}
         if not isinstance(getattr(self, "_mechanical_device_ids", None), set):
             self._mechanical_device_ids = set()
+        if not isinstance(getattr(self, "structure_cells_by_building", None), dict):
+            self.structure_cells_by_building = {}
+        if not isinstance(getattr(self, "_structure_building_index_cell_count", None), int):
+            self._structure_building_index_cell_count = -1
         if not isinstance(getattr(self, "mechanical_known_recipes", None), dict):
             self.mechanical_known_recipes = {}
         # Derived query state is never canonical.  Rebinding happens after a
@@ -1146,6 +1157,75 @@ class Simulation:
         except (TypeError, ValueError):
             return None
 
+    def _rebuild_structure_building_index(self):
+        """Rebuild the runtime building-to-structure-cell lookup."""
+
+        index = {}
+        for coord, info in getattr(self, "structure_cells", {}).items():
+            building_id = str((info or {}).get("building_id", "") or "").strip()
+            if not building_id:
+                continue
+            index.setdefault(building_id, set()).add(tuple(coord))
+        self.structure_cells_by_building = index
+        self._structure_building_index_cell_count = len(getattr(self, "structure_cells", {}) or {})
+        return index
+
+    def _index_structure_cell(self, coord, info):
+        """Write one canonical structure cell and maintain its building index."""
+
+        key = self._coord_key(*(tuple(coord)[:3])) if isinstance(coord, (tuple, list)) and len(coord) >= 3 else None
+        if key is None:
+            return False
+        cells = getattr(self, "structure_cells", None)
+        if not isinstance(cells, dict):
+            cells = {}
+            self.structure_cells = cells
+        index = getattr(self, "structure_cells_by_building", None)
+        if (
+            not isinstance(index, dict)
+            or int(getattr(self, "_structure_building_index_cell_count", -1)) != len(cells)
+        ):
+            index = self._rebuild_structure_building_index()
+
+        previous = cells.get(key)
+        previous_building_id = str((previous or {}).get("building_id", "") or "").strip()
+        next_info = dict(info or {})
+        next_building_id = str(next_info.get("building_id", "") or "").strip()
+        if previous_building_id and previous_building_id != next_building_id:
+            previous_bucket = index.get(previous_building_id)
+            if isinstance(previous_bucket, set):
+                previous_bucket.discard(key)
+                if not previous_bucket:
+                    index.pop(previous_building_id, None)
+        cells[key] = next_info
+        if next_building_id:
+            index.setdefault(next_building_id, set()).add(key)
+        self._structure_building_index_cell_count = len(cells)
+        return True
+
+    def structure_cells_for_building(self, building_id):
+        """Return deterministic canonical cells for one stamped building."""
+
+        building_id = str(building_id or "").strip()
+        if not building_id:
+            return ()
+        cells = getattr(self, "structure_cells", None)
+        if not isinstance(cells, dict):
+            return ()
+        index = getattr(self, "structure_cells_by_building", None)
+        if (
+            not isinstance(index, dict)
+            or int(getattr(self, "_structure_building_index_cell_count", -1)) != len(cells)
+        ):
+            index = self._rebuild_structure_building_index()
+        coords = index.get(building_id, ())
+        return tuple(
+            (coord, cells[coord])
+            for coord in sorted(coords)
+            if coord in cells
+            and str((cells[coord] or {}).get("building_id", "") or "").strip() == building_id
+        )
+
     def _property_footprint_excluded_cells(self, prop):
         if not isinstance(prop, dict):
             return frozenset()
@@ -1188,9 +1268,7 @@ class Simulation:
             return frozenset()
 
         covered_xy = set()
-        for (cell_x, cell_y, cell_z), info in getattr(self, "structure_cells", {}).items():
-            if str((info or {}).get("building_id", "")).strip() != building_id:
-                continue
+        for (cell_x, cell_y, cell_z), info in self.structure_cells_for_building(building_id):
             if not (base_z - basement_levels <= int(cell_z) < base_z + floors):
                 continue
             covered_xy.add((int(cell_x), int(cell_y)))
@@ -1253,9 +1331,7 @@ class Simulation:
         except (TypeError, ValueError):
             return frozenset()
 
-        for (cell_x, cell_y, cell_z), info in getattr(self, "structure_cells", {}).items():
-            if str((info or {}).get("building_id", "")).strip() != building_id:
-                continue
+        for (cell_x, cell_y, cell_z), info in self.structure_cells_for_building(building_id):
             if not (base_z - basement_levels <= int(cell_z) < base_z + floors):
                 continue
             if not (left <= int(cell_x) <= right and top <= int(cell_y) <= bottom):
@@ -1368,6 +1444,7 @@ class Simulation:
 
     def rebuild_spatial_indexes(self):
         self.rebuild_chunk_entity_index()
+        self._rebuild_structure_building_index()
         self._invalidate_properties_in_radius_cache()
         self.property_anchor_index = {}
         self.property_cover_index = {}
@@ -2252,7 +2329,7 @@ class Simulation:
             )
             key = (int(x), int(y), int(z))
             if key not in self.structure_cells:
-                self.structure_cells[key] = dict(structure_info)
+                self._index_structure_cell(key, structure_info)
         return len(floor_cells)
 
     def _mark_structure_area(self, left, right, top, bottom, z, info, room_plan=None, excluded=None):
@@ -2286,7 +2363,7 @@ class Simulation:
                     room_kind = str(room_info.get("room_kind", "") or "").strip().lower()
                     if room_kind in common_area_room_kinds:
                         cell_info["common_area_kind"] = room_kind
-                self.structure_cells[(int(x), int(y), int(z))] = cell_info
+                self._index_structure_cell((int(x), int(y), int(z)), cell_info)
 
     def _add_vertical_link_stack(self, x, y, top_floor, kind, bottom_floor=0):
         top_floor = int(max(0, min(self.tilemap.max_floors - 1, top_floor)))
@@ -3684,6 +3761,118 @@ class Simulation:
             with self.events.dispatch_scope():
                 system.update()
 
+    def incremental_update_active(self):
+        return isinstance(getattr(self, "_incremental_update_state", None), dict)
+
+    def begin_incremental_update(self):
+        """Begin one ordinary update without changing its system semantics.
+
+        The caller may advance the update over several presentation frames.
+        Systems retain their registration order, event dispatch scopes, turn
+        gate, mutator boundary, and single tick increment.  Paused updates stay
+        synchronous because their input/render-only path is already the UI
+        frame path rather than world simulation work.
+        """
+        if self.incremental_update_active():
+            raise RuntimeError("an incremental simulation update is already active")
+        if self.is_time_paused():
+            raise RuntimeError("paused simulation updates must remain synchronous")
+        if not self.systems:
+            return False
+
+        turn_gated = bool(self.turn_based)
+        if turn_gated:
+            self.turn_advance_requested = False
+            systems = tuple(self.systems[:1])
+            phase = "turn_input"
+        else:
+            systems = tuple(self.systems)
+            phase = "systems"
+
+        self._incremental_update_state = {
+            "phase": phase,
+            "systems": systems,
+            "index": 0,
+            "require_flag": None,
+            "advance_tick": not turn_gated,
+        }
+        return True
+
+    def _finish_incremental_update_phase(self, state):
+        if state.get("phase") == "turn_input":
+            advance_tick = bool(self.turn_advance_requested)
+            state.update(
+                {
+                    "phase": "systems",
+                    "systems": tuple(self.systems[1:]),
+                    "index": 0,
+                    "require_flag": None if advance_tick else "runs_without_turn",
+                    "advance_tick": advance_tick,
+                }
+            )
+            return False
+
+        if bool(state.get("advance_tick")):
+            for mutator in self.mutators:
+                mutator.on_tick(self)
+            self.tick += 1
+        self._incremental_update_state = None
+        return True
+
+    def advance_incremental_update(self, time_budget_seconds, *, max_systems=None):
+        """Advance the current ordered update for a bounded wall-clock slice.
+
+        A system is the smallest safe unit: it is always allowed to finish.
+        ``max_systems`` exists for deterministic regression coverage; normal
+        runtime pacing is governed only by the wall-clock budget.
+        """
+        if not self.incremental_update_active():
+            raise RuntimeError("no incremental simulation update is active")
+        try:
+            budget = max(0.0, float(time_budget_seconds))
+        except (TypeError, ValueError):
+            budget = 0.0
+        try:
+            system_limit = None if max_systems is None else max(1, int(max_systems))
+        except (TypeError, ValueError):
+            system_limit = None
+
+        deadline = time.perf_counter() + budget
+        systems_run = 0
+        while self.incremental_update_active():
+            state = self._incremental_update_state
+            systems = state.get("systems", ())
+            index = int(state.get("index", 0) or 0)
+            if index >= len(systems):
+                if self._finish_incremental_update_phase(state):
+                    break
+                continue
+
+            system = systems[index]
+            state["index"] = index + 1
+            require_flag = state.get("require_flag")
+            if require_flag and not getattr(system, require_flag, False):
+                continue
+
+            with self.events.dispatch_scope():
+                system.update()
+            systems_run += 1
+
+            phase_exhausted = int(state.get("index", 0) or 0) >= len(state.get("systems", ()))
+            if phase_exhausted and self._finish_incremental_update_phase(state):
+                break
+
+            if system_limit is not None and systems_run >= system_limit:
+                break
+            if systems_run > 0 and time.perf_counter() >= deadline:
+                break
+
+        return {
+            "active": self.incremental_update_active(),
+            "completed": not self.incremental_update_active(),
+            "systems_run": systems_run,
+        }
+
     def _update_cycle(
         self,
         *,
@@ -3739,6 +3928,8 @@ class Simulation:
         self.tick += 1
 
     def update(self):
+        if self.incremental_update_active():
+            raise RuntimeError("cannot start a synchronous update during an incremental update")
         self._update_cycle()
 
     def run_headless_tick(self, *, headless_profile=None):
