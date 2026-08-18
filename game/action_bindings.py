@@ -93,6 +93,14 @@ ACTION_SPECS = (
     ActionSpec("action_menu", "Action menu", "system", (ACTION_MENU_KEY,), contexts=("local", "overworld"), rebindable=False, protected=True, menu=False),
     ActionSpec("help", "Help", "system", (ord("?"),), contexts=("local", "overworld"), rebindable=False, protected=True),
     ActionSpec(
+        "pause_toggle",
+        "Pause toggle",
+        "system",
+        (),
+        contexts=("local", "overworld"),
+        description="Pause the simulation behind a blank privacy screen until this control is pressed again.",
+    ),
+    ActionSpec(
         "toggle_world_magnification",
         "World magnification",
         "system",
@@ -130,6 +138,13 @@ ACTION_SPECS = (
     ActionSpec("aim_target_prev", "Target previous", "combat", (ord("F"),), description="Cycle target lock backward."),
     ActionSpec("free_aim", "Free aim", "combat", (), description="Open the aim cursor."),
     ActionSpec("fire_locked", "Fire locked target", "combat", (), description="Fire at the current aim lock."),
+    ActionSpec(
+        "combat_pacing_toggle",
+        "Combat pacing toggle",
+        "combat",
+        (),
+        description="Latch turn-by-turn combat pacing on until this control is pressed again.",
+    ),
     ActionSpec("tactical_read", "Tactical read", "combat", (ord("T"),)),
     ActionSpec("cycle_weapon", "Cycle weapon", "combat", (ord("V"),)),
     ActionSpec("side_entry", "Door breach", "caution", (ord("J"),)),

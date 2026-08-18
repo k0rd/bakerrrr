@@ -58,6 +58,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "npc_self_protection_state",
     "rumor_weather_posture_state",
     "action_menu_ui",
+    "manual_pause_ui",
     "custom_room_curiosity_flavors",
     "custom_ui_themes",
     "active_ejections",
@@ -802,6 +803,12 @@ def snapshot_simulation(sim):
     for key, value in sim.__dict__.items():
         if key in _EXCLUDED_SIM_STATE_KEYS:
             continue
+        if key == "pause_reasons" and isinstance(value, (set, list, tuple, frozenset)):
+            value = {
+                reason
+                for reason in value
+                if str(reason or "").strip().lower() != "manual_pause"
+            }
         copied = _snapshot_value_or_skip(key, value)
         if copied is _SKIP_SNAPSHOT_VALUE:
             continue

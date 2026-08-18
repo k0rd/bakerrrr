@@ -126,6 +126,10 @@ class Simulation:
         self.overworld_markers_by_eid = {}
         self.next_overworld_marker_id_by_eid = {}
         self.pause_reasons = set()
+        self.manual_pause_ui = {
+            "active": False,
+            "binding_label": "unbound",
+        }
         self.live_timeskip = {}
         self.look_ui = {
             "active": False,

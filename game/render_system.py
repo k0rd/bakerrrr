@@ -214,8 +214,8 @@ from game.system_support.entity_naming import _entity_display_name
 from game.system_support.combat_pacing_runtime import (
     _combat_overlay_state,
     _combat_turn_pacing_active,
-    _set_manual_combat_pacing,
 )
+from game.system_support.pause_runtime import manual_pause_active, manual_pause_state
 from game.system_support.altered_state_runtime import hallucinated_tile_visual, hallucination_intensity
 from game.system_support.combat_targeting_runtime import (
     _entity_uses_melee_aim,
@@ -2710,6 +2710,27 @@ class RenderSystem(System):
             if not bool(getattr(self.view, "uses_realtime_animation", False)):
                 animation_tick = int(getattr(self.sim, "tick", 0))
             begin_frame(animation_tick=animation_tick)
+
+        if manual_pause_active(self.sim):
+            screen_w, screen_h = self.view.size()
+            pause_state = manual_pause_state(self.sim)
+            binding_label = str(pause_state.get("binding_label", "unbound") or "unbound").strip()
+            title = "Paused"
+            prompt = f"Press {binding_label} to resume."
+            center_y = max(0, int(screen_h) // 2)
+            self.view.draw_text(
+                max(0, (int(screen_w) - len(title)) // 2),
+                max(0, center_y - 1),
+                title,
+                color="objective",
+            )
+            self.view.draw_text(
+                max(0, (int(screen_w) - len(prompt)) // 2),
+                min(max(0, int(screen_h) - 1), center_y + 1),
+                prompt,
+                color="player",
+            )
+            return
 
         positions = self.sim.ecs.get(Position)
         renders = self.sim.ecs.get(Render)

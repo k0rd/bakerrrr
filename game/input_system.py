@@ -327,6 +327,7 @@ from game.system_support.container_runtime import (
 from game.system_support.combat_pacing_runtime import (
     _combat_overlay_state,
     _combat_turn_pacing_active,
+    _manual_combat_pacing_source_active,
     _set_manual_combat_pacing,
 )
 from game.system_support.interaction_ordering import (
@@ -343,6 +344,11 @@ from game.system_support.item_runtime import (
     _item_tags,
     _item_weapon_id,
     _weapon_uses_ammo,
+)
+from game.system_support.pause_runtime import (
+    manual_pause_active,
+    manual_pause_state,
+    set_manual_pause,
 )
 from game.system_support.altered_state_runtime import bonus_move_available, spend_bonus_move
 from game.system_support.player_feedback import _log_player_feedback
@@ -417,6 +423,10 @@ class InputSystem(System):
         self.control_bindings = sanitize_control_bindings(self.player_config.get("control_bindings"))
         self._joystick_command_drain_pending = False
         self._apply_world_magnification_preference()
+        manual_pause_state(self.sim)["binding_label"] = action_binding_label(
+            self.control_bindings,
+            "pause_toggle",
+        )
 
         self.movement_keys = {
             KEY_UP: (0, -1),
@@ -3591,6 +3601,10 @@ class InputSystem(System):
     def _reload_control_bindings(self):
         self.player_config = load_player_config(config_path=self.player_config_path)
         self.control_bindings = sanitize_control_bindings(self.player_config.get("control_bindings"))
+        manual_pause_state(self.sim)["binding_label"] = action_binding_label(
+            self.control_bindings,
+            "pause_toggle",
+        )
         return self.control_bindings
 
     def _save_control_bindings(self, bindings):
@@ -3600,6 +3614,10 @@ class InputSystem(System):
         config["control_bindings"] = bindings
         self.player_config = config
         save_player_config(config, config_path=self.player_config_path)
+        manual_pause_state(self.sim)["binding_label"] = action_binding_label(
+            bindings,
+            "pause_toggle",
+        )
         return bindings
 
     def _apply_world_magnification_preference(self):
@@ -3647,6 +3665,63 @@ class InputSystem(System):
         save_player_config(config, config_path=self.player_config_path)
         return True
 
+    def _toggle_manual_pause(self):
+        currently_active = manual_pause_active(self.sim)
+        binding_label = action_binding_label(self.control_bindings, "pause_toggle")
+        if not currently_active and binding_label == "unbound":
+            _log_player_feedback(
+                self.sim,
+                "Bind Pause toggle before using it.",
+                kind="warning",
+                dedupe_window=1,
+                dedupe_key="manual_pause:unbound",
+            )
+            return True
+
+        active = not currently_active
+        set_manual_pause(self.sim, active, binding_label=binding_label)
+        self.sim.emit(Event(
+            "manual_pause_toggled",
+            eid=self.player_eid,
+            active=active,
+            binding_label=binding_label,
+        ))
+        return True
+
+    def _toggle_combat_pacing_latch(self):
+        active = not _manual_combat_pacing_source_active(self.sim, "player_toggle")
+        overlay = _set_manual_combat_pacing(
+            self.sim,
+            active,
+            source="player_toggle",
+        )
+        if active:
+            if self._auto_walk_state().get("active"):
+                self._stop_auto_walk(reason="combat", announce=True)
+            if self._auto_drive_state().get("active"):
+                self._stop_auto_drive(reason="combat", announce=True)
+            if self._local_drive_state().get("active"):
+                self._stop_local_drive(reason="combat", announce=True, zero_speed=False)
+        self.sim.emit(Event(
+            "manual_combat_pacing_toggled",
+            eid=self.player_eid,
+            active=active,
+        ))
+        if active:
+            message = "Manual combat pacing on."
+        elif bool(overlay.get("active")) or bool(overlay.get("manual_pacing")):
+            message = "Manual combat pacing off; current combat still holds turn pacing."
+        else:
+            message = "Manual combat pacing off."
+        _log_player_feedback(
+            self.sim,
+            message,
+            kind="combat",
+            dedupe_window=1,
+            dedupe_key=f"manual_combat_pacing:{int(active)}",
+        )
+        return True
+
     def _action_context(self, zoom_mode=None):
         mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower()
         return "overworld" if mode == "overworld" else "local"
@@ -3670,11 +3745,15 @@ class InputSystem(System):
                 player_in_vehicle=player_in_vehicle,
                 aim_lock_active=aim_lock_active,
             )
+            binding = action_binding_label(self.control_bindings, spec.id)
+            if spec.id == "pause_toggle" and binding == "unbound":
+                available = False
+                reason = "bind first"
             rows.append({
                 "id": spec.id,
                 "label": spec.label,
                 "category": spec.category,
-                "binding": action_binding_label(self.control_bindings, spec.id),
+                "binding": binding,
                 "available": bool(available),
                 "reason": str(reason or ""),
                 "description": spec.description,
@@ -6407,10 +6486,21 @@ class InputSystem(System):
                         if player_pos:
                             ddx = int(nx) - int(player_pos.x)
                             ddy = int(ny) - int(player_pos.y)
-                            # Melee reticle is constrained to the 8 surrounding tiles.
+                            # The first push positions the melee reticle. A
+                            # second push through its adjacent boundary walks
+                            # the player and keeps the reticle one step ahead.
                             if max(abs(ddx), abs(ddy)) == 1:
                                 state["x"] = nx
                                 state["y"] = ny
+                            elif max(abs(ddx), abs(ddy)) == 2:
+                                self._advance_melee_aim_step(
+                                    state,
+                                    player_pos,
+                                    dx=dx,
+                                    dy=dy,
+                                    cursor_x=nx,
+                                    cursor_y=ny,
+                                )
                         else:
                             state["x"] = nx
                             state["y"] = ny
@@ -6545,6 +6635,51 @@ class InputSystem(System):
     def _emit_turn_action(self, action, **data):
         self._emit_player_action(action, consume_turn=True, **data)
 
+    def _emit_player_move(self, dx, dy):
+        consume_turn = True
+        if bonus_move_available(self.sim, self.player_eid):
+            spend_bonus_move(self.sim, self.player_eid, source="player_move")
+            consume_turn = False
+        self._emit_player_action("move", consume_turn=consume_turn, dx=int(dx), dy=int(dy))
+
+    def _advance_melee_aim_step(self, state, player_pos, *, dx, dy, cursor_x, cursor_y):
+        if player_pos is None or self._player_in_vehicle():
+            return False
+
+        origin_x = int(player_pos.x)
+        origin_y = int(player_pos.y)
+        origin_z = int(player_pos.z)
+        self._record_action_anchor_delta(dx, dy)
+        self._emit_player_move(dx, dy)
+
+        current_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if current_pos is None:
+            return False
+        current_x = int(current_pos.x)
+        current_y = int(current_pos.y)
+        current_z = int(current_pos.z)
+        if (current_x, current_y, current_z) == (origin_x, origin_y, origin_z):
+            return False
+
+        # Keep the intended cursor destination when it remains adjacent after
+        # the step. If movement was redirected, preserve the pushed facing;
+        # the old player cell is an always-adjacent fallback at a map edge.
+        candidates = (
+            (int(cursor_x), int(cursor_y)),
+            (current_x + int(dx), current_y + int(dy)),
+            (origin_x, origin_y),
+        )
+        for target_x, target_y in candidates:
+            if not self.sim.tilemap.in_bounds(target_x, target_y):
+                continue
+            if max(abs(target_x - current_x), abs(target_y - current_y)) != 1:
+                continue
+            state["x"] = int(target_x)
+            state["y"] = int(target_y)
+            state["z"] = current_z
+            return True
+        return False
+
     def _execute_action(self, action_id, *, key=None, zoom_mode=None):
         action_id = str(action_id or "").strip()
         zoom_mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
@@ -6556,6 +6691,10 @@ class InputSystem(System):
             return True
         if action_id == "toggle_world_magnification":
             return self._toggle_world_magnification()
+        if action_id == "pause_toggle":
+            return self._toggle_manual_pause()
+        if action_id == "combat_pacing_toggle":
+            return self._toggle_combat_pacing_latch()
         if action_id == "quit":
             self.sim.running = False
             self.sim.emit(Event("quit_requested", eid=self.player_eid))
@@ -8080,6 +8219,22 @@ class InputSystem(System):
 
     def _update_input_cycle(self):
 
+        if manual_pause_active(self.sim):
+            # A player pause is stricter than the modal pause path: poll only
+            # for its own resume binding and do not refresh or mutate any live
+            # interface/world state hidden behind the privacy screen.
+            zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
+            physical_input = self._next_input_event(collapse_burst=False)
+            key = self._input_key_code(physical_input)
+            action_id = self._action_for_physical_or_key(
+                physical_input,
+                key,
+                zoom_mode=zoom_mode,
+            )
+            if action_id == "pause_toggle":
+                self._toggle_manual_pause()
+            return
+
         state = self._inventory_state()
         trade_state = self._trade_state()
         dialog_state = self._dialog_state()
@@ -8119,6 +8274,20 @@ class InputSystem(System):
             )
         )
         key = self._input_key_code(physical_input)
+        binding_capture_active = bool(action_menu_state.get("open")) and (
+            str(action_menu_state.get("mode", "action") or "action").strip().lower() == "bind"
+        )
+        global_action_id = self._action_for_physical_or_key(
+            physical_input,
+            key,
+            zoom_mode=zoom_mode,
+        )
+        if not binding_capture_active and global_action_id in {
+            "pause_toggle",
+            "combat_pacing_toggle",
+        }:
+            self._execute_action(global_action_id, key=key, zoom_mode=zoom_mode)
+            return
         if physical_input is None and key is None:
             key = self._held_aim_repeat_key(look_state)
             physical_input = key_physical_input(key) if key is not None else None
@@ -8341,13 +8510,11 @@ class InputSystem(System):
             dx, dy = movement_delta
             self._record_action_anchor_delta(dx, dy)
             action = "vehicle_move" if self._player_in_vehicle() else "move"
-            consume_turn = True
-            if action == "move" and bonus_move_available(self.sim, self.player_eid):
-                spend_bonus_move(self.sim, self.player_eid, source="player_move")
-                consume_turn = False
-            self._emit_player_action(action, consume_turn=consume_turn, dx=dx, dy=dy)
             if action == "vehicle_move":
+                self._emit_player_action(action, consume_turn=True, dx=dx, dy=dy)
                 self._sync_local_drive_after_vehicle_command(brake_tapped=dy > 0)
+            else:
+                self._emit_player_move(dx, dy)
             return
 
         action_id = self._action_for_physical_or_key(physical_input, key, zoom_mode=zoom_mode)
