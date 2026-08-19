@@ -3464,12 +3464,13 @@ def _spawn_chunk_wildlife(sim, chunk, property_records, rng, *, target_count):
     profile_counts = {}
     max_attempts = max(4, int(target_count) * 5)
 
+    profiles = tuple(AMBIENT_CREATURE_PROFILES) + tuple(native_fauna_profiles(sim))
+
     for _ in range(max_attempts):
         if len(spawned) >= int(target_count):
             break
 
         weighted = []
-        profiles = tuple(AMBIENT_CREATURE_PROFILES) + tuple(native_fauna_profiles(sim))
         for profile in profiles:
             weight = _creature_profile_weight(profile, descriptor)
             if weight <= 0.0:
