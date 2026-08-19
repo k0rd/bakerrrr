@@ -2417,14 +2417,17 @@ def seed_chunk_items(sim, chunk, property_records):
             useful_item = _contextual_useful_loot_candidate(prop, rng)
             if useful_item:
                 rolled_items[-1] = useful_item
+        tile_candidates_by_zone = {}
         for item_id in rolled_items:
             item_def = ITEM_CATALOG.get(item_id)
             if not item_def:
                 continue
             zone = item_zone_for_property(prop, item_def)
+            if zone not in tile_candidates_by_zone:
+                tile_candidates_by_zone[zone] = _tile_candidates_for_property(sim, prop, zone)
             tile = _pick_tile(
                 sim,
-                _tile_candidates_for_property(sim, prop, zone),
+                tile_candidates_by_zone[zone],
                 rng,
                 allow_entities=True,
                 weight_fn=lambda pos, _prop=prop, _item_def=item_def, _zone=zone: _item_tile_weight(sim, _prop, _item_def, _zone, pos),
@@ -3463,6 +3466,7 @@ def _spawn_chunk_wildlife(sim, chunk, property_records, rng, *, target_count):
     spawned = []
     profile_counts = {}
     max_attempts = max(4, int(target_count) * 5)
+    candidate_cache = {}
 
     profiles = tuple(AMBIENT_CREATURE_PROFILES) + tuple(native_fauna_profiles(sim))
 
@@ -4242,7 +4246,7 @@ def _room_operations_target_property(sim, host_prop, rng):
     return _weighted_choice(rng, candidates)
 
 
-def _spawn_room_operations_payoff_for_property(sim, chunk_key, prop, rng):
+def _spawn_room_operations_payoff_for_property(sim, chunk_key, prop, rng, *, room_tiles=None):
     """Materialize one scarce functional room payoff.
 
     The console is a real local Wire target with a bounded records surface.  A
@@ -4250,7 +4254,8 @@ def _spawn_room_operations_payoff_for_property(sim, chunk_key, prop, rng):
     actual place rather than inventing an abstract supplier or remote job.
     """
 
-    room_tiles = _room_operations_candidate_rooms(sim, prop)
+    if room_tiles is None:
+        room_tiles = _room_operations_candidate_rooms(sim, prop)
     if not room_tiles:
         return []
 
