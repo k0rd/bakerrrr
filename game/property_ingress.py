@@ -9,7 +9,7 @@ from engine.events import Event
 from engine.tilemap import Tile
 from game.components import AI, NPCMemory, PlayerModeState, Position
 from game.movement_runtime import try_move_entity
-from game.property_doors import _set_door_open_state
+from game.property_doors import _door_is_physically_locked, _operable_door_state_at, _set_door_open_state
 from game.property_access import (
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
@@ -21,7 +21,6 @@ from game.property_access import (
     shared_property_interest_event_payload as _shared_property_interest_event_payload,
     shared_property_interests_for_position as _shared_property_interests_for_position,
 )
-from game.property_keys import property_lock_state
 from game.property_runtime import (
     property_aperture_at as _property_aperture_at,
     property_covering as _property_covering,
@@ -504,8 +503,8 @@ class PropertyIngressRuntime:
         if ingress.ingress_kind != "ordinary_entry":
             return None
 
-        lock_state = property_lock_state(prop)
-        if not lock_state["locked"]:
+        door_state = _operable_door_state_at(self.sim, target_x, target_y, target_z)
+        if not _door_is_physically_locked(door_state, prop):
             return None
         if self.action_system._property_credential_access_for(eid, prop):
             return None

@@ -8,6 +8,7 @@ from game.property_access import (
     property_access_level as _property_access_level,
 )
 from game.property_keys import property_lock_state
+from game.property_doors import _set_door_locked_state
 from game.organizations import actor_org_practices
 from game.property_runtime import _int_or_default, property_metadata as _property_metadata
 from game.skills import actor_skill as _actor_skill, actor_tool_terms as _actor_tool_terms
@@ -253,4 +254,5 @@ def _attempt_locked_property_entry_with_sim(sim, eid, prop, *, target_x, target_
     metadata["property_locked"] = False
     metadata["property_override_tick"] = int(getattr(sim, "tick", 0))
     metadata["property_override_method"] = method
+    _set_door_locked_state(sim, target_x, target_y, target_z, False)
     return True, method

@@ -32,8 +32,10 @@ from game.property_access import (
     property_is_open as _property_is_open,
     property_is_storefront as _property_is_storefront,
     property_open_window as _property_open_window,
+    property_access_controller as _property_access_controller,
     site_services_for_property as _site_services_for_property,
 )
+from game.property_keys import ensure_actor_has_property_credential, remove_actor_property_credentials
 from game.property_runtime import (
     property_covering as _property_covering,
     property_distance as _property_distance,
@@ -3195,6 +3197,41 @@ def _ensure_work_routine(sim, actor_eid, prop):
     return routine
 
 
+def _provision_hired_actor_property_credential(sim, actor_eid, prop, *, role="staff"):
+    """Materialize the credential implied by a completed hire immediately."""
+
+    controller = _property_access_controller(sim, prop)
+    holder = next(
+        (
+            row
+            for row in tuple(controller.get("authorized_holders", ()) or ())
+            if isinstance(row, dict) and _int_or(row.get("eid"), default=0) == int(actor_eid)
+        ),
+        None,
+    )
+    if not isinstance(holder, dict):
+        return {"issued": False, "created": False, "mode": "", "reason": "no_entitlement"}
+
+    credential_kind = _text(holder.get("credential_kind")).lower() or "mechanical_key"
+    credential_tier = max(1, _int_or(holder.get("credential_tier"), default=1))
+    issued, instance_id, created = ensure_actor_has_property_credential(
+        sim,
+        actor_eid,
+        prop,
+        owner_tag=_text(prop.get("owner_tag")).lower() or "npc",
+        credential_kind=credential_kind,
+        holder_role=_text(holder.get("role")).lower() or _text(role).lower() or "staff",
+        credential_tier=credential_tier,
+    )
+    return {
+        "issued": bool(issued),
+        "created": bool(created),
+        "mode": credential_kind,
+        "instance_id": instance_id,
+        "reason": "provisioned" if issued else "provisioning_failed",
+    }
+
+
 def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="", contracted_wage=None):
     if sim is None or owner_eid is None or actor_eid is None:
         return None
@@ -3259,6 +3296,8 @@ def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="",
             state.setdefault("employee_wage_promises", {})[str(int(actor_eid))] = int(promised_wage)
         _touch_player_business_runtime(prop, sim=sim)
 
+    credential = _provision_hired_actor_property_credential(sim, actor_eid, prop, role=role)
+
     return {
         "actor_eid": int(actor_eid),
         "property_id": _text(prop.get("id")),
@@ -3273,6 +3312,7 @@ def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="",
         "previous_property_id": _text(previous_departure.get("previous_property_id")),
         "previous_business_name": str(previous_departure.get("previous_business_name", "") or "").strip(),
         "contracted_wage": int(max(0, min(20, _int_or(contracted_wage, default=0)))),
+        "credential": credential,
     }
 
 
@@ -3337,6 +3377,13 @@ def fire_actor_from_player_business(sim, owner_eid, actor_eid, prop=None):
         _sync_staff_roster(sim, employed_prop, state)
         _touch_player_business_runtime(employed_prop, sim=sim)
 
+    revoked_credentials = remove_actor_property_credentials(
+        sim,
+        actor_eid,
+        employed_prop,
+        allowed_kinds=("staff_badge", "manager_badge"),
+    )
+
     _remove_business_seeded_staff_bond(sim, owner_eid, actor_eid)
 
     return {
@@ -3344,6 +3391,7 @@ def fire_actor_from_player_business(sim, owner_eid, actor_eid, prop=None):
         "property_id": _text(employed_prop.get("id")),
         "business_name": _text(_property_metadata(employed_prop).get("business_name")) or _text(employed_prop.get("name")) or "Business",
         "role": str(employment.get("role", "staff") or "staff").strip().lower() or "staff",
+        "revoked_credentials": int(revoked_credentials),
     }
 
 

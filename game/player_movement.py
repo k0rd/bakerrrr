@@ -7,6 +7,7 @@ from engine.events import Event
 from game.components import AI, Collider, CoverState, DoorWaitState, NPCWill, PlayerModeState, Position, Vitality
 from game.movement_runtime import _can_step_transition_for, try_move_entity
 from game.opportunities import opportunity_intel_for_observer, reveal_opportunity_to_observer
+from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_runtime import (
     property_covering as _property_covering,
     property_power_cut_active as _property_power_cut_active,
@@ -107,6 +108,53 @@ def _bump_yield_candidates(player_x, player_y, npc_x, npc_y, dx, dy):
             yield candidate_x, candidate_y
 
 
+def _bump_yield_legitimacy_rank(
+    sim,
+    npc_eid,
+    old_x,
+    old_y,
+    z,
+    candidate_x,
+    candidate_y,
+    *,
+    access_cache=None,
+):
+    """Reject casual displacement that worsens an NPC's right to be there."""
+
+    current_prop = _property_covering(sim, old_x, old_y, z)
+    candidate_prop = _property_covering(sim, candidate_x, candidate_y, z)
+    current_id = str((current_prop or {}).get("id", "") or "").strip() if isinstance(current_prop, dict) else ""
+    candidate_id = str((candidate_prop or {}).get("id", "") or "").strip() if isinstance(candidate_prop, dict) else ""
+
+    cache = access_cache if isinstance(access_cache, dict) else {}
+
+    def permitted_at(prop, x, y):
+        if not isinstance(prop, dict):
+            return True
+        key = (str(prop.get("id", "") or f"prop-object:{id(prop)}"), int(x), int(y), int(z))
+        if key not in cache:
+            cache[key] = bool(_evaluate_property_access(
+                sim,
+                npc_eid,
+                prop,
+                x=x,
+                y=y,
+                z=z,
+            ).permitted)
+        return bool(cache[key])
+
+    current_permitted = permitted_at(current_prop, old_x, old_y)
+    candidate_permitted = permitted_at(candidate_prop, candidate_x, candidate_y)
+
+    if current_permitted and not candidate_permitted:
+        return None
+    if not current_permitted and candidate_permitted:
+        return 0
+    if not current_permitted and not candidate_permitted and current_id != candidate_id:
+        return None
+    return 1
+
+
 class PlayerMovementRuntime:
     def __init__(
         self,
@@ -147,7 +195,26 @@ class PlayerMovementRuntime:
         old_x = int(blocker_pos.x)
         old_y = int(blocker_pos.y)
         old_z = int(blocker_pos.z)
-        for candidate_x, candidate_y in _bump_yield_candidates(pos.x, pos.y, old_x, old_y, dx, dy):
+        ranked_candidates = []
+        access_cache = {}
+        for order, (candidate_x, candidate_y) in enumerate(
+            _bump_yield_candidates(pos.x, pos.y, old_x, old_y, dx, dy)
+        ):
+            legitimacy_rank = _bump_yield_legitimacy_rank(
+                self.sim,
+                blocker_eid,
+                old_x,
+                old_y,
+                old_z,
+                candidate_x,
+                candidate_y,
+                access_cache=access_cache,
+            )
+            if legitimacy_rank is None:
+                continue
+            ranked_candidates.append((int(legitimacy_rank), int(order), candidate_x, candidate_y))
+
+        for _legitimacy_rank, _order, candidate_x, candidate_y in sorted(ranked_candidates):
             moved, _reason = try_move_entity(
                 self.sim,
                 eid=blocker_eid,

@@ -4,7 +4,8 @@ from engine.tilemap import Tile
 
 from game.components import AI, CreatureIdentity, Position
 from game.property_access import (
-    evaluate_property_access as _evaluate_property_access,
+    property_apertures as _property_apertures,
+    property_physical_access_for_actor as _property_physical_access_for_actor,
     property_ingress_context as _property_ingress_context,
 )
 from game.property_keys import ensure_property_lock, property_lock_state
@@ -134,6 +135,53 @@ def _set_door_locked_state(sim, x, y, z, is_locked):
     return True
 
 
+def _door_is_physically_locked(state, prop=None):
+    """Read aperture truth first, with one legacy-property fallback."""
+
+    if isinstance(state, dict) and "locked" in state:
+        return bool(state.get("locked", False))
+    if isinstance(prop, dict):
+        return bool(property_lock_state(prop).get("locked", False))
+    return False
+
+
+def _set_property_apertures_locked(sim, prop, locked, *, auto_managed=None):
+    """Apply one controller/authority lock command to real door endpoints."""
+
+    if sim is None or not isinstance(prop, dict):
+        return 0
+    changed = 0
+    for aperture in _property_apertures(prop):
+        if not isinstance(aperture, dict):
+            continue
+        kind = str(aperture.get("kind", "door") or "door").strip().lower() or "door"
+        if not _is_operable_door_aperture(kind):
+            continue
+        try:
+            x = int(aperture.get("x"))
+            y = int(aperture.get("y"))
+            z = int(aperture.get("z", prop.get("z", 0)))
+        except (TypeError, ValueError):
+            continue
+        kwargs = {
+            "locked": bool(locked),
+            "kind": kind,
+            "ordinary": bool(aperture.get("ordinary", kind == "door")),
+            "property_id": prop.get("id"),
+        }
+        if auto_managed is not None:
+            kwargs["auto_managed"] = bool(auto_managed)
+        state = sim.set_door_state(x, y, z, **kwargs)
+        if isinstance(state, dict):
+            changed += 1
+
+    if changed:
+        # Compatibility projection for legacy/UI readers. Door states above
+        # remain the canonical physical facts.
+        _property_metadata(prop)["property_locked"] = bool(locked)
+    return changed
+
+
 def _door_open_attempt(sim, eid, x, y, z, *, allow_override=False):
     state = _operable_door_state_at(sim, x, y, z)
     if state is None:
@@ -164,32 +212,22 @@ def _door_open_attempt(sim, eid, x, y, z, *, allow_override=False):
             sim=sim,
         )
     if ingress and ingress.from_inside:
+        if _door_is_physically_locked(state, prop):
+            _set_door_locked_state(sim, x, y, z, False)
         return (_set_door_open_state(sim, x, y, z, True), "opened_inside")
 
     if prop:
-        access = _evaluate_property_access(
-            sim,
-            eid,
-            prop,
-            x=x,
-            y=y,
-            z=z,
-            breach_severity=float(getattr(ingress, "breach_severity", 0.0) or 0.0),
-        )
-        if access.permitted:
-            return (_set_door_open_state(sim, x, y, z, True), "authorized_open")
-
-        lock_state = property_lock_state(prop)
-        if not bool(lock_state.get("locked")):
+        if not _door_is_physically_locked(state, prop):
             return (_set_door_open_state(sim, x, y, z, True), "opened_unlocked")
 
-        if bool(lock_state.get("locked")):
+        physical_access = _property_physical_access_for_actor(sim, eid, prop)
+        if not bool(physical_access.get("granted", False)):
             return False, "locked_property"
-        if access.access_level == "public" and access.currently_open is False:
-            return False, "closed_property"
-        return False, "door_access_denied"
+        if not _set_door_locked_state(sim, x, y, z, False):
+            return False, "locked_property"
+        return (_set_door_open_state(sim, x, y, z, True), "credential_open")
 
-    if bool(state.get("locked", False)):
+    if _door_is_physically_locked(state):
         return False, "locked_door"
     return (_set_door_open_state(sim, x, y, z, True), "opened")
 
@@ -306,7 +344,7 @@ def _door_action_text(reason, *, opening=False):
     if opening:
         if reason_key == "already_open":
             return "The door is already open."
-        if reason_key in {"authorized_open", "opened", "opened_inside", "opened_unlocked", "override_open", "picked_front_door", "manual_front_door_override"}:
+        if reason_key in {"authorized_open", "credential_open", "opened", "opened_inside", "opened_unlocked", "override_open", "picked_front_door", "manual_front_door_override"}:
             return "You open the door."
         if reason_key in {"locked_property", "locked_door"}:
             return "The door is locked."

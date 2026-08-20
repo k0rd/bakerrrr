@@ -2698,6 +2698,25 @@ def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12, nutrition
         pid = str(prop.get("id", "") or "").strip()
         if pid and own_prop_id and pid == str(own_prop_id):
             continue
+
+        # Most nearby properties are homes, private workplaces, vehicles, or
+        # other non-venues. Classify the cheap structural facts before asking
+        # the actor-specific settle-target search to walk every footprint cell.
+        metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+        archetype = _behavior_token(metadata.get("archetype"))
+        is_public = bool(_property_is_public(prop))
+        is_storefront = bool(_property_is_storefront(prop))
+        if archetype in _NIGHTLIFE_ARCHETYPES:
+            base_score = 6.8
+        elif archetype in _SOCIAL_VENUE_ARCHETYPES:
+            base_score = 5.6
+        elif is_public:
+            base_score = 4.2
+        elif is_storefront:
+            base_score = 3.4
+        else:
+            continue
+
         focus = _property_focus_position(prop)
         if focus is None:
             continue
@@ -2717,20 +2736,6 @@ def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12, nutrition
             continue
         distance = _manhattan(origin_x, origin_y, int(fx), int(fy))
         if distance <= 0:
-            continue
-
-        archetype = _behavior_token(((prop.get("metadata") or {}) if isinstance(prop, dict) else {}).get("archetype"))
-        is_public = bool(_property_is_public(prop))
-        is_storefront = bool(_property_is_storefront(prop))
-        if archetype in _NIGHTLIFE_ARCHETYPES:
-            base_score = 6.8
-        elif archetype in _SOCIAL_VENUE_ARCHETYPES:
-            base_score = 5.6
-        elif is_public:
-            base_score = 4.2
-        elif is_storefront:
-            base_score = 3.4
-        else:
             continue
 
         access = _cached_behavior_property_access(

@@ -12,6 +12,7 @@ from game.property_door_wait import _door_knock_attempt
 from game.property_doors import (
     _door_action_text,
     _door_close_attempt,
+    _door_is_physically_locked,
     _door_interaction_candidate,
     _door_lock_action_text,
     _door_open_attempt,
@@ -25,7 +26,6 @@ from game.property_access import (
     property_is_storefront as _property_is_storefront,
     site_services_for_property as _site_services_for_property,
 )
-from game.property_keys import property_lock_state
 from game.property_runtime import (
     controller_access_requirement_text as _controller_access_requirement_text,
     property_covering as _property_covering,
@@ -550,8 +550,7 @@ class PropertyActionRuntime:
             )
             return True
 
-        lock_state = property_lock_state(prop)
-        currently_locked = bool(lock_state.get("locked"))
+        currently_locked = _door_is_physically_locked(state, prop)
         access_mode = str((access_entry or {}).get("mode", "authorized")).strip().lower() or "authorized"
 
         if bool(state.get("open", False)):
@@ -587,6 +586,8 @@ class PropertyActionRuntime:
                 tick=self.sim.tick,
                 method=f"{access_mode}_manual_lock",
             )
+            if success:
+                success = _set_door_locked_state(self.sim, x, y, z, True)
             _log_player_feedback(
                 self.sim,
                 _door_lock_action_text("closed_then_locked" if success else "not_property_door"),
@@ -626,6 +627,8 @@ class PropertyActionRuntime:
                 tick=self.sim.tick,
                 method=f"{access_mode}_manual_unlock",
             )
+            if success:
+                success = _set_door_locked_state(self.sim, x, y, z, False)
             _log_player_feedback(
                 self.sim,
                 _door_lock_action_text("unlocked" if success else "not_property_door"),
@@ -651,6 +654,8 @@ class PropertyActionRuntime:
             tick=self.sim.tick,
             method=f"{access_mode}_manual_lock",
         )
+        if success:
+            success = _set_door_locked_state(self.sim, x, y, z, True)
         _log_player_feedback(
             self.sim,
             _door_lock_action_text("locked" if success else "not_property_door"),

@@ -11,16 +11,16 @@ from game.mechanical_device_runtime import (
 )
 from game.components import AI, Collider, CreatureIdentity, Position
 from game.property_access import (
-    evaluate_property_access as _evaluate_property_access,
+    property_physical_access_for_actor as _property_physical_access_for_actor,
     property_ingress_context as _property_ingress_context,
 )
 from game.property_doors import (
     _actor_is_animal_or_wildlife,
+    _door_is_physically_locked,
     _door_property_at,
     _door_open_attempt,
     _operable_door_state_at,
 )
-from game.property_keys import property_lock_state
 from game.property_runtime import (
     property_aperture_at as _property_aperture_at,
     property_covering as _property_covering,
@@ -116,43 +116,12 @@ def _closed_door_move_block_reason(sim, eid, x, y, z):
     if _actor_is_animal_or_wildlife(sim, eid):
         return "blocked_animal_doorway"
 
-    positions = sim.ecs.get(Position)
-    pos = positions.get(eid)
-    if not pos:
-        return "missing_position"
-
     prop = _door_property_at(sim, x, y, z, state=state)
-    ingress = None
     if prop:
-        ingress = _property_ingress_context(
-            prop,
-            from_x=pos.x,
-            from_y=pos.y,
-            from_z=pos.z,
-            to_x=x,
-            to_y=y,
-            to_z=z,
-            sim=sim,
-        )
-    if prop:
-        access = _evaluate_property_access(
-            sim,
-            eid,
-            prop,
-            x=x,
-            y=y,
-            z=z,
-            breach_severity=float(getattr(ingress, "breach_severity", 0.0) or 0.0),
-        )
-        if access.permitted:
-            return "closed_door"
-        lock_state = property_lock_state(prop)
-        if bool(lock_state.get("locked")):
+        if _door_is_physically_locked(state, prop):
             return "locked_property"
-        if access.access_level == "public" and access.currently_open is False:
-            return "closed_property"
-        return "door_access_denied"
-    if bool(state.get("locked", False)):
+        return "closed_door"
+    if _door_is_physically_locked(state):
         return "locked_door"
     return "closed_door"
 
@@ -215,43 +184,20 @@ def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z
         if ingress and ingress.from_inside and actor_inside_same_prop:
             return True
 
-        # Path search only needs the expensive social/credential answer for a
-        # lock that could actually stop this route. Unlocked closed doors are
-        # already plannable by the existing rule below; deriving organization
-        # posture, business reputation, and actor standing for every speculative
-        # A* visit changes no result and can dominate NPC movement cost.
-        lock_state = property_lock_state(prop)
-        if not bool(lock_state.get("locked")):
+        if not _door_is_physically_locked(state, prop):
             return True
 
-        breach_severity = float(getattr(ingress, "breach_severity", 0.0) or 0.0)
         if isinstance(planning_context, MovementPlanningContext):
-            access_key = (id(prop), int(to_x), int(to_y), int(z), breach_severity)
+            access_key = (id(prop), int(to_x), int(to_y), int(z))
             permitted = planning_context.door_access_permissions.get(access_key)
             if permitted is None:
-                permitted = bool(_evaluate_property_access(
-                    sim,
-                    eid,
-                    prop,
-                    x=to_x,
-                    y=to_y,
-                    z=z,
-                    breach_severity=breach_severity,
-                ).permitted)
+                permitted = bool(_property_physical_access_for_actor(sim, eid, prop).get("granted", False))
                 planning_context.door_access_permissions[access_key] = permitted
             return permitted
 
-        return bool(_evaluate_property_access(
-            sim,
-            eid,
-            prop,
-            x=to_x,
-            y=to_y,
-            z=z,
-            breach_severity=breach_severity,
-        ).permitted)
+        return bool(_property_physical_access_for_actor(sim, eid, prop).get("granted", False))
 
-    return not bool(state.get("locked", False))
+    return not _door_is_physically_locked(state)
 
 
 def _movement_allows_auto_open(sim, eid, *, reason="move"):

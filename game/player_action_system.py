@@ -28,15 +28,14 @@ from game.player_look import PlayerLookRuntime
 from game.player_movement import PlayerMovementRuntime
 from game.player_travel import PlayerTravelRuntime
 from game.property_access import (
-    controller_intrusion_access_for_actor as _controller_intrusion_access_for_actor,
     property_access_controller as _property_access_controller,
     property_access_level as _property_access_level,
+    property_physical_access_for_actor as _property_physical_access_for_actor,
     site_services_for_property as _site_services_for_property,
 )
 from game.property_actions import PropertyActionRuntime
 from game.property_ingress import PropertyIngressRuntime
 from game.property_keys import (
-    inventory_matching_property_credential,
     inventory_matching_property_key,
     property_lock_state,
 )
@@ -46,7 +45,6 @@ from game.system_support.opportunity_knowledge_runtime import (
 )
 from game.property_runtime import (
     controller_access_requirement_text as _controller_access_requirement_text,
-    controller_holder_for_actor as _controller_holder_for_actor,
     finance_services_for_property as _finance_services_for_property,
     property_is_public as _property_is_public,
     property_is_storefront as _property_is_storefront,
@@ -649,75 +647,12 @@ class PlayerActionSystem(System):
     def _property_credential_access_for(self, eid, prop):
         if not isinstance(prop, dict):
             return None
-
-        kind = str(prop.get("kind", "")).strip().lower()
-        if kind != "building":
-            entry = self._property_key_entry_for(eid, prop)
-            if not entry:
-                return None
-            return {
-                "mode": "mechanical_key",
-                "entry": entry,
-                "reason": "key",
-            }
-
-        intrusion_access = _controller_intrusion_access_for_actor(self.sim, eid, prop)
-        if intrusion_access:
-            return {
-                "mode": str(intrusion_access.get("mode", "badge")).strip().lower() or "badge",
-                "entry": None,
-                "reason": str(intrusion_access.get("reason", "spoofed_access")).strip().lower() or "spoofed_access",
-            }
-
-        controller = _property_access_controller(self.sim, prop)
-        required_tier = max(1, _facade()._int_or_default(controller.get("required_credential_tier"), 1))
-        inventory = self._inventory_for(eid)
-        if inventory:
-            entry = inventory_matching_property_credential(
-                inventory,
-                property_id=prop.get("id"),
-                key_id=property_lock_state(prop)["key_id"],
-                allowed_kinds=controller.get("accepted_credentials", ()),
-                minimum_tier=required_tier,
-            )
-            if entry:
-                return {
-                    "mode": str(controller.get("credential_mode", "mechanical_key")).strip().lower() or "mechanical_key",
-                    "entry": entry,
-                    "reason": "credential",
-                }
-
-        if str(controller.get("credential_mode", "")).strip().lower() == "biometric":
-            holder = _controller_holder_for_actor(controller, eid)
-            if holder and _facade()._int_or_default(holder.get("credential_tier"), 0) >= required_tier:
-                return {
-                    "mode": "biometric",
-                    "entry": None,
-                    "reason": "biometric_authorization",
-                }
-        return None
+        access = _property_physical_access_for_actor(self.sim, eid, prop)
+        return access if bool(access.get("granted", False)) else None
 
     def _property_lock_access_for(self, eid, prop):
         if not isinstance(prop, dict):
             return None
-
-        owner_eid = prop.get("owner_eid")
-        try:
-            owner_eid = int(owner_eid) if owner_eid is not None else None
-        except (TypeError, ValueError):
-            owner_eid = None
-        if owner_eid is not None and int(eid) == owner_eid:
-            return {
-                "mode": "owner",
-                "entry": None,
-                "reason": "owner",
-            }
-        if str(prop.get("owner_tag", "") or "").strip().lower() == "player":
-            return {
-                "mode": "owner",
-                "entry": None,
-                "reason": "owner",
-            }
         return self._property_credential_access_for(eid, prop)
 
     def _access_skill(self, eid):

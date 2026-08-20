@@ -70,6 +70,8 @@ class Simulation:
         self._organization_runtime_cache = {}
         self._herbal_decay_next_tick = None
         self.door_states = {}
+        self.door_state_revision = 0
+        self.aperture_state_revision = 0
         self.fixture_power_cuts = {}
         self.camera_disabled = {}
         self.contractors = {}
@@ -176,6 +178,10 @@ class Simulation:
             self.log.default_tick_source = self._log_tick
         if not isinstance(getattr(self, "door_states", None), dict):
             self.door_states = {}
+        if not isinstance(getattr(self, "door_state_revision", None), int):
+            self.door_state_revision = 0
+        if not isinstance(getattr(self, "aperture_state_revision", None), int):
+            self.aperture_state_revision = 0
         if not isinstance(getattr(self, "fixture_power_cuts", None), dict):
             self.fixture_power_cuts = {}
         if not isinstance(getattr(self, "camera_disabled", None), dict):
@@ -668,22 +674,36 @@ class Simulation:
         if not isinstance(state, dict):
             state = {}
 
+        changed = key not in self.door_states
+        aperture_changed = key not in self.door_states
+
+        def assign(field, value, *, affects_aperture=False):
+            nonlocal aperture_changed, changed
+            if state.get(field) != value:
+                state[field] = value
+                changed = True
+                aperture_changed = aperture_changed or bool(affects_aperture)
+
         if open is not None:
-            state["open"] = bool(open)
+            assign("open", bool(open), affects_aperture=True)
         if locked is not None:
-            state["locked"] = bool(locked)
+            assign("locked", bool(locked))
         if kind is not None:
-            state["kind"] = str(kind or "door").strip().lower() or "door"
+            assign("kind", str(kind or "door").strip().lower() or "door", affects_aperture=True)
         if ordinary is not None:
-            state["ordinary"] = bool(ordinary)
+            assign("ordinary", bool(ordinary))
         if property_id is not None:
-            state["property_id"] = str(property_id).strip() or None
+            assign("property_id", str(property_id).strip() or None, affects_aperture=True)
         if auto_managed is not None:
-            state["auto_managed"] = bool(auto_managed)
+            assign("auto_managed", bool(auto_managed))
         if broken is not None:
-            state["broken"] = bool(broken)
+            assign("broken", bool(broken), affects_aperture=True)
 
         self.door_states[key] = state
+        if changed:
+            self.door_state_revision = int(getattr(self, "door_state_revision", 0) or 0) + 1
+        if aperture_changed:
+            self.aperture_state_revision = int(getattr(self, "aperture_state_revision", 0) or 0) + 1
         tile = self.tilemap.tile_at(x, y, z)
         if tile is not None:
             self.apply_door_state(x, y, z)

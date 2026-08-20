@@ -376,8 +376,25 @@ def _neighbor_aperture_bonus(sim, x, y, z=0):
     except (TypeError, ValueError):
         return 0.0
 
+    tilemap = getattr(sim, "tilemap", None)
+    signature_helper = getattr(tilemap, "visibility_signature_for_region", None)
+    if callable(signature_helper):
+        topology_signature = signature_helper(x, y, z, 2)
+    else:
+        topology_signature = int(getattr(tilemap, "visibility_revision", 0) or 0)
+    state = lighting_state(sim)
+    bleed_cache = state.get("aperture_bleed_cache")
+    if not isinstance(bleed_cache, dict):
+        bleed_cache = {}
+        state["aperture_bleed_cache"] = bleed_cache
+    cache_key = (x, y, z)
+    cached = bleed_cache.get(cache_key)
+    if isinstance(cached, tuple) and len(cached) == 2 and cached[0] == topology_signature:
+        return float(cached[1])
+
     structure = _structure_at(sim, x, y, z)
     if not isinstance(structure, dict):
+        bleed_cache[cache_key] = (topology_signature, 0.0)
         return 0.0
 
     strongest = 0.0
@@ -411,6 +428,7 @@ def _neighbor_aperture_bonus(sim, x, y, z=0):
                 strongest = strength
 
     if strongest >= 0.999:
+        bleed_cache[cache_key] = (topology_signature, 1.0)
         return 1.0
 
     if _tile_aperture_allows_light(sim, x, y, z):
@@ -420,7 +438,11 @@ def _neighbor_aperture_bonus(sim, x, y, z=0):
         if _tile_aperture_allows_light(sim, nx, ny, z):
             strongest = max(strongest, 0.6)
 
-    return _clamp_unit(strongest)
+    result = _clamp_unit(strongest)
+    if len(bleed_cache) >= 16384 and cache_key not in bleed_cache:
+        bleed_cache.clear()
+    bleed_cache[cache_key] = (topology_signature, result)
+    return result
 
 
 def _loaded_property_bounds(sim):
@@ -752,6 +774,20 @@ def _bioluminescent_flora_light_sources(sim):
 def _aperture_light_sources(sim, clock):
     phase = str(clock.get("phase", "day")).strip().lower() or "day"
     bounds = _loaded_property_bounds(sim)
+    state = lighting_state(sim)
+    cache_key = (
+        phase,
+        int(clock.get("hour", 0) or 0),
+        bounds,
+        int(len(getattr(sim, "properties", {}))),
+        int(getattr(sim, "aperture_state_revision", 0) or 0),
+        _active_power_cut_cache_key(sim, tick=clock.get("tick", getattr(sim, "tick", 0))),
+    )
+    if tuple(state.get("aperture_source_cache_key", ())) == cache_key:
+        cached = state.get("aperture_light_sources", ())
+        if isinstance(cached, (list, tuple)):
+            return [dict(source) for source in cached if isinstance(source, dict)]
+
     sources = []
     if sim is None or not hasattr(sim, "properties"):
         return sources
@@ -795,6 +831,8 @@ def _aperture_light_sources(sim, clock):
                 "light_priority": int(profile.get("light_priority", 0) or 0),
             })
 
+    state["aperture_source_cache_key"] = cache_key
+    state["aperture_light_sources"] = [dict(source) for source in sources]
     return sources
 
 
@@ -1434,6 +1472,9 @@ def lighting_state(sim):
         "local_light_sources": [],
         "source_spatial_cache_key": (),
         "local_light_source_spatial": {},
+        "aperture_source_cache_key": (),
+        "aperture_light_sources": [],
+        "aperture_bleed_cache": {},
         "ambient_cache_signature": (),
         "ambient_cache": {},
         "source_count": 0,

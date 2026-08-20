@@ -224,6 +224,10 @@ class PygameView:
         self._font_glyph_surface_cache_misses = 0
         self._font_measure_cache = OrderedDict()
         self._font_measure_cache_limit = 8_192
+        self._ui_border_surface_cache = OrderedDict()
+        self._ui_border_surface_cache_limit = 256
+        self._ui_border_surface_cache_hits = 0
+        self._ui_border_surface_cache_misses = 0
         self._procedural_surface_cache = OrderedDict()
         self._procedural_surface_cache_limit = 8_192
         self._procedural_surface_cache_hits = 0
@@ -9114,6 +9118,7 @@ class PygameView:
         self._font_surface_cache.clear()
         self._font_glyph_surface_cache.clear()
         self._font_measure_cache.clear()
+        self._ui_border_surface_cache.clear()
         self._procedural_surface_cache.clear()
 
     def render_cache_stats(self):
@@ -9144,6 +9149,12 @@ class PygameView:
             },
             "font_objects": {
                 "size": len(self._system_font_cache),
+            },
+            "ui_border": {
+                "size": len(self._ui_border_surface_cache),
+                "limit": int(self._ui_border_surface_cache_limit),
+                "hits": int(self._ui_border_surface_cache_hits),
+                "misses": int(self._ui_border_surface_cache_misses),
             },
             "procedural": {
                 "size": len(self._procedural_surface_cache),
@@ -9568,6 +9579,20 @@ class PygameView:
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
         width_px = max(1, len(text) * self.cell_px)
+        cache_key = (
+            str(kind),
+            int(width_px),
+            int(self.cell_px),
+            tuple(int(channel) for channel in frame),
+        )
+        cached = self._ui_border_surface_cache.get(cache_key)
+        if cached is not None:
+            self._ui_border_surface_cache.move_to_end(cache_key)
+            self._ui_border_surface_cache_hits += 1
+            self.surface.blit(cached, (cell_x, cell_y))
+            return True
+
+        self._ui_border_surface_cache_misses += 1
         inset = max(1, self.cell_px // 8)
         stroke_w = 1
         overlay = self.pygame.Surface((width_px, self.cell_px), self.pygame.SRCALPHA)
@@ -9641,6 +9666,12 @@ class PygameView:
                     stroke_w,
                 )
 
+        self._bounded_cache_store(
+            self._ui_border_surface_cache,
+            cache_key,
+            overlay,
+            self._ui_border_surface_cache_limit,
+        )
         self.surface.blit(overlay, (cell_x, cell_y))
         return True
 

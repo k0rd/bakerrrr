@@ -10,8 +10,9 @@ from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
 from game.knowledge_notebook import note_property_notebook_mutation
+from game.property_access import property_physical_access_for_actor
 from game.property_runtime import remember_property_lead_for_actor
-from game.property_doors import _door_tile_is_occupied
+from game.property_doors import _door_is_physically_locked, _door_tile_is_occupied, _set_door_locked_state
 from game.signal_jammer_runtime import electronic_fixture_interference_status
 from game.system_support.access_checks import (
     _maybe_damage_access_tool,
@@ -28,15 +29,12 @@ from game.system_support.access_runtime import (
 )
 from game.system_support.intrusion_runtime import _is_operable_door_aperture
 
-Inventory = _systems.Inventory
 PlayerAssets = _systems.PlayerAssets
 PropertyKnowledge = _systems.PropertyKnowledge
 PropertyPortfolio = _systems.PropertyPortfolio
 _apply_controller_intrusion = _systems._apply_controller_intrusion
 _building_id_from_property = _systems._building_id_from_property
 _controller_access_requirement_text = _systems._controller_access_requirement_text
-_controller_holder_for_actor = _systems._controller_holder_for_actor
-_controller_intrusion_access_for_actor = _systems._controller_intrusion_access_for_actor
 _controller_intrusion_state = _systems._controller_intrusion_state
 _finance_services_for_property = _systems._finance_services_for_property
 _int_or_default = _systems._int_or_default
@@ -52,8 +50,6 @@ _site_services_for_property = _systems._site_services_for_property
 _world_hour = _systems._world_hour
 ensure_actor_has_property_credential = _systems.ensure_actor_has_property_credential
 ensure_property_lock = _systems.ensure_property_lock
-inventory_matching_property_credential = _systems.inventory_matching_property_credential
-inventory_matching_property_key = _systems.inventory_matching_property_key
 property_lock_state = _systems.property_lock_state
 remove_actor_property_credentials = _systems.remove_actor_property_credentials
 _sync_property_access_controller = _systems._sync_property_access_controller
@@ -380,69 +376,11 @@ class PropertySystem(System):
             **data,
         ))
 
-    def _property_key_entry_for(self, eid, prop):
-        inventory = self.sim.ecs.get(Inventory).get(eid)
-        if not inventory or not isinstance(prop, dict):
-            return None
-        state = property_lock_state(prop)
-        if not state["key_id"]:
-            return None
-        return inventory_matching_property_key(
-            inventory,
-            property_id=prop.get("id"),
-            key_id=state["key_id"],
-        )
-
     def _property_credential_access_for(self, eid, prop):
         if not isinstance(prop, dict):
             return None
-
-        kind = str(prop.get("kind", "")).strip().lower()
-        if kind != "building":
-            entry = self._property_key_entry_for(eid, prop)
-            if not entry:
-                return None
-            return {
-                "mode": "mechanical_key",
-                "entry": entry,
-                "reason": "key",
-            }
-
-        intrusion_access = _controller_intrusion_access_for_actor(self.sim, eid, prop)
-        if intrusion_access:
-            return {
-                "mode": str(intrusion_access.get("mode", "badge")).strip().lower() or "badge",
-                "entry": None,
-                "reason": str(intrusion_access.get("reason", "spoofed_access")).strip().lower() or "spoofed_access",
-            }
-
-        controller = _property_access_controller(self.sim, prop)
-        required_tier = max(1, _int_or_default(controller.get("required_credential_tier"), 1))
-        inventory = self.sim.ecs.get(Inventory).get(eid)
-        if inventory:
-            entry = inventory_matching_property_credential(
-                inventory,
-                property_id=prop.get("id"),
-                key_id=property_lock_state(prop)["key_id"],
-                allowed_kinds=controller.get("accepted_credentials", ()),
-                minimum_tier=required_tier,
-            )
-            if entry:
-                return {
-                    "mode": str(controller.get("credential_mode", "mechanical_key")).strip().lower() or "mechanical_key",
-                    "entry": entry,
-                    "reason": "credential",
-                }
-
-        if str(controller.get("credential_mode", "")).strip().lower() == "biometric":
-            holder = _controller_holder_for_actor(controller, eid)
-            if holder and _int_or_default(holder.get("credential_tier"), 0) >= required_tier:
-                return {
-                    "mode": "biometric",
-                    "entry": None,
-                    "reason": "biometric_authorization",
-                }
-        return None
+        access = property_physical_access_for_actor(self.sim, eid, prop)
+        return access if bool(access.get("granted", False)) else None
 
     def _panel_intrusion_profile(self, controller):
         mode = str((controller or {}).get("credential_mode", "") or "").strip().lower()
@@ -615,7 +553,8 @@ class PropertySystem(System):
 
         controller = _property_access_controller(self.sim, target_prop)
         entry = _property_focus_position(target_prop)
-        lock_state = property_lock_state(target_prop)
+        entry_state = self.sim.door_state_at(*entry) if entry is not None else None
+        physically_locked = _door_is_physically_locked(entry_state, target_prop)
         credential = self._property_credential_access_for(eid, target_prop)
         intrusion_state = _controller_intrusion_state(self.sim, target_prop)
 
@@ -624,13 +563,15 @@ class PropertySystem(System):
             metadata["property_locked"] = False
             metadata["property_override_tick"] = int(self.sim.tick)
             metadata["property_override_method"] = "authorized_panel_access"
+            if entry is not None:
+                _set_door_locked_state(self.sim, entry[0], entry[1], entry[2], False)
             self._emit_access_panel_event(
                 "access_panel_used",
                 eid=eid,
                 panel_prop=panel_prop,
                 target_prop=target_prop,
                 controller=controller,
-                outcome="authorized_open" if lock_state["locked"] or controller.get("open_now") is False else "status",
+                outcome="authorized_open" if physically_locked or controller.get("open_now") is False else "status",
                 method=str(credential.get("reason", "credential")).strip().lower() or "credential",
                 intrusion_mode=str(intrusion_state.get("mode", "") or "").strip().lower(),
                 intrusion_label=str(intrusion_state.get("label", "") or "").strip(),
@@ -638,7 +579,7 @@ class PropertySystem(System):
             )
             return
 
-        if not lock_state["locked"] and controller.get("open_now") is not False:
+        if not physically_locked and controller.get("open_now") is not False:
             self._emit_access_panel_event(
                 "access_panel_used",
                 eid=eid,
@@ -683,6 +624,10 @@ class PropertySystem(System):
 
             intrusion = intrusion_attempt.get("intrusion") or {}
             controller = _property_access_controller(self.sim, target_prop)
+            if bool(controller.get("open_now") is True):
+                self._sync_property_doors(target_prop, controller)
+            elif entry is not None:
+                _set_door_locked_state(self.sim, entry[0], entry[1], entry[2], False)
             self._emit_access_panel_event(
                 "access_panel_used",
                 eid=eid,
@@ -839,7 +784,15 @@ class PropertySystem(System):
                 current_tier = _int_or_default(current.get("credential_tier"), 1)
                 if current_kind == previous_kind and current_tier == previous_tier:
                     continue
-            remove_actor_property_credentials(self.sim, holder_eid, prop)
+            # Badge authority is centrally revocable. A mechanical key is a
+            # physical object and survives loss of entitlement until it is
+            # returned, confiscated, or defeated by a later rekey.
+            remove_actor_property_credentials(
+                self.sim,
+                holder_eid,
+                prop,
+                allowed_kinds=("staff_badge", "manager_badge"),
+            )
 
         issued_any = False
         created_any = False
@@ -928,7 +881,7 @@ class PropertySystem(System):
         if not isinstance(prop, dict):
             return
 
-        auto_managed = _property_access_level(prop) == "public"
+        auto_managed = bool(controller.get("managed_lock", False))
         player_pos = self.sim.ecs.get(_systems.Position).get(self.player_eid)
         player_cover = (
             _property_covering(self.sim, player_pos.x, player_pos.y, player_pos.z)
@@ -937,6 +890,7 @@ class PropertySystem(System):
         )
         player_inside = bool(player_cover and player_cover.get("id") == prop.get("id"))
         warned = False
+        physical_lock_states = []
 
         for aperture in self._iter_property_doors(prop):
             ax = int(aperture.get("x", prop.get("x", 0)))
@@ -957,6 +911,13 @@ class PropertySystem(System):
             if not desired_open and _door_tile_is_occupied(self.sim, ax, ay, az):
                 desired_open = True
 
+            if auto_managed:
+                desired_locked = bool(controller.get("open_now") is False and not desired_open)
+            elif isinstance(existing, dict) and "locked" in existing:
+                desired_locked = bool(existing.get("locked", False))
+            else:
+                desired_locked = bool(property_lock_state(prop).get("locked", False))
+
             self.sim.set_door_state(
                 ax,
                 ay,
@@ -966,11 +927,19 @@ class PropertySystem(System):
                 ordinary=ordinary,
                 property_id=prop.get("id"),
                 auto_managed=auto_managed,
+                locked=desired_locked,
             )
             self.sim.apply_door_state(ax, ay, az)
+            physical_lock_states.append(bool(desired_locked))
 
             if emit_closing_warning and player_inside and previous_open and not desired_open:
                 warned = True
+
+        metadata = _property_metadata(prop)
+        if physical_lock_states:
+            # Compatibility projection only. Aperture state above is the
+            # canonical physical truth used by movement and interaction.
+            metadata["property_locked"] = bool(all(physical_lock_states))
 
         if warned:
             self.sim.emit(Event(
@@ -1059,7 +1028,12 @@ class PropertySystem(System):
         property_id = event.data.get("property_id")
         prop = self.sim.properties.get(property_id)
         if old_owner_eid is not None and isinstance(prop, dict):
-            remove_actor_property_credentials(self.sim, old_owner_eid, prop)
+            remove_actor_property_credentials(
+                self.sim,
+                old_owner_eid,
+                prop,
+                allowed_kinds=("staff_badge", "manager_badge"),
+            )
         self._sync_from_registry()
         self.sim.property_registry_dirty = False
         self.last_controller_hour = _world_hour(self.sim)

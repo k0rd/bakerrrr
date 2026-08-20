@@ -7,6 +7,7 @@ import re
 import types
 from pathlib import Path
 
+from .derived_facts import mark_derived_fact_changed
 from .events import EventBus
 from .save_paths import SAVE_DIR
 from .sim import Simulation
@@ -21,6 +22,25 @@ def _inventory_item_instance_ids_from_sim(sim):
     if not isinstance(components, dict):
         return ids
     for component_map in components.values():
+        if not isinstance(component_map, dict):
+            continue
+        for component in component_map.values():
+            items = getattr(component, "items", None)
+            if not isinstance(items, list):
+                continue
+            for entry in items:
+                if isinstance(entry, dict):
+                    ids.append(entry.get("instance_id"))
+    return ids
+
+
+def _inventory_item_instance_ids_from_entity_snapshots(entity_snapshots):
+    """Return item instance ids carried by only the entities being restored."""
+
+    ids = []
+    if not isinstance(entity_snapshots, dict):
+        return ids
+    for component_map in entity_snapshots.values():
         if not isinstance(component_map, dict):
             continue
         for component in component_map.values():
@@ -598,6 +618,64 @@ def _merge_snapshot_record_rows(existing_rows, incoming_rows):
     return merged
 
 
+def _can_restore_spatial_indexes_incrementally(sim):
+    return all(
+        callable(getattr(sim, method_name, None))
+        for method_name in (
+            "_index_property_record",
+            "_unindex_property_record",
+            "_index_ground_item_record",
+            "_unindex_ground_item_record",
+            "_invalidate_properties_in_radius_cache",
+            "_invalidate_ground_items_in_rect_cache",
+            "track_vehicle_entry",
+        )
+    )
+
+
+def _index_restored_chunk_state(sim, restored_properties, restored_ground_items, restored_entity_ids):
+    """Merge one restored chunk into maintained runtime indexes.
+
+    Terrain and structure cells remain resident while a chunk's dynamic state
+    is unloaded, and TileMap.add_entity maintains the entity/chunk index at the
+    insertion boundary. Only property, ground-item, vehicle-occupancy, and
+    transit-derived state therefore need work here. Keeping that work local
+    avoids rebuilding every loaded chunk after restoring one snapshot.
+    """
+
+    if not _can_restore_spatial_indexes_incrementally(sim):
+        rebuild = getattr(sim, "rebuild_spatial_indexes", None)
+        if callable(rebuild):
+            rebuild()
+        return False
+
+    restored_nonvehicle_property = False
+    for property_id, prop in restored_properties.items():
+        sim._index_property_record(str(property_id), prop)
+        if str((prop or {}).get("kind", "") or "").strip().lower() != "vehicle":
+            restored_nonvehicle_property = True
+    if restored_properties:
+        sim._invalidate_properties_in_radius_cache()
+
+    for ground_item_id, ground in restored_ground_items.items():
+        sim._index_ground_item_record(str(ground_item_id), ground)
+    if restored_ground_items:
+        sim._invalidate_ground_items_in_rect_cache()
+
+    vehicle_states = sim.ecs.get(VehicleState)
+    for eid in restored_entity_ids:
+        state = vehicle_states.get(int(eid))
+        if state is None or not bool(getattr(state, "in_vehicle", False)):
+            continue
+        vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
+        if vehicle_id:
+            sim.track_vehicle_entry(int(eid), vehicle_id)
+
+    if restored_nonvehicle_property:
+        mark_derived_fact_changed(sim, "transit_nodes")
+    return True
+
+
 def merge_unload_chunk_state(sim, key, *, rebuild_indexes=True):
     key = _chunk_key(key)
     if key is None:
@@ -647,15 +725,28 @@ def restore_chunk_state(sim, key):
     if not isinstance(snapshot, dict):
         return False
 
+    restored_properties = {}
+    incremental_indexes = _can_restore_spatial_indexes_incrementally(sim)
     for property_id, prop in snapshot.get("properties", {}).items():
-        sim.properties[property_id] = copy.deepcopy(prop)
+        existing = sim.properties.get(property_id)
+        if existing is not None and incremental_indexes:
+            sim._unindex_property_record(property_id, existing)
+        restored = copy.deepcopy(prop)
+        sim.properties[property_id] = restored
+        restored_properties[property_id] = restored
         metadata = prop.get("metadata") if isinstance(prop, dict) and isinstance(prop.get("metadata"), dict) else {}
         if bool(metadata.get("mechanical_device")):
             mechanical_ids = getattr(sim, "_mechanical_device_ids", None)
             if isinstance(mechanical_ids, set):
                 mechanical_ids.add(str(property_id))
+    restored_ground_items = {}
     for ground_item_id, ground in snapshot.get("ground_items", {}).items():
-        sim.ground_items[ground_item_id] = copy.deepcopy(ground)
+        existing = sim.ground_items.get(ground_item_id)
+        if existing is not None and incremental_indexes:
+            sim._unindex_ground_item_record(ground_item_id, existing, drop_order=False)
+        restored = copy.deepcopy(ground)
+        sim.ground_items[ground_item_id] = restored
+        restored_ground_items[ground_item_id] = restored
     for property_id, state in snapshot.get("stores", {}).items():
         sim.stores[property_id] = copy.deepcopy(state)
 
@@ -673,9 +764,12 @@ def restore_chunk_state(sim, key):
                 except (TypeError, ValueError):
                     continue
 
+    restored_entity_ids = []
     max_entity_id = 0
-    for eid, component_map in snapshot.get("entities", {}).items():
+    entity_snapshots = snapshot.get("entities", {})
+    for eid, component_map in entity_snapshots.items():
         eid = int(eid)
+        restored_entity_ids.append(eid)
         max_entity_id = max(max_entity_id, eid)
         position = None
         for component_type, component in component_map.items():
@@ -690,23 +784,27 @@ def restore_chunk_state(sim, key):
         sim.ecs.next_id = max(int(sim.ecs.next_id), max_entity_id + 1)
     sim.next_property_id = max(
         int(sim.next_property_id),
-        _max_numeric_suffix(sim.properties.keys(), "prop-") + 1,
+        _max_numeric_suffix(restored_properties.keys(), "prop-") + 1,
     )
     sim.next_ground_item_id = max(
         int(sim.next_ground_item_id),
-        _max_numeric_suffix(sim.ground_items.keys(), "ground-") + 1,
+        _max_numeric_suffix(restored_ground_items.keys(), "ground-") + 1,
     )
     sim.next_item_instance_id = max(
         int(sim.next_item_instance_id),
         _max_numeric_suffix(
-            [ground.get("instance_id") for ground in sim.ground_items.values()]
-            + _inventory_item_instance_ids_from_sim(sim),
+            [ground.get("instance_id") for ground in restored_ground_items.values()]
+            + _inventory_item_instance_ids_from_entity_snapshots(entity_snapshots),
             "item-",
         ) + 1,
     )
     sim.property_registry_dirty = True
-    if hasattr(sim, "rebuild_spatial_indexes"):
-        sim.rebuild_spatial_indexes()
+    _index_restored_chunk_state(
+        sim,
+        restored_properties,
+        restored_ground_items,
+        restored_entity_ids,
+    )
     if hasattr(sim, "reapply_door_states"):
         sim.reapply_door_states(chunk=key)
     from game.pursuit_streaming_runtime import settle_pursuit_chunk_restore

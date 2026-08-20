@@ -33,6 +33,7 @@ from game.property_keys import (
     inventory_matching_property_credential,
     property_lock_state,
 )
+from game.property_doors import _set_property_apertures_locked
 from game.property_runtime import (
     building_id_from_property,
     controller_holder_for_actor,
@@ -920,7 +921,13 @@ def resolve_person_leverage_demand(
             )
         )
         if complied:
-            sync_property_access_controller(sim, prop)
+            refreshed_controller = sync_property_access_controller(sim, prop)
+            _set_property_apertures_locked(
+                sim,
+                prop,
+                locked=refreshed_controller.get("open_now") is not True,
+                auto_managed=refreshed_controller.get("managed_lock"),
+            )
             effect = {
                 "kind": "access_window",
                 "property_id": property_id,

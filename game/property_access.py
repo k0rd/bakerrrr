@@ -2194,8 +2194,6 @@ def sync_property_access_controller(sim, prop, hour=None):
         metadata["access_controller_authority_eid"] = int(controller["authority_eid"])
     else:
         metadata.pop("access_controller_authority_eid", None)
-    if controller["managed_lock"] and controller["open_now"] is not None:
-        metadata["property_locked"] = not bool(controller["open_now"])
     return controller
 
 
@@ -2285,24 +2283,44 @@ def _player_owns_property(sim, actor_eid, prop):
     return False
 
 
-def _credential_holder_standing(sim, actor_eid, prop, *, controller=None):
+def property_physical_access_for_actor(sim, actor_eid, prop, *, controller=None):
+    """Return the actor's actual means to operate this property's lock.
+
+    This deliberately does not consult property legitimacy. Employment,
+    ownership, invitations, and public-hours standing answer whether an actor
+    *should* enter; an issued or acquired credential and live controller state
+    answer whether the actor can make a locked aperture admit them.
+    """
+
+    denied = {
+        "granted": False,
+        "mode": "",
+        "reason": "no_physical_access",
+        "credential_tier": 0,
+        "entry": None,
+    }
     if actor_eid is None or not prop:
-        return 0.0, ""
+        return denied
 
     access_record = controller_access_record_for_actor(sim, actor_eid, prop)
     if access_record:
-        return float(access_record.get("standing", 0.0) or 0.0), (
-            str(access_record.get("standing_reason", "") or "").strip().lower()
-            or "falsified_access_record"
-        )
+        return {
+            "granted": True,
+            "mode": "controller_record",
+            "reason": str(access_record.get("source", "") or "").strip().lower() or "controller_access_record",
+            "credential_tier": 0,
+            "entry": None,
+        }
 
     intrusion_access = controller_intrusion_access_for_actor(sim, actor_eid, prop)
     if intrusion_access:
-        intrusion = controller_intrusion_state(sim, prop)
-        return float(intrusion.get("standing", 0.0) or 0.0), (
-            str(intrusion.get("standing_reason", "") or "").strip().lower()
-            or str(intrusion_access.get("reason", "") or "").strip().lower()
-        )
+        return {
+            "granted": True,
+            "mode": str(intrusion_access.get("mode", "") or "").strip().lower() or "controller_override",
+            "reason": str(intrusion_access.get("reason", "") or "").strip().lower() or "controller_override",
+            "credential_tier": 0,
+            "entry": None,
+        }
 
     if not isinstance(controller, dict):
         controller = property_access_controller(sim, prop)
@@ -2319,15 +2337,28 @@ def _credential_holder_standing(sim, actor_eid, prop, *, controller=None):
             minimum_tier=required_tier,
         )
         if entry:
-            return 0.94, "credential_holder"
+            metadata = entry.get("metadata") if isinstance(entry, dict) and isinstance(entry.get("metadata"), dict) else {}
+            return {
+                "granted": True,
+                "mode": str(controller.get("credential_mode", "") or "").strip().lower() or "mechanical_key",
+                "reason": "credential",
+                "credential_tier": max(1, _int_or_default(metadata.get("property_credential_tier"), required_tier)),
+                "entry": entry,
+            }
 
     if str(controller.get("credential_mode", "")).strip().lower() == "biometric":
         for holder in controller.get("authorized_holders", ()):
             if holder.get("eid") != actor_eid:
                 continue
             if _int_or_default(holder.get("credential_tier"), 0) >= required_tier:
-                return 0.96, "credential_holder"
-    return 0.0, ""
+                return {
+                    "granted": True,
+                    "mode": "biometric",
+                    "reason": "biometric_authorization",
+                    "credential_tier": _int_or_default(holder.get("credential_tier"), required_tier),
+                    "entry": None,
+                }
+    return denied
 
 
 def _employment_standing(sim, actor_eid, prop):
@@ -2791,18 +2822,6 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
     if owner_authority:
         standing, standing_reason = 1.0, "owner"
     else:
-        key_score, key_reason = _credential_holder_standing(
-            sim,
-            actor_eid,
-            prop,
-            controller=controller,
-        )
-        standing, standing_reason = _standing_candidate(
-            standing,
-            standing_reason,
-            key_score,
-            key_reason or standing_reason,
-        )
         routine_score, routine_reason = _routine_standing(sim, actor_eid, prop)
         standing, standing_reason = _standing_candidate(
             standing,

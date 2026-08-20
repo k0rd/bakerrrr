@@ -26,10 +26,10 @@ from game.property_access import (
 from game.property_doors import (
     _actor_is_animal_or_wildlife,
     _door_close_attempt,
+    _door_is_physically_locked,
     _operable_door_state_at,
     _set_door_open_state,
 )
-from game.property_keys import property_lock_state
 from game.property_runtime import (
     property_covering as _property_covering,
     property_is_storefront as _property_is_storefront,
@@ -630,8 +630,13 @@ class DoorWaitSystem(System):
         prop = self.sim.properties.get(str(getattr(state, "property_id", "") or "").strip())
         should_close = False
         if isinstance(prop, dict):
-            lock_state = property_lock_state(prop)
-            if bool(lock_state.get("locked")):
+            door_state = _operable_door_state_at(
+                self.sim,
+                int(getattr(state, "aperture_x", 0)),
+                int(getattr(state, "aperture_y", 0)),
+                int(getattr(state, "aperture_z", 0)),
+            )
+            if _door_is_physically_locked(door_state, prop):
                 should_close = True
             else:
                 controller = _property_access_controller(self.sim, prop)
