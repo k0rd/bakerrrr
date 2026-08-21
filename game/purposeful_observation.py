@@ -144,12 +144,14 @@ _PURPOSE_PROFILES = {
         "requires_los": True,
         "loss_policy": "search_reported_position",
         "lost_contact_grace_ticks": 0,
-        "search_radius": 7,
-        "search_waypoint_limit": 7,
-        "search_duration_ticks": 54,
-        "reacquisition_radius": 11,
+        # A report creates a patient local search, never a hidden actor tether.
+        # These bounds operate on maintained local spatial indexes.
+        "search_radius": 10,
+        "search_waypoint_limit": 10,
+        "search_duration_ticks": 84,
+        "reacquisition_radius": 13,
         "reacquisition_policy": "description_candidates",
-        "candidate_limit": 12,
+        "candidate_limit": 16,
         "candidate_min_score": 0.64,
         "candidate_min_evidence": 0.28,
         # A received description may nominate somebody at a distance, but the
@@ -866,6 +868,7 @@ def begin_purposeful_report_search(
     report_conflict_count=0,
     canvas_enabled=False,
     canvas_limit=0,
+    canvas_until_exhausted=False,
     casework_kind="",
 ):
     """Create a dormant, save-safe search from genuinely received evidence.
@@ -902,6 +905,7 @@ def begin_purposeful_report_search(
         "casework_kind": _clean_key(casework_kind) or None,
         "canvas_enabled": bool(canvas_enabled),
         "canvas_limit": max(0, _int_or(canvas_limit, 0)),
+        "canvas_until_exhausted": bool(canvas_enabled and canvas_until_exhausted),
         "canvassed_eids": (),
         "canvas_contacts": (),
         "received_tick": tick,
@@ -1048,7 +1052,11 @@ def record_purposeful_canvas_contact(sim, context, *, actor_eid, outcome="questi
     ]
     if actor_id is not None and actor_id not in canvassed:
         canvassed.append(actor_id)
-    result["canvassed_eids"] = tuple(canvassed[-24:])
+    # This is the exhaustion set, not presentation history.  Keeping every
+    # interviewed actor prevents a long investigation from cycling back to an
+    # old witness after an arbitrary cap.  The detailed contact log below may
+    # still remain bounded.
+    result["canvassed_eids"] = tuple(canvassed)
     rows = list(tuple(result.get("canvas_contacts", ()) or ()))
     rows.append({
         "tick": int(getattr(sim, "tick", 0) or 0),
@@ -1058,6 +1066,8 @@ def record_purposeful_canvas_contact(sim, context, *, actor_eid, outcome="questi
     })
     result["canvas_contacts"] = tuple(rows[-24:])
     result["canvas_contact_pending"] = False
+    result.pop("canvas_lead_eid", None)
+    result.pop("canvas_lead_position", None)
     result["updated_tick"] = int(getattr(sim, "tick", 0) or 0)
     return result
 
@@ -1313,8 +1323,11 @@ def refresh_purposeful_observation(
         "casework_kind",
         "canvas_enabled",
         "canvas_limit",
+        "canvas_until_exhausted",
         "canvassed_eids",
         "canvas_contacts",
+        "lead_refresh_count",
+        "last_lead_refresh_tick",
         "received_tick",
         "approach_position",
         "rejected_candidate_eids",
@@ -1567,6 +1580,7 @@ def advance_purposeful_actor_observation(
     waypoints = tuple(_position_xyz(row) for row in tuple(search.get("waypoints", ()) or ()))
     waypoints = tuple(row for row in waypoints if row is not None)
     index = max(0, _int_or(search.get("waypoint_index"), 0))
+    previous_index = index
     current = (int(observer_pos.x), int(observer_pos.y), int(observer_pos.z))
     visited = list(tuple(_position_xyz(row) for row in tuple(search.get("visited", ()) or ())))
     visited = [row for row in visited if row is not None]
@@ -1577,6 +1591,12 @@ def advance_purposeful_actor_observation(
     search["waypoint_index"] = index
     search["visited"] = tuple(visited)
     search["updated_tick"] = tick
+    if bool(result.get("canvas_until_exhausted", False)) and index > previous_index:
+        # For casework, duration is a no-progress failsafe rather than a total
+        # interview clock.  Each reached search point renews it; exhaustion of
+        # the finite route and its unasked local people is the normal stop.
+        deadline = tick + search_duration
+        search["deadline_tick"] = deadline
     result["search_state"] = search
     if tick > deadline or index >= len(waypoints):
         search["active"] = False

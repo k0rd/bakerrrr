@@ -50,6 +50,7 @@ from game.components import (
     WeaponUseProfile,
 )
 from collections import Counter, deque
+from copy import deepcopy
 from engine.events import Event
 from game.items import (
     CREDSTICK_ITEM_ID,
@@ -265,6 +266,7 @@ from game.civic_records import record_civic_license_misuse
 from game.purposeful_observation import (
     advance_purposeful_actor_observation,
     begin_purposeful_anchor_observation,
+    begin_purposeful_report_search,
     finish_purposeful_observation,
     is_purposeful_observation,
     observation_purpose_profile,
@@ -334,6 +336,7 @@ class CriminalJusticeSystem(System):
     PLAYER_IDENTITY_CHECK_PROMPT_RADIUS = 1
     PLAYER_IDENTITY_CHECK_SCAN_TICKS = 3
     IDENTITY_REFUSAL_SEVERITY = 24
+    IDENTITY_DECEPTION_SEVERITY = 28
     JUSTICE_DETENTION_NOTICE_RADIUS = 10
     JUSTICE_DETENTION_CONTACT_RADIUS = 1
     BOUNTY_PICKUP_DISPATCH_RADIUS = 80
@@ -936,6 +939,252 @@ class CriminalJusticeSystem(System):
         if choice_id == "explain":
             return max(0.0, min(0.16, (score - 5.0) * 0.04))
         return max(0.0, min(0.08, (score - 6.0) * 0.025))
+
+    def _player_case_misdirection_options(self, incident_id):
+        """Return event-time people the player can honestly remember describing.
+
+        Participant accounts are frozen when the incident is learned.  Reading
+        only that one bounded record keeps this dialogue from recovering a
+        person's current clothes, location, or canonical identity by scanning
+        the live world.
+        """
+
+        try:
+            incident_id = int(incident_id)
+        except (TypeError, ValueError):
+            return ()
+        knowledge = self.sim.ecs.get(IncidentKnowledge).get(self.player_eid)
+        record = knowledge.records.get(incident_id) if knowledge is not None else None
+        participants = record.get("participant_accounts") if isinstance(record, dict) else None
+        if not isinstance(participants, dict):
+            return ()
+
+        rows = []
+        for raw_role in sorted(participants):
+            role = str(raw_role or "").strip().lower().replace(" ", "_")
+            if not role.startswith(("witness_", "bystander_")):
+                continue
+            account = participants.get(raw_role)
+            description = account.get("description") if isinstance(account, dict) else None
+            if not isinstance(description, dict) or not description:
+                continue
+            summary = subject_description_summary(description)
+            if summary == "a person with few reliable visual details":
+                continue
+            topic_id = f"misdirect_{role}"
+            rows.append({
+                "topic_id": topic_id,
+                "role": role,
+                "role_label": role.replace("_", " "),
+                "description_summary": summary,
+                "account": deepcopy(account),
+            })
+        return tuple(rows)
+
+    def _justice_misdirection_read(self, npc_eid, prompt, option, case):
+        """Resolve a bounded social contest without consuming global RNG state."""
+
+        prompt = prompt if isinstance(prompt, dict) else {}
+        option = option if isinstance(option, dict) else {}
+        case = case if isinstance(case, dict) else {}
+        match = prompt.get("match") if isinstance(prompt.get("match"), dict) else {}
+        account = option.get("account") if isinstance(option.get("account"), dict) else {}
+        observation = account.get("observation") if isinstance(account.get("observation"), dict) else {}
+
+        conversation = float(actor_skill(self.sim, self.player_eid, "conversation", default=5.0))
+        player_streetwise = float(actor_skill(self.sim, self.player_eid, "streetwise", default=5.0))
+        officer_perception = float(actor_skill(self.sim, npc_eid, "perception", default=5.0))
+        officer_streetwise = float(actor_skill(self.sim, npc_eid, "streetwise", default=5.0))
+        player_score = ((conversation * 0.56) + (player_streetwise * 0.44)) / 10.0
+        officer_score = ((officer_perception * 0.62) + (officer_streetwise * 0.38)) / 10.0
+
+        source_credibility = 0.0
+        framed_resistance = 0.0
+        social = self.sim.ecs.get(NPCSocial).get(npc_eid)
+        bonds = social.bonds if isinstance(social, NPCSocial) and isinstance(social.bonds, dict) else {}
+        player_bond = bonds.get(self.player_eid)
+        if isinstance(player_bond, dict):
+            trust = max(0.0, min(1.0, float(player_bond.get("trust", 0.5) or 0.0)))
+            closeness = max(0.0, min(1.0, float(player_bond.get("closeness", 0.5) or 0.0)))
+            source_credibility = ((trust - 0.5) * 0.14) + ((closeness - 0.5) * 0.05)
+        try:
+            framed_eid = int(account.get("suspect_eid")) if account.get("suspect_eid") is not None else None
+        except (TypeError, ValueError):
+            framed_eid = None
+        framed_bond = bonds.get(framed_eid) if framed_eid is not None else None
+        if isinstance(framed_bond, dict):
+            trust = max(0.0, min(1.0, float(framed_bond.get("trust", 0.0) or 0.0)))
+            protectiveness = max(0.0, min(1.0, float(framed_bond.get("protectiveness", 0.0) or 0.0)))
+            framed_resistance = (trust * 0.08) + (protectiveness * 0.07)
+
+        memory_quality = max(0.0, min(1.0, float(observation.get("quality", 0.5) or 0.0)))
+        match_score = max(0.0, min(1.0, float(match.get("score", 0.0) or 0.0)))
+        evidence_weight = max(0.0, min(1.0, float(match.get("evidence_weight", 0.0) or 0.0)))
+        conflict_relief = min(0.12, max(0, int(case.get("report_conflict_count", 0) or 0)) * 0.04)
+        chance = (
+            0.56
+            + ((player_score - officer_score) * 0.50)
+            + ((memory_quality - 0.5) * 0.14)
+            + source_credibility
+            + conflict_relief
+            - (max(0.0, match_score - 0.62) * 0.20)
+            - (max(0.0, evidence_weight - 0.28) * 0.16)
+            - framed_resistance
+        )
+        chance = max(0.06, min(0.92, chance))
+        roll = random.Random(
+            f"{self.sim.seed}:justice-misdirection:{prompt.get('case_id')}:{int(npc_eid or 0)}:"
+            f"{int(prompt.get('opened_tick', getattr(self.sim, 'tick', 0)) or 0)}:{option.get('role', '')}"
+        ).random()
+        return {
+            "succeeded": bool(roll < chance),
+            "chance": round(chance, 3),
+            "roll": round(roll, 3),
+            "memory_quality": round(memory_quality, 3),
+            "source_credibility": round(source_credibility, 3),
+            "framed_resistance": round(framed_resistance, 3),
+        }
+
+    def _justice_misdirection_account(self, option, read):
+        option = option if isinstance(option, dict) else {}
+        source = option.get("account") if isinstance(option.get("account"), dict) else {}
+        claim = {
+            "identification": "described",
+            "suspect_eid": None,
+            "presented_name": "",
+            "identity_confidence": 0.0,
+            "description": source.get("description") if isinstance(source.get("description"), dict) else {},
+            "observation": source.get("observation") if isinstance(source.get("observation"), dict) else {},
+        }
+        confidence = 0.72 + (max(0.0, min(1.0, float((read or {}).get("memory_quality", 0.5) or 0.0))) * 0.18)
+        return transmitted_subject_account(
+            claim,
+            channel="player_misdirection",
+            source_eid=self.player_eid,
+            confidence=confidence,
+            propagation_depth=0,
+            preserve_reporter_account=False,
+        )
+
+    def _record_player_case_misdirection_attempt(self, case, npc_eid, option, read, *, accepted):
+        if not isinstance(case, dict):
+            return None
+        option = option if isinstance(option, dict) else {}
+        read = read if isinstance(read, dict) else {}
+        row = {
+            "tick": int(getattr(self.sim, "tick", 0)),
+            "actor_eid": int(self.player_eid),
+            "officer_eid": int(npc_eid) if npc_eid is not None else -1,
+            "role": str(option.get("role", "") or ""),
+            "description_summary": str(option.get("description_summary", "") or ""),
+            "accepted": bool(accepted),
+            "chance": float(read.get("chance", 0.0) or 0.0),
+            "roll": float(read.get("roll", 0.0) or 0.0),
+        }
+        attempts = list(case.get("misdirection_attempts", ()) or ())
+        attempts.append(row)
+        case["misdirection_attempts"] = attempts[-16:]
+        return row
+
+    def _accept_player_case_misdirection(self, npc_eid, prompt, option, read):
+        """Record the believed statement and give this officer a real false lead."""
+
+        prompt = prompt if isinstance(prompt, dict) else {}
+        option = option if isinstance(option, dict) else {}
+        incident_id = prompt.get("incident_id")
+        incident = incident_record(self.sim, incident_id)
+        if not isinstance(incident, dict):
+            return None
+        account = self._justice_misdirection_account(option, read)
+        prompt_kind = str(prompt.get("kind", "") or "").strip().lower()
+        lead_source = (
+            "player_identity_check"
+            if prompt_kind == self.IDENTITY_CHECK_DIALOG_KIND
+            else "player_investigator_interview"
+        )
+        case, changed, newly_resolved = record_justice_identity_report(
+            self.sim,
+            incident,
+            {
+                "incident_id": incident_id,
+                "reporter_eid": self.player_eid,
+                "method": f"{lead_source}_misdirection_{option.get('role', 'person')}",
+                "subject_account": account,
+            },
+        )
+        if not isinstance(case, dict):
+            return None
+
+        # This is not canonical truth.  It is the account the active
+        # investigator accepted, and later reports may contradict or replace
+        # it through the ordinary evidence path.
+        case["best_subject_account"] = deepcopy(account)
+        case["last_accepted_lead_source"] = lead_source
+        case["last_accepted_lead_reporter_eid"] = int(self.player_eid)
+        case["last_accepted_lead_tick"] = int(getattr(self.sim, "tick", 0))
+        self._record_player_case_misdirection_attempt(
+            case,
+            npc_eid,
+            option,
+            read,
+            accepted=True,
+        )
+        self._emit_identity_case_change(case, changed=changed, newly_resolved=newly_resolved)
+
+        ai = self.sim.ecs.get(AI).get(npc_eid)
+        officer_pos = self._position_for(npc_eid)
+        if ai is not None and officer_pos is not None:
+            try:
+                reported_position = (
+                    int(case.get("x")),
+                    int(case.get("y")),
+                    int(case.get("z", 0) or 0),
+                )
+            except (TypeError, ValueError):
+                reported_position = None
+            if reported_position is not None:
+                current_position = (int(officer_pos.x), int(officer_pos.y), int(officer_pos.z))
+                context = begin_purposeful_report_search(
+                    self.sim,
+                    npc_eid,
+                    reported_position,
+                    subject_account=account,
+                    incident_id=incident_id,
+                    reporter_eid=self.player_eid,
+                    knowledge_channel=lead_source,
+                    approach_position=current_position,
+                    report_conflict_count=case.get("report_conflict_count", 0),
+                    canvas_enabled=True,
+                    canvas_until_exhausted=True,
+                    casework_kind=str(prompt.get("casework_kind", "") or "").strip().lower() or "patrol_canvas",
+                )
+                context["rejected_candidate_eids"] = (int(self.player_eid),)
+                context["canvassed_eids"] = (int(self.player_eid),)
+                ai.investigation_context = context
+                ai.state = "investigating"
+                ai.target = current_position
+                ai.target_eid = None
+                ai.incident_id = int(incident_id)
+                ai.response_role = "peace_dispatched"
+                ai.suppress_report_for_incident_id = int(incident_id)
+                will = self.sim.ecs.get(NPCWill).get(npc_eid)
+                if will is not None:
+                    will.intent = "investigating"
+                    will.score = max(62.0, float(getattr(will, "score", 0.0) or 0.0))
+                    will.target = current_position
+                    will.target_eid = None
+                    will.last_tick = int(getattr(self.sim, "tick", 0))
+
+        self.sim.emit(Event(
+            "justice_false_lead_accepted",
+            eid=self.player_eid,
+            officer_eid=npc_eid,
+            incident_id=incident_id,
+            case_id=case.get("case_id"),
+            framed_role=option.get("role"),
+            description_summary=option.get("description_summary"),
+        ))
+        return account
 
     def _incident_type_from_context(self, context):
         return {
@@ -3201,6 +3450,25 @@ class CriminalJusticeSystem(System):
             supplied_account=bool(supplied_account),
         ))
         case = justice_case_for_incident(self.sim, incident_id)
+        if supplied_account and isinstance(case, dict):
+            # Duplicate dispatch is deliberately suppressed, so the responder
+            # already carrying the case must adopt useful field testimony.
+            best_account = case.get("best_subject_account") if isinstance(case.get("best_subject_account"), dict) else {}
+            description = best_account.get("description") if isinstance(best_account.get("description"), dict) else {}
+            if description:
+                refreshed = dict(updated)
+                refreshed["subject_account"] = transmitted_subject_account(
+                    best_account,
+                    channel="investigator_followup",
+                    source_eid=actor_eid,
+                    confidence=0.98,
+                    propagation_depth=1,
+                    preserve_reporter_account=False,
+                )
+                refreshed["knowledge_channel"] = "investigator_followup"
+                refreshed["lead_refresh_count"] = max(0, int(updated.get("lead_refresh_count", 0) or 0)) + 1
+                refreshed["last_lead_refresh_tick"] = int(getattr(self.sim, "tick", 0) or 0)
+                updated = refreshed
         if isinstance(case, dict) and str(case.get("status", "") or "").strip().lower() != "unresolved":
             self._finish_received_report_search(investigator_eid, updated, reason="case_resolved")
         else:
@@ -3261,12 +3529,31 @@ class CriminalJusticeSystem(System):
                     '"Did you see anyone enter, leave, or handle anything near the first smoke?"',
                 ]
                 subtitle = "Fire Investigation"
+            elif casework_kind == "patrol_canvas":
+                opening_lines = [
+                    f'The officer stops beside you. "I am following up on a reported {kind} near here."',
+                    '"Did you see or hear anything?"',
+                ]
+                subtitle = str(case.get("jurisdiction_name", "Justice Office") or "Justice Office")
             else:
                 opening_lines = [
                     f'The investigator stops beside you. "I am asking around about a reported {kind} near here."',
                     '"Did you see or hear anything?"',
                 ]
                 subtitle = str(case.get("jurisdiction_name", "Justice Office") or "Justice Office")
+            misdirection_options = self._player_case_misdirection_options(incident_id)
+            topics = [{"id": "share", "label": "Tell them what you saw"}]
+            topics.extend(
+                {
+                    "id": row["topic_id"],
+                    "label": f"Say the culprit was {row['description_summary']}",
+                }
+                for row in misdirection_options
+            )
+            topics.extend([
+                {"id": "nothing", "label": "Say you saw nothing"},
+                {"id": "decline", "label": "Decline to answer"},
+            ])
             state = self._dialog_ui_state()
             self.sim.set_time_paused(True, reason="dialog")
             state.update({
@@ -3277,11 +3564,7 @@ class CriminalJusticeSystem(System):
                 "title": f"Questions: {investigator_name}",
                 "subtitle": subtitle,
                 "transcript": opening_lines,
-                "topics": [
-                    {"id": "share", "label": "Tell them what you saw"},
-                    {"id": "nothing", "label": "Say you saw nothing"},
-                    {"id": "decline", "label": "Decline to answer"},
-                ],
+                "topics": topics,
                 "selected_index": 0,
                 "scroll": 0,
                 "hint": "? help",
@@ -3296,6 +3579,12 @@ class CriminalJusticeSystem(System):
                 "casework_kind": casework_kind,
                 "property_id": case.get("property_id") or None,
                 "jurisdiction_name": subtitle,
+                "case_id": case.get("case_id"),
+                "opened_tick": int(getattr(self.sim, "tick", 0)),
+                "misdirection_options": {
+                    row["topic_id"]: deepcopy(row)
+                    for row in misdirection_options
+                },
             }
             return
 
@@ -3329,7 +3618,17 @@ class CriminalJusticeSystem(System):
         investigator_eid = prompt.get("npc_eid")
         incident_id = prompt.get("incident_id")
         casework_kind = str(prompt.get("casework_kind", "investigator_canvas") or "investigator_canvas").strip().lower()
+        options = prompt.get("misdirection_options") if isinstance(prompt.get("misdirection_options"), dict) else {}
+        misdirection_option = options.get(choice)
+        deception_attempted = isinstance(misdirection_option, dict)
+        case = justice_case_for_incident(self.sim, incident_id)
+        if deception_attempted and not isinstance(case, dict):
+            deception_attempted = False
+            misdirection_option = None
+            choice = "decline"
         supplied = False
+        deception_read = {}
+        deception_succeeded = False
         if choice == "share":
             knowledge = self.sim.ecs.get(IncidentKnowledge).get(self.player_eid)
             record = knowledge.records.get(int(incident_id)) if knowledge is not None else None
@@ -3339,25 +3638,99 @@ class CriminalJusticeSystem(System):
                 incident_id,
                 record,
             ) if isinstance(record, dict) else False
+        elif deception_attempted and isinstance(case, dict):
+            deception_read = self._justice_misdirection_read(
+                investigator_eid,
+                prompt,
+                misdirection_option,
+                case,
+            )
+            if bool(deception_read.get("succeeded", False)):
+                supplied = isinstance(
+                    self._accept_player_case_misdirection(
+                        investigator_eid,
+                        prompt,
+                        misdirection_option,
+                        deception_read,
+                    ),
+                    dict,
+                )
+                deception_succeeded = supplied
+            if not deception_succeeded:
+                self._record_player_case_misdirection_attempt(
+                    case,
+                    investigator_eid,
+                    misdirection_option,
+                    deception_read,
+                    accepted=False,
+                )
+        elif choice not in {"share", "nothing", "decline"}:
+            choice = "decline"
         self._close_player_surrender_prompt()
+        contact_outcome = (
+            "misdirection_accepted"
+            if deception_succeeded
+            else "misdirection_rejected"
+            if deception_attempted
+            else "statement_supplied"
+            if supplied
+            else "nothing_known"
+            if choice == "nothing" or choice == "share"
+            else "declined"
+        )
         self._record_investigator_canvas_contact(
             investigator_eid,
             self.player_eid,
             incident_id,
-            outcome="statement_supplied" if supplied else "nothing_known" if choice == "nothing" or choice == "share" else "declined",
+            outcome=contact_outcome,
             supplied_account=supplied,
         )
-        role_label = "wildlife officer" if casework_kind == "wildlife_enforcement_canvas" else "fire investigator" if casework_kind == "arson_investigation_canvas" else "investigator"
-        lines = {
-            "share": [
-                f"You tell the {role_label} what you remember." if supplied else "You have nothing useful to add.",
-                f"The {role_label} makes a note and moves on.",
-            ],
-            "nothing": [f"You say you saw nothing. The {role_label} makes a note and moves on."],
-            "decline": [f"You decline to answer. The {role_label} moves on."],
-        }.get(choice, [f"You decline to answer. The {role_label} moves on."])
+        obstruction_change = None
+        if deception_attempted and not deception_succeeded:
+            obstruction_change = self._escalate_player_identity_deception(
+                by_eid=investigator_eid,
+                prompt=prompt,
+            )
+        if deception_attempted:
+            self.sim.emit(Event(
+                "justice_case_canvas_misdirection_resolved",
+                eid=self.player_eid,
+                investigator_eid=investigator_eid,
+                incident_id=incident_id,
+                case_id=prompt.get("case_id"),
+                outcome=contact_outcome,
+                succeeded=deception_succeeded,
+                obstruction_offense=isinstance(obstruction_change, dict),
+                framed_role=(misdirection_option or {}).get("role"),
+                claimed_description=(misdirection_option or {}).get("description_summary"),
+            ))
+        role_label = "wildlife officer" if casework_kind == "wildlife_enforcement_canvas" else "fire investigator" if casework_kind == "arson_investigation_canvas" else "officer" if casework_kind == "patrol_canvas" else "investigator"
+        if deception_attempted:
+            claimed_description = str(misdirection_option.get("description_summary", "someone else") or "someone else")
+            if deception_succeeded:
+                lines = [
+                    f"You say the culprit was {claimed_description}.",
+                    f"The {role_label} accepts the description and follows the lead.",
+                ]
+                title = f"{role_label.title()} Takes the Lead"
+            else:
+                lines = [
+                    f"You try to put the incident on {claimed_description}.",
+                    f"The {role_label} catches the false account, records obstruction, and moves to detain you.",
+                ]
+                title = "Obstruction Recorded"
+        else:
+            lines = {
+                "share": [
+                    f"You tell the {role_label} what you remember." if supplied else "You have nothing useful to add.",
+                    f"The {role_label} makes a note and moves on.",
+                ],
+                "nothing": [f"You say you saw nothing. The {role_label} makes a note and moves on."],
+                "decline": [f"You decline to answer. The {role_label} moves on."],
+            }.get(choice, [f"You decline to answer. The {role_label} moves on."])
+            title = f"{role_label.title()} Moves On"
         self._present_justice_result(
-            f"{role_label.title()} Moves On",
+            title,
             lines,
             property_id=prompt.get("property_id"),
             subtitle=prompt.get("jurisdiction_name", "Justice Office"),
@@ -3413,6 +3786,22 @@ class CriminalJusticeSystem(System):
             transcript.append('"This is a formal identity demand. Refusing to identify yourself is an offense."')
         if weapon_line:
             transcript.insert(1, weapon_line)
+        misdirection_options = self._player_case_misdirection_options(incident_id)
+        topics = [
+            {"id": "identify", "label": "Give your name"},
+            {"id": "explain", "label": "Give your name and explain"},
+        ]
+        topics.extend(
+            {
+                "id": row["topic_id"],
+                "label": f"Give your name; accuse {row['description_summary']}",
+            }
+            for row in misdirection_options
+        )
+        topics.append({
+            "id": "decline",
+            "label": "Refuse to identify" if formal_identity_demand else "Decline the questions",
+        })
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
         state.update({
@@ -3423,14 +3812,7 @@ class CriminalJusticeSystem(System):
             "title": f"Identity Check: {_entity_display_name(self.sim, npc_eid, title_case=True) or authority_label.title()}",
             "subtitle": jurisdiction_name,
             "transcript": transcript,
-            "topics": [
-                {"id": "identify", "label": "Give your name"},
-                {"id": "explain", "label": "Give your name and explain"},
-                {
-                    "id": "decline",
-                    "label": "Refuse to identify" if formal_identity_demand else "Decline the questions",
-                },
-            ],
+            "topics": topics,
             "selected_index": 0,
             "scroll": 0,
             "hint": "? help",
@@ -3451,13 +3833,24 @@ class CriminalJusticeSystem(System):
             "jurisdiction_name": jurisdiction_name,
             "casework_kind": casework_kind,
             "formal_identity_demand": formal_identity_demand,
+            "misdirection_options": {
+                row["topic_id"]: deepcopy(row)
+                for row in misdirection_options
+            },
         }
         return True
 
     def _resolve_player_identity_check_choice(self, choice_id, *, prompt):
         prompt = prompt if isinstance(prompt, dict) else {}
         choice = str(choice_id or "").strip().lower() or "decline"
-        if choice not in {"identify", "explain", "decline"}:
+        misdirection_options = (
+            prompt.get("misdirection_options")
+            if isinstance(prompt.get("misdirection_options"), dict)
+            else {}
+        )
+        misdirection_option = misdirection_options.get(choice)
+        deception_attempted = isinstance(misdirection_option, dict)
+        if choice not in {"identify", "explain", "decline"} and not deception_attempted:
             choice = "decline"
         npc_eid = prompt.get("npc_eid")
         incident_id = prompt.get("incident_id")
@@ -3465,7 +3858,7 @@ class CriminalJusticeSystem(System):
         provisional_read = prompt.get("provisional_read") if isinstance(prompt.get("provisional_read"), dict) else {}
         case = justice_case_for_incident(self.sim, incident_id)
         identity = actor_identity_snapshot(self.sim, self.player_eid) or {}
-        identity_supplied = choice in {"identify", "explain"}
+        identity_supplied = choice in {"identify", "explain"} or deception_attempted
         presented_name = str(identity.get("personal_name", "") or "").strip() if identity_supplied else ""
         if identity_supplied and npc_eid is not None:
             remember_presented_identity(
@@ -3479,6 +3872,35 @@ class CriminalJusticeSystem(System):
                 benefits=("known_name", "justice_contact"),
                 tick=int(getattr(self.sim, "tick", 0)),
             )
+
+        deception_read = {}
+        deception_succeeded = False
+        accepted_account = None
+        if deception_attempted and isinstance(case, dict):
+            deception_read = self._justice_misdirection_read(
+                npc_eid,
+                prompt,
+                misdirection_option,
+                case,
+            )
+            deception_succeeded = bool(deception_read.get("succeeded", False))
+            if deception_succeeded:
+                accepted_account = self._accept_player_case_misdirection(
+                    npc_eid,
+                    prompt,
+                    misdirection_option,
+                    deception_read,
+                )
+                deception_succeeded = isinstance(accepted_account, dict)
+            if not deception_succeeded:
+                self._record_player_case_misdirection_attempt(
+                    case,
+                    npc_eid,
+                    misdirection_option,
+                    deception_read,
+                    accepted=False,
+                )
+
         eligible = bool(provisional_read.get("eligible", False)) and isinstance(case, dict)
         explanation_succeeded = False
         if eligible and choice == "explain":
@@ -3496,24 +3918,34 @@ class CriminalJusticeSystem(System):
                 + freshness * 0.03
             )
             explanation_succeeded = skill_defense >= evidence_pressure
-        provisional_punishment = bool(eligible and not explanation_succeeded)
+        provisional_punishment = bool(eligible and not explanation_succeeded and not deception_succeeded)
         identity_refusal_offense = bool(
             choice == "decline"
             and bool(prompt.get("formal_identity_demand", False))
             and not provisional_punishment
         )
-        outcome = (
-            "provisionally_attributed_for_booking"
-            if provisional_punishment
-            else "failure_to_identify_recorded"
-            if identity_refusal_offense
-            else {
-                "identify": "identity_supplied_without_charge",
-                "explain": "explanation_accepted_without_charge" if explanation_succeeded else "explanation_noted_without_charge",
-                "decline": "declined_without_charge",
-            }[choice]
-        )
-        encounter = record_justice_case_encounter(
+        obstruction_offense = bool(deception_attempted and not deception_succeeded)
+        if deception_attempted:
+            outcome = (
+                "misdirection_accepted"
+                if deception_succeeded
+                else "misdirection_rejected_for_booking"
+                if provisional_punishment
+                else "misdirection_rejected_obstruction"
+            )
+        else:
+            outcome = (
+                "provisionally_attributed_for_booking"
+                if provisional_punishment
+                else "failure_to_identify_recorded"
+                if identity_refusal_offense
+                else {
+                    "identify": "identity_supplied_without_charge",
+                    "explain": "explanation_accepted_without_charge" if explanation_succeeded else "explanation_noted_without_charge",
+                    "decline": "declined_without_charge",
+                }[choice]
+            )
+        record_justice_case_encounter(
             self.sim,
             incident_id,
             actor_eid=self.player_eid,
@@ -3539,6 +3971,12 @@ class CriminalJusticeSystem(System):
                 by_eid=npc_eid,
                 prompt=prompt,
             )
+        obstruction_change = None
+        if obstruction_offense:
+            obstruction_change = self._escalate_player_identity_deception(
+                by_eid=npc_eid,
+                prompt=prompt,
+            )
         self.sim.emit(Event(
             "justice_identity_check_resolved",
             eid=self.player_eid,
@@ -3549,10 +3987,19 @@ class CriminalJusticeSystem(System):
             outcome=outcome,
             presented_name=presented_name,
             match_score=float(match.get("score", 0.0) or 0.0),
-            justice_record_created=isinstance(provisional_change, dict) or isinstance(refusal_change, dict),
+            justice_record_created=(
+                isinstance(provisional_change, dict)
+                or isinstance(refusal_change, dict)
+                or isinstance(obstruction_change, dict)
+            ),
             provisional_attribution=provisional_punishment,
             formal_identity_demand=bool(prompt.get("formal_identity_demand", False)),
             identity_refusal_offense=identity_refusal_offense,
+            deception_attempted=deception_attempted,
+            deception_succeeded=deception_succeeded,
+            obstruction_offense=obstruction_offense,
+            framed_role=(misdirection_option or {}).get("role"),
+            claimed_description=(misdirection_option or {}).get("description_summary"),
             canonical_identity_resolved=False,
         ))
         if provisional_punishment:
@@ -3572,25 +4019,41 @@ class CriminalJusticeSystem(System):
                 return bool(booked or provisional_change)
         casework_kind = str(prompt.get("casework_kind", "") or "").strip().lower()
         authority_label = "wildlife officer" if casework_kind == "wildlife_enforcement_canvas" else "fire investigator" if casework_kind == "arson_investigation_canvas" else "officer"
-        lines = {
-            "identify": [
-                f"You give the name {presented_name or 'you use'}. The {authority_label} writes it down.",
-                f"After another look, the {authority_label} steps aside.",
-            ],
-            "explain": [
-                f"You give your name and explain where you have been. The {authority_label} listens and makes a note.",
-                f"The {authority_label} steps aside." if explanation_succeeded else f"After another look, the {authority_label} steps aside.",
-            ],
-            "decline": [
-                (
-                    f"You refuse to identify yourself. The {authority_label} records failure to identify and moves to detain you."
-                    if identity_refusal_offense
-                    else f"You decline to answer. The {authority_label} watches you for a moment, makes a note, and steps aside."
-                ),
-            ],
-        }[choice]
+        if deception_attempted:
+            claimed_description = str(misdirection_option.get("description_summary", "someone else") or "someone else")
+            if deception_succeeded:
+                lines = [
+                    f"You give your name, then say the person they want was {claimed_description}.",
+                    f"The {authority_label} accepts the description and turns the search toward it.",
+                ]
+                title = f"{authority_label.title()} Takes the Lead"
+            else:
+                lines = [
+                    f"You give your name, then try to put the reported act on {claimed_description}.",
+                    f"The {authority_label} catches the false account, records obstruction, and moves to detain you.",
+                ]
+                title = "Obstruction Recorded"
+        else:
+            lines = {
+                "identify": [
+                    f"You give the name {presented_name or 'you use'}. The {authority_label} writes it down.",
+                    f"After another look, the {authority_label} steps aside.",
+                ],
+                "explain": [
+                    f"You give your name and explain where you have been. The {authority_label} listens and makes a note.",
+                    f"The {authority_label} steps aside." if explanation_succeeded else f"After another look, the {authority_label} steps aside.",
+                ],
+                "decline": [
+                    (
+                        f"You refuse to identify yourself. The {authority_label} records failure to identify and moves to detain you."
+                        if identity_refusal_offense
+                        else f"You decline to answer. The {authority_label} watches you for a moment, makes a note, and steps aside."
+                    ),
+                ],
+            }[choice]
+            title = "Identity Refusal Recorded" if identity_refusal_offense else f"{authority_label.title()} Steps Aside"
         self._present_justice_result(
-            "Identity Refusal Recorded" if identity_refusal_offense else f"{authority_label.title()} Steps Aside",
+            title,
             lines,
             subtitle=str(prompt.get("jurisdiction_name", "Justice Office") or "Justice Office"),
         )
@@ -4054,8 +4517,20 @@ class CriminalJusticeSystem(System):
         candidates.sort()
         return [eid for _primary, _dist, _priority, _law_drive, eid in candidates]
 
-    def _escalate_player_identity_refusal(self, *, by_eid=None, prompt=None):
-        """Turn a witnessed formal ID refusal into bounded custody pressure."""
+    def _escalate_player_identity_offense(
+        self,
+        *,
+        by_eid=None,
+        prompt=None,
+        incident_type,
+        severity,
+        source_event,
+        note_kind,
+        event_type,
+        threat_type,
+        ingress_kind,
+    ):
+        """Turn a witnessed identity-check offense into bounded custody pressure."""
 
         prompt = prompt if isinstance(prompt, dict) else {}
         player_pos = self._position_for(self.player_eid)
@@ -4064,14 +4539,14 @@ class CriminalJusticeSystem(System):
         property_id = str(prompt.get("property_id", "") or "").strip() or None
         change = self._record_incident(
             self.player_eid,
-            incident_type="failure_to_identify",
-            severity=int(self.IDENTITY_REFUSAL_SEVERITY),
-            source_event="justice_identity_check_choice",
+            incident_type=incident_type,
+            severity=int(severity),
+            source_event=source_event,
             property_id=property_id,
             x=player_pos.x,
             y=player_pos.y,
             witnessed=True,
-            note=f"formal_identity_demand/case_{prompt.get('case_id') or prompt.get('incident_id') or 'unknown'}",
+            note=f"{note_kind}/case_{prompt.get('case_id') or prompt.get('incident_id') or 'unknown'}",
         )
 
         target = (int(player_pos.x), int(player_pos.y), int(player_pos.z))
@@ -4106,7 +4581,7 @@ class CriminalJusticeSystem(System):
                 will.last_tick = self.sim.tick
 
         self.sim.emit(Event(
-            "justice_identity_refusal_recorded",
+            event_type,
             eid=self.player_eid,
             officer_eid=primary,
             incident_id=prompt.get("incident_id"),
@@ -4124,13 +4599,39 @@ class CriminalJusticeSystem(System):
                 property_id=property_id,
                 owner_eid=None,
                 defender_reason="law",
-                threat_type="justice_identity_refusal",
-                severity_label="failure_to_identify",
-                ingress_kind="identity_refusal",
+                threat_type=threat_type,
+                severity_label=incident_type,
+                ingress_kind=ingress_kind,
                 aperture_kind="",
-                ingress_method="identity_refusal",
+                ingress_method=ingress_kind,
             ))
         return change
+
+    def _escalate_player_identity_refusal(self, *, by_eid=None, prompt=None):
+        return self._escalate_player_identity_offense(
+            by_eid=by_eid,
+            prompt=prompt,
+            incident_type="failure_to_identify",
+            severity=self.IDENTITY_REFUSAL_SEVERITY,
+            source_event="justice_identity_check_choice",
+            note_kind="formal_identity_demand",
+            event_type="justice_identity_refusal_recorded",
+            threat_type="justice_identity_refusal",
+            ingress_kind="identity_refusal",
+        )
+
+    def _escalate_player_identity_deception(self, *, by_eid=None, prompt=None):
+        return self._escalate_player_identity_offense(
+            by_eid=by_eid,
+            prompt=prompt,
+            incident_type="obstruction",
+            severity=self.IDENTITY_DECEPTION_SEVERITY,
+            source_event="justice_identity_check_deception",
+            note_kind="false_identity_check_statement",
+            event_type="justice_identity_deception_detected",
+            threat_type="justice_identity_deception",
+            ingress_kind="identity_deception",
+        )
 
     def _escalate_player_surrender_refusal(self, *, by_eid=None, source_prop=None, snapshot=None):
         snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot()

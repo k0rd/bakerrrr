@@ -10,7 +10,10 @@ Core invariants:
 - existing actors respond first
 - civilian vigils are civic/social responses, not guaranteed police response
 - a usable reported subject description receives one available bounded peace response
-- reports without a usable subject lead retain a seeded police/security response chance
+- serious factual reports without a usable subject lead still receive one
+  available bounded peace response so patrol can build a lead at the scene
+- every dispatched peace responder canvasses encountered local leads until the
+  finite scene-search route is exhausted
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ DEFAULT_VIGIL_RADIUS = 22
 DEFAULT_PEACE_DISPATCH_RADIUS = 80
 DEFAULT_MAX_VIGIL_RESPONDERS = 3
 DEFAULT_MAX_PEACE_RESPONDERS = 1
+SERIOUS_CASEWORK_SEVERITY = 24
 SPECIALIST_RESPONSE_ROLES = {
     "wildlife_enforcement_dispatched": WILDLIFE_DOMAIN,
     "fire_investigator_dispatched": FIRE_DOMAIN,
@@ -403,7 +407,10 @@ class ObservedIncidentDispatchSystem(System):
             isinstance(case, dict)
             and _key(case.get("status")) == "unresolved"
             and bool(case.get("factual_incident", False))
-            and description
+            and (
+                description
+                or _int(case.get("severity"), _int(incident.get("severity"), 0)) >= SERIOUS_CASEWORK_SEVERITY
+            )
         )
         peace_eids = (
             [investigator_eid]
@@ -517,7 +524,7 @@ class ObservedIncidentDispatchSystem(System):
             return []
         severity = _int(incident.get("severity"), 0) if isinstance(incident, dict) else 0
         tags = {str(tag).strip().lower() for tag in incident.get("tags", ()) or ()} if isinstance(incident, dict) else set()
-        base_chance = 0.18 + min(0.45, severity / 180.0)
+        base_chance = 0.28 + min(0.45, severity / 180.0)
         base_chance += _peace_dispatch_bonus(tags)
         prop = self.sim.properties.get(_text((incident or {}).get("property_id")))
         pressure = local_protective_pressure_snapshot(self.sim, prop) if isinstance(prop, dict) else {}
@@ -529,7 +536,7 @@ class ObservedIncidentDispatchSystem(System):
         )
         if (
             not bool(required)
-            and _unit_roll(getattr(self.sim, "seed", ""), "peace_dispatch", incident_id, severity) > min(0.85, base_chance)
+            and _unit_roll(getattr(self.sim, "seed", ""), "peace_dispatch", incident_id, severity) > min(0.92, base_chance)
         ):
             return []
         occupations = self.sim.ecs.get(Occupation)
@@ -658,7 +665,8 @@ class ObservedIncidentDispatchSystem(System):
             case = justice_case_for_incident(self.sim, incident_id)
             account = case.get("best_subject_account") if isinstance(case, dict) and isinstance(case.get("best_subject_account"), dict) else {}
             description = account.get("description") if isinstance(account.get("description"), dict) else {}
-            if str((case or {}).get("status", "") or "").strip().lower() == "unresolved" and (description or specialist_domain):
+            factual_case = bool((case or {}).get("factual_incident", False))
+            if str((case or {}).get("status", "") or "").strip().lower() == "unresolved" and (description or specialist_domain or factual_case):
                 occupation = self.sim.ecs.get(Occupation).get(eid)
                 career = _key(getattr(occupation, "career", ""))
                 is_investigator = bool(specialist_domain) or any(token in career for token in INVESTIGATOR_CAREER_TOKENS)
@@ -676,11 +684,6 @@ class ObservedIncidentDispatchSystem(System):
                     if account
                     else {}
                 )
-                canvas_limit = 5
-                if specialist_domain == WILDLIFE_DOMAIN:
-                    canvas_limit = 4
-                elif specialist_domain == FIRE_DOMAIN:
-                    canvas_limit = 6
                 ai.investigation_context = begin_purposeful_report_search(
                     self.sim,
                     eid,
@@ -691,9 +694,9 @@ class ObservedIncidentDispatchSystem(System):
                     knowledge_channel=f"{specialist_domain}_handoff" if specialist_domain else "dispatch_handoff",
                     approach_position=target,
                     report_conflict_count=(case or {}).get("report_conflict_count", 0),
-                    canvas_enabled=is_investigator,
-                    canvas_limit=canvas_limit if is_investigator else 0,
-                    casework_kind=specialist_casework_kind(specialist_domain) if specialist_domain else "investigator_canvas" if is_investigator else "guard_scene_search",
+                    canvas_enabled=True,
+                    canvas_until_exhausted=True,
+                    casework_kind=specialist_casework_kind(specialist_domain) if specialist_domain else "investigator_canvas" if is_investigator else "patrol_canvas",
                 )
         self.sim.emit(Event(
             "incident_responder_assigned",

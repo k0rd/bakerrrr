@@ -117,6 +117,7 @@ from game.purposeful_observation import (
     finish_purposeful_observation,
     is_purposeful_observation,
     observation_context_purpose,
+    observation_watch_position,
     purposeful_observation_holds_at_target,
 )
 from game.property_access import (
@@ -6531,22 +6532,24 @@ class NPCInvestigateSystem(System):
         ))
         return True
 
-    def _report_search_canvas_candidate(self, eid, pos, context):
+    def _report_search_canvas_candidate(self, eid, pos, context, *, radius=1):
         if not bool((context or {}).get("canvas_enabled", False)):
             return None
+        until_exhausted = bool((context or {}).get("canvas_until_exhausted", False))
         limit = max(0, int((context or {}).get("canvas_limit", 0) or 0))
         canvassed = {
             int(value)
             for value in tuple((context or {}).get("canvassed_eids", ()) or ())
             if str(value).lstrip("-").isdigit()
         }
-        if limit <= 0 or len(canvassed) >= limit:
+        if not until_exhausted and (limit <= 0 or len(canvassed) >= limit):
             return None
         identities = self.sim.ecs.get(CreatureIdentity)
         positions = self.sim.ecs.get(Position)
         vitalities = self.sim.ecs.get(Vitality)
         ranked = []
-        for actor_eid in self.sim.entity_ids_in_radius(pos.x, pos.y, pos.z, 2):
+        radius = max(1, min(4, int(radius or 1)))
+        for actor_eid in self.sim.entity_ids_in_radius(pos.x, pos.y, pos.z, radius):
             if actor_eid == eid or actor_eid in canvassed:
                 continue
             actor_pos = positions.get(actor_eid)
@@ -6561,7 +6564,7 @@ class NPCInvestigateSystem(System):
             if vitality is not None and (bool(getattr(vitality, "downed", False)) or int(getattr(vitality, "hp", 1) or 0) <= 0):
                 continue
             distance = _manhattan(pos.x, pos.y, actor_pos.x, actor_pos.y)
-            if distance <= 0 or distance > 1:
+            if distance <= 0 or distance > radius:
                 continue
             if not _has_line_of_sight(self.sim, pos.x, pos.y, pos.z, actor_pos.x, actor_pos.y, actor_pos.z):
                 continue
@@ -6682,6 +6685,38 @@ class NPCInvestigateSystem(System):
                     z=int(pos.z),
                 ))
                 return True
+
+            # Step off the waypoint route for a visible nearby person, using a
+            # tiny indexed radius and a fixed reachable contact cell.  This is
+            # how the finite route actually exhausts its local human leads;
+            # it never scans the registry or follows a hidden suspect.
+            canvas_lead_eid = self._report_search_canvas_candidate(eid, pos, context, radius=4)
+            canvas_lead_pos = self.sim.ecs.get(Position).get(canvas_lead_eid) if canvas_lead_eid is not None else None
+            if canvas_lead_pos is not None:
+                approach = observation_watch_position(
+                    self.sim,
+                    eid,
+                    canvas_lead_pos,
+                    purpose="justice_report_search",
+                    distance_band=(1, 1, 1),
+                )
+                if approach is not None and tuple(approach) != current:
+                    updated = dict(context)
+                    updated["canvas_lead_eid"] = int(canvas_lead_eid)
+                    updated["canvas_lead_position"] = (
+                        int(canvas_lead_pos.x),
+                        int(canvas_lead_pos.y),
+                        int(canvas_lead_pos.z),
+                    )
+                    ai.investigation_context = updated
+                    ai.target = tuple(approach)
+                    ai.target_eid = None
+                    if will is not None:
+                        will.intent = "investigating"
+                        will.target = tuple(approach)
+                        will.target_eid = None
+                        will.last_tick = int(self.sim.tick)
+                    return False
 
         if target is not None:
             ai.target = tuple(target)
