@@ -227,6 +227,7 @@ from game.wire_scene import (
     active_wire_scene,
     active_wire_scene_stale,
     close_wire_scene,
+    download_wire_scene_data,
     move_wire_avatar,
     open_wire_scene,
     open_wire_scene_from_connection,
@@ -237,6 +238,7 @@ from game.wire_scene import (
     wire_scene_status_lines,
 )
 from game.wire_consequences import wire_recovery_status
+from game.wire_security_runtime import wire_alert_rank
 from game.wire_runtime import is_wire_interface_item
 from game.wire_users import handle_wire_dialogue_choice, wire_dialogue_rows, wire_dialogue_state
 from game.wire_drone_bridge import perform_drone_wire_shell_action
@@ -3322,6 +3324,7 @@ class InputSystem(System):
                             and (
                                 active_scene.get("trace_awake")
                                 or int(active_scene.get("trace_current", 0) or 0) > 0
+                                or wire_alert_rank(active_scene) >= 1
                             )
                         )
                         if hot_load:
@@ -3435,11 +3438,22 @@ class InputSystem(System):
             panic_exit_wire_scene(self.sim, self.player_eid)
             state["feedback"] = "Panic exit complete."
             return True
+        if key in (ord("d"), ord("D")):
+            result = download_wire_scene_data(self.sim, self.player_eid, item_catalog=self.catalog)
+            if result.get("ok"):
+                self.sim.turn_advance_requested = True
+                state["feedback"] = "Records packet downloaded to the Wire kit."
+            else:
+                state["feedback"] = f"Download blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
+            self._refresh_wire_scene_ui()
+            return True
         if key in ENTER_KEYS or key in (ord("i"), ord("I"), ord("x"), ord("X")):
             result = read_wire_scene_node(self.sim, self.player_eid)
             if result.get("ok"):
                 state["read_lines"] = list(result.get("lines", ()) or ())
                 state["feedback"] = "Node read."
+                if result.get("turn_spent"):
+                    self.sim.turn_advance_requested = True
             else:
                 state["feedback"] = f"Read blocked: {str(result.get('reason', 'blocked')).replace('_', ' ')}."
             self._refresh_wire_scene_ui()

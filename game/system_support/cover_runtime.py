@@ -29,26 +29,47 @@ def _is_cover_state_valid(sim, pos, cover_state):
     return False
 
 
-def _threat_positions_for_entity(sim, eid, pos, radius=10):
+def _cover_threat_positions_by_floor(sim):
+    """Snapshot cover-relevant actor positions once for a CoverSystem update."""
+
     positions = sim.ecs.get(Position)
     ais = sim.ecs.get(AI)
-
-    threats = []
+    by_floor = {}
     for other_eid, ai in ais.items():
-        if other_eid == eid:
-            continue
         if ai.state not in THREAT_STATES:
             continue
-
         threat_pos = positions.get(other_eid)
-        if not threat_pos or threat_pos.z != pos.z:
+        if not threat_pos:
             continue
+        by_floor.setdefault(int(threat_pos.z), []).append(
+            (other_eid, int(threat_pos.x), int(threat_pos.y))
+        )
+    return {floor: tuple(rows) for floor, rows in by_floor.items()}
 
-        dist = _manhattan(pos.x, pos.y, threat_pos.x, threat_pos.y)
+
+def _threat_positions_for_entity(sim, eid, pos, radius=10, *, prepared_by_floor=None):
+    if prepared_by_floor is None:
+        positions = sim.ecs.get(Position)
+        ais = sim.ecs.get(AI)
+        candidates = (
+            (other_eid, threat_pos.x, threat_pos.y)
+            for other_eid, ai in ais.items()
+            if ai.state in THREAT_STATES
+            for threat_pos in (positions.get(other_eid),)
+            if threat_pos is not None and threat_pos.z == pos.z
+        )
+    else:
+        candidates = prepared_by_floor.get(int(pos.z), ())
+
+    threats = []
+    for other_eid, threat_x, threat_y in candidates:
+        if other_eid == eid:
+            continue
+        dist = _manhattan(pos.x, pos.y, threat_x, threat_y)
         if dist > radius:
             continue
 
-        threats.append((other_eid, dist, threat_pos.x, threat_pos.y))
+        threats.append((other_eid, dist, threat_x, threat_y))
 
     return threats
 

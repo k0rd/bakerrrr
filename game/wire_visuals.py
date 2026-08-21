@@ -43,6 +43,9 @@ CURRENT_WIRE_VISUAL_KINDS = (
     "records",
     "exit",
     "walkable_route",
+    "wire_route_authenticated",
+    "wire_route_restricted",
+    "wire_route_privileged",
     "void",
     "boundary",
     "noise_residue",
@@ -120,6 +123,9 @@ WIRE_VISUAL_CATALOG = {
     "records": _visual("records", "D", "item_paper", "records node"),
     "exit": _visual("exit", "<", "player", "exit route"),
     "walkable_route": _visual("walkable_route", ".", "feature_window", "wire route"),
+    "wire_route_authenticated": _visual("wire_route_authenticated", ":", "item_access", "authenticated route"),
+    "wire_route_restricted": _visual("wire_route_restricted", "+", "world_object_gold", "restricted route"),
+    "wire_route_privileged": _visual("wire_route_privileged", "=", "survival_meter_low", "privileged route"),
     "void": _visual("void", " ", "building_fill_dark", "signal void"),
     "boundary": _visual("boundary", "#", "building_edge", "bounded edge"),
     "noise_residue": _visual("noise_residue", "~", "human_slate", "noise residue"),
@@ -141,7 +147,7 @@ WIRE_VISUAL_CATALOG = {
     "program_handshake_breaker": _visual("program_handshake_breaker", "H", "survival_meter_low", "handshake breaker"),
     "program_door_latch": _visual("program_door_latch", "L", "feature_door", "door latch"),
     "program_camera_loop": _visual("program_camera_loop", "o", "property_fixture", "camera loop"),
-    "program_data_siphon": _visual("program_data_siphon", "s", "item_objective", "data siphon"),
+    "program_data_siphon": _visual("program_data_siphon", "s", "item_objective", "decryptor"),
     "program_spike": _visual("program_spike", "!", "projectile", "spike"),
     "program_ice_cutter": _visual("program_ice_cutter", "/", "feature_breach", "ICE cutter"),
     "program_trace_scrubber": _visual("program_trace_scrubber", "u", "property_service", "trace scrubber"),
@@ -491,7 +497,10 @@ def wire_visual_for_cell(scene, x, y, *, walkable=False, node=None, avatar=False
         visual_kind = node.get("visual_kind") or wire_visual_kind_for_node_kind(node.get("kind"))
         return wire_visual_for_kind(visual_kind)
     if walkable:
-        kind = "noise_residue" if _noise_variant(scene, x, y) == 0 else "walkable_route"
+        from game.wire_security_runtime import wire_security_visual_kind_at
+
+        secured_kind = wire_security_visual_kind_at(scene, x, y)
+        kind = secured_kind or ("noise_residue" if _noise_variant(scene, x, y) == 0 else "walkable_route")
         token = "noise" if kind == "noise_residue" else "route"
         return _host_colored_visual(scene, wire_visual_for_kind(kind), token)
     if x <= 0 or y <= 0 or (width and x >= int(width) - 1) or (height and y >= int(height) - 1):
@@ -512,15 +521,22 @@ def wire_scene_hud_lines(scene):
         if int(node.get("x", -999)) == int(avatar.get("x", -1)) and int(node.get("y", -999)) == int(avatar.get("y", -1)):
             node_label = str(node.get("label", node_label))
             break
+    from game.wire_security_runtime import wire_alert_read, wire_trace_read
+
+    objective = scene.get("objective") if isinstance(scene.get("objective"), Mapping) else {}
+    objective_label = str(objective.get("label", "") or "").strip()
+    objective_state = "complete" if objective.get("completed") else "available"
     lines = [
         (
             f"Target: {scene.get('target_name', 'wire target')} "
             f"[{str(scene.get('target_class', 'wire')).replace('_', ' ')} / "
             f"{str(scene.get('network_family', 'local_controller')).replace('_', ' ')}]"
         ),
-        f"Interface: {scene.get('interface_name', 'interface')} / {scene.get('interface_style', 'plain')}",
+        f"Objective ({objective_state}): {objective_label or 'inspect the local controller'}",
+        f"Payoff: {objective.get('payoff', 'physical leverage')}",
         f"Node: {node_label}",
-        "Body: anchored in meatspace; link active",
+        f"Alert: {wire_alert_read(scene)}",
+        f"Trace: {wire_trace_read(scene)}",
     ]
     action_effects = [
         effect
@@ -538,6 +554,8 @@ def wire_scene_hud_lines(scene):
         and not bool(entity.get("destroyed"))
         and int(entity.get("hp", 0) or 0) > 0
     ]
+    revealed_ice = [entity for entity in live_ice if bool(entity.get("revealed"))]
+    hidden_ice = [entity for entity in live_ice if not bool(entity.get("revealed"))]
     effects = [
         f"{effect.get('kind')}:{effect.get('turns')}"
         for effect in scene.get("active_effects", ()) or ()
@@ -545,15 +563,20 @@ def wire_scene_hud_lines(scene):
     ]
     if scene.get("buffer"):
         lines.append(f"Buffer: {scene.get('buffer')}")
-    if scene.get("trace"):
-        lines.append(f"Trace: {scene.get('trace')}")
-    if live_ice:
-        lines.append(f"ICE: {len(live_ice)} active")
+    if revealed_ice:
+        states = ", ".join(
+            f"{entity.get('label', 'ICE')}:{entity.get('state', 'unknown')}"
+            for entity in revealed_ice[:2]
+        )
+        lines.append(f"ICE contacts: {states}")
+    elif hidden_ice and int(scene.get("interface_warning_rating", 0) or 0) >= 2:
+        lines.append("Contacts: unresolved security signal")
     if scene.get("clean_exit_blocked"):
         lines.append("Exit: quarantined")
     if effects:
         lines.append("Effects: " + ", ".join(effects[:3]))
-    for key, label in (("running_program", "Program"), ("alert_state", "Alert")):
+    lines.append("Body: anchored in meatspace; link active")
+    for key, label in (("running_program", "Program"),):
         value = scene.get(key)
         if value not in (None, "", (), []):
             lines.append(f"{label}: {value}")

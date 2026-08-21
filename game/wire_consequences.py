@@ -449,7 +449,7 @@ def apply_wire_physical_effect(sim, actor_eid, scene, program_key, *, target=Non
         })
         metadata["wire_records_dirty"] = dirty[-12:]
         raise_result = raise_wire_security(sim, actor_eid, scene, amount=1, reason="data_siphon_shell")
-        feedback = "Data siphon shell dirties the records surface."
+        feedback = "Decryptor Shell leaves the records surface visibly worked."
         effect_target = target_prop.get("id")
     sim.emit(Event(
         "wire_physical_effect_applied",

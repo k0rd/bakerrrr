@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 from collections import OrderedDict
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Mapping, Tuple
 
 from engine.buildings import building_exterior_profile
@@ -2002,6 +2003,13 @@ def _building_material_style(info):
         or info.get("display_name", "")
         or ""
     ).strip().lower()
+    return _building_material_style_for_token(building_id, archetype, name, exterior_class)
+
+
+@lru_cache(maxsize=16_384)
+def _building_material_style_for_token(building_id, archetype, name, exterior_class):
+    """Resolve one immutable building identity without reseeding every frame."""
+
     seed_token = f"building-material:{building_id}:{archetype}:{name}:{exterior_class}"
     rng = random.Random(seed_token)
     weights = _BUILDING_MATERIAL_WEIGHTS_BY_CLASS.get(

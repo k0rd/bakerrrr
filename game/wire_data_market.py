@@ -743,7 +743,58 @@ def choose_wire_data_family(scene, prop):
     return options[_stable_index(((prop or {}).get("id", ""), (scene or {}).get("scene_id"), archetype, security), len(options))]
 
 
-def wire_data_cache_metadata(sim, actor_eid, scene, node=None, *, item_catalog=None):
+def wire_data_payoff_preview(scene, prop=None):
+    """Describe the likely records payoff without inspecting NPC state.
+
+    Connection and scene previews use this before extraction.  The estimate is
+    deliberately a range: a buyer's interests and any person named by the
+    record are only resolved when the packet is actually downloaded.
+    """
+
+    if not isinstance(scene, Mapping):
+        return {}
+    family = choose_wire_data_family(scene, prop if isinstance(prop, Mapping) else {})
+    security = _int(
+        (scene or {}).get("security_tier")
+        or _prop_metadata(prop if isinstance(prop, Mapping) else {}).get("security_tier")
+        or 1,
+        1,
+        minimum=0,
+        maximum=5,
+    )
+    sensitivity = min(5, _SENSITIVITY_BY_FAMILY.get(family, 1) + (1 if security >= 4 else 0))
+    low = 18 + max(1, sensitivity - 1) * 34 + 2 * 9
+    high = 18 + sensitivity * 34 + 4 * 9 + min(5, sensitivity + 1) * 13 + 4 * 12
+    return {
+        "data_family": family,
+        "label": _FAMILY_LABELS.get(family, "brokerable records").lower(),
+        "value_read": f"brokerable data, roughly ${low}-${high} before buyer demand",
+        "base_value_low": int(low),
+        "base_value_high": int(high),
+    }
+
+
+def _apply_extraction_fidelity(metadata, extraction_mode):
+    result = dict(metadata or {})
+    mode = _key(extraction_mode, "decryptor")
+    if mode == "direct":
+        result["extraction_mode"] = "direct"
+        result["decryption_state"] = "partial"
+        result["sensitivity"] = max(1, _int(result.get("sensitivity"), 1, minimum=0, maximum=5) - 1)
+        result["freshness"] = max(2, _int(result.get("freshness"), 3, minimum=0, maximum=5) - 1)
+        if result.get("subject_value") is not None:
+            result["subject_value"] = max(0, _int(result.get("subject_value"), 0, minimum=0, maximum=5) - 1)
+        display_name = _text(result.get("display_name"), "Data cache")
+        result["display_name"] = f"Partially decoded {display_name[0].lower() + display_name[1:] if display_name else 'data cache'}"
+        summary = _text(result.get("record_summary"), "A brokerable encrypted records packet.")
+        result["record_summary"] = f"Partial decode: {summary}"
+    else:
+        result["extraction_mode"] = "decryptor"
+        result["decryption_state"] = "full"
+    return result
+
+
+def wire_data_cache_metadata(sim, actor_eid, scene, node=None, *, extraction_mode="decryptor", item_catalog=None):
     prop = wire_network_property(sim, scene)
     node = node if isinstance(node, Mapping) else _records_node(scene)
     family = choose_wire_data_family(scene, prop if isinstance(prop, Mapping) else {})
@@ -812,13 +863,33 @@ def wire_data_cache_metadata(sim, actor_eid, scene, node=None, *, item_catalog=N
     if family == "blackmail" and metadata.get("pressure_fact_summary"):
         metadata["record_summary"] = _text(metadata.get("pressure_fact_summary"))
     return normalize_wire_entry_metadata(
-        metadata,
+        _apply_extraction_fidelity(metadata, extraction_mode),
         item_id=WIRE_DATA_ITEM_ID,
         profile=wire_profile_for_item(WIRE_DATA_ITEM_ID, item_catalog=item_catalog or ITEM_CATALOG),
     )
 
 
-def wire_data_siphon_preflight(sim, actor_eid, scene, *, target=None, item_catalog=None):
+def _partial_cache_for_source(state, source_key):
+    for raw in getattr(state, "kit_entries", ()) or ():
+        if not isinstance(raw, Mapping) or _key(raw.get("item_id")) != WIRE_DATA_ITEM_ID:
+            continue
+        metadata = raw.get("metadata") if isinstance(raw.get("metadata"), Mapping) else {}
+        if _text(metadata.get("wire_extraction_key")) != _text(source_key):
+            continue
+        if _key(metadata.get("decryption_state")) == "partial":
+            return dict(raw)
+    return None
+
+
+def wire_data_siphon_preflight(
+    sim,
+    actor_eid,
+    scene,
+    *,
+    target=None,
+    extraction_mode="decryptor",
+    item_catalog=None,
+):
     if not isinstance(scene, Mapping):
         return {"ok": False, "reason": "missing_scene"}
     node = _records_node(scene, target=target)
@@ -833,8 +904,27 @@ def wire_data_siphon_preflight(sim, actor_eid, scene, *, target=None, item_catal
         marks = {}
     key = wire_data_extraction_key(scene, node=node)
     now = _int(getattr(sim, "tick", 0), 0)
+    mode = _key(extraction_mode, "decryptor")
+    state = wire_state_for_actor(sim, actor_eid, create=True)
     previous = marks.get(key)
     if isinstance(previous, Mapping):
+        upgrade_entry = _partial_cache_for_source(state, key) if mode == "decryptor" else None
+        if upgrade_entry is not None:
+            return {
+                "ok": True,
+                "reason": None,
+                "source_key": key,
+                "node": dict(node),
+                "upgrade_entry": upgrade_entry,
+                "metadata": wire_data_cache_metadata(
+                    sim,
+                    actor_eid,
+                    scene,
+                    node=node,
+                    extraction_mode="decryptor",
+                    item_catalog=item_catalog,
+                ),
+            }
         cooldown = _int(previous.get("cooldown_ticks"), wire_data_cooldown_ticks(prop), minimum=1)
         last_tick = _int(previous.get("last_tick"), -cooldown, minimum=-cooldown)
         if now < last_tick + cooldown:
@@ -844,15 +934,22 @@ def wire_data_siphon_preflight(sim, actor_eid, scene, *, target=None, item_catal
                 "remaining_ticks": (last_tick + cooldown) - now,
                 "source_key": key,
             }
-    state = wire_state_for_actor(sim, actor_eid, create=True)
     entry = {
         "instance_id": "wire-data-preview",
         "item_id": WIRE_DATA_ITEM_ID,
         "quantity": 1,
         "owner_eid": actor_eid,
         "owner_tag": "player",
-        "metadata": wire_data_cache_metadata(sim, actor_eid, scene, node=node, item_catalog=item_catalog),
+        "metadata": wire_data_cache_metadata(
+            sim,
+            actor_eid,
+            scene,
+            node=node,
+            extraction_mode=mode,
+            item_catalog=item_catalog,
+        ),
     }
+    entry["metadata"]["wire_extraction_key"] = key
     ok, reason = wire_kit_can_accept_entry(state, entry, item_catalog=item_catalog or ITEM_CATALOG)
     if not ok:
         return {"ok": False, "reason": reason or "wire_kit_full", "source_key": key}
@@ -909,12 +1006,63 @@ def _remember_wire_data_subject(sim, actor_eid, metadata):
     return True
 
 
-def extract_wire_data_cache(sim, actor_eid, scene, *, target=None, item_catalog=None):
-    preflight = wire_data_siphon_preflight(sim, actor_eid, scene, target=target, item_catalog=item_catalog)
+def extract_wire_data_cache(
+    sim,
+    actor_eid,
+    scene,
+    *,
+    target=None,
+    extraction_mode="decryptor",
+    item_catalog=None,
+):
+    mode = _key(extraction_mode, "decryptor")
+    preflight = wire_data_siphon_preflight(
+        sim,
+        actor_eid,
+        scene,
+        target=target,
+        extraction_mode=mode,
+        item_catalog=item_catalog,
+    )
     if not preflight.get("ok"):
         return preflight
     prop = wire_network_property(sim, scene)
     node = dict(preflight.get("node") or {})
+    state = wire_state_for_actor(sim, actor_eid, create=True)
+    upgrade_entry = preflight.get("upgrade_entry") if isinstance(preflight.get("upgrade_entry"), Mapping) else None
+    if upgrade_entry is not None:
+        instance_id = _text(upgrade_entry.get("instance_id"))
+        upgraded = dict(upgrade_entry)
+        upgraded["metadata"] = dict(preflight.get("metadata") or {})
+        upgraded["metadata"]["wire_extraction_key"] = str(preflight.get("source_key") or "")
+        replaced = False
+        entries = []
+        for raw in getattr(state, "kit_entries", ()) or ():
+            row = dict(raw) if isinstance(raw, Mapping) else raw
+            if isinstance(row, dict) and _text(row.get("instance_id")) == instance_id:
+                row = dict(upgraded)
+                replaced = True
+            entries.append(row)
+        if not replaced:
+            return {"ok": False, "reason": "partial_cache_unavailable"}
+        state.kit_entries = entries
+        _remember_wire_data_subject(sim, actor_eid, upgraded["metadata"])
+        sim.emit(Event(
+            "wire_data_decrypted",
+            eid=actor_eid,
+            item_id=WIRE_DATA_ITEM_ID,
+            instance_id=instance_id,
+            display_name=upgraded["metadata"].get("display_name", ""),
+            data_family=upgraded["metadata"].get("data_family", ""),
+            source_key=preflight.get("source_key", ""),
+        ))
+        return {
+            "ok": True,
+            "reason": None,
+            "entry": upgraded,
+            "source_key": preflight.get("source_key", ""),
+            "upgraded": True,
+        }
     instance_factory = getattr(sim, "new_item_instance_id", None)
     instance_id = instance_factory() if callable(instance_factory) else f"wire-data-{getattr(sim, 'tick', 0)}"
     entry = {
@@ -923,9 +1071,16 @@ def extract_wire_data_cache(sim, actor_eid, scene, *, target=None, item_catalog=
         "quantity": 1,
         "owner_eid": actor_eid,
         "owner_tag": "player",
-        "metadata": dict(preflight.get("metadata") or wire_data_cache_metadata(sim, actor_eid, scene, node=node, item_catalog=item_catalog)),
+        "metadata": dict(preflight.get("metadata") or wire_data_cache_metadata(
+            sim,
+            actor_eid,
+            scene,
+            node=node,
+            extraction_mode=mode,
+            item_catalog=item_catalog,
+        )),
     }
-    state = wire_state_for_actor(sim, actor_eid, create=True)
+    entry["metadata"]["wire_extraction_key"] = str(preflight.get("source_key") or "")
     result = wire_kit_add_entry(state, entry, item_catalog=item_catalog or ITEM_CATALOG)
     if not result.get("ok"):
         return {"ok": False, "reason": result.get("reason", "wire_kit_full"), "entry": dict(entry)}
@@ -944,6 +1099,7 @@ def extract_wire_data_cache(sim, actor_eid, scene, *, target=None, item_catalog=
         "scene_id": (scene or {}).get("scene_id"),
         "subject_eid": entry["metadata"].get("subject_eid"),
         "subject_name": entry["metadata"].get("subject_name", ""),
+        "extraction_mode": mode,
     }
     _remember_wire_data_subject(sim, actor_eid, entry["metadata"])
     sim.emit(Event(
@@ -960,6 +1116,8 @@ def extract_wire_data_cache(sim, actor_eid, scene, *, target=None, item_catalog=
         subject_role=entry["metadata"].get("subject_role", ""),
         subject_relation=entry["metadata"].get("subject_relation", ""),
         source_key=source_key,
+        extraction_mode=mode,
+        decryption_state=entry["metadata"].get("decryption_state", ""),
     ))
     return {"ok": True, "reason": None, "entry": dict(result.get("entry") or entry), "source_key": source_key}
 

@@ -4388,7 +4388,7 @@
     "effects": []
   },
   "wire_data_siphon_shell_program": {
-    "name": "Data Siphon Shell",
+    "name": "Decryptor Shell",
     "glyph": ";",
     "stack_max": 1,
     "category": "wireware",
@@ -4414,7 +4414,7 @@
       "dangerous": true,
       "capabilities": [
         "data",
-        "siphon"
+        "decrypt"
       ]
     },
     "effects": []

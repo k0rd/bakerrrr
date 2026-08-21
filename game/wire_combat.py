@@ -16,10 +16,18 @@ from game.wire_runtime import (
     wire_interface_profile_for_item,
     wire_profile_for_item,
 )
+from game.wire_security_runtime import (
+    normalize_wire_session_security,
+    resolve_wire_action_security,
+    wire_acquire_avatar,
+    wire_alert_rank,
+    wire_reveal_all_security_edges,
+    wire_session_alert,
+)
 from game.wire_visuals import wire_visual_for_kind
 
 
-WIRE_COMBAT_SCHEMA_VERSION = 1
+WIRE_COMBAT_SCHEMA_VERSION = 2
 
 PROGRAM_ITEM_ID_BY_KEY = {
     "talk": "wire_talk_program",
@@ -45,7 +53,7 @@ PROGRAM_SPECS = {
     "handshake_breaker": {"target": "node", "label": "Handshake Breaker", "node_kinds": {"controller", "sensor_relay"}, "mode": "active"},
     "door_latch": {"target": "node", "label": "Door Latch", "node_kinds": {"door_alarm_relay", "controller"}, "mode": "active"},
     "camera_loop": {"target": "node", "label": "Camera Loop", "node_kinds": {"controller", "diagnostic", "sensor_relay"}, "mode": "active"},
-    "data_siphon_shell": {"target": "node", "label": "Data Siphon Shell", "node_kinds": {"records"}, "mode": "active"},
+    "data_siphon_shell": {"target": "node", "label": "Decryptor Shell", "node_kinds": {"records"}, "mode": "active"},
     "spike": {"target": "ice", "label": "Spike", "range": 10, "damage": 3, "mode": "active"},
     "ice_cutter": {"target": "ice", "label": "ICE Cutter", "range": 8, "damage": 5, "mode": "active"},
     "trace_scrubber": {"target": "self", "label": "Trace Scrubber", "trace_delta": -5, "mode": "active"},
@@ -331,6 +339,9 @@ def _ice_entity(scene, kind, entity_id, x, y, *, traits=()):
         "glyph": visual["glyph"],
         "color": visual["color"],
         "semantic_id": visual["semantic_id"],
+        "installed": True,
+        "state": "dormant",
+        "last_known_target": None,
         "revealed": False,
     }
 
@@ -369,7 +380,7 @@ def _initial_ice_entities(scene, *, security=1):
     return rows[:5]
 
 
-def initialize_wire_combat_scene(scene, *, interface_metadata=None, security=1):
+def initialize_wire_combat_scene(scene, *, interface_metadata=None, security=1, persistent_security=None):
     if not isinstance(scene, dict):
         return scene
     interface_metadata = dict(interface_metadata or {})
@@ -401,11 +412,30 @@ def initialize_wire_combat_scene(scene, *, interface_metadata=None, security=1):
     scene.setdefault("wire_action_effects", [])
     scene.setdefault("last_wire_action", "")
     scene["interface_memory_speed"] = _memory_speed(interface_metadata)
+    normalize_wire_session_security(
+        scene,
+        interface_metadata=interface_metadata,
+        persistent_security=persistent_security,
+    )
     if not scene.get("wire_entities_initialized"):
         scene["wire_entities"] = _initial_ice_entities(scene, security=security)
         scene["wire_entities_initialized"] = True
     else:
         scene.setdefault("wire_entities", [])
+    warning_rating = _int(scene.get("interface_warning_rating"), 1, minimum=0, maximum=5)
+    normalized_entities = []
+    for raw in scene.get("wire_entities", ()) or ():
+        if not isinstance(raw, Mapping):
+            continue
+        entity = dict(raw)
+        entity.setdefault("installed", True)
+        entity.setdefault("state", "dormant")
+        entity.setdefault("last_known_target", None)
+        if warning_rating >= 4:
+            entity["revealed"] = True
+        normalized_entities.append(entity)
+    scene["wire_entities"] = normalized_entities
+    _sync_ice_states(scene)
     _refresh_clean_exit_block(scene)
     _refresh_trace_alert(scene)
     return scene
@@ -417,15 +447,92 @@ def ensure_wire_combat_state(sim, actor_eid, *, item_catalog=None):
         return None
     scene = dict(state.active_scene)
     _item_id, interface_metadata = _interface_metadata(sim, actor_eid, scene, item_catalog=item_catalog)
+    if not scene.get("security_edges") and scene.get("nodes") and scene.get("edges"):
+        from game.wire_scene import _apply_wire_security_topology
+
+        scene["security_edges"] = _apply_wire_security_topology(
+            scene["nodes"],
+            [tuple(edge) for edge in scene.get("edges", ()) or () if isinstance(edge, (list, tuple)) and len(edge) >= 2],
+            security=_scene_security(scene),
+            network_family=scene.get("network_family", "local_controller"),
+            warning_rating=_int(interface_metadata.get("warning_rating"), 1, minimum=0, maximum=5),
+        )
+        scene["schema_version"] = max(2, _int(scene.get("schema_version"), 1, minimum=1))
+    if not isinstance(scene.get("objective"), Mapping):
+        from game.wire_consequences import wire_network_property
+        from game.wire_scene import _wire_objective_summary
+
+        scene["objective"] = _wire_objective_summary(scene, wire_network_property(sim, scene) or {})
     program_slots = _int(interface_metadata.get("program_slots"), getattr(state, "program_slots", 2), minimum=0)
     state.program_slots = program_slots
     normalize_wire_ram_slots(state, item_catalog=item_catalog)
     if len(getattr(state, "ram_slots", ()) or ()) > 0 and wire_ram_used_points(state, item_catalog=item_catalog) > program_slots:
         while state.ram_slots and wire_ram_used_points(state, item_catalog=item_catalog) > program_slots:
             state.ram_slots.pop()
-    initialize_wire_combat_scene(scene, interface_metadata=interface_metadata, security=scene.get("security_tier", 1))
+    from game.wire_consequences import wire_security_state
+
+    persistent_security = wire_security_state(sim, scene, create=False)
+    initialize_wire_combat_scene(
+        scene,
+        interface_metadata=interface_metadata,
+        security=scene.get("security_tier", 1),
+        persistent_security=persistent_security,
+    )
     state.active_scene = scene
     return scene
+
+
+def reveal_wire_ice(scene, entity_id, *, state=None):
+    """Reveal one installed countermeasure after contact or a successful scan."""
+
+    if not isinstance(scene, dict):
+        return None
+    wanted = _clean_text(entity_id)
+    for entity in _live_ice_entities(scene):
+        if _clean_text(entity.get("entity_id")) != wanted:
+            continue
+        entity["revealed"] = True
+        if state:
+            entity["state"] = _clean_key(state)
+        _set_entity(scene, entity)
+        return dict(entity)
+    return None
+
+
+def _ice_state_active(entity):
+    return _clean_key((entity or {}).get("state")) not in {"", "dormant", "disabled"}
+
+
+def _active_ice_entities(scene):
+    return [entity for entity in _live_ice_entities(scene) if _ice_state_active(entity)]
+
+
+def _sync_ice_states(scene):
+    """Turn installed ICE roles on from local alert state, not from trace."""
+
+    rank = wire_alert_rank(scene)
+    known_avatar = wire_session_alert(scene).get("known_avatar")
+    hostile = bool(_clean_text(scene.get("last_hostile_program_instance_id")))
+    for entity in _live_ice_entities(scene):
+        kind = _clean_key(entity.get("kind"))
+        if kind == "camera_watchdog":
+            state = "pursuing" if rank >= 1 and known_avatar else "investigating" if rank >= 1 else "watching"
+        elif kind == "door_arbiter":
+            state = "engaged" if rank >= 1 and known_avatar else "watching"
+        elif kind == "trace_sentinel":
+            state = "tracing" if rank >= 2 else "dormant"
+        elif kind == "compliance_daemon":
+            state = "supporting" if rank >= 1 else "dormant"
+        elif kind == "quarantine_gate":
+            state = "quarantining" if rank >= 3 else "dormant"
+        elif kind == "corruptor":
+            state = "pursuing" if rank >= 3 or (rank >= 2 and hostile) else "dormant"
+        else:
+            state = "dormant"
+        entity["state"] = state
+        if known_avatar is not None and state in {"pursuing", "engaged", "tracing", "quarantining"}:
+            entity["last_known_target"] = list(_wire_point(known_avatar))
+        _set_entity(scene, entity)
 
 
 def load_wire_program_to_ram(sim, actor_eid, instance_id=None, *, item_catalog=None):
@@ -557,7 +664,7 @@ def wire_program_rows(sim, actor_eid, *, item_catalog=None):
 
 def wire_blocking_ice_at(scene, x, y):
     point = (int(x), int(y))
-    for entity in _live_ice_entities(scene):
+    for entity in _active_ice_entities(scene):
         spec = ICE_SPECS.get(_clean_key(entity.get("kind")), {})
         if not bool(spec.get("blocks_route")):
             continue
@@ -632,6 +739,8 @@ def wire_program_target_rows(sim, actor_eid):
             "label": f"Node: {node.get('label', 'node')}",
         })
     for entity in _live_ice_entities(scene):
+        if not bool(entity.get("revealed")):
+            continue
         rows.append({
             "kind": "ice",
             "target_id": str(entity.get("entity_id")),
@@ -655,6 +764,8 @@ def _target_from_row(sim, scene, target=None, *, program_key=""):
         if kind == "ice":
             entity_id = _clean_text(target.get("target_id"))
             for entity in _live_ice_entities(scene):
+                if not bool(entity.get("revealed")):
+                    continue
                 if _clean_text(entity.get("entity_id")) == entity_id:
                     return {"kind": "ice", "entity": dict(entity), "label": _entity_label(entity)}
         if kind == "self":
@@ -666,7 +777,7 @@ def _target_from_row(sim, scene, target=None, *, program_key=""):
     spec = PROGRAM_SPECS.get(program_key, {})
     target_kind = spec.get("target")
     if target_kind == "ice":
-        entities = _live_ice_entities(scene)
+        entities = [entity for entity in _live_ice_entities(scene) if bool(entity.get("revealed"))]
         if entities:
             return {"kind": "ice", "entity": entities[0], "label": _entity_label(entities[0])}
     if target_kind == "node":
@@ -778,7 +889,7 @@ def _scene_node_point(scene, kind, default=None):
     return _wire_point(default or scene.get("avatar"))
 
 
-def _advance_mobile_ice(scene, entity):
+def _advance_mobile_ice(scene, entity, goal=None):
     kind = _clean_key((entity or {}).get("kind"))
     spec = ICE_SPECS.get(kind, {})
     if not bool(spec.get("mobile")):
@@ -788,7 +899,13 @@ def _advance_mobile_ice(scene, entity):
     if kind == "corruptor" and not _clean_text(scene.get("last_hostile_program_instance_id")):
         return None
     start = _wire_point(entity)
-    goal = _wire_point(scene.get("avatar"), start)
+    if goal is None:
+        goal = (entity or {}).get("last_known_target")
+    if goal is None:
+        goal = wire_session_alert(scene).get("last_anomaly")
+    if goal is None:
+        return None
+    goal = _wire_point(goal, start)
     path = _wire_route_path(scene, start, goal)
     if len(path) <= 2:
         return None
@@ -827,6 +944,8 @@ def _validate_target(scene, program_key, target):
         entity = target.get("entity") if isinstance(target, Mapping) else None
         if not isinstance(entity, Mapping):
             return False, "missing_ice_target"
+        if not bool(entity.get("revealed")):
+            return False, "unresolved_ice_target"
         if _grid_distance(scene, entity) > _int(spec.get("range"), 1, minimum=0):
             return False, "target_out_of_range"
         return True, None
@@ -1038,9 +1157,7 @@ def _damage_ice(sim, actor_eid, scene, entity, amount, *, program_key=""):
 def _refresh_clean_exit_block(scene):
     blocked = False
     for entity in _live_ice_entities(scene):
-        if _clean_key(entity.get("kind")) == "quarantine_gate":
-            blocked = True
-        if "quarantine_anchor" in tuple(entity.get("traits", ()) or ()):
+        if _clean_key(entity.get("kind")) == "quarantine_gate" and _clean_key(entity.get("state")) == "quarantining":
             blocked = True
     scene["clean_exit_blocked"] = bool(blocked)
     return bool(blocked)
@@ -1184,21 +1301,26 @@ def advance_wire_combat_turn(
     _decrement_effects(scene)
     if _check_forced_eject(sim, actor_eid, state, scene, reason=cause):
         return {"ok": True, "reason": "forced_eject", "scene": None}
-    if not _trace_awake(scene):
-        _refresh_trace_alert(scene)
-        state.active_scene = dict(scene)
-        return {"ok": True, "reason": None, "scene": dict(scene)}
-    security = _scene_security(scene)
-    passive = max(1, security)
-    _add_trace(sim, actor_eid, scene, passive, reason=f"passive_{cause}")
+    normalize_wire_session_security(scene)
+    _sync_ice_states(scene)
     memory_speed = _int(scene.get("interface_memory_speed"), 1, minimum=0)
-    for entity in _live_ice_entities(scene):
+    avatar_point = _wire_point(scene.get("avatar"))
+    for entity in _active_ice_entities(scene):
         kind = _clean_key(entity.get("kind"))
+        ice_state = _clean_key(entity.get("state"))
         spec = ICE_SPECS.get(kind, {})
-        pursuit = _advance_mobile_ice(scene, entity)
+        alert = wire_session_alert(scene)
+        known_avatar = alert.get("known_avatar")
+        known_point = _wire_point(known_avatar) if known_avatar is not None else None
+        goal = known_point if ice_state in {"pursuing", "engaged"} else alert.get("last_anomaly")
+        pursuit = _advance_mobile_ice(scene, entity, goal=goal)
         if pursuit:
             entity = dict(pursuit["entity"])
-            action_label = f"{_entity_label(entity)} advances one route segment toward your process."
+            if ice_state == "investigating":
+                action_label = f"{_entity_label(entity)} searches the route around the last anomaly."
+            else:
+                action_label = f"{_entity_label(entity)} advances on its last fix for your process."
+            reveal_wire_ice(scene, entity.get("entity_id"), state=ice_state)
             _record_wire_action(
                 scene,
                 source=pursuit["from"],
@@ -1217,10 +1339,21 @@ def advance_wire_combat_turn(
                 x=entity.get("x"),
                 y=entity.get("y"),
             ))
+            if kind == "camera_watchdog" and abs(_int(entity.get("x")) - avatar_point[0]) + abs(_int(entity.get("y")) - avatar_point[1]) <= 1:
+                wire_acquire_avatar(
+                    sim,
+                    actor_eid,
+                    scene,
+                    reason="watchdog_contact",
+                    position=avatar_point,
+                    alert_amount=18,
+                )
+            continue
+        if ice_state == "watching":
             continue
         trace = _int(spec.get("trace"), 0, minimum=0)
         buffer_damage = _int(spec.get("buffer"), 0, minimum=0)
-        action_target = _wire_point(scene.get("avatar"))
+        action_target = avatar_point
         action_visual = "effect_trace_sweep" if trace else "effect_packet_pulse"
         action_label = f"{_entity_label(entity)} sends pressure toward your process."
         if _effect_active(scene, "signal_cloak"):
@@ -1228,6 +1361,42 @@ def advance_wire_combat_turn(
         traits = tuple(entity.get("traits", ()) or ())
         if "memory_speed_trace" in traits:
             trace += max(1, memory_speed // 2)
+        if kind == "camera_watchdog":
+            distance = abs(_int(entity.get("x")) - avatar_point[0]) + abs(_int(entity.get("y")) - avatar_point[1])
+            if distance <= 1 and known_point != avatar_point:
+                wire_acquire_avatar(
+                    sim,
+                    actor_eid,
+                    scene,
+                    reason="watchdog_contact",
+                    position=avatar_point,
+                    alert_amount=18,
+                )
+                entity = reveal_wire_ice(scene, entity.get("entity_id"), state="pursuing") or entity
+                known_point = avatar_point
+            elif ice_state == "investigating":
+                continue
+        has_current_fix = known_point is not None and known_point == avatar_point
+        if "ram_reset_attack" in traits and has_current_fix:
+            _reset_ram(sim, actor_eid, state, scene, item_catalog=item_catalog)
+            entity = reveal_wire_ice(scene, entity.get("entity_id"), state=ice_state) or entity
+            action_label = f"{_entity_label(entity)} drives a reset pulse into loaded RAM."
+            _record_wire_action(
+                scene,
+                source=entity,
+                target=avatar_point,
+                visual_kind="effect_corruption_flecks",
+                label=action_label,
+                source_kind="ice",
+            )
+            sim.emit(Event("wire_ice_acted", eid=actor_eid, ice_kind=kind, ice_label=_entity_label(entity), cause=cause, action="ram_reset"))
+            continue
+        if kind in {"camera_watchdog", "door_arbiter"} and not has_current_fix:
+            continue
+        if kind in {"camera_watchdog", "door_arbiter"} and _grid_distance(scene, entity) > 1:
+            continue
+        if kind == "trace_sentinel" and ice_state != "tracing":
+            continue
         if kind == "compliance_daemon":
             healed = False
             for other in _live_ice_entities(scene):
@@ -1245,12 +1414,18 @@ def advance_wire_combat_turn(
                     break
             if healed:
                 trace = 0
+            else:
+                continue
         if kind == "quarantine_gate":
+            if ice_state != "quarantining":
+                continue
             scene["clean_exit_blocked"] = True
             action_target = _scene_node_point(scene, "exit", scene.get("avatar"))
             action_visual = "effect_lock_bars"
             action_label = f"{_entity_label(entity)} holds lock bars across the exit route."
         if kind == "corruptor":
+            if ice_state != "pursuing":
+                continue
             target_iid = _clean_text(scene.get("last_hostile_program_instance_id"))
             if target_iid:
                 corrupt_target = _last_ram_entry(state, target_iid, item_catalog=item_catalog)
@@ -1261,10 +1436,9 @@ def advance_wire_combat_turn(
                     f"{_entity_label(entity)} throws corruption into "
                     f"{_program_name(corrupt_target, item_catalog=item_catalog) if corrupt_target else 'the attacking program'}."
                 )
-        if "ram_reset_attack" in traits:
-            _reset_ram(sim, actor_eid, state, scene, item_catalog=item_catalog)
-            action_visual = "effect_corruption_flecks"
-            action_label = f"{_entity_label(entity)} drives a reset pulse into loaded RAM."
+            elif not has_current_fix or _grid_distance(scene, entity) > 1:
+                continue
+        entity = reveal_wire_ice(scene, entity.get("entity_id"), state=ice_state) or entity
         if trace:
             _add_trace(sim, actor_eid, scene, trace, reason=f"ice_{kind}")
         if buffer_damage:
@@ -1308,7 +1482,7 @@ def _mark_program_use(state, entry, *, program_key, item_catalog=None):
 
 def _active_trait(scene, trait):
     needle = _clean_key(trait)
-    for entity in _live_ice_entities(scene):
+    for entity in _active_ice_entities(scene):
         if needle in tuple(entity.get("traits", ()) or ()):
             return True
     return False
@@ -1371,6 +1545,7 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
                 actor_eid,
                 scene,
                 target=resolved_target,
+                extraction_mode="decryptor",
                 item_catalog=item_catalog,
             )
             if not data_preflight.get("ok"):
@@ -1382,27 +1557,42 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
     program_source = _wire_point(scene.get("avatar"))
     program_target = _resolved_target_point(scene, resolved_target)
     trace_add = _int(metadata.get("trace_cost"), profile.get("trace_cost", 0), minimum=0)
-    trace_add += _int(metadata.get("noise"), profile.get("noise", 0), minimum=0)
+    action_noise = _int(metadata.get("noise"), profile.get("noise", 0), minimum=0)
     if _active_trait(scene, "blackbox_auditor") and program_key in OFFENSIVE_PROGRAMS:
         trace_add += 1
     _add_trace(sim, actor_eid, scene, trace_add, reason=f"program_{program_key}")
+    security_result = resolve_wire_action_security(
+        sim,
+        actor_eid,
+        scene,
+        kind=f"program_{program_key}",
+        source=program_source,
+        target=program_target,
+        base_signature=action_noise + (3 if program_key == "route_probe" else 0),
+        hostile=program_key in OFFENSIVE_PROGRAMS,
+        cloak_strength=_active_effect_strength(scene, "signal_cloak", default=1) if _effect_active(scene, "signal_cloak") else 0,
+        acquire_avatar=program_key in OFFENSIVE_PROGRAMS,
+    )
     feedback = f"{PROGRAM_SPECS.get(program_key, {}).get('label', program_key)} runs."
     forced_disconnect_after_run = False
     forced_disconnect_reason = "wire_network_locked"
     if program_key == "route_probe":
+        revealed_edges = wire_reveal_all_security_edges(scene)
         entities = []
         for entity in _live_ice_entities(scene):
             entity["revealed"] = True
             _set_entity(scene, entity)
             traits = ", ".join(entity.get("traits", ()) or ()) or "standard"
             entities.append(f"{_entity_label(entity)} [{traits}]")
-        feedback = "Route probe reveals " + (", ".join(entities) if entities else "no active ICE") + "."
+        feedback = "Route probe reveals " + (", ".join(entities) if entities else "no installed ICE") + f" and {revealed_edges} protected route(s)."
     elif program_key in {"spike", "ice_cutter"}:
         entity = dict(resolved_target.get("entity") or {})
         damage = _int(PROGRAM_SPECS[program_key].get("damage"), 1)
         if program_key == "ice_cutter" and _clean_key(entity.get("kind")) not in {"quarantine_gate", "door_arbiter"}:
             damage = max(2, damage - 1)
-        _damage_ice(sim, actor_eid, scene, entity, damage, program_key=program_key)
+        damaged = _damage_ice(sim, actor_eid, scene, entity, damage, program_key=program_key)
+        if bool(damaged.get("destroyed")) and _clean_key(damaged.get("kind")) == "trace_sentinel":
+            _add_trace(sim, actor_eid, scene, -4, reason="trace_sentinel_destroyed")
         scene["last_hostile_program_instance_id"] = _clean_text(entry.get("instance_id"))
         feedback = f"{PROGRAM_SPECS[program_key]['label']} hits {_entity_label(entity)} for {damage}."
     elif program_key == "trace_scrubber":
@@ -1475,7 +1665,14 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
         from game.wire_data_market import extract_wire_data_cache
 
         effect = apply_wire_physical_effect(sim, actor_eid, scene, program_key, target=resolved_target)
-        extraction = extract_wire_data_cache(sim, actor_eid, scene, target=resolved_target, item_catalog=item_catalog)
+        extraction = extract_wire_data_cache(
+            sim,
+            actor_eid,
+            scene,
+            target=resolved_target,
+            extraction_mode="decryptor",
+            item_catalog=item_catalog,
+        )
         scene["data_siphon_primed"] = True
         scene["last_hostile_program_instance_id"] = _clean_text(entry.get("instance_id"))
         forced_disconnect_after_run = bool(effect.get("forced_disconnect"))
@@ -1483,9 +1680,16 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
             extracted = extraction.get("entry") if isinstance(extraction.get("entry"), Mapping) else {}
             display_name = str((extracted.get("metadata") or {}).get("display_name", "data cache") or "data cache")
             scene["last_data_cache_instance_id"] = extracted.get("instance_id")
-            feedback = f"Data siphon shell pulls {display_name}."
+            feedback = (
+                f"Decryptor Shell finishes {display_name}."
+                if extraction.get("upgraded")
+                else f"Decryptor Shell pulls and fully decodes {display_name}."
+            )
+            objective = dict(scene.get("objective") or {})
+            objective.update({"completed": True, "completed_kind": "decrypted_download"})
+            scene["objective"] = objective
         else:
-            feedback = str(effect.get("feedback", "Data siphon shell dirties the records surface.") or "")
+            feedback = str(effect.get("feedback", "Decryptor Shell dirties the records surface.") or "")
     elif program_key == "talk":
         from game.wire_users import open_wire_dialogue
 
@@ -1528,6 +1732,8 @@ def run_wire_program(sim, actor_eid, *, program_instance_id=None, program_index=
         feedback=feedback,
         trace=scene.get("trace_current"),
         buffer=scene.get("buffer_current"),
+        alert=(scene.get("session_alert") or {}).get("level", "quiet"),
+        detected=bool(security_result.get("detected")),
     ))
     if forced_disconnect_after_run:
         scene["ejection_state"] = {
@@ -1573,6 +1779,14 @@ def request_clean_wire_exit(sim, actor_eid):
     if state is None or not isinstance(getattr(state, "active_scene", None), Mapping):
         return {"ok": False, "reason": "missing_scene"}
     scene = ensure_wire_combat_state(sim, actor_eid)
+    current = _current_node(scene)
+    if not isinstance(current, Mapping) or _clean_key(current.get("kind")) != "exit":
+        reason = "exit_node_required"
+        scene["last_feedback"] = "Reach the exit node for a clean disconnect, or use panic exit now."
+        state.active_scene = dict(scene)
+        sim.emit(Event("wire_program_blocked", eid=actor_eid, reason=reason))
+        return {"ok": False, "reason": reason}
+    _sync_ice_states(scene)
     if _refresh_clean_exit_block(scene):
         reason = "clean_exit_blocked"
         scene["last_feedback"] = "Quarantine ICE blocks a clean disconnect."
@@ -1581,4 +1795,6 @@ def request_clean_wire_exit(sim, actor_eid):
         return {"ok": False, "reason": reason}
     from game.wire_scene import close_wire_scene
 
-    return close_wire_scene(sim, actor_eid, reason="manual", disconnect=True)
+    exit_kind = "dirty" if wire_alert_rank(scene) >= 2 else "clean"
+    reason = "dirty_exit" if exit_kind == "dirty" else "clean_exit"
+    return close_wire_scene(sim, actor_eid, reason=reason, disconnect=True, exit_kind=exit_kind)

@@ -142,9 +142,16 @@ def _room_cells_for_property(sim, prop):
     preferred = {"gaming_floor", "main_floor"}
     rows = []
     fallback = []
-    for (x, y, z), info in getattr(sim, "structure_cells", {}).items():
-        if str((info or {}).get("building_id", "") or "").strip() != building_id:
-            continue
+    structure_cells_for_building = getattr(sim, "structure_cells_for_building", None)
+    if callable(structure_cells_for_building):
+        structure_rows = structure_cells_for_building(building_id)
+    else:
+        structure_rows = (
+            (coord, info)
+            for coord, info in getattr(sim, "structure_cells", {}).items()
+            if str((info or {}).get("building_id", "") or "").strip() == building_id
+        )
+    for (x, y, z), info in structure_rows:
         tile = sim.tilemap.tile_at(int(x), int(y), int(z))
         if tile is None or not bool(getattr(tile, "walkable", False)):
             continue
@@ -173,6 +180,20 @@ def _set_cash_service_available(prop, available):
     metadata["holdem_cash_available"] = bool(available)
     metadata["holdem_offer_mode"] = "live_cash" if bool(available) else "casino_holdem"
     return changed
+
+
+def _property_declares_compact_holdem(prop):
+    """Return whether genesis explicitly chose the non-spatial card offering."""
+
+    metadata = prop.get("metadata") if isinstance(prop, dict) else None
+    if not isinstance(metadata, dict):
+        return False
+    return (
+        "dedicated_poker_floor" in metadata
+        and not bool(metadata.get("dedicated_poker_floor"))
+        and metadata.get("holdem_cash_available") is False
+        and str(metadata.get("holdem_offer_mode", "") or "").strip().lower() == "casino_holdem"
+    )
 
 
 def _retrofit_open_gaming_floor(sim, prop):
@@ -1218,7 +1239,17 @@ class HoldemCashSystem(System):
         for prop in list(getattr(self.sim, "properties", {}).values()):
             if _property_archetype(prop) not in {"casino", "gaming_hall"}:
                 continue
-            table = holdem_cash_table_for_property(self.sim, prop, ensure=True)
+            table = holdem_cash_table_for_property(self.sim, prop, ensure=False)
+            if table is None and _property_declares_compact_holdem(prop):
+                # Genesis has already made the structural qualification decision
+                # for this venue.  Keep its compact game without repeatedly
+                # searching every stamped room during live time or sleep.
+                _set_cash_service_available(prop, False)
+                continue
+            if table is None:
+                # Missing metadata identifies a legacy venue.  Let the migration
+                # path inspect/retrofit it instead of treating absence as denial.
+                table = holdem_cash_table_for_property(self.sim, prop, ensure=True)
             if table is None:
                 _set_cash_service_available(prop, False)
                 continue
@@ -1423,15 +1454,20 @@ class HoldemCashSystem(System):
                 traits = traits_map.get(eid)
                 discipline = max(0.0, min(1.0, float(getattr(traits, "discipline", 0.5))))
                 profile = use_profiles.get(eid)
-                risk = max(0.0, min(1.0, float(getattr(profile, "risk_tolerance", 0.4))))
+                raw_risk = max(0.0, min(1.0, float(getattr(profile, "risk_tolerance", 0.4))))
+                # A cash game is an ordinary indulgence, not the same risk as
+                # taking an unknown drug or walking into danger. Preserve the
+                # personality ordering without making cautious civilians treat
+                # a legal card table as categorically off limits.
+                risk = 0.15 + (raw_risk * 0.85)
                 proximity = 1.0 - (
                     min(float(HOLDEM_CASH_GUEST_APPROACH_RANGE), float(approach_distance))
                     / float(HOLDEM_CASH_GUEST_APPROACH_RANGE)
                 )
-                gain = 0.045 + affinity * 0.075 + social_need * 0.065 + risk * 0.045
+                gain = 0.055 + affinity * 0.085 + social_need * 0.075 + risk * 0.045
                 gain += (1.0 - discipline) * 0.025 + proximity * 0.025
                 urge = drive.add_urge(HOLDEM_CASH_LEISURE_ID, gain)
-                threshold = 0.74 - affinity * 0.17 - risk * 0.07 - social_need * 0.05
+                threshold = 0.70 - affinity * 0.17 - risk * 0.07 - social_need * 0.08
                 if urge >= threshold:
                     candidates.append((-urge, -affinity, int(approach_distance), int(eid), pos, drive))
             if not candidates:
@@ -1457,6 +1493,17 @@ class HoldemCashSystem(System):
                 will.target_eid = None
                 will.last_tick = now
             table["revision"] = _int(table.get("revision")) + 1
+            # This is a committed movement intent, not merely a table-local
+            # reservation. The shared event wakes the movement due-queue during
+            # live time-skip as well as ordinary play.
+            self.sim.emit(Event(
+                "npc_intent_changed",
+                npc_eid=eid,
+                intent="seeking_poker_table",
+                score=round(urge * 100.0, 2),
+                target=target,
+                target_eid=None,
+            ))
             self.sim.emit(Event(
                 "npc_leisure_urge_committed",
                 npc_eid=eid,

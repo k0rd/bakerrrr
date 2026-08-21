@@ -649,7 +649,24 @@ def handle_wire_dialogue_choice(sim, actor_eid, *, row_index=0, topic_id=None):
         response = "They surface the cleanest contact handle they are willing to admit."
         dialogue.setdefault("contact_refs", {})["org_contact_ref"] = link.get("org_contact_ref", "")
     elif topic == "stall":
-        response = "You keep them talking. Nothing real changes, but the silence breaks in your favor."
+        if user.get("stall_cover_spent"):
+            response = "They have already spent the harmless traffic they could hide you inside."
+        elif dialogue.get("provenance_kind") == "honeypot":
+            response = "The friendly delay is part of the trap; the endpoint keeps measuring you."
+            user["suspicion"] = _int(user.get("suspicion"), 0) + 1
+            user["stall_cover_spent"] = True
+        else:
+            from game.wire_security_runtime import wire_alert_level_for_score
+
+            alert = dict(scene.get("session_alert") or {})
+            before = _int(alert.get("score"), 0)
+            after = max(0, before - 8)
+            alert["score"] = after
+            alert["level"] = wire_alert_level_for_score(after)
+            scene["session_alert"] = alert
+            scene["alert_state"] = alert["level"]
+            user["stall_cover_spent"] = True
+            response = f"They fold your signal into harmless chatter; host attention slips {before - after} points."
     elif topic == "offer_data":
         data_count = _wire_data_count(state)
         response = "They might buy a packet later." if data_count else "They ask what data you think you are offering."

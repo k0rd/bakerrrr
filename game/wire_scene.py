@@ -8,9 +8,25 @@ from hashlib import blake2b
 from engine.events import Event
 from game.components import Inventory, Position
 from game.items import ITEM_CATALOG, item_display_name
-from game.wire_combat import advance_wire_combat_turn, initialize_wire_combat_scene, wire_blocking_ice_at
+from game.wire_combat import (
+    advance_wire_combat_turn,
+    initialize_wire_combat_scene,
+    reveal_wire_ice,
+    wire_blocking_ice_at,
+)
 from game.wire_kit import wire_state_for_actor
-from game.wire_runtime import normalize_wire_interface_metadata, wire_interface_profile_for_item
+from game.wire_runtime import (
+    normalize_wire_entry_metadata,
+    normalize_wire_interface_metadata,
+    wire_interface_profile_for_item,
+    wire_profile_for_item,
+)
+from game.wire_security_runtime import (
+    resolve_wire_action_security,
+    wire_alert_rank,
+    wire_reveal_security_edge,
+    wire_security_edge_for_step,
+)
 from game.wire_users import seed_wire_users_for_scene
 from game.wire_visuals import apply_wire_scene_visuals, wire_scene_hud_lines
 from game.wire_targets import (
@@ -21,7 +37,7 @@ from game.wire_targets import (
 )
 
 
-WIRE_SCENE_SCHEMA_VERSION = 1
+WIRE_SCENE_SCHEMA_VERSION = 2
 WIRE_SCENE_WIDTH = 27
 WIRE_SCENE_HEIGHT = 15
 
@@ -193,6 +209,194 @@ def _build_walkable(nodes, edges):
             continue
         points.update(_path_points(a["x"], a["y"], b["x"], b["y"]))
     return sorted(points)
+
+
+_WIRE_ZONE_RANK = {"public": 0, "service": 1, "restricted": 2, "core": 3}
+
+
+def _node_security_zone(node_kind):
+    node_kind = _clean_id(node_kind)
+    if node_kind in {"entry", "exit", "diagnostic"}:
+        return "public"
+    if node_kind == "service_index":
+        return "service"
+    if node_kind in {"controller", "door_alarm_relay", "sensor_relay", "vehicle_lock_bus", "vehicle_ignition"}:
+        return "restricted"
+    if node_kind in {"records", "vehicle_tracker"}:
+        return "core"
+    return "service"
+
+
+def _edge_gate_kind(network_family, access_class):
+    if access_class == "public":
+        return ""
+    return {
+        "access_control": "credential_challenge",
+        "commercial_service": "service_auth",
+        "civic_service": "audit_challenge",
+        "finance_mask": "audit_challenge",
+        "drone_radio": "radio_handshake",
+        "vehicle_bus": "service_auth",
+    }.get(_clean_id(network_family), "credential_challenge")
+
+
+def _apply_wire_security_topology(nodes, edges, *, security, network_family, warning_rating):
+    """Attach behavioral security to the existing deterministic family graph."""
+
+    security = max(0, int(security))
+    warning_rating = max(0, min(5, int(warning_rating)))
+    by_id = {str(node.get("node_id")): node for node in nodes if isinstance(node, dict)}
+    for node in by_id.values():
+        zone = _node_security_zone(node.get("kind"))
+        node["security_zone"] = zone
+        node["monitoring"] = (
+            0
+            if zone == "public" and security <= 2
+            else max(0, min(5, security - 1 + max(0, _WIRE_ZONE_RANK.get(zone, 0) - 1)))
+        )
+        node["objective_tags"] = tuple(
+            tag
+            for tag, applies in (
+                ("records", _clean_id(node.get("kind")) == "records"),
+                ("access", _clean_id(node.get("kind")) in {"controller", "door_alarm_relay", "vehicle_lock_bus"}),
+                ("sensor", _clean_id(node.get("kind")) in {"diagnostic", "sensor_relay", "vehicle_tracker"}),
+            )
+            if applies
+        )
+
+    records = []
+    for index, (left, right) in enumerate(edges):
+        left_node = by_id.get(str(left), {})
+        right_node = by_id.get(str(right), {})
+        left_zone = _clean_id(left_node.get("security_zone") or "public")
+        right_zone = _clean_id(right_node.get("security_zone") or "public")
+        zone = max((left_zone, right_zone), key=lambda value: _WIRE_ZONE_RANK.get(value, 0))
+        if security < 2:
+            access_class = "public" if zone in {"public", "service"} else "authenticated"
+        else:
+            access_class = {
+                "public": "public",
+                "service": "authenticated",
+                "restricted": "restricted",
+                "core": "privileged",
+            }.get(zone, "authenticated")
+        monitoring = 0 if access_class == "public" else max(1, min(5, security - 1 + _WIRE_ZONE_RANK.get(zone, 0)))
+        path = _path_points(
+            int(left_node.get("x", 0)),
+            int(left_node.get("y", 0)),
+            int(right_node.get("x", 0)),
+            int(right_node.get("y", 0)),
+        )
+        records.append({
+            "edge_id": f"edge-{index}-{left}-{right}",
+            "from": str(left),
+            "to": str(right),
+            "security_zone": zone,
+            "access_class": access_class,
+            "monitoring": monitoring,
+            "noise_cost": 0 if access_class == "public" else max(1, monitoring // 2),
+            "gate_kind": _edge_gate_kind(network_family, access_class),
+            "quarantinable": "exit" in {str(left), str(right)},
+            "revealed": bool(access_class == "public" or warning_rating >= 4),
+            "path": [list(point) for point in path],
+        })
+    return records
+
+
+def _wire_objective_summary(scene, source_prop):
+    from game.wire_data_market import wire_data_payoff_preview
+
+    nodes = {str(node.get("kind")) for node in scene.get("nodes", ()) or () if isinstance(node, Mapping)}
+    target_kind = _clean_id(scene.get("target_kind"))
+    target_class = _clean_id(scene.get("target_class"))
+    data = wire_data_payoff_preview(scene, source_prop) if "records" in nodes else {}
+    outcomes = []
+    if data:
+        outcomes.append(f"download {data.get('label', 'brokerable records')}")
+    if target_class == "access_panel":
+        outcomes.append("open a short physical access window")
+        outcomes.append("blind linked surveillance")
+    elif target_kind == "drone":
+        outcomes.append("disrupt the live command link")
+    elif target_kind == "vehicle":
+        outcomes.append("reach lock, tracker, and ignition service controls")
+    else:
+        outcomes.append("alter a linked controller")
+    return {
+        "primary_node_kind": "records" if "records" in nodes else "controller",
+        "label": "; ".join(outcomes[:3]),
+        "payoff": data.get("value_read", "physical leverage") if data else "physical leverage",
+        "data_family": data.get("data_family", ""),
+        "completed": False,
+        "completed_kind": "",
+    }
+
+
+def _edge_authorization_from_kit(sim, actor_eid, scene, edge):
+    """Burn a matching access key; low-tier generic keys bootstrap Wire play."""
+
+    if not isinstance(edge, Mapping) or _clean_id(edge.get("access_class") or "public") == "public":
+        return {"authorized": True, "used": False, "label": "public route"}
+    state = wire_state_for_actor(sim, actor_eid, create=False)
+    if state is None:
+        return {"authorized": False, "used": False}
+    scene_key = _clean_text(scene.get("target_identity") or scene.get("target_property_id"))
+    network_key = _clean_text(scene.get("network_key"))
+    edge_id = _clean_text(edge.get("edge_id"))
+    session_alert = scene.get("session_alert") if isinstance(scene.get("session_alert"), Mapping) else {}
+    if edge_id and edge_id in set(session_alert.get("authorized_edges", ()) or ()):
+        return {"authorized": True, "used": False, "label": "cached credential handshake"}
+    security = max(0, _int(scene.get("security_tier"), 1))
+    for index, raw in enumerate(list(getattr(state, "kit_entries", ()) or ())):
+        if not isinstance(raw, Mapping):
+            continue
+        profile = wire_profile_for_item(raw.get("item_id"), item_catalog=ITEM_CATALOG)
+        if _clean_id(profile.get("kind")) != "credential":
+            continue
+        metadata = normalize_wire_entry_metadata(
+            dict(raw.get("metadata") or {}),
+            item_id=raw.get("item_id"),
+            profile=profile,
+        )
+        exact = bool(
+            network_key and _clean_text(metadata.get("network_key")) == network_key
+            or scene_key and _clean_text(metadata.get("target_identity") or metadata.get("source_property_id")) == scene_key
+            or scene.get("source_org_key") and _clean_id(metadata.get("org_signature")) == _clean_id(scene.get("source_org_key"))
+        )
+        generic_local = _clean_id(profile.get("credential_scope") or "local") == "local" and security <= 2
+        if not (exact or generic_local):
+            continue
+        updated = dict(raw)
+        runs_max = max(0, _int(metadata.get("runs_max"), profile.get("runs_max", 1)))
+        runs = max(0, _int(metadata.get("runs"), runs_max))
+        if runs_max and runs <= 0:
+            continue
+        if bool(metadata.get("burnable", profile.get("burnable", True))) and runs_max:
+            runs -= 1
+            metadata["runs"] = runs
+        updated["metadata"] = metadata
+        if runs_max and runs <= 0:
+            del state.kit_entries[index]
+        else:
+            state.kit_entries[index] = updated
+        sim.emit(Event(
+            "wire_credential_used",
+            eid=actor_eid,
+            instance_id=raw.get("instance_id"),
+            edge_id=edge.get("edge_id"),
+            exact=bool(exact),
+            consumed=bool(runs_max and runs <= 0),
+        ))
+        if edge_id:
+            alert = dict(scene.get("session_alert") or {})
+            alert["authorized_edges"] = list(dict.fromkeys([*alert.get("authorized_edges", ()), edge_id]))
+            scene["session_alert"] = alert
+        return {
+            "authorized": True,
+            "used": True,
+            "label": item_display_name(raw.get("item_id"), metadata=metadata, item_catalog=ITEM_CATALOG),
+        }
+    return {"authorized": False, "used": False}
 
 
 def _network_family(*, target_kind, target_class, archetype, service_words, is_atm_surface):
@@ -475,7 +679,7 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
         if target_kind == "vehicle"
         else [
             f"Local records point toward {linked_name}.",
-            "Data siphon programs can pull one bounded packet from this surface.",
+            "Download can pull one partially decoded, brokerable packet; a Decryptor Shell recovers full fidelity and value.",
         ]
     )
     network_family = _network_family(
@@ -568,6 +772,13 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
         ))
     edges = [tuple(edge) for edge in layout.get("edges", ()) or ()]
     walkable = _build_walkable(nodes, edges)
+    security_edges = _apply_wire_security_topology(
+        nodes,
+        edges,
+        security=security,
+        network_family=network_family,
+        warning_rating=_int((interface.get("metadata") or {}).get("warning_rating"), 1),
+    )
     scene = {
         "schema_version": WIRE_SCENE_SCHEMA_VERSION,
         "scene_id": _scene_id(sim, actor_eid, connection, target, interface),
@@ -614,20 +825,35 @@ def build_wire_scene(sim, actor_eid, prop=None, *, target=None, item_catalog=Non
         "home": {"x": 2, "y": mid},
         "nodes": nodes,
         "edges": [list(edge) for edge in edges],
+        "security_edges": security_edges,
         "walkable": [list(point) for point in walkable],
         "last_read_node_id": "entry",
         "last_read_lines": list(nodes[0]["read_lines"]),
         "last_feedback": "Wire layer open.",
         "opened_tick": int(getattr(sim, "tick", 0)),
     }
-    apply_wire_scene_visuals(scene, security=security)
-    initialize_wire_combat_scene(scene, interface_metadata=interface.get("metadata"), security=security)
     source_prop = prop if prop else {
         "id": target_identity,
         "name": target_name,
         "owner_tag": metadata.get("owner_tag"),
         "metadata": metadata,
     }
+    network_prop = linked_prop if isinstance(linked_prop, Mapping) else source_prop
+    from game.wire_consequences import wire_network_key, wire_security_state
+
+    scene["network_key"] = wire_network_key(scene, network_prop)
+    persistent_security = wire_security_state(sim, scene, prop=network_prop, create=False)
+    if isinstance(persistent_security, Mapping):
+        scene["persistent_security_level"] = int(persistent_security.get("level", 1) or 1)
+        scene["persistent_security_label"] = _clean_text(persistent_security.get("label"), "quiet")
+    scene["objective"] = _wire_objective_summary(scene, network_prop)
+    apply_wire_scene_visuals(scene, security=security)
+    initialize_wire_combat_scene(
+        scene,
+        interface_metadata=interface.get("metadata"),
+        security=security,
+        persistent_security=persistent_security,
+    )
     seed_wire_users_for_scene(scene, sim=sim, source_prop=source_prop, linked_prop=linked_prop)
     return {"ok": True, "reason": None, "scene": scene}
 
@@ -767,12 +993,18 @@ def active_wire_scene_stale(sim, actor_eid):
     return (bool(reason), reason)
 
 
-def close_wire_scene(sim, actor_eid, *, reason="manual", disconnect=True):
+def close_wire_scene(sim, actor_eid, *, reason="manual", disconnect=True, exit_kind=""):
     state = wire_state_for_actor(sim, actor_eid, create=False)
     if state is None:
         return {"ok": False, "reason": "missing_wire_state"}
     had_scene = isinstance(getattr(state, "active_scene", None), Mapping)
-    scene_id = state.active_scene.get("scene_id") if had_scene else None
+    closed_scene = dict(state.active_scene) if had_scene else {}
+    scene_id = closed_scene.get("scene_id") if had_scene else None
+    exit_kind = _clean_id(exit_kind or ("panic" if "panic" in _clean_id(reason) else "forced" if "forced" in _clean_id(reason) else "clean"))
+    if had_scene and exit_kind == "dirty":
+        from game.wire_consequences import raise_wire_security
+
+        raise_wire_security(sim, actor_eid, closed_scene, amount=1, reason="dirty_exit")
     state.active_scene = None
     if disconnect:
         state.active_connection = None
@@ -785,8 +1017,8 @@ def close_wire_scene(sim, actor_eid, *, reason="manual", disconnect=True):
         ui["scroll"] = 0
     state.last_wire_feedback = "Wire layer closed." if had_scene else "No active wire scene."
     if had_scene:
-        sim.emit(Event("wire_scene_exited", eid=actor_eid, scene_id=scene_id, reason=reason))
-    return {"ok": True, "reason": None, "had_scene": had_scene}
+        sim.emit(Event("wire_scene_exited", eid=actor_eid, scene_id=scene_id, reason=reason, exit_kind=exit_kind))
+    return {"ok": True, "reason": None, "had_scene": had_scene, "exit_kind": exit_kind}
 
 
 def panic_exit_wire_scene(sim, actor_eid):
@@ -841,7 +1073,19 @@ def move_wire_avatar(sim, actor_eid, dx, dy):
     if blocking_ice:
         reason = "ice_blocks_route"
         label = str(blocking_ice.get("label", "ICE") or "ICE")
-        scene["last_feedback"] = f"{label} occupies that route. Break it or take another path."
+        reveal_wire_ice(scene, blocking_ice.get("entity_id"), state="engaged")
+        resolve_wire_action_security(
+            sim,
+            actor_eid,
+            scene,
+            kind="ice_contact",
+            source=avatar,
+            target=(new_x, new_y),
+            base_signature=1,
+            acquire_avatar=True,
+            avatar_position=avatar,
+        )
+        scene["last_feedback"] = f"{label} resolves out of the route and fixes on your process. Break it or take another path."
         state.active_scene = dict(scene)
         sim.emit(Event(
             "wire_scene_move_blocked",
@@ -851,6 +1095,27 @@ def move_wire_avatar(sim, actor_eid, dx, dy):
             ice_label=label,
         ))
         return {"ok": False, "reason": reason, "entity": blocking_ice}
+    edge = wire_security_edge_for_step(scene, avatar, (new_x, new_y))
+    edge_id = _clean_text((edge or {}).get("edge_id"))
+    entering_edge = edge_id != _clean_text(scene.get("avatar_security_edge_id"))
+    authorization = {"authorized": True, "used": False}
+    security_result = {"access_violation": False, "detected": False}
+    if entering_edge:
+        authorization = _edge_authorization_from_kit(sim, actor_eid, scene, edge)
+        security_result = resolve_wire_action_security(
+            sim,
+            actor_eid,
+            scene,
+            kind="route_crossing",
+            source=avatar,
+            target=(new_x, new_y),
+            edge=edge,
+            base_signature=_int((edge or {}).get("noise_cost"), 0) if not authorization.get("authorized") else 0,
+            authorized=bool(authorization.get("authorized")),
+            acquire_avatar=bool(edge and not authorization.get("authorized") and _int(edge.get("monitoring"), 0) >= 2),
+            avatar_position=(new_x, new_y),
+        )
+    scene["avatar_security_edge_id"] = edge_id
     scene["avatar"] = {"x": int(new_x), "y": int(new_y)}
     node = _node_at(scene, new_x, new_y)
     if node:
@@ -859,6 +1124,10 @@ def move_wire_avatar(sim, actor_eid, dx, dy):
         scene["last_feedback"] = f"At {node.get('label', 'node')}."
     else:
         scene["last_feedback"] = "Moving through signal path."
+    if authorization.get("used"):
+        scene["last_feedback"] += f" {authorization.get('label', 'Credential')} clears the protected boundary."
+    elif security_result.get("access_violation"):
+        scene["last_feedback"] += " The protected boundary records an unauthorized crossing."
     state.active_scene = dict(scene)
     advance_wire_combat_turn(sim, actor_eid, cause="move")
     sim.emit(Event(
@@ -902,10 +1171,28 @@ def read_wire_scene_node(sim, actor_eid):
         scene["last_read_node_id"] = node.get("node_id")
         scene["last_read_lines"] = lines
         scene["last_feedback"] = f"Read {node.get('label', 'node')}."
+        zone = _clean_id(node.get("security_zone") or "public")
+        turn_spent = zone in {"restricted", "core"} or _int(node.get("monitoring"), 0) > 0
+        if turn_spent:
+            resolve_wire_action_security(
+                sim,
+                actor_eid,
+                scene,
+                kind="protected_read",
+                source=avatar,
+                target=avatar,
+                edge={
+                    "access_class": "privileged" if zone == "core" else "restricted",
+                    "monitoring": _int(node.get("monitoring"), 1),
+                },
+                base_signature=1,
+                acquire_avatar=zone == "core",
+            )
     else:
         lines = ["Signal path. Nothing executable is exposed here yet."]
         scene["last_read_lines"] = lines
         scene["last_feedback"] = "Read signal path."
+        turn_spent = False
     state.active_scene = dict(scene)
     sim.emit(Event(
         "wire_scene_read",
@@ -914,4 +1201,67 @@ def read_wire_scene_node(sim, actor_eid):
         node_id=(node or {}).get("node_id", ""),
         node_label=(node or {}).get("label", "signal path"),
     ))
-    return {"ok": True, "reason": None, "lines": [str(line) for line in lines], "node": node}
+    if turn_spent:
+        advance_wire_combat_turn(sim, actor_eid, cause="protected_read")
+    return {
+        "ok": True,
+        "reason": None,
+        "lines": [str(line) for line in lines],
+        "node": node,
+        "turn_spent": bool(turn_spent),
+    }
+
+
+def download_wire_scene_data(sim, actor_eid, *, item_catalog=None):
+    """Download one records packet without requiring a specialist program."""
+
+    state = wire_state_for_actor(sim, actor_eid, create=False)
+    scene = getattr(state, "active_scene", None) if state is not None else None
+    if not isinstance(scene, Mapping):
+        return {"ok": False, "reason": "missing_scene"}
+    avatar = scene.get("avatar") if isinstance(scene.get("avatar"), Mapping) else {}
+    node = _node_at(scene, avatar.get("x", 0), avatar.get("y", 0))
+    if not isinstance(node, Mapping) or _clean_id(node.get("kind")) != "records":
+        return {"ok": False, "reason": "wrong_records_node"}
+    from game.wire_data_market import extract_wire_data_cache
+
+    extraction = extract_wire_data_cache(
+        sim,
+        actor_eid,
+        scene,
+        target={"kind": "node", "node": dict(node), "label": node.get("label", "records")},
+        extraction_mode="direct",
+        item_catalog=item_catalog or ITEM_CATALOG,
+    )
+    if not extraction.get("ok"):
+        scene["last_feedback"] = f"Download blocked: {_clean_text(extraction.get('reason'), 'blocked').replace('_', ' ')}."
+        state.active_scene = dict(scene)
+        return extraction
+    resolve_wire_action_security(
+        sim,
+        actor_eid,
+        scene,
+        kind="records_download",
+        source=avatar,
+        target=avatar,
+        base_signature=max(2, _int(node.get("monitoring"), 1)),
+        hostile=True,
+        acquire_avatar=True,
+    )
+    entry = extraction.get("entry") if isinstance(extraction.get("entry"), Mapping) else {}
+    display_name = _clean_text((entry.get("metadata") or {}).get("display_name"), "encrypted records packet")
+    scene["last_data_cache_instance_id"] = entry.get("instance_id")
+    objective = dict(scene.get("objective") or {})
+    objective.update({"completed": True, "completed_kind": "direct_download"})
+    scene["objective"] = objective
+    scene["last_feedback"] = f"Downloaded {display_name}. It is sellable now; a Decryptor Shell can recover the full record."
+    state.active_scene = dict(scene)
+    advance_wire_combat_turn(sim, actor_eid, cause="records_download", item_catalog=item_catalog or ITEM_CATALOG)
+    sim.emit(Event(
+        "wire_scene_data_downloaded",
+        eid=actor_eid,
+        scene_id=scene.get("scene_id"),
+        instance_id=entry.get("instance_id"),
+        decryption_state=(entry.get("metadata") or {}).get("decryption_state", "partial"),
+    ))
+    return {"ok": True, "reason": None, "entry": dict(entry), "turn_spent": True}

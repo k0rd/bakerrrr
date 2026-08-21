@@ -2317,7 +2317,7 @@ class NPCNeedsSystem(System):
             else:
                 needs.safety = _clamp(needs.safety + 0.03)
 
-            if state in {"seeking_social", "seeking_companionship"}:
+            if state in {"seeking_social", "seeking_companionship", "playing_poker"}:
                 needs.social = _clamp(needs.social + 0.25)
 
             if state == "resting":
@@ -2383,6 +2383,7 @@ class NPCWillSystem(System):
         "rendezvousing_crew",
         "seeking_criminal_affiliation",
         "soliciting_player",
+        "seeking_poker_table",
         "war_advancing",
         "war_holding",
         "war_mobilizing",
@@ -3357,6 +3358,21 @@ class NPCWillSystem(System):
                 )
 
             # Higher-priority external states can preempt intent planning.
+            if ai.state == "seeking_poker_table" and ai.target:
+                survival_critical = {
+                    str(value or "").strip().lower()
+                    for value in tuple(getattr(needs, "critical", ()) or ())
+                }.intersection({"energy", "hunger", "safety", "thirst"})
+                if not survival_critical:
+                    # A reserved chair owns this short trip. Immediate threats,
+                    # war orders, and survival needs can still replace the AI
+                    # state before it reaches this ordinary-planning seam.
+                    will.intent = "seeking_poker_table"
+                    will.target = ai.target
+                    will.target_eid = None
+                    will.last_tick = self.sim.tick
+                    continue
+
             if ai.state == "investigating" and ai.target:
                 will.intent = "investigating"
                 will.target = ai.target

@@ -2457,11 +2457,16 @@ class RenderSystem(System):
         bounds = scene.get("bounds") if isinstance(scene.get("bounds"), dict) else {}
         grid_w = max(1, int(bounds.get("width", 27) or 27))
         grid_h = max(1, int(bounds.get("height", 15) or 15))
-        map_w = min(grid_w, max(18, body_w // 2))
+        # Split the modal in screen-cell space, then derive text capacity for
+        # each region.  Pygame can fit more UI-font characters than map cells
+        # across the same pixel width, so using ``body_w`` here lets the HUD
+        # rail (and especially node reads) spill beyond its physical bounds.
+        map_w = min(grid_w, max(18, body_cell_w // 2))
         map_top = panel_y + 2
         map_left = panel_x + 2
         side_x = map_left + map_w + 3
-        side_w = max(18, body_w - map_w - 3)
+        side_cell_w = max(1, body_cell_w - map_w - 3)
+        side_w = max(1, _view_text_wrap_width(self.view, side_cell_w))
         footer_y = panel_y + panel_h - 2
         map_rows = min(grid_h, max(1, footer_y - map_top - 1))
         walkable = {
@@ -2476,6 +2481,8 @@ class RenderSystem(System):
         entity_by_pos = {}
         for entity in scene.get("wire_entities", ()) or ():
             if not isinstance(entity, dict) or bool(entity.get("destroyed")):
+                continue
+            if str(entity.get("source", "") or "").strip().lower() == "ice" and not bool(entity.get("revealed")):
                 continue
             try:
                 hp = int(entity.get("hp", 0) or 0)
@@ -2579,7 +2586,7 @@ class RenderSystem(System):
                 for part in wrapped:
                     if side_y >= footer_y - 2:
                         break
-                    self._draw_display_line(side_x, side_y, _clip_display_line(part, side_w), body_cell_w)
+                    self._draw_display_line(side_x, side_y, _clip_display_line(part, side_w), side_cell_w)
                     side_y += 1
             side_y += 1
             rows = list(dialogue.get("rows", ()) or [])
@@ -2588,7 +2595,7 @@ class RenderSystem(System):
             for idx, row in enumerate(rows[:max_rows]):
                 prefix = "> " if idx == selected_dialogue else "  "
                 wrapped = _wrap_display_lines(prefix + str(row.get("label", "topic")), side_w, max_lines=1)
-                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), body_cell_w)
+                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), side_cell_w)
                 side_y += 1
         elif bool(wire_scene_ui.get("program_load_panel")):
             load_rows = list(wire_scene_ui.get("load_program_rows", ()) or [])
@@ -2596,7 +2603,7 @@ class RenderSystem(System):
             self.view.draw_text(side_x, side_y, _local_clip("KIT PROGRAMS", side_w), color=self._theme_color(scene_theme, "title", "objective"))
             side_y += 1
             if not load_rows:
-                self._draw_display_line(side_x, side_y, "No unloaded kit programs.", body_cell_w)
+                self._draw_display_line(side_x, side_y, "No unloaded kit programs.", side_cell_w)
                 side_y += 1
             max_load_rows = max(1, footer_y - side_y - 2)
             for idx, row in enumerate(load_rows[:max_load_rows]):
@@ -2605,7 +2612,7 @@ class RenderSystem(System):
                 for part in wrapped:
                     if side_y >= footer_y - 1:
                         break
-                    self._draw_display_line(side_x, side_y, _clip_display_line(part, side_w), body_cell_w)
+                    self._draw_display_line(side_x, side_y, _clip_display_line(part, side_w), side_cell_w)
                     side_y += 1
         elif bool(wire_scene_ui.get("program_panel")):
             program_rows = list(wire_scene_ui.get("program_rows", ()) or [])
@@ -2616,12 +2623,12 @@ class RenderSystem(System):
             side_y += 1
             max_program_rows = max(1, min(5, footer_y - side_y - 6))
             if not program_rows:
-                self._draw_display_line(side_x, side_y, "L loads the first fitting kit program", body_cell_w)
+                self._draw_display_line(side_x, side_y, "L loads the first fitting kit program", side_cell_w)
                 side_y += 1
             for idx, row in enumerate(program_rows[:max_program_rows]):
                 prefix = "> " if idx == selected_program else "  "
                 wrapped = _wrap_display_lines(prefix + str(row.get("label", "program")), side_w, max_lines=1)
-                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), body_cell_w)
+                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), side_cell_w)
                 side_y += 1
             side_y += 1
             self.view.draw_text(side_x, side_y, _local_clip("Target", side_w), color=self._theme_color(scene_theme, "title", "objective"))
@@ -2630,12 +2637,12 @@ class RenderSystem(System):
             for idx, row in enumerate(target_rows[:max_target_rows]):
                 prefix = "> " if idx == selected_target else "  "
                 wrapped = _wrap_display_lines(prefix + str(row.get("label", "target")), side_w, max_lines=1)
-                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), body_cell_w)
+                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), side_cell_w)
                 side_y += 1
         else:
-            for line in status_lines[:7]:
+            for line in status_lines[:8]:
                 wrapped = _wrap_display_lines(str(line), side_w, max_lines=1)
-                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), body_cell_w)
+                self._draw_display_line(side_x, side_y, _clip_display_line(wrapped[0], side_w), side_cell_w)
                 side_y += 1
             side_y += 1
             self.view.draw_text(side_x, side_y, _local_clip("Read", side_w), color=self._theme_color(scene_theme, "title", "objective"))
@@ -2646,7 +2653,7 @@ class RenderSystem(System):
             for raw in read_lines:
                 display_lines.extend(_wrap_display_lines(str(raw), side_w, max_lines=2))
             for idx, line in enumerate(display_lines[:max_read_lines]):
-                self._draw_display_line(side_x, side_y + idx, _clip_display_line(line, side_w), body_cell_w)
+                self._draw_display_line(side_x, side_y + idx, _clip_display_line(line, side_w), side_cell_w)
 
         feedback = str(wire_scene_ui.get("feedback", "") or scene.get("last_feedback", "") or "").strip()
         if feedback:
@@ -2658,7 +2665,7 @@ class RenderSystem(System):
         elif bool(wire_scene_ui.get("program_panel")):
             hint = "Up/Down program  Left/Right target  Enter/R run  L load  U unload  Esc back"
         else:
-            hint = "Move avatar  5/Space wait  Enter/I/X read  R programs  P panic  Esc/Q disconnect"
+            hint = "Move  D download records  Enter/I/X read  R programs  P panic  Esc/Q exit-node disconnect"
         self.view.draw_text(panel_x + 2, footer_y, _local_clip(hint, body_w), color=self._theme_color(scene_theme, "footer"))
         return True
 

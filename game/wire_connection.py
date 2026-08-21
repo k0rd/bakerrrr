@@ -15,7 +15,7 @@ from game.wire_runtime import (
     normalize_wire_interface_metadata,
     wire_interface_profile_for_item,
 )
-from game.wire_consequences import wire_connection_blockers, wire_security_lockout_status, wire_recovery_status
+from game.wire_consequences import wire_connection_blockers, wire_network_property, wire_security_lockout_status, wire_recovery_status
 from game.wire_targets import (
     drone_wire_target_ref,
     property_wire_target_ref,
@@ -443,6 +443,27 @@ def _wire_connection_preflight_target(sim, actor_eid, target, *, item_catalog=No
         preview_lines.append(
             f"Vehicle bus: {lock_label}, tracker {tracker_label}, fuel {fuel}/{fuel_capacity}, condition {durability}/10."
         )
+    if target.get("kind") != "vehicle" and target_class:
+        from game.wire_data_market import wire_data_payoff_preview
+
+        payoff_prop = wire_network_property(sim, network_ref)
+        if not isinstance(payoff_prop, Mapping):
+            payoff_prop = prop
+        payoff_scene = dict(network_ref)
+        payoff_scene.update({
+            "scene_id": f"wire-preview:{target_identity}",
+            "target_kind": _clean_id(target.get("kind")),
+            "security_tier": _int((payoff_prop.get("metadata") or {}).get("security_tier"), 1) if isinstance(payoff_prop, Mapping) else 1,
+        })
+        payoff = wire_data_payoff_preview(payoff_scene, payoff_prop)
+        if payoff:
+            preview_lines.append(
+                f"Payoff: {payoff.get('label', 'brokerable records')}; download works without software, while Decryptor Shell restores full fidelity and value."
+            )
+    if target_class == "access_panel":
+        preview_lines.append("Physical leverage: door-latch and camera-loop programs can create short real-world windows.")
+    elif target.get("kind") == "drone":
+        preview_lines.append("Physical leverage: radio programs can disrupt or contest the live command link.")
     preview_lines.append(
         f"Skill read: intrusion {skills['intrusion']:.1f}, mechanics {skills['mechanics']:.1f}, perception {skills['perception']:.1f}."
     )

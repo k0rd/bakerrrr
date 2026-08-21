@@ -51,6 +51,7 @@ from game.system_support.combat_targeting_runtime import (
 )
 from game.system_support.combat_pacing_runtime import _combat_overlay_state
 from game.system_support.cover_runtime import (
+    _cover_threat_positions_by_floor,
     _effective_cover_value,
     _is_cover_state_valid,
     _threat_positions_for_entity,
@@ -70,6 +71,7 @@ class CoverSystem(System):
         covers = self.sim.ecs.get(CoverState)
         positions = self.sim.ecs.get(Position)
         ais = self.sim.ecs.get(AI)
+        threats_by_floor = _cover_threat_positions_by_floor(self.sim)
 
         for eid, cover in covers.items():
             pos = positions.get(eid)
@@ -88,7 +90,13 @@ class CoverSystem(System):
                     reason="displaced",
                 ))
 
-            threats = _threat_positions_for_entity(self.sim, eid, pos, radius=10)
+            threats = _threat_positions_for_entity(
+                self.sim,
+                eid,
+                pos,
+                radius=10,
+                prepared_by_floor=threats_by_floor,
+            )
             cover.threat_count = len(threats)
             cover.nearest_threat_dist = min((dist for _, dist, _, _ in threats), default=None)
 
