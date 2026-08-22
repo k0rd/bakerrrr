@@ -2347,26 +2347,33 @@ class RenderSystem(System):
             glyph = str(row.get("glyph", "") or "")[:1]
             mark = str(row.get("compatibility_mark", "") or "")[:5]
             class_band = str(row.get("drone_class_band", "") or "")[:4]
+            row_color = None
+            if not bool(row.get("actionable", False)):
+                row_color = self._theme_color(modal_theme, "muted")
+            if str(row.get("compatibility_match", "") or "") == "incompatible" or row.get("compatible") is False:
+                row_color = self._theme_color(modal_theme, "warning")
             if glyph or mark or class_band:
                 item_prefix = f"{glyph or ' '} "
-                compatibility_prefix = f"{mark:<5}{class_band:<4} "
-                prefix = selection_prefix + item_prefix + compatibility_prefix
-                mark_offset = len(selection_prefix) + len(item_prefix)
+                row_segments = (
+                    _segment(selection_prefix, color=row_color),
+                    _segment(item_prefix[:1], color=row.get("swatch_color") or row_color),
+                    _segment(item_prefix[1:], color=row_color),
+                    _segment(f"{mark:<5}", color=row.get("compatibility_color") or row_color),
+                    _segment(f"{class_band:<4} ", color=row.get("compatibility_color") or row_color),
+                    _segment(label, color=row_color),
+                )
             else:
-                prefix = selection_prefix
-                mark_offset = None
+                row_segments = (
+                    _segment(selection_prefix, color=row_color),
+                    _segment(label, color=row_color),
+                )
             row_anchors.append(len(display_rows))
-            wrapped = _wrap_display_lines(prefix + label, row_w, max_lines=2) if label.strip() else [prefix.rstrip()]
-            for wrapped_index, line in enumerate(wrapped):
+            rich_row = _rich_line(row_segments)
+            wrapped = _wrap_display_lines(rich_row, row_w, max_lines=2) if label.strip() else [rich_row]
+            for line in wrapped:
                 display_rows.append({
-                    "line": _line_text(line),
-                    "row": row,
+                    "line": line,
                     "row_index": idx,
-                    "first": wrapped_index == 0,
-                    "mark_offset": mark_offset,
-                    "glyph": glyph,
-                    "mark": mark,
-                    "class_band": class_band,
                 })
 
         scroll = max(0, int(drone_sheet_ui.get("scroll", 0) or 0))
@@ -2380,42 +2387,16 @@ class RenderSystem(System):
         scroll = max(0, min(scroll, max_scroll))
         drone_sheet_ui["scroll"] = scroll
         for draw_index, display in enumerate(display_rows[scroll: scroll + list_h]):
-            row = display["row"]
             selected = int(display["row_index"]) == selected_index
             attrs = A_REVERSE if selected else 0
-            row_color = None
-            if not bool(row.get("actionable", False)):
-                row_color = self._theme_color(modal_theme, "muted")
-            if str(row.get("compatibility_match", "") or "") == "incompatible" or row.get("compatible") is False:
-                row_color = self._theme_color(modal_theme, "warning")
-            line = _local_clip(display["line"], row_w)
-            self.view.draw_text(panel_x + 2, body_top + draw_index, line, color=row_color, attrs=attrs)
-            if display.get("first") and display.get("glyph") and row.get("swatch_color"):
-                self.view.draw_text(
-                    panel_x + 4,
-                    body_top + draw_index,
-                    display["glyph"],
-                    color=row.get("swatch_color"),
-                    attrs=attrs,
-                )
-            mark_offset = display.get("mark_offset")
-            compatibility_color = row.get("compatibility_color")
-            if display.get("first") and mark_offset is not None and display.get("mark") and compatibility_color:
-                self.view.draw_text(
-                    panel_x + 2 + int(mark_offset),
-                    body_top + draw_index,
-                    display["mark"],
-                    color=compatibility_color,
-                    attrs=attrs,
-                )
-            if display.get("first") and mark_offset is not None and display.get("class_band") and compatibility_color:
-                self.view.draw_text(
-                    panel_x + 2 + int(mark_offset) + 5,
-                    body_top + draw_index,
-                    display["class_band"],
-                    color=compatibility_color,
-                    attrs=attrs,
-                )
+            line = _clip_display_line(display["line"], row_w)
+            self._draw_display_line(
+                panel_x + 2,
+                body_top + draw_index,
+                line,
+                row_w,
+                attrs=attrs,
+            )
         if not display_rows:
             self.view.draw_text(panel_x + 2, body_top, "(empty)", color=self._theme_color(modal_theme, "muted"))
 
@@ -5401,23 +5382,22 @@ class RenderSystem(System):
                 compatibility_mark = str(row.get("compatibility_mark", "") or "")[:5]
                 class_band = str(row.get("drone_class_band", "") or "")[:4]
                 base_prefix = f"{marker}{absolute + 1:02d} {glyph} "
-                compatibility_prefix = f"{compatibility_mark:<5}{class_band:<4} "
                 item_name = str(row.get("item_name", row.get("item_id", "item")))
                 price = int(row.get("price", 0))
                 action_label = str(row.get("action_label", "")).strip().lower()
+                equipment_badge = ""
                 if mode == "buy":
                     stock = int(row.get("stock", 0))
                     badge = str(row.get("row_badge", "") or "").strip()
                     badge_text = f" {badge}" if badge else ""
                     if action_label:
-                        label = f"{base_prefix}{compatibility_prefix}{item_name} {action_label} stk {stock}{badge_text}"
+                        row_suffix = f" {action_label} stk {stock}{badge_text}"
                     else:
-                        label = f"{base_prefix}{compatibility_prefix}{item_name} {price}c stk {stock}{badge_text}"
+                        row_suffix = f" {price}c stk {stock}{badge_text}"
                 else:
                     qty = int(row.get("quantity", 0))
                     equipment_tag = str(row.get("equipment_tag", "") or "").strip().upper()
                     equipment_badge = f"[{equipment_tag}] " if equipment_tag else ""
-                    row_prefix = f"{base_prefix}{compatibility_prefix}{equipment_badge}"
                     if action_label:
                         if action_label == "trade-in":
                             row_suffix = f" trade-in {price}c x{qty}"
@@ -5433,28 +5413,29 @@ class RenderSystem(System):
                             "refused": "!",
                         }.get(interest, listed)
                         row_suffix = f" {price}c x{qty} {listed}/{interest_marker}"
-                    item_width = max(1, row_w - len(row_prefix) - len(row_suffix))
-                    label = f"{row_prefix}{_clip(item_name, item_width)}{row_suffix}"
+                compatibility_width = 10  # five cells each for the slot key and class band.
+                item_width = max(
+                    1,
+                    row_w - len(base_prefix) - compatibility_width - len(equipment_badge) - len(row_suffix),
+                )
+                item_label = _clip(item_name, item_width)
                 row_color = row.get("row_color")
-                if row_color:
-                    self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w), color=row_color)
-                else:
-                    self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w))
                 compatibility_color = row.get("compatibility_color")
-                if compatibility_mark and compatibility_color:
-                    self.view.draw_text(
-                        panel_x + 1 + len(base_prefix),
-                        list_y + idx,
-                        compatibility_mark,
-                        color=compatibility_color,
-                    )
-                if class_band and compatibility_color:
-                    self.view.draw_text(
-                        panel_x + 1 + len(base_prefix) + 5,
-                        list_y + idx,
-                        class_band,
-                        color=compatibility_color,
-                    )
+                # Trade rows share Inventory's glyph-first visual language. Keep
+                # the entire row in one proportional-text flow: repainting these
+                # fields at character-count offsets duplicated them over the item
+                # name in Pygame's pixel-advanced UI font.
+                self.view.draw_segments(
+                    panel_x + 1,
+                    list_y + idx,
+                    (
+                        _segment(base_prefix, color=row_color),
+                        _segment(f"{compatibility_mark:<5}", color=compatibility_color or row_color),
+                        _segment(f"{class_band:<4} ", color=compatibility_color or row_color),
+                        _segment(f"{equipment_badge}{item_label}{row_suffix}", color=row_color),
+                    ),
+                    max_width=row_w,
+                )
 
             if not rows:
                 self.view.draw_text(panel_x + 2, list_y, _clip("(no offers)", body_w))
