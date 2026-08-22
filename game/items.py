@@ -5,6 +5,7 @@ from pathlib import Path
 from game.content_warnings import warn_content_fallback
 from game.drone_runtime import PACKED_DRONE_ITEM_ID, normalize_drone_profile, normalize_packed_drone_metadata
 from game.json_metadata import split_object_document
+from game.item_compatibility import normalize_item_compatibility
 from game.object_profile_runtime import normalize_object_profile, object_profile_display_text
 from game.wire_runtime import (
     is_wire_interface_item,
@@ -14,6 +15,7 @@ from game.wire_runtime import (
     normalize_wire_interface_profile,
     normalize_wire_profile,
 )
+from game.weapons import WEAPON_CATALOG
 
 
 ITEMS_PATH = Path(__file__).resolve().parent / "items.json"
@@ -136,6 +138,51 @@ def _normalize_appearance_slots(value):
     if not isinstance(value, (list, tuple)):
         return []
     return [str(slot).strip().lower() for slot in value if str(slot).strip()]
+
+
+def _normalize_appearance_profile(value):
+    """Normalize catalogue-owned wearable generation metadata.
+
+    Item identity deliberately does not participate here.  A garment becomes
+    appearance-capable by declaring slots and this profile in content; adding a
+    new garment must not require another Python name branch.
+    """
+    if not isinstance(value, dict):
+        return {}
+
+    profile = {}
+    for field in ("label", "presentation"):
+        token = str(value.get(field, "") or "").strip()
+        if token:
+            profile[field] = token
+    for field in ("materials", "styles", "details", "patterns", "emblems"):
+        values = value.get(field)
+        if not isinstance(values, (list, tuple)):
+            continue
+        profile[field] = [str(entry).strip() for entry in values if isinstance(entry, str)]
+
+    if "emblem_chance" in value:
+        try:
+            profile["emblem_chance"] = max(0.0, min(1.0, float(value.get("emblem_chance", 0.0))))
+        except (TypeError, ValueError):
+            pass
+    for field in ("basewear", "articleless", "personal_token", "fashion_item"):
+        if field in value:
+            profile[field] = bool(value.get(field))
+
+    weights = value.get("starter_weights")
+    if isinstance(weights, dict):
+        normalized_weights = {}
+        for family in ("masc", "femme", "mixed"):
+            try:
+                weight = int(weights.get(family, 0))
+            except (TypeError, ValueError):
+                continue
+            if weight > 0:
+                normalized_weights[family] = min(32, weight)
+        if normalized_weights:
+            profile["starter_weights"] = normalized_weights
+    return profile
 
 
 def _default_appearance_slots_for_family(appearance_family):
@@ -1355,6 +1402,8 @@ def _normalize_item_catalog_source(source):
         appearance_slots = _normalize_appearance_slots(item.get("appearance_slots"))
         if not appearance_slots:
             appearance_slots = _default_appearance_slots_for_family(appearance_family)
+        appearance_drawable = str(item.get("appearance_drawable", "") or "").strip().lower()
+        appearance_profile = _normalize_appearance_profile(item.get("appearance_profile"))
         identification_profile = _normalize_identification_profile(
             item_id,
             tags,
@@ -1376,6 +1425,8 @@ def _normalize_item_catalog_source(source):
             "legal_status": legal_status,
             "appearance_family": appearance_family,
             "appearance_slots": appearance_slots,
+            "appearance_drawable": appearance_drawable,
+            "appearance_profile": appearance_profile,
             "identification_profile": identification_profile,
             "effects": [effect for effect in effects if isinstance(effect, dict)],
             "tool_profiles": _normalize_tool_profiles(item.get("tool_profiles")),
@@ -1410,6 +1461,12 @@ def _normalize_item_catalog_source(source):
             ),
             "fire_profile": _normalize_item_fire_profile(item_id, tags, item, category),
         }
+
+    for item_def in parsed.values():
+        item_def["compatibility"] = normalize_item_compatibility(
+            item_def,
+            weapon_catalog=WEAPON_CATALOG,
+        )
 
     return parsed
 

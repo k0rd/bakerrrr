@@ -83,22 +83,47 @@ OUTFIT_COLOR_PRIORITY = (
     "ring_right",
     "earrings",
 )
-ARTICLELESS_APPEARANCE_TYPES = frozenset({
-    "bikini_panties",
-    "boxer_briefs",
-    "boxers",
-    "boyshorts",
-    "briefs",
-    "boots",
-    "earrings",
-    "gloves",
-    "cheeky_panties",
-    "high_waist_panties",
-    "sandals",
-    "shorts",
-    "sneakers",
-    "trousers",
-})
+def _catalog_appearance_profile(item_id, item_def):
+    """Build the runtime fashion profile from one normalized catalogue row."""
+    if not isinstance(item_def, dict):
+        return {}
+    raw = item_def.get("appearance_profile")
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    slots = tuple(
+        str(slot).strip().lower()
+        for slot in item_def.get("appearance_slots", ())
+        if str(slot).strip().lower() in ALL_APPEARANCE_SLOTS
+    )
+    if not slots:
+        return {}
+    profile = dict(raw)
+    profile["slots"] = slots
+    profile.setdefault("label", str(item_def.get("name", "") or item_id).strip())
+    return profile
+
+
+# These indexes are projections of content, not parallel Python catalogues.
+# New wearables opt in solely through items.json.
+COSMETIC_ITEM_IDS = {
+    item_id: profile
+    for item_id, item_def in ITEM_CATALOG.items()
+    if (profile := _catalog_appearance_profile(item_id, item_def))
+    and bool(profile.get("fashion_item", True))
+}
+BASEWEAR_ITEM_IDS = {
+    item_id: profile
+    for item_id, profile in COSMETIC_ITEM_IDS.items()
+    if bool(profile.get("basewear"))
+    or any(slot in BASEWEAR_SLOTS for slot in tuple(profile.get("slots", ())))
+}
+ARTICLELESS_APPEARANCE_TYPES = frozenset(
+    item_id
+    for item_id, profile in COSMETIC_ITEM_IDS.items()
+    if bool(profile.get("articleless"))
+)
+
+
 BASEWEAR_EMBLEMS = (
     "bee",
     "cherry",
@@ -113,353 +138,6 @@ BASEWEAR_EMBLEMS = (
     "tiny lightning bolt",
     "worklight",
 )
-BASEWEAR_ITEM_IDS = {
-    "undershirt": {
-        "label": "undershirt",
-        "slots": ("base_top",),
-        "presentation": "masc",
-        "materials": ("cotton", "ribbed cotton", "modal", "soft jersey"),
-        "details": ("classic", "close-fitting", "ribbed", "soft"),
-        "patterns": ("", "striped", "pinstriped"),
-        "emblem_chance": 0.18,
-    },
-    "tank_undershirt": {
-        "label": "tank undershirt",
-        "slots": ("base_top",),
-        "presentation": "neutral",
-        "materials": ("cotton", "ribbed cotton", "modal", "soft jersey"),
-        "details": ("classic", "low-necked", "ribbed", "trim"),
-        "patterns": ("", "striped", "star-print"),
-        "emblem_chance": 0.22,
-    },
-    "bra": {
-        "label": "bra",
-        "slots": ("base_top",),
-        "presentation": "femme",
-        "materials": ("cotton", "lace", "satin", "soft mesh"),
-        "details": ("lacy", "scallop-trimmed", "ribbon-trimmed", "soft-cup", "strappy"),
-        "patterns": ("", "little-floral", "dotted"),
-        "emblem_chance": 0.46,
-    },
-    "bralette": {
-        "label": "bralette",
-        "slots": ("base_top",),
-        "presentation": "femme",
-        "materials": ("cotton", "lace", "modal", "soft mesh"),
-        "details": ("lacy", "cross-backed", "scallop-trimmed", "soft", "strappy"),
-        "patterns": ("", "little-floral", "star-print"),
-        "emblem_chance": 0.5,
-    },
-    "camisole": {
-        "label": "camisole",
-        "slots": ("base_top",),
-        "presentation": "femme",
-        "materials": ("cotton", "lace", "satin", "modal"),
-        "details": ("lacy", "ribbon-trimmed", "scallop-trimmed", "strappy"),
-        "patterns": ("", "little-floral", "dotted"),
-        "emblem_chance": 0.56,
-    },
-    "bandeau": {
-        "label": "bandeau",
-        "slots": ("base_top",),
-        "presentation": "neutral",
-        "materials": ("cotton", "lace", "modal", "soft jersey"),
-        "details": ("simple", "lacy", "ribbed", "scallop-trimmed"),
-        "patterns": ("", "striped", "constellation-print"),
-        "emblem_chance": 0.42,
-    },
-    "boxers": {
-        "label": "boxers",
-        "slots": ("base_bottom",),
-        "presentation": "masc",
-        "materials": ("cotton", "poplin", "soft jersey", "modal"),
-        "details": ("classic", "button-front", "relaxed", "soft"),
-        "patterns": ("", "striped", "pinstriped", "star-print"),
-        "emblem_chance": 0.28,
-    },
-    "boxer_briefs": {
-        "label": "boxer briefs",
-        "slots": ("base_bottom",),
-        "presentation": "masc",
-        "materials": ("cotton", "modal", "ribbed cotton", "soft jersey"),
-        "details": ("classic", "contrast-waistband", "sporty", "trim"),
-        "patterns": ("", "striped", "constellation-print"),
-        "emblem_chance": 0.3,
-    },
-    "briefs": {
-        "label": "briefs",
-        "slots": ("base_bottom",),
-        "presentation": "masc",
-        "materials": ("cotton", "modal", "ribbed cotton", "soft jersey"),
-        "details": ("classic", "contrast-trimmed", "sporty", "soft"),
-        "patterns": ("", "striped", "dotted"),
-        "emblem_chance": 0.3,
-    },
-    "boyshorts": {
-        "label": "boyshort panties",
-        "slots": ("base_bottom",),
-        "presentation": "femme",
-        "materials": ("cotton", "lace", "modal", "soft jersey"),
-        "details": ("lacy", "scallop-trimmed", "sporty", "ribbon-trimmed"),
-        "patterns": ("", "little-floral", "striped"),
-        "emblem_chance": 0.58,
-    },
-    "bikini_panties": {
-        "label": "bikini panties",
-        "slots": ("base_bottom",),
-        "presentation": "femme",
-        "materials": ("cotton", "lace", "satin", "modal"),
-        "details": ("lacy", "scallop-trimmed", "ribbon-trimmed", "soft", "strappy"),
-        "patterns": ("", "little-floral", "dotted"),
-        "emblem_chance": 0.62,
-    },
-    "cheeky_panties": {
-        "label": "cheeky panties",
-        "slots": ("base_bottom",),
-        "presentation": "femme",
-        "materials": ("cotton", "lace", "satin", "modal"),
-        "details": ("lacy", "scallop-trimmed", "ribbon-trimmed", "soft", "strappy"),
-        "patterns": ("", "little-floral", "star-print"),
-        "emblem_chance": 0.72,
-    },
-    "thong": {
-        "label": "thong",
-        "slots": ("base_bottom",),
-        "presentation": "femme",
-        "materials": ("cotton", "lace", "satin", "soft mesh"),
-        "details": ("lacy", "scallop-trimmed", "ribbon-trimmed", "simple", "strappy"),
-        "patterns": ("", "little-floral", "dotted"),
-        "emblem_chance": 0.66,
-    },
-    "high_waist_panties": {
-        "label": "high-waist panties",
-        "slots": ("base_bottom",),
-        "presentation": "femme",
-        "materials": ("cotton", "lace", "satin", "modal"),
-        "details": ("lacy", "scallop-trimmed", "vintage-cut", "soft"),
-        "patterns": ("", "little-floral", "dotted", "constellation-print"),
-        "emblem_chance": 0.6,
-    },
-}
-COSMETIC_ITEM_IDS = {
-    **BASEWEAR_ITEM_IDS,
-    "tee": {
-        "label": "tee",
-        "slots": ("top",),
-        "materials": ("cotton", "jersey", "linen", "ribbed cotton"),
-        "styles": ("plain", "soft", "trim", "faded"),
-    },
-    "button_up": {
-        "label": "button-up",
-        "slots": ("top",),
-        "materials": ("cotton", "linen", "poplin", "brushed cotton"),
-        "styles": ("crisp", "rolled-sleeve", "loose", "neat"),
-    },
-    "blouse": {
-        "label": "blouse",
-        "slots": ("top",),
-        "materials": ("cotton", "linen", "satin", "poplin"),
-        "styles": ("sharp", "soft", "neat", "loose"),
-    },
-    "sweater": {
-        "label": "sweater",
-        "slots": ("top",),
-        "materials": ("knit", "wool", "cotton", "ribbed knit"),
-        "styles": ("soft", "plain", "loose", "trim"),
-    },
-    "overshirt": {
-        "label": "overshirt",
-        "slots": ("top",),
-        "materials": ("cotton", "canvas", "flannel", "denim"),
-        "styles": ("thick", "neat", "oversized", "workwear"),
-    },
-    "turtleneck": {
-        "label": "turtleneck",
-        "slots": ("top",),
-        "materials": ("knit", "cotton", "ribbed knit", "wool"),
-        "styles": ("clean", "sharp", "soft", "severe"),
-    },
-    "trousers": {
-        "label": "trousers",
-        "slots": ("bottom",),
-        "materials": ("twill", "denim", "wool", "canvas"),
-        "styles": ("straight-leg", "creased", "relaxed", "tapered"),
-    },
-    "shorts": {
-        "label": "shorts",
-        "slots": ("bottom",),
-        "materials": ("cotton", "denim", "twill", "linen"),
-        "styles": ("plain", "cuffed", "loose", "utility"),
-    },
-    "skirt": {
-        "label": "skirt",
-        "slots": ("bottom",),
-        "materials": ("cotton", "denim", "satin", "linen"),
-        "styles": ("pleated", "straight", "wrap", "soft"),
-    },
-    "dress": {
-        "label": "dress",
-        "slots": ("full_body",),
-        "materials": ("cotton", "linen", "satin", "knit"),
-        "styles": ("simple", "fitted", "loose", "sharp"),
-    },
-    "worker_coverall": {
-        "label": "worker coverall",
-        "slots": ("full_body",),
-        "materials": ("cotton", "canvas", "poly-cotton", "duck cloth"),
-        "styles": ("issued", "work-worn", "plain", "zip-front"),
-    },
-    "orange_jumpsuit": {
-        "label": "jumpsuit",
-        "slots": ("full_body",),
-        "materials": ("cotton",),
-        "styles": ("issued",),
-    },
-    "boots": {
-        "label": "boots",
-        "slots": ("shoes",),
-        "materials": ("leather", "canvas", "rubber", "suede"),
-        "styles": ("scuffed", "polished", "heavy", "soft"),
-    },
-    "sneakers": {
-        "label": "sneakers",
-        "slots": ("shoes",),
-        "materials": ("canvas", "mesh", "suede", "rubber"),
-        "styles": ("clean", "worn-in", "bright", "low-top"),
-    },
-    "sandals": {
-        "label": "sandals",
-        "slots": ("shoes",),
-        "materials": ("leather", "rubber", "canvas", "woven cord"),
-        "styles": ("plain", "strapped", "soft", "worn-in"),
-    },
-    "cap": {
-        "label": "cap",
-        "slots": ("hat",),
-        "materials": ("cotton", "canvas", "denim", "wool"),
-        "styles": ("plain", "low-brim", "soft", "patched"),
-    },
-    "baseball_cap": {
-        "label": "baseball cap",
-        "slots": ("hat",),
-        "materials": ("cotton", "canvas", "denim", "polyester"),
-        "styles": ("plain", "curved-brim", "faded", "patched"),
-    },
-    "bandana": {
-        "label": "bandana",
-        "slots": ("hat",),
-        "materials": ("cotton", "linen", "gauze", "soft cotton"),
-        "styles": ("plain", "knotted", "folded", "faded"),
-    },
-    "jacket": {
-        "label": "jacket",
-        "slots": ("outer",),
-        "materials": ("canvas", "denim", "leather", "wool"),
-        "styles": ("boxy", "cropped", "workwear", "lined"),
-    },
-    "windbreaker": {
-        "label": "windbreaker",
-        "slots": ("outer",),
-        "materials": ("nylon", "polyester", "ripstop", "light canvas"),
-        "styles": ("lightweight", "hooded", "zip-front", "boxy"),
-    },
-    "coat": {
-        "label": "coat",
-        "slots": ("outer",),
-        "materials": ("wool", "canvas", "cotton", "weatherproof cloth"),
-        "styles": ("dark", "heavy", "boxy", "long"),
-    },
-    "cardigan": {
-        "label": "cardigan",
-        "slots": ("outer",),
-        "materials": ("knit", "wool", "cotton", "soft knit"),
-        "styles": ("long", "soft", "loose", "neat"),
-    },
-    "blazer": {
-        "label": "blazer",
-        "slots": ("outer",),
-        "materials": ("wool", "twill", "linen", "structured cotton"),
-        "styles": ("structured", "sharp", "tailored", "dark"),
-    },
-    "vest": {
-        "label": "vest",
-        "slots": ("outer",),
-        "materials": ("cotton", "canvas", "wool", "denim"),
-        "styles": ("sleeveless", "plain", "neat", "severe"),
-    },
-    "maintenance_vest": {
-        "label": "maintenance vest",
-        "slots": ("outer",),
-        "materials": ("canvas", "polyester", "ripstop", "duck cloth"),
-        "styles": ("high-visibility", "pocketed", "issued", "work-worn"),
-    },
-    "patrol_rain_shell": {
-        "label": "patrol rain shell",
-        "slots": ("outer",),
-        "materials": ("nylon", "ripstop", "weatherproof cloth", "polyester"),
-        "styles": ("hooded", "issued", "zip-front", "weatherproof"),
-    },
-    "security_jacket": {
-        "label": "security jacket",
-        "slots": ("outer",),
-        "materials": ("nylon", "canvas", "polyester", "weatherproof cloth"),
-        "styles": ("issued", "boxy", "patched", "dark"),
-    },
-    "butcher_apron": {
-        "label": "butcher apron",
-        "slots": ("outer",),
-        "materials": ("canvas", "waxed cotton", "heavy cotton", "duck cloth"),
-        "styles": ("work-stained", "plain", "cross-back", "heavy"),
-    },
-    "botany_apron": {
-        "label": "botany apron",
-        "slots": ("outer",),
-        "materials": ("canvas", "linen", "cotton", "soft duck cloth"),
-        "styles": ("pocketed", "plain", "garden", "cross-back"),
-    },
-    "earrings": {
-        "label": "earrings",
-        "slots": ("earrings",),
-        "materials": ("silver", "brass", "glass", "steel"),
-        "styles": ("small", "hoop", "drop", "simple"),
-    },
-    "ring": {
-        "label": "ring",
-        "slots": ("ring_left", "ring_right"),
-        "materials": ("silver", "brass", "steel", "onyx"),
-        "styles": ("plain", "signet", "thin", "wide"),
-    },
-    "necklace": {
-        "label": "necklace",
-        "slots": ("necklace",),
-        "materials": ("silver", "brass", "cord", "steel"),
-        "styles": ("simple", "chain", "pendant", "short"),
-    },
-    "scarf": {
-        "label": "scarf",
-        "slots": ("necklace",),
-        "materials": ("cotton", "wool", "linen", "soft knit"),
-        "styles": ("narrow", "wrapped", "knotted", "soft"),
-    },
-    "bracelet": {
-        "label": "bracelet",
-        "slots": ("bracelet",),
-        "materials": ("silver", "brass", "cord", "steel"),
-        "styles": ("cuff", "chain", "simple", "wrapped"),
-    },
-    "gloves": {
-        "label": "gloves",
-        "slots": ("bracelet",),
-        "materials": ("leather", "canvas", "wool", "knit"),
-        "styles": ("fingerless", "work-rough", "soft", "worn-in"),
-    },
-    "watch": {
-        "label": "watch",
-        "slots": ("bracelet",),
-        "materials": ("steel", "brass", "leather", "canvas"),
-        "styles": ("weathered", "smooth", "narrow", "polished"),
-    },
-}
 COSMETIC_COLORS = appearance_color_words()
 COSMETIC_COLOR_KEYS = {word: render_key_for_color_word(word) for word in COSMETIC_COLORS}
 CLOTHING_RENDER_COLOR_KEYS = tuple(dict.fromkeys(COSMETIC_COLOR_KEYS.values()))
@@ -561,7 +239,11 @@ NPC_DESCRIBED_OUTFIT_METADATA_KEY = "npc_described_outfit"
 NPC_DESCRIBED_OUTFIT_SOURCE = "seeded_description_outfit"
 EMPLOYER_CLOTHING_CULTURE_METADATA_KEY = "employer_clothing_culture"
 PERSONAL_CLOTHING_TOKEN_METADATA_KEY = "personal_clothing_token"
-PERSONAL_TOKEN_ITEMS = ("cap", "scarf", "bracelet", "ring", "necklace", "earrings")
+PERSONAL_TOKEN_ITEMS = tuple(
+    item_id
+    for item_id, profile in COSMETIC_ITEM_IDS.items()
+    if bool(profile.get("personal_token"))
+)
 PERSONAL_TOKEN_MOTIFS = (
     "bee", "broken chevron", "little eye", "little star", "moth",
     "painted hand", "threaded ring", "tiny lightning bolt",
@@ -863,8 +545,16 @@ def _inventory_for(sim, eid):
 
 
 def _item_def(item_id, item_catalog=None):
-    catalog = item_catalog or ITEM_CATALOG
+    catalog = ITEM_CATALOG if item_catalog is None else item_catalog
     return catalog.get(_key(item_id), {})
+
+
+def _appearance_profile(item_id, *, item_catalog=None):
+    item_id = _key(item_id)
+    return _catalog_appearance_profile(
+        item_id,
+        _item_def(item_id, item_catalog=item_catalog),
+    )
 
 
 def _entry_metadata(entry):
@@ -878,7 +568,7 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
     nested = metadata.get(APPEARANCE_METADATA_KEY)
     item_id = _key(entry.get("item_id"))
     item_def = _item_def(item_id, item_catalog=item_catalog)
-    profile = COSMETIC_ITEM_IDS.get(item_id, {})
+    profile = _appearance_profile(item_id, item_catalog=item_catalog)
     nested_data = nested if isinstance(nested, dict) else {}
     slots = _clean_slots(
         metadata.get("appearance_slots")
@@ -947,6 +637,7 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
         return {}
     return {
         "appearance_type": appearance_type,
+        "appearance_drawable": _key(item_def.get("appearance_drawable")),
         "label": label,
         "slots": slots,
         "color": color,
@@ -963,7 +654,7 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
         "fashion_rarity_score": metadata.get("fashion_rarity_score", nested_data.get("fashion_rarity_score")),
         "fashion_base_value": metadata.get("fashion_base_value", nested_data.get("fashion_base_value")),
         "fashion_rarity_value": metadata.get("fashion_rarity_value", nested_data.get("fashion_rarity_value")),
-        "basewear": bool(profile.get("basewear") or item_id in BASEWEAR_ITEM_IDS or any(slot in BASEWEAR_SLOTS for slot in slots)),
+        "basewear": bool(profile.get("basewear") or any(slot in BASEWEAR_SLOTS for slot in slots)),
     }
 
 
@@ -979,7 +670,7 @@ def is_appearance_item(entry_or_item_id, *, item_catalog=None):
     item_def = _item_def(item_id, item_catalog=item_catalog)
     tags = {_key(tag) for tag in item_def.get("tags", ())}
     category = _key(item_def.get("category"))
-    return item_id in COSMETIC_ITEM_IDS or category == "cosmetic" or "cosmetic" in tags or "clothing" in tags
+    return bool(_appearance_profile(item_id, item_catalog=item_catalog)) or category == "cosmetic" or "cosmetic" in tags or "clothing" in tags
 
 
 def is_entry_worn(entry):
@@ -989,10 +680,10 @@ def is_entry_worn(entry):
 
 def is_basewear_item(entry_or_item_id, *, item_catalog=None):
     if isinstance(entry_or_item_id, dict):
-        item_id = _key(entry_or_item_id.get("item_id"))
         profile = appearance_metadata_for_entry(entry_or_item_id, item_catalog=item_catalog)
-        return bool(profile.get("basewear") or item_id in BASEWEAR_ITEM_IDS)
-    return _key(entry_or_item_id) in BASEWEAR_ITEM_IDS
+        return bool(profile.get("basewear"))
+    profile = _appearance_profile(entry_or_item_id, item_catalog=item_catalog)
+    return bool(profile.get("basewear") or any(slot in BASEWEAR_SLOTS for slot in tuple(profile.get("slots", ()))))
 
 
 def _basewear_phrase(profile):
@@ -1024,9 +715,10 @@ def _basewear_phrase(profile):
 
 def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None, sim=None):
     item_id = _key(item_id)
-    profile = COSMETIC_ITEM_IDS.get(item_id)
+    profile = _appearance_profile(item_id, item_catalog=item_catalog)
     if not profile:
         return {}
+    basewear = bool(profile.get("basewear") or any(slot in BASEWEAR_SLOTS for slot in tuple(profile.get("slots", ()))))
     seed = f"cosmetic-variant:{item_id}:{seed_token}"
     rng = random.Random(seed)
     slots = tuple(profile.get("slots", ()))
@@ -1040,7 +732,7 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None, sim=
     patterns = tuple(profile.get("patterns") or ())
     pattern = rng.choice(patterns) if patterns else ""
     emblem = ""
-    if item_id in BASEWEAR_ITEM_IDS and rng.random() < float(profile.get("emblem_chance", 0.0) or 0.0):
+    if basewear and rng.random() < float(profile.get("emblem_chance", 0.0) or 0.0):
         emblem = rng.choice(tuple(profile.get("emblems") or BASEWEAR_EMBLEMS))
     pattern_key = _key(pattern)
     emblem_key = _key(emblem)
@@ -1060,7 +752,7 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None, sim=
     accent = fallback_render_key_for_color_word(color, default="human_monochrome")
     label = str(profile.get("label", item_id)).strip() or item_id
     presentation = _key(profile.get("presentation"))
-    if item_id in BASEWEAR_ITEM_IDS:
+    if basewear:
         display_name = _title_words(_basewear_phrase({
             "appearance_type": item_id,
             "label": label,
@@ -1095,7 +787,7 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None, sim=
         "emblem": emblem,
         "flora_motif": dict(flora_motif),
         "presentation": presentation,
-        "basewear": bool(item_id in BASEWEAR_ITEM_IDS),
+        "basewear": basewear,
     }
     metadata = {
         "appearance_type": item_id,
@@ -1111,26 +803,33 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None, sim=
         "emblem": emblem,
         "flora_motif": dict(flora_motif),
         "presentation": presentation,
-        "basewear": bool(item_id in BASEWEAR_ITEM_IDS),
+        "basewear": basewear,
         "display_name": display_name,
         APPEARANCE_METADATA_KEY: appearance,
     }
     return with_cosmetic_rarity_metadata(item_id, metadata)
 
 
+def _starter_basewear_pool(family, slot):
+    weighted = []
+    for item_id, profile in BASEWEAR_ITEM_IDS.items():
+        if slot not in tuple(profile.get("slots", ())):
+            continue
+        weights = profile.get("starter_weights")
+        weights = weights if isinstance(weights, dict) else {}
+        weight = int(weights.get(family, 0) or 0)
+        if family == "mixed" and weight <= 0:
+            weight = 1
+        weighted.extend((item_id,) * max(0, weight))
+    return tuple(weighted)
+
+
 STARTER_BASEWEAR_POOLS = {
-    "masc": {
-        "base_top": ("undershirt", "undershirt", "tank_undershirt", "bandeau"),
-        "base_bottom": ("boxers", "boxer_briefs", "boxer_briefs", "briefs"),
-    },
-    "femme": {
-        "base_top": ("bra", "bralette", "bralette", "camisole", "camisole", "bandeau"),
-        "base_bottom": ("boyshorts", "bikini_panties", "cheeky_panties", "cheeky_panties", "high_waist_panties", "thong"),
-    },
-    "mixed": {
-        "base_top": tuple(item_id for item_id, profile in BASEWEAR_ITEM_IDS.items() if "base_top" in tuple(profile.get("slots", ()))),
-        "base_bottom": tuple(item_id for item_id, profile in BASEWEAR_ITEM_IDS.items() if "base_bottom" in tuple(profile.get("slots", ()))),
-    },
+    family: {
+        slot: _starter_basewear_pool(family, slot)
+        for slot in BASEWEAR_SLOTS
+    }
+    for family in ("masc", "femme", "mixed")
 }
 
 
@@ -2758,6 +2457,7 @@ def _appearance_render_color_part(sim, eid, slot):
         "word": word,
         "render_key": render_key,
         "type": _key(profile.get("appearance_type")) or _key(entry.get("item_id")),
+        "drawable_id": _key(profile.get("appearance_drawable")),
         "material": _key(profile.get("material")),
         "style": _key(profile.get("style")),
         "detail": _key(profile.get("detail")),
@@ -2782,6 +2482,9 @@ def _basewear_render_color_part(loadout, slot):
         "word": word,
         "render_key": render_key,
         "type": _key(state.get("appearance_type") or state.get("item_id")),
+        "drawable_id": _key(
+            (_item_def(state.get("item_id")) or {}).get("appearance_drawable")
+        ),
         "material": _key(state.get("material")),
         "style": _key(state.get("style")),
         "detail": _key(state.get("detail")),

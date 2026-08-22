@@ -9,9 +9,12 @@ from pathlib import Path
 from game.appearance_palette import pygame_palette_entries
 from game.action_bindings import CONTROLLER_DEADZONE, CONTROLLER_REPEAT_DELAY, CONTROLLER_REPEAT_INTERVAL
 from game.color_words import casino_color_word, color_contrast_ratio, color_word_rgb, readable_color_word_for_text, render_key_for_color_word
+from game.drawable_catalog import RUNTIME_DRAWABLES
+from game.drawable_dsl import DrawableError, DrawableRenderContext, condition_tokens
 from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_semantic_catalog
 from game.symbolic_palette import pygame_symbolic_palette_entries
 from game.world_palette import pygame_world_palette_entries
+from ui.pygame_drawable import rasterize_drawable
 from ui.input_keys import (
     KEY_DOWN,
     KEY_END,
@@ -233,6 +236,7 @@ class PygameView:
         self._procedural_surface_cache_hits = 0
         self._procedural_surface_cache_misses = 0
         self._procedural_cache_source_position = None
+        self._drawable_render_last_error = None
         self.key_queue = deque()
         self.input_queue = deque()
         self._controller_module = None
@@ -6348,6 +6352,150 @@ class PygameView:
             diamond = [(x, y - 2), (x + 2, y), (x, y + 2), (x - 2, y)]
             self.pygame.draw.polygon(overlay, stitch, diamond)
 
+    @staticmethod
+    def _actor_outfit_effect_value(effects, prefix, default=""):
+        prefix = str(prefix)
+        for effect in tuple(effects or ()):
+            value = str(effect or "").strip().lower()
+            if value.startswith(prefix):
+                return value.removeprefix(prefix)
+        return default
+
+    def _draw_actor_drawable_overlay(self, x, y, color=None, attrs=0, *, effects=()):
+        """Draw one opted-in garment through the shared drawable catalogue.
+
+        Returning false is the explicit compatibility seam: callers continue
+        through the established procedural garment renderer when an item has no
+        drawable ID or when an unexpected runtime resolution error occurs.
+        """
+
+        drawable_id = self._actor_outfit_effect_value(effects, "outfit_drawable_")
+        if not drawable_id:
+            return False
+
+        presentation = self._actor_outfit_effect_value(effects, "actor_presentation_", "mixed")
+        silhouette = self._actor_outfit_effect_value(effects, "actor_silhouette_", "")
+        material = self._actor_outfit_effect_value(effects, "outfit_material_", "")
+        detail = self._actor_outfit_effect_value(effects, "outfit_detail_", "")
+        pattern = self._actor_outfit_effect_value(effects, "outfit_pattern_", "")
+        emblem = self._actor_outfit_effect_value(effects, "outfit_emblem_", "")
+        flora_motif = self._actor_outfit_effect_value(effects, "outfit_flora_motif_", "")
+        motif_treatment = self._actor_outfit_effect_value(effects, "outfit_motif_treatment_", "")
+        motif_shape = self._actor_outfit_effect_value(effects, "outfit_motif_shape_", "")
+
+        shoulder_half, hip_half = self._actor_torso_half_widths(16, presentation, silhouette)
+        waist_half = max(1, min(shoulder_half, hip_half) - 1)
+        context = DrawableRenderContext.garment(
+            shoulder=shoulder_half,
+            hip=hip_half,
+            waist=waist_half,
+            basewear_hip=max(1, hip_half - 1),
+            shoulder_y=6,
+            hip_y=11,
+            foot_y=14,
+            material=material,
+            detail=detail,
+            pattern=pattern,
+        )
+        variant = "detailed" if self.cell_px > 28 else "compact"
+        try:
+            resolved = RUNTIME_DRAWABLES.resolve(drawable_id, context, variant=variant)
+        except DrawableError as exc:
+            self._drawable_render_last_error = str(exc)
+            return False
+
+        self._drawable_render_last_error = None
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.06)
+        alpha = 226 if variant == "detailed" else 242
+        paints = {
+            "fill": (frame[0], frame[1], frame[2], alpha),
+            "edge": self._lightened_rgba(frame, 242, amount=0.34),
+            "shade": self._darkened_rgba(frame, 224, amount=0.52),
+            "outline": self._alpha_color("actor_outline", 206),
+        }
+        raster = rasterize_drawable(
+            self.pygame,
+            resolved,
+            target_px=self.cell_px,
+            paints=paints,
+        )
+        bounds = raster.garment_bounds
+        if bounds is not None:
+            decoration = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+            self._draw_material_finish(
+                decoration,
+                bounds,
+                frame,
+                material=material,
+                seed=len(drawable_id) + len(detail) + len(pattern),
+            )
+            detail_tokens = condition_tokens(detail)
+            stroke_w = max(1, self.cell_px // 26)
+            edge = paints["edge"]
+            if detail_tokens.intersection({"ribbon", "contrast", "sporty"}):
+                self.pygame.draw.line(
+                    decoration,
+                    edge,
+                    (bounds.left, min(bounds.bottom - 1, bounds.top + stroke_w)),
+                    (bounds.right - 1, min(bounds.bottom - 1, bounds.top + stroke_w)),
+                    stroke_w,
+                )
+            if detail_tokens.intersection({"lacy", "lace", "scallop", "scalloped"}):
+                step = max(2, self.cell_px // 12)
+                for scallop_x in range(bounds.left + 1, bounds.right, step):
+                    self.pygame.draw.circle(
+                        decoration,
+                        edge,
+                        (scallop_x, bounds.bottom - 1),
+                        max(1, self.cell_px // 34),
+                        stroke_w,
+                    )
+
+            center = bounds.center
+            if flora_motif:
+                motif = motif_shape or flora_motif
+                centers = [center]
+                if motif_treatment == "print":
+                    offset = max(2, self.cell_px // 10)
+                    centers = [
+                        (center[0] - offset, center[1]),
+                        (center[0] + offset, center[1]),
+                        (center[0], min(bounds.bottom - 1, center[1] + offset)),
+                    ]
+                for motif_center in centers:
+                    self._draw_basewear_emblem(decoration, motif_center, motif, frame)
+            if emblem:
+                self._draw_basewear_emblem(
+                    decoration,
+                    (bounds.right - max(2, self.cell_px // 12), bounds.centery),
+                    emblem,
+                    frame,
+                )
+            decoration.blit(
+                raster.garment_mask,
+                (0, 0),
+                special_flags=self.pygame.BLEND_RGBA_MULT,
+            )
+            raster.overlay.blit(decoration, (0, 0))
+
+            if pattern and not flora_motif:
+                spread = max(1, bounds.w // 4)
+                for pattern_center in (
+                    (bounds.centerx - spread, bounds.centery),
+                    (bounds.centerx + spread, bounds.centery),
+                    (bounds.centerx, min(bounds.bottom - 1, bounds.centery + max(1, bounds.h // 4))),
+                ):
+                    self._draw_clipped_actor_pattern_mark(
+                        raster.overlay,
+                        pattern_center,
+                        pattern,
+                        frame,
+                        radius=max(1, self.cell_px // 36),
+                    )
+
+        self.surface.blit(raster.overlay, (int(x) * self.cell_px, int(y) * self.cell_px))
+        return True
+
     def _draw_actor_outfit_overlay_small(self, x, y, color=None, attrs=0, *, kind="secondary", effects=()):
         px = self.cell_px
         cell_x = int(x) * px
@@ -6599,6 +6747,11 @@ class PygameView:
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_actor_outfit_overlay(self, x, y, color=None, attrs=0, *, kind="secondary", effects=()):
+        if self._draw_actor_drawable_overlay(x, y, color=color, attrs=attrs, effects=effects):
+            return
+        # Compatibility only. Built-in wearables all carry a catalogue
+        # drawable, so the historical name-aware code below is reached solely
+        # by old/external effects or a recoverable drawable-resolution failure.
         if self.cell_px <= 10:
             self._draw_actor_outfit_overlay_legacy(x, y, color=color, attrs=attrs, kind=kind)
             return

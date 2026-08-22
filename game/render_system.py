@@ -103,6 +103,7 @@ from game.item_semantics import (
     item_is_identified_for_actor,
     item_unknown_inspect_text_for_actor,
 )
+from game.item_compatibility import compatibility_row_fields, drone_compatibility_target
 from game.lighting import (
     LIGHT_COLOR_PROFILES,
     ambient_snapshot as _lighting_ambient_snapshot,
@@ -2207,7 +2208,7 @@ class RenderSystem(System):
         panel_h = max(12, min(map_h, int(round(map_h * 0.82))))
         panel_y = max(0, (map_h - panel_h) // 2)
         body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
-        row_cell_w, row_w = _modal_body_widths(self.view, panel_w, horizontal_padding=4)
+        _row_cell_w, row_w = _modal_body_widths(self.view, panel_w, horizontal_padding=4)
         self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
 
         tab = str(drone_sheet_ui.get("tab", "status") or "status").strip().lower() or "status"
@@ -2215,44 +2216,159 @@ class RenderSystem(System):
         module_side = str(drone_sheet_ui.get("module_side", "drone") or "drone").strip().lower() or "drone"
         if module_side == "pack":
             module_side = "bay"
-        title = " Drone Sheet "
-        self.view.draw_text(panel_x + 2, panel_y, _local_clip(title, body_w), color=self._theme_color(modal_theme, "title", "objective"))
+        visual = drone_sheet_ui.get("visual_model") if isinstance(drone_sheet_ui.get("visual_model"), dict) else {}
+        title = f" {str(visual.get('title', 'Drone Workshop') or 'Drone Workshop')} "
+        self.view.draw_text(
+            panel_x + 2,
+            panel_y,
+            _local_clip(title, body_w),
+            color=self._theme_color(modal_theme, "title", "objective"),
+            attrs=A_BOLD,
+        )
+
         tab_labels = []
         tab_ids = tuple(drone_sheet_ui.get("tabs", ()) or ("status", "cargo", "battery", "modules", "schematic"))
         for idx, tab_id in enumerate(tab_ids, start=1):
-            label = tab_id.upper() if tab_id == tab else tab_id
+            label = f"[{str(tab_id).upper()}]" if tab_id == tab else str(tab_id)
             tab_labels.append(f"{idx}:{label}")
-        tab_line = "Tabs " + "  ".join(tab_labels)
+        tab_line = "  ".join(tab_labels)
         if tab == "cargo":
-            tab_line += f" | side {cargo_side}"
+            tab_line += f" | {cargo_side}"
         if tab == "modules":
-            tab_line += f" | side {'workshop' if module_side == 'bay' else module_side}"
-        self.view.draw_text(panel_x + 2, panel_y + 1, _local_clip(tab_line, body_w), color=self._theme_color(modal_theme, "muted"))
+            tab_line += f" | {'workshop stock' if module_side == 'bay' else 'installed'}"
+        self.view.draw_text(
+            panel_x + 2,
+            panel_y + 1,
+            _local_clip(tab_line, body_w),
+            color=self._theme_color(modal_theme, "muted"),
+        )
 
         eligible = list(drone_sheet_ui.get("eligible", ()) or ())
         visible_start = max(0, int(drone_sheet_ui.get("visible_start", 0) or 0))
-        visible = eligible[visible_start: visible_start + 4]
-        slot_bits = []
-        for row in visible:
-            marker = "*" if bool(row.get("selected")) else "-"
-            access = "adj" if bool(row.get("accessible")) else f"d{row.get('distance', 0)}"
-            slot_bits.append(f"{marker}{row.get('label', 'drone')}#{row.get('eid')} {access}")
-        slot_line = "Drones: " + (" | ".join(slot_bits) if slot_bits else "none")
-        self._draw_display_line(panel_x + 2, panel_y + 2, _clip_display_line(slot_line, body_w), body_cell_w)
+        target_bits = []
+        for row in eligible[visible_start: visible_start + 4]:
+            marker = ">" if bool(row.get("selected")) else "-"
+            access = "nearby" if bool(row.get("accessible")) else "remote"
+            target_bits.append(f"{marker}{row.get('label', 'drone')} ({access})")
+        subtitle = str(visual.get("subtitle", "") or "").strip()
+        target_line = "TARGETS " + " | ".join(target_bits) if target_bits else (subtitle or "WORKSHOP STORAGE")
+        self.view.draw_text(
+            panel_x + 2,
+            panel_y + 2,
+            _local_clip(target_line, body_w),
+            color=self._theme_color(modal_theme, "title"),
+        )
+
+        def _meter_text(meter, width=5):
+            label = str((meter or {}).get("label", "") or "")[:7]
+            try:
+                used = max(0, int((meter or {}).get("used", 0) or 0))
+            except (TypeError, ValueError):
+                used = 0
+            try:
+                limit = max(0, int((meter or {}).get("limit", 0) or 0))
+            except (TypeError, ValueError):
+                limit = 0
+            filled = 0 if limit <= 0 else min(width, int(round(width * min(used, limit) / limit)))
+            return f"{label} [{'=' * filled}{'.' * (width - filled)}] {used}/{limit}"
+
+        dashboard_y = panel_y + 3
+        dashboard_lines = 0
+        mode = str(visual.get("mode", "") or "").strip().lower()
+        if panel_h >= 16:
+            if mode != "storage":
+                chassis_class = str(visual.get("chassis_class", "") or "?").strip().upper() or "?"
+                glyph = str(visual.get("glyph", "d") or "d")[:1] or "d"
+                core_name = str(visual.get("core_name", "none") or "none")
+                paint = visual.get("paint") if isinstance(visual.get("paint"), dict) else {}
+                primary = str(paint.get("primary_color", "steel") or "steel")
+                secondary = str(paint.get("secondary_color") or paint.get("accent_color", "blue") or "blue")
+                frame_line = f"FRAME [ {glyph} ] {chassis_class}-CLASS  |  CORE {core_name}  |  FINISH {primary}/{secondary}"
+                self.view.draw_text(
+                    panel_x + 2,
+                    dashboard_y,
+                    _local_clip(frame_line, body_w),
+                    color="item_restricted",
+                    attrs=A_BOLD,
+                )
+                dashboard_lines += 1
+
+            meters = tuple(visual.get("meters", ()) or ())
+            if meters:
+                meter_segments = []
+                for meter in meters:
+                    meter_segments.append(_segment(_meter_text(meter) + "  ", color=(meter or {}).get("color")))
+                self.view.draw_segments(
+                    panel_x + 2,
+                    dashboard_y + dashboard_lines,
+                    meter_segments,
+                    max_width=body_cell_w,
+                )
+                dashboard_lines += 1
+
+            if mode != "storage":
+                ports = "  ".join(str(value) for value in tuple(visual.get("ports", ()) or ())) or "none"
+                capabilities = ", ".join(str(value) for value in tuple(visual.get("capabilities", ()) or ())) or "none"
+                detail_line = f"PORTS {ports}  |  CAPABILITIES {capabilities}"
+                self.view.draw_text(
+                    panel_x + 2,
+                    dashboard_y + dashboard_lines,
+                    _local_clip(detail_line, body_w),
+                    color=self._theme_color(modal_theme, "muted"),
+                )
+                dashboard_lines += 1
 
         rows = list(drone_sheet_ui.get("rows", ()) or [])
         selected_index = max(0, min(int(drone_sheet_ui.get("selected_index", 0) or 0), len(rows) - 1)) if rows else 0
-        body_top = panel_y + 4
+        section_y = dashboard_y + dashboard_lines
+        section_side = ""
+        if tab == "modules":
+            section_side = " / WORKSHOP STOCK" if module_side == "bay" else " / INSTALLED"
+        elif tab == "cargo":
+            section_side = f" / {cargo_side.upper()}"
+        section_line = f"-- {tab.upper()}{section_side} "
+        section_line += "-" * max(0, body_w - len(section_line))
+        self.view.draw_text(
+            panel_x + 2,
+            section_y,
+            _local_clip(section_line, body_w),
+            color=self._theme_color(modal_theme, "muted"),
+        )
+
+        body_top = section_y + 1
         footer_y = panel_y + panel_h - 2
-        list_h = max(1, footer_y - body_top - 1)
+        list_h = max(1, footer_y - body_top)
         display_rows = []
         row_anchors = []
-        for idx, row in enumerate(rows):
-            label = str(row.get("label", row) if isinstance(row, dict) else row)
-            prefix = "> " if idx == selected_index else "  "
+        for idx, raw in enumerate(rows):
+            row = raw if isinstance(raw, dict) else {"label": str(raw)}
+            label = str(row.get("label", "") or "")
+            selection_prefix = "> " if idx == selected_index else "  "
+            glyph = str(row.get("glyph", "") or "")[:1]
+            mark = str(row.get("compatibility_mark", "") or "")[:5]
+            class_band = str(row.get("drone_class_band", "") or "")[:4]
+            if glyph or mark or class_band:
+                item_prefix = f"{glyph or ' '} "
+                compatibility_prefix = f"{mark:<5}{class_band:<4} "
+                prefix = selection_prefix + item_prefix + compatibility_prefix
+                mark_offset = len(selection_prefix) + len(item_prefix)
+            else:
+                prefix = selection_prefix
+                mark_offset = None
             row_anchors.append(len(display_rows))
-            wrapped = _wrap_display_lines(prefix + label, row_w, max_lines=2) if label.strip() else [prefix.strip()]
-            display_rows.extend(wrapped)
+            wrapped = _wrap_display_lines(prefix + label, row_w, max_lines=2) if label.strip() else [prefix.rstrip()]
+            for wrapped_index, line in enumerate(wrapped):
+                display_rows.append({
+                    "line": _line_text(line),
+                    "row": row,
+                    "row_index": idx,
+                    "first": wrapped_index == 0,
+                    "mark_offset": mark_offset,
+                    "glyph": glyph,
+                    "mark": mark,
+                    "class_band": class_band,
+                })
+
         scroll = max(0, int(drone_sheet_ui.get("scroll", 0) or 0))
         if row_anchors and selected_index < len(row_anchors):
             anchor = row_anchors[selected_index]
@@ -2263,17 +2379,57 @@ class RenderSystem(System):
         max_scroll = max(0, len(display_rows) - list_h)
         scroll = max(0, min(scroll, max_scroll))
         drone_sheet_ui["scroll"] = scroll
-        for idx, line in enumerate(display_rows[scroll: scroll + list_h]):
-            self._draw_display_line(panel_x + 2, body_top + idx, _clip_display_line(line, row_w), row_cell_w)
+        for draw_index, display in enumerate(display_rows[scroll: scroll + list_h]):
+            row = display["row"]
+            selected = int(display["row_index"]) == selected_index
+            attrs = A_REVERSE if selected else 0
+            row_color = None
+            if not bool(row.get("actionable", False)):
+                row_color = self._theme_color(modal_theme, "muted")
+            if str(row.get("compatibility_match", "") or "") == "incompatible" or row.get("compatible") is False:
+                row_color = self._theme_color(modal_theme, "warning")
+            line = _local_clip(display["line"], row_w)
+            self.view.draw_text(panel_x + 2, body_top + draw_index, line, color=row_color, attrs=attrs)
+            if display.get("first") and display.get("glyph") and row.get("swatch_color"):
+                self.view.draw_text(
+                    panel_x + 4,
+                    body_top + draw_index,
+                    display["glyph"],
+                    color=row.get("swatch_color"),
+                    attrs=attrs,
+                )
+            mark_offset = display.get("mark_offset")
+            compatibility_color = row.get("compatibility_color")
+            if display.get("first") and mark_offset is not None and display.get("mark") and compatibility_color:
+                self.view.draw_text(
+                    panel_x + 2 + int(mark_offset),
+                    body_top + draw_index,
+                    display["mark"],
+                    color=compatibility_color,
+                    attrs=attrs,
+                )
+            if display.get("first") and mark_offset is not None and display.get("class_band") and compatibility_color:
+                self.view.draw_text(
+                    panel_x + 2 + int(mark_offset) + 5,
+                    body_top + draw_index,
+                    display["class_band"],
+                    color=compatibility_color,
+                    attrs=attrs,
+                )
         if not display_rows:
             self.view.draw_text(panel_x + 2, body_top, "(empty)", color=self._theme_color(modal_theme, "muted"))
 
         feedback = str(drone_sheet_ui.get("feedback", "") or "").strip()
-        if feedback:
-            self._draw_display_line(panel_x + 2, footer_y - 1, _clip_display_line(feedback, body_w), body_cell_w)
-        tab_hint = f"1-{len(tab_ids)} tabs" if len(tab_ids) > 1 else "1 tab"
-        hint = f"{tab_hint}  [/] drone  Arrows select/side  Enter/U edit  R drop part  G/Esc close"
-        self.view.draw_text(panel_x + 2, footer_y, _local_clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
+        selected_row = rows[selected_index] if rows and selected_index < len(rows) and isinstance(rows[selected_index], dict) else {}
+        context_line = feedback or str(selected_row.get("action_hint", "") or "").strip()
+        if not context_line:
+            context_line = f"1-{len(tab_ids)} tabs  [/] target  Arrows select  G/Esc close"
+        self.view.draw_text(
+            panel_x + 2,
+            footer_y,
+            _local_clip(context_line, body_w),
+            color=self._theme_color(modal_theme, "footer"),
+        )
         return True
 
     def _draw_wire_kit_modal(self, wire_kit_ui, *, screen_w, map_h, modal_theme):
@@ -5055,6 +5211,7 @@ class RenderSystem(System):
             weapon_loadout = self.sim.ecs.get(WeaponLoadout).get(self.player_eid)
             active_disguise = getattr(self.sim, "disguise_state", None)
             equipped_container = getattr(self.sim, "equipped_container", None)
+            compatibility_target_class = drone_compatibility_target(self.sim)
             for idx, entry in enumerate(visible_entries):
                 absolute = start + idx
                 marker = ">" if absolute == selected_index else " "
@@ -5131,8 +5288,31 @@ class RenderSystem(System):
                     row_color = _INVENTORY_KEY_ITEM_COLOR
                 elif _inventory_entry_is_critical_quest_item(entry):
                     row_color = _INVENTORY_CRITICAL_QUEST_ITEM_COLOR
-                label = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} {name} x{entry['quantity']}{ammo_suffix}{worn_suffix}{storage_suffix}"
+                compatibility = compatibility_row_fields(
+                    item_def,
+                    target_chassis_class=compatibility_target_class,
+                )
+                compatibility_mark = str(compatibility.get("compatibility_mark", "") or "")[:5]
+                class_band = str(compatibility.get("drone_class_band", "") or "")[:4]
+                row_prefix = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} "
+                compatibility_prefix = f"{compatibility_mark:<5}{class_band:<4} "
+                label = f"{row_prefix}{compatibility_prefix}{name} x{entry['quantity']}{ammo_suffix}{worn_suffix}{storage_suffix}"
                 self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w), color=row_color)
+                compatibility_color = compatibility.get("compatibility_color")
+                if compatibility_mark and compatibility_color:
+                    self.view.draw_text(
+                        panel_x + 1 + len(row_prefix),
+                        list_y + idx,
+                        compatibility_mark,
+                        color=compatibility_color,
+                    )
+                if class_band and compatibility_color:
+                    self.view.draw_text(
+                        panel_x + 1 + len(row_prefix) + 5,
+                        list_y + idx,
+                        class_band,
+                        color=compatibility_color,
+                    )
 
             if not entries:
                 empty_label = "(empty)"
@@ -5198,6 +5378,10 @@ class RenderSystem(System):
             supply_note = str(trade_ui.get("supply_note", "")).strip()
             contact_note = str(trade_ui.get("contact_note", "")).strip()
             panel_bits = [bit for bit in (service_note, supply_note, contact_note) if bit]
+            target_class = str(trade_ui.get("compatibility_target_class", "") or "").strip().upper()
+            target_label = str(trade_ui.get("compatibility_target_label", "") or "").strip()
+            if target_class:
+                panel_bits.append(f"target {target_label or (target_class + '-class drone')}")
             store_line = store_name if not panel_bits else f"{store_name} [{' | '.join(panel_bits)}]"
 
             header = f" Trade {mode_label} "
@@ -5215,6 +5399,10 @@ class RenderSystem(System):
                 absolute = start + idx
                 marker = ">" if absolute == selected_index else " "
                 glyph = str(row.get("glyph", "*"))[:1] or "*"
+                compatibility_mark = str(row.get("compatibility_mark", "") or "")[:5]
+                class_band = str(row.get("drone_class_band", "") or "")[:4]
+                base_prefix = f"{marker}{absolute + 1:02d} {glyph} "
+                compatibility_prefix = f"{compatibility_mark:<5}{class_band:<4} "
                 item_name = str(row.get("item_name", row.get("item_id", "item")))
                 price = int(row.get("price", 0))
                 action_label = str(row.get("action_label", "")).strip().lower()
@@ -5223,14 +5411,14 @@ class RenderSystem(System):
                     badge = str(row.get("row_badge", "") or "").strip()
                     badge_text = f" {badge}" if badge else ""
                     if action_label:
-                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {action_label} stk {stock}{badge_text}"
+                        label = f"{base_prefix}{compatibility_prefix}{item_name} {action_label} stk {stock}{badge_text}"
                     else:
-                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c stk {stock}{badge_text}"
+                        label = f"{base_prefix}{compatibility_prefix}{item_name} {price}c stk {stock}{badge_text}"
                 else:
                     qty = int(row.get("quantity", 0))
                     equipment_tag = str(row.get("equipment_tag", "") or "").strip().upper()
                     equipment_badge = f"[{equipment_tag}] " if equipment_tag else ""
-                    row_prefix = f"{marker}{absolute + 1:02d} {glyph} {equipment_badge}"
+                    row_prefix = f"{base_prefix}{compatibility_prefix}{equipment_badge}"
                     if action_label:
                         if action_label == "trade-in":
                             row_suffix = f" trade-in {price}c x{qty}"
@@ -5253,6 +5441,21 @@ class RenderSystem(System):
                     self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w), color=row_color)
                 else:
                     self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w))
+                compatibility_color = row.get("compatibility_color")
+                if compatibility_mark and compatibility_color:
+                    self.view.draw_text(
+                        panel_x + 1 + len(base_prefix),
+                        list_y + idx,
+                        compatibility_mark,
+                        color=compatibility_color,
+                    )
+                if class_band and compatibility_color:
+                    self.view.draw_text(
+                        panel_x + 1 + len(base_prefix) + 5,
+                        list_y + idx,
+                        class_band,
+                        color=compatibility_color,
+                    )
 
             if not rows:
                 self.view.draw_text(panel_x + 2, list_y, _clip("(no offers)", body_w))

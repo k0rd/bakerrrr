@@ -5,7 +5,14 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from engine.building_stamp import BUILDING_STAMP_ROOT, BuildingStampError, load_building_stamp_catalog
 from game.drone_runtime import DRONE_CHASSIS_CLASSES, DRONE_PROFILE_KINDS
+from game.drawable_dsl import (
+    BUILTIN_DRAWABLE_ROOT,
+    IDENTIFIER_RE as DRAWABLE_IDENTIFIER_RE,
+    DrawableError,
+    load_drawable_catalog,
+)
 from game.flora_genetics import GENETICS_SCHEMA_VERSION, normalize_flora_genetics, validate_flora_genetics
 from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_document
 from game.lighting import LIGHT_COLOR_PROFILES
@@ -35,6 +42,8 @@ RENDER_SEMANTICS_PATH = GAME_DIR / "render_semantics.json"
 FLORA_PATH = GAME_DIR / "flora.json"
 HERBAL_RECIPES_PATH = GAME_DIR / "herbal_recipes.json"
 MECHANICAL_RECIPES_PATH = GAME_DIR / "mechanical_recipes.json"
+DRAWABLES_PATH = BUILTIN_DRAWABLE_ROOT
+BUILDING_STAMPS_PATH = BUILDING_STAMP_ROOT
 
 ALLOWED_ITEM_EFFECTS = {"modify_need", "extend_wakefulness", "restore_hp", "status", "credits", "add_ammo"}
 ALLOWED_ITEM_NEEDS = {"energy", "safety", "social", "hunger", "thirst"}
@@ -749,7 +758,7 @@ def _validate_wire_interface_profile(report, source, item_path, profile):
             report.error(source, profile_path + ["default_quality"], f"default_quality must be one of {list(WIRE_QUALITY_TIERS)}")
 
 
-def _validate_items(path, report):
+def _validate_items(path, report, *, drawable_ids=None):
     data, source = _load_object_document(path, report, "an object keyed by item id")
     if data is None:
         return set()
@@ -779,6 +788,105 @@ def _validate_items(path, report):
 
         if "tags" in item:
             _validate_string_list(report, source, item_path + ["tags"], item["tags"], field_name="tags")
+
+        if "appearance_profile" in item:
+            profile = item.get("appearance_profile")
+            profile_path = item_path + ["appearance_profile"]
+            if _expect_type(report, source, profile_path, profile, dict, "an object"):
+                slots = item.get("appearance_slots")
+                valid_slots = {
+                    "base_top", "base_bottom", "hat", "earrings", "necklace",
+                    "bracelet", "ring_left", "ring_right", "top", "bottom",
+                    "full_body", "shoes", "outer",
+                }
+                parsed_slots = _validate_string_list(
+                    report,
+                    source,
+                    item_path + ["appearance_slots"],
+                    slots,
+                    field_name="appearance_slots",
+                    require_non_empty=True,
+                )
+                for index, slot in enumerate(parsed_slots):
+                    if str(slot).strip().lower() not in valid_slots:
+                        report.error(
+                            source,
+                            item_path + ["appearance_slots", index],
+                            f"unknown wearable appearance slot {slot!r}",
+                        )
+                if not item.get("appearance_drawable"):
+                    report.error(source, item_path + ["appearance_drawable"], "catalogue wearables require an appearance_drawable")
+                for field_name in ("label", "presentation"):
+                    if field_name in profile:
+                        _validate_non_empty_string(
+                            report,
+                            source,
+                            profile_path + [field_name],
+                            profile[field_name],
+                            field_name=field_name,
+                        )
+                for field_name in ("materials", "styles", "details", "emblems"):
+                    if field_name in profile:
+                        _validate_string_list(
+                            report,
+                            source,
+                            profile_path + [field_name],
+                            profile[field_name],
+                            field_name=field_name,
+                        )
+                if "patterns" in profile:
+                    patterns = profile.get("patterns")
+                    if isinstance(patterns, list):
+                        for index, pattern in enumerate(patterns):
+                            if not isinstance(pattern, str):
+                                report.error(source, profile_path + ["patterns", index], "pattern must be a string")
+                    else:
+                        report.error(source, profile_path + ["patterns"], "patterns must be a list")
+                if "emblem_chance" in profile:
+                    _validate_number(
+                        report,
+                        source,
+                        profile_path + ["emblem_chance"],
+                        profile["emblem_chance"],
+                        minimum=0.0,
+                        maximum=1.0,
+                        field_name="emblem_chance",
+                    )
+                for field_name in ("basewear", "articleless", "personal_token", "fashion_item"):
+                    if field_name in profile and not isinstance(profile[field_name], bool):
+                        report.error(source, profile_path + [field_name], f"{field_name} must be a boolean")
+                if "starter_weights" in profile:
+                    weights = profile.get("starter_weights")
+                    weights_path = profile_path + ["starter_weights"]
+                    if _expect_type(report, source, weights_path, weights, dict, "an object"):
+                        for family, weight in weights.items():
+                            if family not in {"masc", "femme", "mixed"}:
+                                report.error(source, weights_path + [family], f"unknown presentation family {family!r}")
+                            _validate_int(report, source, weights_path + [family], weight, minimum=1, maximum=32, field_name="starter weight")
+
+        if "appearance_drawable" in item:
+            drawable_id = item.get("appearance_drawable")
+            drawable_path = item_path + ["appearance_drawable"]
+            valid_drawable_id = _validate_non_empty_string(
+                report,
+                source,
+                drawable_path,
+                drawable_id,
+                field_name="appearance_drawable",
+            )
+            if valid_drawable_id and not DRAWABLE_IDENTIFIER_RE.fullmatch(str(drawable_id)):
+                report.error(
+                    source,
+                    drawable_path,
+                    "appearance_drawable must match [a-z][a-z0-9_]*",
+                )
+                valid_drawable_id = False
+            if valid_drawable_id and drawable_ids is not None and str(drawable_id) not in drawable_ids:
+                report.error(
+                    source,
+                    drawable_path,
+                    f"unknown drawable id {drawable_id!r}",
+                )
 
         if "legal_status" in item:
             if _validate_non_empty_string(report, source, item_path + ["legal_status"], item["legal_status"], field_name="legal_status"):
@@ -1824,10 +1932,41 @@ def _validate_render_semantics(path, report):
                     )
 
 
+def _validate_drawables(path, report):
+    files = sorted(Path(path).rglob("*.bkdraw")) if Path(path).is_dir() else []
+    report.files_checked.update(_rel_path(file_path) for file_path in files)
+    try:
+        catalog = load_drawable_catalog((path,))
+    except DrawableError as exc:
+        location = exc.location
+        source = _rel_path(location.source) if location is not None else _rel_path(path)
+        issue_path = (
+            f"line {location.line}, column {location.column}"
+            if location is not None
+            else "$"
+        )
+        report.error(source, issue_path, exc.message)
+        return None
+    return set(catalog.definitions)
+
+
+def _validate_building_stamps(path, report):
+    files = sorted(Path(path).rglob("*.json")) if Path(path).is_dir() else []
+    report.files_checked.update(_rel_path(file_path) for file_path in files)
+    try:
+        catalog = load_building_stamp_catalog((path,))
+    except BuildingStampError as exc:
+        report.error(_rel_path(exc.source), exc.path or "$", exc.message)
+        return None
+    return set(catalog.definitions)
+
+
 def validate_repo_content():
     report = ValidationReport()
 
-    item_ids = _validate_items(ITEMS_PATH, report)
+    drawable_ids = _validate_drawables(DRAWABLES_PATH, report)
+    _validate_building_stamps(BUILDING_STAMPS_PATH, report)
+    item_ids = _validate_items(ITEMS_PATH, report, drawable_ids=drawable_ids)
     _validate_loot_tables(LOOT_TABLES_PATH, item_ids, report)
     _validate_weapons(WEAPONS_PATH, report)
     _validate_offense_profile(OFFENSE_PROFILE_PATH, report)

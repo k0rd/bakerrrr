@@ -830,6 +830,7 @@ def _actor_outfit_color_overlays(render_colors, humanoid_profile=None):
                 continue
         effects = list(actor_effects)
         for prefix, value in (
+            ("outfit_drawable_", part.get("drawable_id")),
             ("outfit_type_", part.get("type")),
             ("outfit_material_", part.get("material")),
             ("outfit_style_", part.get("style")),

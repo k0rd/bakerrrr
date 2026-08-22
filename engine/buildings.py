@@ -2,6 +2,12 @@
 
 import random
 
+from engine.building_stamp import (
+    BUILTIN_BUILDING_STAMPS,
+    BuildingStampError,
+    resolve_building_stamp,
+)
+
 BUILDING_LAYOUT_OFFSETS = (
     (-3, -3),
     (3, -3),
@@ -1801,7 +1807,27 @@ def building_parcel_span(building):
     return int(span_x), int(span_y)
 
 
+def building_stamp_definition(building):
+    """Return an eligible opt-in shell stamp without weakening legacy layout."""
+
+    if not isinstance(building, dict):
+        return None
+    stamp_id = str(building.get("building_stamp", "") or "").strip().lower()
+    if not stamp_id:
+        return None
+    stamp = BUILTIN_BUILDING_STAMPS.get(stamp_id)
+    if stamp is None:
+        return None
+    exterior_class = building_exterior_class(building)
+    if stamp.exterior_classes and exterior_class not in stamp.exterior_classes:
+        return None
+    return stamp
+
+
 def building_shell_span(building, rng=None):
+    stamp = building_stamp_definition(building)
+    if stamp is not None:
+        return int(stamp.width), int(stamp.height)
     profile = building_exterior_profile(building)
     exterior_class = str(profile.get("class", "building")).strip().lower() or "building"
     parcel_span_x, parcel_span_y = building_parcel_span(building)
@@ -2275,8 +2301,30 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
             block_bottom=block_bottom,
             rng=layout_rng,
         )
-    entry_bias = (shell_cx + layout_rng.randint(-1, 1)) if front_side in {"north", "south"} else (shell_cy + layout_rng.randint(-1, 1))
-    entry_x, entry_y = _wall_point_from_bias(left, right, top, bottom, front_side, entry_bias)
+    resolved_stamp = None
+    stamp = building_stamp_definition(building)
+    if stamp is not None:
+        try:
+            candidate = resolve_building_stamp(stamp, left=left, top=top, frontage_side=front_side)
+        except BuildingStampError:
+            candidate = None
+        if (
+            candidate is not None
+            and int(candidate.right) == int(right)
+            and int(candidate.bottom) == int(bottom)
+        ):
+            resolved_stamp = candidate
+
+    if resolved_stamp is not None:
+        entry_x = int(resolved_stamp.entry["x"])
+        entry_y = int(resolved_stamp.entry["y"])
+        service_anchors = [anchor for anchor in resolved_stamp.anchors if str(anchor.get("kind", "")) == "service"]
+        if service_anchors:
+            anchor_x = int(service_anchors[0]["x"])
+            anchor_y = int(service_anchors[0]["y"])
+    else:
+        entry_bias = (shell_cx + layout_rng.randint(-1, 1)) if front_side in {"north", "south"} else (shell_cy + layout_rng.randint(-1, 1))
+        entry_x, entry_y = _wall_point_from_bias(left, right, top, bottom, front_side, entry_bias)
 
     sign_text = building_signage_text(building)
     signage = None
@@ -2293,19 +2341,23 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
                 "text": sign_text,
             }
 
-    excluded = set(building_shape_exclusions(
-        rng=layout_rng,
-        exterior_class=building_exterior_class(building) if isinstance(building, dict) else "building",
-        left=left,
-        right=right,
-        top=top,
-        bottom=bottom,
-        entry_x=entry_x,
-        entry_y=entry_y,
-        entry_side=front_side,
-        parcel_span_x=parcel_span_x,
-        parcel_span_y=parcel_span_y,
-    ))
+    if resolved_stamp is not None:
+        ground_floor = resolved_stamp.floors.get(0)
+        excluded = set(ground_floor.excluded if ground_floor is not None else ())
+    else:
+        excluded = set(building_shape_exclusions(
+            rng=layout_rng,
+            exterior_class=building_exterior_class(building) if isinstance(building, dict) else "building",
+            left=left,
+            right=right,
+            top=top,
+            bottom=bottom,
+            entry_x=entry_x,
+            entry_y=entry_y,
+            entry_side=front_side,
+            parcel_span_x=parcel_span_x,
+            parcel_span_y=parcel_span_y,
+        ))
     if bool((building or {}).get("dedicated_poker_floor")):
         # The card-room floor needs full support and must not bridge a court or
         # notch whose ground level belongs to the street or another building.
@@ -2313,53 +2365,60 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
     if excluded and _included_interior_cell_count(left, right, top, bottom, excluded) <= 0:
         excluded.clear()
 
-    apertures = [
-        {
-            "x": int(entry_x),
-            "y": int(entry_y),
-            "z": 0,
-            "side": front_side,
-            "kind": "door",
-            "ordinary": True,
-        }
-    ]
-    for diagonal_aperture in _reentrant_exterior_door_apertures(excluded, left, right, top, bottom):
-        excluded.discard((int(diagonal_aperture["x"]), int(diagonal_aperture["y"])))
-        apertures.append(diagonal_aperture)
+    if resolved_stamp is not None:
+        apertures = [
+            dict(aperture)
+            for floor in resolved_stamp.floors.values()
+            for aperture in floor.apertures
+        ]
+    else:
+        apertures = [
+            {
+                "x": int(entry_x),
+                "y": int(entry_y),
+                "z": 0,
+                "side": front_side,
+                "kind": "door",
+                "ordinary": True,
+            }
+        ]
+        for diagonal_aperture in _reentrant_exterior_door_apertures(excluded, left, right, top, bottom):
+            excluded.discard((int(diagonal_aperture["x"]), int(diagonal_aperture["y"])))
+            apertures.append(diagonal_aperture)
 
-    service_aperture = _service_aperture(
-        building=building,
-        left=left,
-        right=right,
-        top=top,
-        bottom=bottom,
-        anchor_x=anchor_x,
-        anchor_y=anchor_y,
-        entry_x=entry_x,
-        entry_y=entry_y,
-        entry_side=front_side,
-    )
-    if service_aperture:
-        apertures.append(service_aperture)
-
-    reserved = {
-        (int(aperture["x"]), int(aperture["y"]), int(aperture.get("z", 0)))
-        for aperture in apertures
-        if isinstance(aperture, dict)
-    }
-    if signage:
-        reserved.add((int(signage["x"]), int(signage["y"]), int(signage.get("z", 0))))
-    apertures.extend(
-        _window_apertures(
+        service_aperture = _service_aperture(
             building=building,
             left=left,
             right=right,
             top=top,
             bottom=bottom,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            entry_x=entry_x,
+            entry_y=entry_y,
             entry_side=front_side,
-            reserved=reserved,
         )
-    )
+        if service_aperture:
+            apertures.append(service_aperture)
+
+        reserved = {
+            (int(aperture["x"]), int(aperture["y"]), int(aperture.get("z", 0)))
+            for aperture in apertures
+            if isinstance(aperture, dict)
+        }
+        if signage:
+            reserved.add((int(signage["x"]), int(signage["y"]), int(signage.get("z", 0))))
+        apertures.extend(
+            _window_apertures(
+                building=building,
+                left=left,
+                right=right,
+                top=top,
+                bottom=bottom,
+                entry_side=front_side,
+                reserved=reserved,
+            )
+        )
 
     # Remove apertures and signage that fall in excluded (notched) areas.
     if excluded:
@@ -2387,6 +2446,21 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
             "column_overlap": bool(profile.get("column_overlap")),
         })
 
+    stamp_floor_plans = {}
+    stamp_anchors = ()
+    if resolved_stamp is not None:
+        stamp_anchors = tuple(dict(anchor) for anchor in resolved_stamp.anchors)
+        for floor_z, floor in resolved_stamp.floors.items():
+            stamp_floor_plans[int(floor_z)] = {
+                "excluded": frozenset(floor.excluded),
+                "walls": tuple(sorted(floor.walls)),
+                "apertures": tuple(dict(aperture) for aperture in floor.apertures),
+                "room_cells": dict(floor.zones),
+                "vertical_cells": tuple(
+                    sorted(cell for cell, glyph in floor.cells.items() if glyph == "S")
+                ),
+            }
+
     return {
         "left": int(left),
         "right": int(right),
@@ -2413,4 +2487,7 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         },
         "placement": placement,
         "signage": signage,
+        "building_stamp": resolved_stamp.stamp_id if resolved_stamp is not None else None,
+        "stamp_floor_plans": stamp_floor_plans,
+        "stamp_anchors": stamp_anchors,
     }

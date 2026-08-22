@@ -594,6 +594,8 @@ def _register_chunk_properties(sim, chunk):
                     "footprint": dict(layout.get("footprint", {})),
                     "placement": dict(layout.get("placement", {})),
                     "placement_profile": dict(building.get("placement_profile", {})) if isinstance(building.get("placement_profile"), dict) else None,
+                    "building_stamp": str(layout.get("building_stamp", "") or "").strip() or None,
+                    "stamp_anchors": [dict(anchor) for anchor in layout.get("stamp_anchors", ()) if isinstance(anchor, dict)],
                     "entry": dict(layout.get("entry", {})),
                     "apertures": [dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)],
                     "signage": dict(layout["signage"]) if isinstance(layout.get("signage"), dict) else None,

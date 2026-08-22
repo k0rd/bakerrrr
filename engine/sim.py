@@ -2376,6 +2376,25 @@ class Simulation:
                         "room_index": int(room_index),
                         "room_kind": room_kind,
                     }
+        explicit_room_cells = (room_plan or {}).get("room_cells", {})
+        if isinstance(explicit_room_cells, dict):
+            room_order = {
+                room_kind: index
+                for index, room_kind in enumerate(dict.fromkeys(str(value) for value in explicit_room_cells.values()))
+            }
+            for cell, room_kind in explicit_room_cells.items():
+                if not isinstance(cell, (tuple, list)) or len(cell) < 2:
+                    continue
+                try:
+                    room_x = int(cell[0])
+                    room_y = int(cell[1])
+                except (TypeError, ValueError):
+                    continue
+                room_kind = str(room_kind or "room").strip().lower() or "room"
+                room_cells[(room_x, room_y, int(z))] = {
+                    "room_index": int(room_order.get(room_kind, 0)),
+                    "room_kind": room_kind,
+                }
         for y in range(int(top), int(bottom) + 1):
             for x in range(int(left), int(right) + 1):
                 if (x, y) in excluded:
@@ -3141,14 +3160,28 @@ class Simulation:
                     door_x = int(entry.get("x", layout["anchor_x"]))
                     door_y = int(entry.get("y", bottom))
                     shape_excluded = layout.get("excluded", frozenset())
+                    stamp_floor_plans = layout.get("stamp_floor_plans", {}) if isinstance(layout.get("stamp_floor_plans"), dict) else {}
                     dedicated_poker_floor = bool(building.get("dedicated_poker_floor"))
                     try:
                         poker_floor = int(building.get("poker_floor", 1))
                     except (TypeError, ValueError):
                         poker_floor = 1
                     for z in range(-basement_levels, floors):
-                        floor_excluded = shape_excluded
-                        if dedicated_poker_floor and int(z) == int(poker_floor):
+                        stamp_floor_plan = stamp_floor_plans.get(int(z))
+                        floor_excluded = stamp_floor_plan.get("excluded", shape_excluded) if isinstance(stamp_floor_plan, dict) else shape_excluded
+                        if isinstance(stamp_floor_plan, dict):
+                            room_cells = stamp_floor_plan.get("room_cells", {})
+                            room_kinds = tuple(dict.fromkeys(str(value) for value in room_cells.values())) if isinstance(room_cells, dict) else ()
+                            room_plan = {
+                                "rooms": tuple(
+                                    {"kind": room_kind, "left": left + 1, "right": right - 1, "top": top + 1, "bottom": bottom - 1}
+                                    for room_kind in room_kinds
+                                ),
+                                "walls": tuple(stamp_floor_plan.get("walls", ())),
+                                "doors": (),
+                                "room_cells": dict(room_cells) if isinstance(room_cells, dict) else {},
+                            }
+                        elif dedicated_poker_floor and int(z) == int(poker_floor):
                             room_plan = {
                                 "rooms": ({
                                     "kind": "poker_room",
@@ -3196,7 +3229,13 @@ class Simulation:
                             "placement": dict(layout.get("placement", {})),
                             "placement_profile": dict(building.get("placement_profile", {})) if isinstance(building.get("placement_profile"), dict) else None,
                             "signage": dict(layout["signage"]) if isinstance(layout.get("signage"), dict) else None,
+                            "building_stamp": str(layout.get("building_stamp", "") or "").strip() or None,
                         }
+                        floor_apertures = (
+                            stamp_floor_plan.get("apertures", ())
+                            if isinstance(stamp_floor_plan, dict)
+                            else layout.get("apertures", ()) if z == 0 else ()
+                        )
                         self._stamp_room_shell(
                             left=left,
                             right=right,
@@ -3205,7 +3244,7 @@ class Simulation:
                             z=z,
                             door_x=door_x if z == 0 else None,
                             door_y=door_y if z == 0 else None,
-                            apertures=layout.get("apertures", ()) if z == 0 else (),
+                            apertures=floor_apertures,
                             room_plan=room_plan,
                             excluded=floor_excluded,
                         )
@@ -3223,16 +3262,40 @@ class Simulation:
                     if floors + basement_levels > 1:
                         archetype = str(building.get("archetype", "")).strip().lower()
                         connector_kind = "elevator" if archetype in elevator_archetypes else "stairs"
-                        connector_cell = self._pick_building_connector_cell(
-                            left=left,
-                            right=right,
-                            top=top,
-                            bottom=bottom,
-                            kind=connector_kind,
-                            excluded=shape_excluded,
-                            building_id=chunk_building_id,
-                            bottom_floor=-basement_levels,
-                            top_floor=floors - 1,
+                        connector_anchor = next(
+                            (
+                                anchor
+                                for anchor in tuple(layout.get("stamp_anchors", ()) or ())
+                                if isinstance(anchor, dict) and str(anchor.get("kind", "")).strip().lower() in {"stairs", "elevator", "vertical"}
+                            ),
+                            None,
+                        )
+                        authored_vertical_cell = next(
+                            (
+                                (int(cell[0]), int(cell[1]))
+                                for floor_plan in stamp_floor_plans.values()
+                                if isinstance(floor_plan, dict)
+                                for cell in tuple(floor_plan.get("vertical_cells", ()) or ())
+                                if isinstance(cell, (tuple, list)) and len(cell) >= 2
+                            ),
+                            None,
+                        )
+                        connector_cell = (
+                            (int(connector_anchor["x"]), int(connector_anchor["y"]))
+                            if connector_anchor is not None
+                            else authored_vertical_cell
+                            if authored_vertical_cell is not None
+                            else self._pick_building_connector_cell(
+                                left=left,
+                                right=right,
+                                top=top,
+                                bottom=bottom,
+                                kind=connector_kind,
+                                excluded=shape_excluded,
+                                building_id=chunk_building_id,
+                                bottom_floor=-basement_levels,
+                                top_floor=floors - 1,
+                            )
                         )
                         if connector_cell is None:
                             continue

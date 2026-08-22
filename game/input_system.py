@@ -79,6 +79,7 @@ from game.item_semantics import (
     item_is_identified_for_actor,
     item_unknown_inspect_text_for_actor,
 )
+from game.item_compatibility import set_drone_compatibility_target
 from game.opportunities import _item_label
 from game.overworld_runtime import _player_overworld_chunk
 from game.player_action_system import PlayerActionSystem
@@ -156,6 +157,7 @@ from game.drone_sheet import (
     drone_sheet_records,
     drone_sheet_status_lines,
     drone_sheet_tab_rows,
+    drone_sheet_visual_model,
     drone_workshop_chassis_records,
     drop_drone_workshop_part,
     has_backpack_packed_drone,
@@ -652,6 +654,9 @@ class InputSystem(System):
                 "rows": [],
                 "status_lines": [],
                 "feedback": "",
+                "target_chassis_class": "",
+                "target_label": "",
+                "visual_model": {},
             }
         if not hasattr(self.sim, "wire_kit_ui"):
             self.sim.wire_kit_ui = {
@@ -1059,6 +1064,9 @@ class InputSystem(System):
         state.setdefault("rows", [])
         state.setdefault("status_lines", [])
         state.setdefault("feedback", "")
+        state.setdefault("target_chassis_class", "")
+        state.setdefault("target_label", "")
+        state.setdefault("visual_model", {})
         return state
 
     def _wire_kit_state(self):
@@ -1887,6 +1895,13 @@ class InputSystem(System):
                     state["cargo_side"] = "pack"
                 if tab == "modules" and str(state.get("module_side", "bay")).strip().lower() not in {"bay", "drone"}:
                     state["module_side"] = "bay"
+                target = set_drone_compatibility_target(
+                    self.sim,
+                    getattr(selected_workshop_record.get("state"), "chassis_class", None),
+                    label=selected_workshop_record.get("label", "workshop chassis"),
+                )
+                state["target_chassis_class"] = target.get("drone_chassis_class", "")
+                state["target_label"] = target.get("drone_label", "")
                 rows = list(drone_sheet_tab_rows(
                     self.sim,
                     self.player_eid,
@@ -1899,6 +1914,12 @@ class InputSystem(System):
                 ))
                 state["rows"] = rows
                 state["status_lines"] = list(drone_sheet_status_lines(selected_workshop_record, item_catalog=self.catalog))
+                state["visual_model"] = drone_sheet_visual_model(
+                    selected_workshop_record,
+                    rows=rows,
+                    tab=tab,
+                    item_catalog=self.catalog,
+                )
                 if rows:
                     state["selected_index"] = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
                 else:
@@ -1937,6 +1958,12 @@ class InputSystem(System):
                     procedure_editor=state.get("procedure_editor"),
                 ))
                 state["rows"] = rows
+                state["visual_model"] = drone_sheet_visual_model(
+                    {},
+                    rows=rows,
+                    tab="parts",
+                    item_catalog=self.catalog,
+                )
                 if rows:
                     state["selected_index"] = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
                 else:
@@ -1977,6 +2004,13 @@ class InputSystem(System):
         if tab not in DRONE_SHEET_TABS:
             tab = "status"
             state["tab"] = tab
+        target = set_drone_compatibility_target(
+            self.sim,
+            getattr(selected_record.get("state"), "chassis_class", None),
+            label=selected_record.get("label", "drone"),
+        )
+        state["target_chassis_class"] = target.get("drone_chassis_class", "")
+        state["target_label"] = target.get("drone_label", "")
         rows = list(drone_sheet_tab_rows(
             self.sim,
             self.player_eid,
@@ -1989,6 +2023,12 @@ class InputSystem(System):
         ))
         state["rows"] = rows
         state["status_lines"] = list(drone_sheet_status_lines(selected_record, item_catalog=self.catalog))
+        state["visual_model"] = drone_sheet_visual_model(
+            selected_record,
+            rows=rows,
+            tab=tab,
+            item_catalog=self.catalog,
+        )
         if rows:
             state["selected_index"] = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
         else:
@@ -2012,7 +2052,7 @@ class InputSystem(System):
             self.sim.emit(Event("drone_sheet_blocked", eid=self.player_eid, controller_eid=self.player_eid, reason="no_manageable_drone"))
             return True
         state["open"] = True
-        state["feedback"] = "Drone workshop open."
+        state["feedback"] = ""
         self.sim.emit(Event(
             "drone_sheet_opened",
             eid=self.player_eid,
@@ -2044,7 +2084,7 @@ class InputSystem(System):
         state["selected_drone_eid"] = records[index].get("eid")
         state["selected_index"] = 0
         state["scroll"] = 0
-        state["feedback"] = f"Selected {records[index].get('label', 'drone')}."
+        state["feedback"] = ""
         return self._refresh_drone_sheet_ui()
 
     def _set_drone_sheet_tab(self, tab):
@@ -2057,7 +2097,7 @@ class InputSystem(System):
         state["tab"] = tab
         state["selected_index"] = 0
         state["scroll"] = 0
-        state["feedback"] = f"Drone workshop: {tab}."
+        state["feedback"] = ""
         self._refresh_drone_sheet_ui(announce_unavailable=True)
         return True
 
@@ -2066,7 +2106,7 @@ class InputSystem(System):
         state["cargo_side"] = "drone" if str(state.get("cargo_side", "pack")).strip().lower() == "pack" else "pack"
         state["selected_index"] = 0
         state["scroll"] = 0
-        state["feedback"] = f"Cargo view: {'drone' if state['cargo_side'] == 'drone' else 'pack'}."
+        state["feedback"] = ""
         self._refresh_drone_sheet_ui(announce_unavailable=True)
         return True
 
@@ -2075,7 +2115,7 @@ class InputSystem(System):
         state["module_side"] = "bay" if str(state.get("module_side", "drone")).strip().lower() == "drone" else "drone"
         state["selected_index"] = 0
         state["scroll"] = 0
-        state["feedback"] = f"Modules: {'workshop' if state['module_side'] == 'bay' else 'installed'}."
+        state["feedback"] = ""
         self._refresh_drone_sheet_ui(announce_unavailable=True)
         return True
 
@@ -2715,9 +2755,11 @@ class InputSystem(System):
         rows = list(state.get("rows", ()) or ())
         if key in (KEY_UP, ord("k"), ord("K")):
             state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), -1, len(rows))
+            state["feedback"] = ""
             return True
         if key in (KEY_DOWN, ord("j"), ord("J")):
             state["selected_index"] = _wrapped_selection_index(state.get("selected_index", 0), 1, len(rows))
+            state["feedback"] = ""
             return True
         if key in ENTER_KEYS:
             return self._activate_selected_drone_sheet_row(prefer_workbench=True)

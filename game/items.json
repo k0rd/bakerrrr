@@ -5659,8 +5659,43 @@
     "name": "Undershirt",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_top"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_top"
+    ],
+    "appearance_drawable": "undershirt",
+    "appearance_profile": {
+      "label": "undershirt",
+      "presentation": "masc",
+      "materials": [
+        "cotton",
+        "ribbed cotton",
+        "modal",
+        "soft jersey"
+      ],
+      "details": [
+        "classic",
+        "close-fitting",
+        "ribbed",
+        "soft"
+      ],
+      "patterns": [
+        "",
+        "striped",
+        "pinstriped"
+      ],
+      "emblem_chance": 0.18,
+      "basewear": true,
+      "articleless": false,
+      "starter_weights": {
+        "masc": 2
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5668,8 +5703,43 @@
     "name": "Tank Undershirt",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_top"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_top"
+    ],
+    "appearance_drawable": "tank_undershirt",
+    "appearance_profile": {
+      "label": "tank undershirt",
+      "presentation": "neutral",
+      "materials": [
+        "cotton",
+        "ribbed cotton",
+        "modal",
+        "soft jersey"
+      ],
+      "details": [
+        "classic",
+        "low-necked",
+        "ribbed",
+        "trim"
+      ],
+      "patterns": [
+        "",
+        "striped",
+        "star-print"
+      ],
+      "emblem_chance": 0.22,
+      "basewear": true,
+      "articleless": false,
+      "starter_weights": {
+        "masc": 1
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5677,8 +5747,44 @@
     "name": "Bra",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_top"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_top"
+    ],
+    "appearance_drawable": "bra",
+    "appearance_profile": {
+      "label": "bra",
+      "presentation": "femme",
+      "materials": [
+        "cotton",
+        "lace",
+        "satin",
+        "soft mesh"
+      ],
+      "details": [
+        "lacy",
+        "scallop-trimmed",
+        "ribbon-trimmed",
+        "soft-cup",
+        "strappy"
+      ],
+      "patterns": [
+        "",
+        "little-floral",
+        "dotted"
+      ],
+      "emblem_chance": 0.46,
+      "basewear": true,
+      "articleless": false,
+      "starter_weights": {
+        "femme": 1
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5686,8 +5792,44 @@
     "name": "Bralette",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_top"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_top"
+    ],
+    "appearance_drawable": "bralette",
+    "appearance_profile": {
+      "label": "bralette",
+      "presentation": "femme",
+      "materials": [
+        "cotton",
+        "lace",
+        "modal",
+        "soft mesh"
+      ],
+      "details": [
+        "lacy",
+        "cross-backed",
+        "scallop-trimmed",
+        "soft",
+        "strappy"
+      ],
+      "patterns": [
+        "",
+        "little-floral",
+        "star-print"
+      ],
+      "emblem_chance": 0.5,
+      "basewear": true,
+      "articleless": false,
+      "starter_weights": {
+        "femme": 2
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5695,8 +5837,43 @@
     "name": "Camisole",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_top"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_top"
+    ],
+    "appearance_drawable": "camisole",
+    "appearance_profile": {
+      "label": "camisole",
+      "presentation": "femme",
+      "materials": [
+        "cotton",
+        "lace",
+        "satin",
+        "modal"
+      ],
+      "details": [
+        "lacy",
+        "ribbon-trimmed",
+        "scallop-trimmed",
+        "strappy"
+      ],
+      "patterns": [
+        "",
+        "little-floral",
+        "dotted"
+      ],
+      "emblem_chance": 0.56,
+      "basewear": true,
+      "articleless": false,
+      "starter_weights": {
+        "femme": 2
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5704,8 +5881,44 @@
     "name": "Bandeau",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_top"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_top"
+    ],
+    "appearance_drawable": "bandeau",
+    "appearance_profile": {
+      "label": "bandeau",
+      "presentation": "neutral",
+      "materials": [
+        "cotton",
+        "lace",
+        "modal",
+        "soft jersey"
+      ],
+      "details": [
+        "simple",
+        "lacy",
+        "ribbed",
+        "scallop-trimmed"
+      ],
+      "patterns": [
+        "",
+        "striped",
+        "constellation-print"
+      ],
+      "emblem_chance": 0.42,
+      "basewear": true,
+      "articleless": false,
+      "starter_weights": {
+        "masc": 1,
+        "femme": 1
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5713,8 +5926,44 @@
     "name": "Boxers",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_bottom"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_bottom"
+    ],
+    "appearance_drawable": "boxers",
+    "appearance_profile": {
+      "label": "boxers",
+      "presentation": "masc",
+      "materials": [
+        "cotton",
+        "poplin",
+        "soft jersey",
+        "modal"
+      ],
+      "details": [
+        "classic",
+        "button-front",
+        "relaxed",
+        "soft"
+      ],
+      "patterns": [
+        "",
+        "striped",
+        "pinstriped",
+        "star-print"
+      ],
+      "emblem_chance": 0.28,
+      "basewear": true,
+      "articleless": true,
+      "starter_weights": {
+        "masc": 1
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5722,8 +5971,43 @@
     "name": "Boxer Briefs",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_bottom"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_bottom"
+    ],
+    "appearance_drawable": "boxer_briefs",
+    "appearance_profile": {
+      "label": "boxer briefs",
+      "presentation": "masc",
+      "materials": [
+        "cotton",
+        "modal",
+        "ribbed cotton",
+        "soft jersey"
+      ],
+      "details": [
+        "classic",
+        "contrast-waistband",
+        "sporty",
+        "trim"
+      ],
+      "patterns": [
+        "",
+        "striped",
+        "constellation-print"
+      ],
+      "emblem_chance": 0.3,
+      "basewear": true,
+      "articleless": true,
+      "starter_weights": {
+        "masc": 2
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5731,8 +6015,43 @@
     "name": "Briefs",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_bottom"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_bottom"
+    ],
+    "appearance_drawable": "briefs",
+    "appearance_profile": {
+      "label": "briefs",
+      "presentation": "masc",
+      "materials": [
+        "cotton",
+        "modal",
+        "ribbed cotton",
+        "soft jersey"
+      ],
+      "details": [
+        "classic",
+        "contrast-trimmed",
+        "sporty",
+        "soft"
+      ],
+      "patterns": [
+        "",
+        "striped",
+        "dotted"
+      ],
+      "emblem_chance": 0.3,
+      "basewear": true,
+      "articleless": true,
+      "starter_weights": {
+        "masc": 1
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5740,8 +6059,43 @@
     "name": "Boyshort Panties",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_bottom"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_bottom"
+    ],
+    "appearance_drawable": "boyshorts",
+    "appearance_profile": {
+      "label": "boyshort panties",
+      "presentation": "femme",
+      "materials": [
+        "cotton",
+        "lace",
+        "modal",
+        "soft jersey"
+      ],
+      "details": [
+        "lacy",
+        "scallop-trimmed",
+        "sporty",
+        "ribbon-trimmed"
+      ],
+      "patterns": [
+        "",
+        "little-floral",
+        "striped"
+      ],
+      "emblem_chance": 0.58,
+      "basewear": true,
+      "articleless": true,
+      "starter_weights": {
+        "femme": 1
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5749,8 +6103,44 @@
     "name": "Bikini Panties",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_bottom"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_bottom"
+    ],
+    "appearance_drawable": "bikini_panties",
+    "appearance_profile": {
+      "label": "bikini panties",
+      "presentation": "femme",
+      "materials": [
+        "cotton",
+        "lace",
+        "satin",
+        "modal"
+      ],
+      "details": [
+        "lacy",
+        "scallop-trimmed",
+        "ribbon-trimmed",
+        "soft",
+        "strappy"
+      ],
+      "patterns": [
+        "",
+        "little-floral",
+        "dotted"
+      ],
+      "emblem_chance": 0.62,
+      "basewear": true,
+      "articleless": true,
+      "starter_weights": {
+        "femme": 1
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5758,8 +6148,44 @@
     "name": "Cheeky Panties",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_bottom"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_bottom"
+    ],
+    "appearance_drawable": "cheeky_panties",
+    "appearance_profile": {
+      "label": "cheeky panties",
+      "presentation": "femme",
+      "materials": [
+        "cotton",
+        "lace",
+        "satin",
+        "modal"
+      ],
+      "details": [
+        "lacy",
+        "scallop-trimmed",
+        "ribbon-trimmed",
+        "soft",
+        "strappy"
+      ],
+      "patterns": [
+        "",
+        "little-floral",
+        "star-print"
+      ],
+      "emblem_chance": 0.72,
+      "basewear": true,
+      "articleless": true,
+      "starter_weights": {
+        "femme": 2
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5767,8 +6193,44 @@
     "name": "Thong",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_bottom"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_bottom"
+    ],
+    "appearance_drawable": "thong",
+    "appearance_profile": {
+      "label": "thong",
+      "presentation": "femme",
+      "materials": [
+        "cotton",
+        "lace",
+        "satin",
+        "soft mesh"
+      ],
+      "details": [
+        "lacy",
+        "scallop-trimmed",
+        "ribbon-trimmed",
+        "simple",
+        "strappy"
+      ],
+      "patterns": [
+        "",
+        "little-floral",
+        "dotted"
+      ],
+      "emblem_chance": 0.66,
+      "basewear": true,
+      "articleless": false,
+      "starter_weights": {
+        "femme": 1
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5776,8 +6238,44 @@
     "name": "High-Waist Panties",
     "glyph": "[",
     "stack_max": 1,
-    "tags": ["cosmetic", "clothing", "basewear", "legal"],
-    "appearance_slots": ["base_bottom"],
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "basewear",
+      "legal"
+    ],
+    "appearance_slots": [
+      "base_bottom"
+    ],
+    "appearance_drawable": "high_waist_panties",
+    "appearance_profile": {
+      "label": "high-waist panties",
+      "presentation": "femme",
+      "materials": [
+        "cotton",
+        "lace",
+        "satin",
+        "modal"
+      ],
+      "details": [
+        "lacy",
+        "scallop-trimmed",
+        "vintage-cut",
+        "soft"
+      ],
+      "patterns": [
+        "",
+        "little-floral",
+        "dotted",
+        "constellation-print"
+      ],
+      "emblem_chance": 0.6,
+      "basewear": true,
+      "articleless": true,
+      "starter_weights": {
+        "femme": 1
+      }
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5793,6 +6291,24 @@
     "appearance_slots": [
       "top"
     ],
+    "appearance_drawable": "tee",
+    "appearance_profile": {
+      "label": "tee",
+      "materials": [
+        "cotton",
+        "jersey",
+        "linen",
+        "ribbed cotton"
+      ],
+      "styles": [
+        "plain",
+        "soft",
+        "trim",
+        "faded"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5808,6 +6324,24 @@
     "appearance_slots": [
       "top"
     ],
+    "appearance_drawable": "buttoned_top",
+    "appearance_profile": {
+      "label": "button-up",
+      "materials": [
+        "cotton",
+        "linen",
+        "poplin",
+        "brushed cotton"
+      ],
+      "styles": [
+        "crisp",
+        "rolled-sleeve",
+        "loose",
+        "neat"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5823,6 +6357,24 @@
     "appearance_slots": [
       "top"
     ],
+    "appearance_drawable": "blouse",
+    "appearance_profile": {
+      "label": "blouse",
+      "materials": [
+        "cotton",
+        "linen",
+        "satin",
+        "poplin"
+      ],
+      "styles": [
+        "sharp",
+        "soft",
+        "neat",
+        "loose"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5838,6 +6390,24 @@
     "appearance_slots": [
       "top"
     ],
+    "appearance_drawable": "sweater",
+    "appearance_profile": {
+      "label": "sweater",
+      "materials": [
+        "knit",
+        "wool",
+        "cotton",
+        "ribbed knit"
+      ],
+      "styles": [
+        "soft",
+        "plain",
+        "loose",
+        "trim"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5853,6 +6423,24 @@
     "appearance_slots": [
       "top"
     ],
+    "appearance_drawable": "overshirt",
+    "appearance_profile": {
+      "label": "overshirt",
+      "materials": [
+        "cotton",
+        "canvas",
+        "flannel",
+        "denim"
+      ],
+      "styles": [
+        "thick",
+        "neat",
+        "oversized",
+        "workwear"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5868,6 +6456,24 @@
     "appearance_slots": [
       "top"
     ],
+    "appearance_drawable": "turtleneck",
+    "appearance_profile": {
+      "label": "turtleneck",
+      "materials": [
+        "knit",
+        "cotton",
+        "ribbed knit",
+        "wool"
+      ],
+      "styles": [
+        "clean",
+        "sharp",
+        "soft",
+        "severe"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5883,6 +6489,24 @@
     "appearance_slots": [
       "bottom"
     ],
+    "appearance_drawable": "trousers",
+    "appearance_profile": {
+      "label": "trousers",
+      "materials": [
+        "twill",
+        "denim",
+        "wool",
+        "canvas"
+      ],
+      "styles": [
+        "straight-leg",
+        "creased",
+        "relaxed",
+        "tapered"
+      ],
+      "basewear": false,
+      "articleless": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5898,6 +6522,24 @@
     "appearance_slots": [
       "bottom"
     ],
+    "appearance_drawable": "shorts",
+    "appearance_profile": {
+      "label": "shorts",
+      "materials": [
+        "cotton",
+        "denim",
+        "twill",
+        "linen"
+      ],
+      "styles": [
+        "plain",
+        "cuffed",
+        "loose",
+        "utility"
+      ],
+      "basewear": false,
+      "articleless": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5913,6 +6555,24 @@
     "appearance_slots": [
       "bottom"
     ],
+    "appearance_drawable": "skirt",
+    "appearance_profile": {
+      "label": "skirt",
+      "materials": [
+        "cotton",
+        "denim",
+        "satin",
+        "linen"
+      ],
+      "styles": [
+        "pleated",
+        "straight",
+        "wrap",
+        "soft"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5928,6 +6588,24 @@
     "appearance_slots": [
       "full_body"
     ],
+    "appearance_drawable": "dress",
+    "appearance_profile": {
+      "label": "dress",
+      "materials": [
+        "cotton",
+        "linen",
+        "satin",
+        "knit"
+      ],
+      "styles": [
+        "simple",
+        "fitted",
+        "loose",
+        "sharp"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5944,6 +6622,18 @@
     "appearance_slots": [
       "full_body"
     ],
+    "appearance_drawable": "jumpsuit",
+    "appearance_profile": {
+      "label": "jumpsuit",
+      "materials": [
+        "cotton"
+      ],
+      "styles": [
+        "issued"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5959,6 +6649,24 @@
     "appearance_slots": [
       "shoes"
     ],
+    "appearance_drawable": "boots",
+    "appearance_profile": {
+      "label": "boots",
+      "materials": [
+        "leather",
+        "canvas",
+        "rubber",
+        "suede"
+      ],
+      "styles": [
+        "scuffed",
+        "polished",
+        "heavy",
+        "soft"
+      ],
+      "basewear": false,
+      "articleless": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5974,6 +6682,24 @@
     "appearance_slots": [
       "shoes"
     ],
+    "appearance_drawable": "sneakers",
+    "appearance_profile": {
+      "label": "sneakers",
+      "materials": [
+        "canvas",
+        "mesh",
+        "suede",
+        "rubber"
+      ],
+      "styles": [
+        "clean",
+        "worn-in",
+        "bright",
+        "low-top"
+      ],
+      "basewear": false,
+      "articleless": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -5989,6 +6715,24 @@
     "appearance_slots": [
       "shoes"
     ],
+    "appearance_drawable": "sandals",
+    "appearance_profile": {
+      "label": "sandals",
+      "materials": [
+        "leather",
+        "rubber",
+        "canvas",
+        "woven cord"
+      ],
+      "styles": [
+        "plain",
+        "strapped",
+        "soft",
+        "worn-in"
+      ],
+      "basewear": false,
+      "articleless": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6004,6 +6748,25 @@
     "appearance_slots": [
       "hat"
     ],
+    "appearance_drawable": "cap",
+    "appearance_profile": {
+      "label": "cap",
+      "materials": [
+        "cotton",
+        "canvas",
+        "denim",
+        "wool"
+      ],
+      "styles": [
+        "plain",
+        "low-brim",
+        "soft",
+        "patched"
+      ],
+      "basewear": false,
+      "articleless": false,
+      "personal_token": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6017,8 +6780,26 @@
       "legal"
     ],
     "appearance_slots": [
-      "earrings"
+      "hat"
     ],
+    "appearance_drawable": "cap",
+    "appearance_profile": {
+      "label": "baseball cap",
+      "materials": [
+        "cotton",
+        "canvas",
+        "denim",
+        "polyester"
+      ],
+      "styles": [
+        "plain",
+        "curved-brim",
+        "faded",
+        "patched"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6034,6 +6815,24 @@
     "appearance_slots": [
       "hat"
     ],
+    "appearance_drawable": "bandana",
+    "appearance_profile": {
+      "label": "bandana",
+      "materials": [
+        "cotton",
+        "linen",
+        "gauze",
+        "soft cotton"
+      ],
+      "styles": [
+        "plain",
+        "knotted",
+        "folded",
+        "faded"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6049,6 +6848,24 @@
     "appearance_slots": [
       "outer"
     ],
+    "appearance_drawable": "jacket",
+    "appearance_profile": {
+      "label": "jacket",
+      "materials": [
+        "canvas",
+        "denim",
+        "leather",
+        "wool"
+      ],
+      "styles": [
+        "boxy",
+        "cropped",
+        "workwear",
+        "lined"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6064,6 +6881,24 @@
     "appearance_slots": [
       "outer"
     ],
+    "appearance_drawable": "windbreaker",
+    "appearance_profile": {
+      "label": "windbreaker",
+      "materials": [
+        "nylon",
+        "polyester",
+        "ripstop",
+        "light canvas"
+      ],
+      "styles": [
+        "lightweight",
+        "hooded",
+        "zip-front",
+        "boxy"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6079,6 +6914,24 @@
     "appearance_slots": [
       "outer"
     ],
+    "appearance_drawable": "coat",
+    "appearance_profile": {
+      "label": "coat",
+      "materials": [
+        "wool",
+        "canvas",
+        "cotton",
+        "weatherproof cloth"
+      ],
+      "styles": [
+        "dark",
+        "heavy",
+        "boxy",
+        "long"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6094,6 +6947,24 @@
     "appearance_slots": [
       "outer"
     ],
+    "appearance_drawable": "cardigan",
+    "appearance_profile": {
+      "label": "cardigan",
+      "materials": [
+        "knit",
+        "wool",
+        "cotton",
+        "soft knit"
+      ],
+      "styles": [
+        "long",
+        "soft",
+        "loose",
+        "neat"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6109,6 +6980,24 @@
     "appearance_slots": [
       "outer"
     ],
+    "appearance_drawable": "blazer",
+    "appearance_profile": {
+      "label": "blazer",
+      "materials": [
+        "wool",
+        "twill",
+        "linen",
+        "structured cotton"
+      ],
+      "styles": [
+        "structured",
+        "sharp",
+        "tailored",
+        "dark"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6124,6 +7013,24 @@
     "appearance_slots": [
       "outer"
     ],
+    "appearance_drawable": "vest",
+    "appearance_profile": {
+      "label": "vest",
+      "materials": [
+        "cotton",
+        "canvas",
+        "wool",
+        "denim"
+      ],
+      "styles": [
+        "sleeveless",
+        "plain",
+        "neat",
+        "severe"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6139,6 +7046,25 @@
     "appearance_slots": [
       "earrings"
     ],
+    "appearance_drawable": "earrings",
+    "appearance_profile": {
+      "label": "earrings",
+      "materials": [
+        "silver",
+        "brass",
+        "glass",
+        "steel"
+      ],
+      "styles": [
+        "small",
+        "hoop",
+        "drop",
+        "simple"
+      ],
+      "basewear": false,
+      "articleless": true,
+      "personal_token": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6155,6 +7081,25 @@
       "ring_left",
       "ring_right"
     ],
+    "appearance_drawable": "ring",
+    "appearance_profile": {
+      "label": "ring",
+      "materials": [
+        "silver",
+        "brass",
+        "steel",
+        "onyx"
+      ],
+      "styles": [
+        "plain",
+        "signet",
+        "thin",
+        "wide"
+      ],
+      "basewear": false,
+      "articleless": false,
+      "personal_token": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6170,6 +7115,25 @@
     "appearance_slots": [
       "necklace"
     ],
+    "appearance_drawable": "necklace",
+    "appearance_profile": {
+      "label": "necklace",
+      "materials": [
+        "silver",
+        "brass",
+        "cord",
+        "steel"
+      ],
+      "styles": [
+        "simple",
+        "chain",
+        "pendant",
+        "short"
+      ],
+      "basewear": false,
+      "articleless": false,
+      "personal_token": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6185,6 +7149,25 @@
     "appearance_slots": [
       "necklace"
     ],
+    "appearance_drawable": "scarf",
+    "appearance_profile": {
+      "label": "scarf",
+      "materials": [
+        "cotton",
+        "wool",
+        "linen",
+        "soft knit"
+      ],
+      "styles": [
+        "narrow",
+        "wrapped",
+        "knotted",
+        "soft"
+      ],
+      "basewear": false,
+      "articleless": false,
+      "personal_token": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6200,6 +7183,25 @@
     "appearance_slots": [
       "bracelet"
     ],
+    "appearance_drawable": "bracelet",
+    "appearance_profile": {
+      "label": "bracelet",
+      "materials": [
+        "silver",
+        "brass",
+        "cord",
+        "steel"
+      ],
+      "styles": [
+        "cuff",
+        "chain",
+        "simple",
+        "wrapped"
+      ],
+      "basewear": false,
+      "articleless": false,
+      "personal_token": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6215,6 +7217,24 @@
     "appearance_slots": [
       "bracelet"
     ],
+    "appearance_drawable": "gloves",
+    "appearance_profile": {
+      "label": "gloves",
+      "materials": [
+        "leather",
+        "canvas",
+        "wool",
+        "knit"
+      ],
+      "styles": [
+        "fingerless",
+        "work-rough",
+        "soft",
+        "worn-in"
+      ],
+      "basewear": false,
+      "articleless": true
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6230,6 +7250,24 @@
     "appearance_slots": [
       "bracelet"
     ],
+    "appearance_drawable": "watch",
+    "appearance_profile": {
+      "label": "watch",
+      "materials": [
+        "steel",
+        "brass",
+        "leather",
+        "canvas"
+      ],
+      "styles": [
+        "weathered",
+        "smooth",
+        "narrow",
+        "polished"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": []
   },
@@ -6255,6 +7293,27 @@
       "disguise",
       "legal"
     ],
+    "appearance_slots": [
+      "full_body"
+    ],
+    "appearance_drawable": "coverall",
+    "appearance_profile": {
+      "label": "worker coverall",
+      "materials": [
+        "cotton",
+        "canvas",
+        "poly-cotton",
+        "duck cloth"
+      ],
+      "styles": [
+        "issued",
+        "work-worn",
+        "plain",
+        "zip-front"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": [],
     "disguise": {
@@ -6272,6 +7331,27 @@
       "disguise",
       "legal"
     ],
+    "appearance_slots": [
+      "outer"
+    ],
+    "appearance_drawable": "maintenance_vest",
+    "appearance_profile": {
+      "label": "maintenance vest",
+      "materials": [
+        "canvas",
+        "polyester",
+        "ripstop",
+        "duck cloth"
+      ],
+      "styles": [
+        "high-visibility",
+        "pocketed",
+        "issued",
+        "work-worn"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "legal",
     "effects": [],
     "disguise": {
@@ -6310,6 +7390,22 @@
     "appearance_slots": [
       "earrings"
     ],
+    "appearance_drawable": "earpiece",
+    "appearance_profile": {
+      "label": "security earpiece",
+      "materials": [
+        "polymer",
+        "steel"
+      ],
+      "styles": [
+        "discreet",
+        "coiled",
+        "issued"
+      ],
+      "basewear": false,
+      "articleless": false,
+      "fashion_item": false
+    },
     "legal_status": "restricted",
     "effects": []
   },
@@ -6323,6 +7419,27 @@
       "disguise",
       "restricted"
     ],
+    "appearance_slots": [
+      "outer"
+    ],
+    "appearance_drawable": "rain_shell",
+    "appearance_profile": {
+      "label": "patrol rain shell",
+      "materials": [
+        "nylon",
+        "ripstop",
+        "weatherproof cloth",
+        "polyester"
+      ],
+      "styles": [
+        "hooded",
+        "issued",
+        "zip-front",
+        "weatherproof"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "restricted",
     "effects": [],
     "disguise": {
@@ -6340,6 +7457,27 @@
       "disguise",
       "restricted"
     ],
+    "appearance_slots": [
+      "outer"
+    ],
+    "appearance_drawable": "security_jacket",
+    "appearance_profile": {
+      "label": "security jacket",
+      "materials": [
+        "nylon",
+        "canvas",
+        "polyester",
+        "weatherproof cloth"
+      ],
+      "styles": [
+        "issued",
+        "boxy",
+        "patched",
+        "dark"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
     "legal_status": "restricted",
     "effects": [],
     "disguise": {
@@ -6389,10 +7527,28 @@
       "butcher",
       "legal"
     ],
-    "appearance_family": "clothing",
     "appearance_slots": [
       "outer"
     ],
+    "appearance_drawable": "work_apron",
+    "appearance_profile": {
+      "label": "butcher apron",
+      "materials": [
+        "canvas",
+        "waxed cotton",
+        "heavy cotton",
+        "duck cloth"
+      ],
+      "styles": [
+        "work-stained",
+        "plain",
+        "cross-back",
+        "heavy"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
+    "appearance_family": "clothing",
     "legal_status": "legal",
     "effects": [],
     "container": {
@@ -6427,10 +7583,28 @@
       "botany",
       "legal"
     ],
-    "appearance_family": "clothing",
     "appearance_slots": [
       "outer"
     ],
+    "appearance_drawable": "work_apron",
+    "appearance_profile": {
+      "label": "botany apron",
+      "materials": [
+        "canvas",
+        "linen",
+        "cotton",
+        "soft duck cloth"
+      ],
+      "styles": [
+        "pocketed",
+        "plain",
+        "garden",
+        "cross-back"
+      ],
+      "basewear": false,
+      "articleless": false
+    },
+    "appearance_family": "clothing",
     "legal_status": "legal",
     "effects": [],
     "container": {
@@ -7196,7 +8370,14 @@
     "name": "Textile Scrap",
     "glyph": "{",
     "stack_max": 99,
-    "tags": ["component", "textile_component", "bandage_material", "salvage", "junk", "legal"],
+    "tags": [
+      "component",
+      "textile_component",
+      "bandage_material",
+      "salvage",
+      "junk",
+      "legal"
+    ],
     "legal_status": "legal",
     "effects": []
   },
@@ -7204,7 +8385,12 @@
     "name": "Wire Spool",
     "glyph": ")",
     "stack_max": 3,
-    "tags": ["component", "mechanical_component", "tool", "legal"],
+    "tags": [
+      "component",
+      "mechanical_component",
+      "tool",
+      "legal"
+    ],
     "legal_status": "legal",
     "effects": []
   },
@@ -7212,7 +8398,13 @@
     "name": "Salvaged Hardware",
     "glyph": ")",
     "stack_max": 4,
-    "tags": ["component", "mechanical_component", "salvage", "junk", "legal"],
+    "tags": [
+      "component",
+      "mechanical_component",
+      "salvage",
+      "junk",
+      "legal"
+    ],
     "legal_status": "legal",
     "effects": []
   },
@@ -7220,7 +8412,12 @@
     "name": "Spring Clamp",
     "glyph": ")",
     "stack_max": 3,
-    "tags": ["component", "mechanical_component", "tool", "restricted"],
+    "tags": [
+      "component",
+      "mechanical_component",
+      "tool",
+      "restricted"
+    ],
     "legal_status": "restricted",
     "effects": []
   },
@@ -7228,7 +8425,12 @@
     "name": "Tripline Alarm Plan",
     "glyph": "=",
     "stack_max": 1,
-    "tags": ["plan", "mechanical_plan", "knowledge", "legal"],
+    "tags": [
+      "plan",
+      "mechanical_plan",
+      "knowledge",
+      "legal"
+    ],
     "legal_status": "legal",
     "effects": []
   },
@@ -7236,7 +8438,12 @@
     "name": "Restraint Snare Plan",
     "glyph": "=",
     "stack_max": 1,
-    "tags": ["plan", "mechanical_plan", "knowledge", "restricted"],
+    "tags": [
+      "plan",
+      "mechanical_plan",
+      "knowledge",
+      "restricted"
+    ],
     "legal_status": "restricted",
     "effects": []
   },
@@ -7244,7 +8451,12 @@
     "name": "Remote Release Rig Plan",
     "glyph": "=",
     "stack_max": 1,
-    "tags": ["plan", "mechanical_plan", "knowledge", "restricted"],
+    "tags": [
+      "plan",
+      "mechanical_plan",
+      "knowledge",
+      "restricted"
+    ],
     "legal_status": "restricted",
     "effects": []
   },
@@ -7252,7 +8464,12 @@
     "name": "Decoy Beacon Plan",
     "glyph": "=",
     "stack_max": 1,
-    "tags": ["plan", "mechanical_plan", "knowledge", "restricted"],
+    "tags": [
+      "plan",
+      "mechanical_plan",
+      "knowledge",
+      "restricted"
+    ],
     "legal_status": "restricted",
     "effects": []
   },
@@ -7260,36 +8477,80 @@
     "name": "Tripline Alarm",
     "glyph": "^",
     "stack_max": 1,
-    "tags": ["device", "mechanical_device", "trap", "placeable", "reusable", "restricted"],
+    "tags": [
+      "device",
+      "mechanical_device",
+      "trap",
+      "placeable",
+      "reusable",
+      "restricted"
+    ],
     "legal_status": "restricted",
-    "condition_profile": {"supports_quality": true, "supports_durability": true, "max_durability": 6},
+    "condition_profile": {
+      "supports_quality": true,
+      "supports_durability": true,
+      "max_durability": 6
+    },
     "effects": []
   },
   "restraint_snare": {
     "name": "Restraint Snare",
     "glyph": "^",
     "stack_max": 1,
-    "tags": ["device", "mechanical_device", "trap", "placeable", "contraband", "illegal"],
+    "tags": [
+      "device",
+      "mechanical_device",
+      "trap",
+      "placeable",
+      "contraband",
+      "illegal"
+    ],
     "legal_status": "illegal",
-    "condition_profile": {"supports_quality": true, "supports_durability": true, "max_durability": 5},
+    "condition_profile": {
+      "supports_quality": true,
+      "supports_durability": true,
+      "max_durability": 5
+    },
     "effects": []
   },
   "remote_release_rig": {
     "name": "Remote Release Rig",
     "glyph": "=",
     "stack_max": 1,
-    "tags": ["device", "mechanical_device", "controller", "placeable", "electronics", "restricted"],
+    "tags": [
+      "device",
+      "mechanical_device",
+      "controller",
+      "placeable",
+      "electronics",
+      "restricted"
+    ],
     "legal_status": "restricted",
-    "condition_profile": {"supports_quality": true, "supports_durability": true, "max_durability": 7},
+    "condition_profile": {
+      "supports_quality": true,
+      "supports_durability": true,
+      "max_durability": 7
+    },
     "effects": []
   },
   "decoy_beacon": {
     "name": "Decoy Beacon",
     "glyph": "*",
     "stack_max": 1,
-    "tags": ["device", "mechanical_device", "decoy", "placeable", "electronics", "restricted"],
+    "tags": [
+      "device",
+      "mechanical_device",
+      "decoy",
+      "placeable",
+      "electronics",
+      "restricted"
+    ],
     "legal_status": "restricted",
-    "condition_profile": {"supports_quality": true, "supports_durability": true, "max_durability": 5},
+    "condition_profile": {
+      "supports_quality": true,
+      "supports_durability": true,
+      "max_durability": 5
+    },
     "effects": []
   }
 }

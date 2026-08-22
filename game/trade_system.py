@@ -32,6 +32,7 @@ from game.fashion_market import (
     with_cosmetic_market_metadata,
 )
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor, item_entry_is_critical_quest_item
+from game.item_compatibility import compatibility_context, compatibility_row_fields, drone_compatibility_target
 from game.item_valuation import ITEM_BASE_VALUES as SHARED_ITEM_BASE_VALUES, item_fair_value
 from game.items import ITEM_CATALOG, world_distributed_item_pool
 from game.inventory_display import inventory_entry_equipment_display
@@ -1886,6 +1887,8 @@ class TradeSystem(System):
                 "contact_eid": None,
                 "available_modes": ("buy", "sell"),
                 "vendor_kind": "",
+                "compatibility_target_class": "",
+                "compatibility_target_label": "",
             }
         self.sim.events.subscribe("player_action", self.on_player_action)
         self.sim.events.subscribe("property_interact", self.on_property_interact)
@@ -2012,6 +2015,8 @@ class TradeSystem(System):
             state.setdefault("available_modes", ("buy", "sell"))
             state.setdefault("vendor_kind", "")
             state.setdefault("owner_transfer", False)
+            state.setdefault("compatibility_target_class", "")
+            state.setdefault("compatibility_target_label", "")
         return state
 
     def _store_profile(self, archetype):
@@ -2958,6 +2963,33 @@ class TradeSystem(System):
             )
         return candidates
 
+    def _compatibility_trade_rows(self, rows):
+        """Attach cached compatibility presentation once per trade refresh."""
+
+        target_class = drone_compatibility_target(self.sim)
+        prepared = []
+        has_drone_compatibility = False
+        for raw in tuple(rows or ()):
+            row = dict(raw) if isinstance(raw, dict) else {}
+            row.update(compatibility_row_fields(
+                row.get("item_id"),
+                item_catalog=ITEM_CATALOG,
+                target_chassis_class=target_class,
+            ))
+            has_drone_compatibility = has_drone_compatibility or int(row.get("drone_class_mask", 0) or 0) > 0
+            prepared.append(row)
+        self._prepared_trade_has_drone_compatibility = bool(has_drone_compatibility)
+        return prepared
+
+    def _stamp_trade_compatibility_context(self, state):
+        context = compatibility_context(self.sim)
+        if bool(getattr(self, "_prepared_trade_has_drone_compatibility", False)):
+            state["compatibility_target_class"] = str(context.get("drone_chassis_class", "") or "")
+            state["compatibility_target_label"] = str(context.get("drone_label", "") or "")
+        else:
+            state["compatibility_target_class"] = ""
+            state["compatibility_target_label"] = ""
+
     def _trade_buy_rows(self, store, terms=None, owner_transfer=False):
         terms = terms or {"buy_mult": 1.0}
         rows = []
@@ -2982,7 +3014,7 @@ class TradeSystem(System):
                 **self._fashion_row_fields(item_id, row_entry.get("metadata")),
                 **({} if owner_transfer else self._trade_pressure_row_fields(store, item_id)),
             })
-        return rows
+        return self._compatibility_trade_rows(rows)
 
     def _trade_sell_rows(self, inventory, store, terms=None, owner_transfer=False, actor_eid=None, service_eid=None):
         rows = []
@@ -3029,7 +3061,7 @@ class TradeSystem(System):
                 "fashion_player_influence": float(row.get("fashion_player_influence", 0.0) or 0.0),
                 "fashion_npc_influence": float(row.get("fashion_npc_influence", 0.0) or 0.0),
             })
-        return rows
+        return self._compatibility_trade_rows(rows)
 
     def _refresh_trade_inspect_text(self, state):
         rows = list(state.get("rows", []))
@@ -3211,6 +3243,8 @@ class TradeSystem(System):
                     else street_vendor_sell_rows(self.sim, contact_eid, self.player_eid, profile=profile)
                 )
 
+        rows = self._compatibility_trade_rows(rows)
+
         prev_index = int(state.get("selected_index", 0))
         selected_index = 0
         if rows:
@@ -3233,6 +3267,7 @@ class TradeSystem(System):
             selected_index = max(0, min(selected_index, len(rows) - 1))
 
         state["open"] = True
+        self._stamp_trade_compatibility_context(state)
         state["mode"] = wanted_mode
         state["rows"] = rows
         state["selected_index"] = selected_index
@@ -3459,6 +3494,7 @@ class TradeSystem(System):
             selected_index = max(0, min(selected_index, len(rows) - 1))
 
         state["open"] = True
+        self._stamp_trade_compatibility_context(state)
         state["mode"] = mode
         state["rows"] = rows
         state["selected_index"] = selected_index

@@ -31,6 +31,11 @@ from game.drone_workshop import (
     move_workshop_part_to_inventory,
 )
 from game.items import item_display_name, item_inventory_slot_cost
+from game.item_compatibility import (
+    compatibility_row_fields,
+    drone_compatibility_target,
+    item_compatibility_profile,
+)
 from game.technical_research import drone_module_profile_with_research
 
 
@@ -39,6 +44,23 @@ DRONE_SHEET_VISIBLE_SLOTS = 4
 DRONE_CARGO_SLOTS_PER_MODULE = 4
 DRONE_PAINT_KEYS = drone_paint_palette()
 WORKSHOP_BUILD_METADATA_KEY = "drone_build"
+
+DRONE_SHEET_ACTION_HINTS = {
+    "workshop_part": "Enter workbench  U backpack  R drop",
+    "unpack_packed_drone": "Enter unpack",
+    "install_module": "Enter install",
+    "remove_module": "Enter remove",
+    "swap_chassis": "Enter swap chassis",
+    "swap_power_center": "Enter install core",
+    "paint": "Enter apply paint",
+    "pack_drone": "Enter pack drone",
+    "swap_battery": "Enter swap battery",
+    "to_drone": "Enter load cargo",
+    "to_player": "Enter unload cargo",
+    "activate_program": "Enter activate routine",
+    "stop_program": "Enter stop routine",
+    "write_program": "Enter write routine",
+}
 
 
 def _int(value, default=0):
@@ -470,12 +492,11 @@ def drone_sheet_status_lines(record, *, item_catalog=None):
         errors = "; ".join(summary.get("errors", ()) or ())
         modules = [entry for entry in tuple(getattr(state, "modules", ()) or ()) if isinstance(entry, dict)]
         lines = [
-            f"Workbench: {record.get('label', 'workshop chassis')} | source {record.get('workshop_chassis_instance_id', '-')}",
-            f"Core: {_item_name(getattr(state, 'power_center_item_id', None), item_catalog=item_catalog)} | Battery: choose from Battery tab to pack",
+            f"Workbench: {record.get('label', 'workshop chassis')}",
+            f"Core: {_item_name(getattr(state, 'power_center_item_id', None), item_catalog=item_catalog)} | Battery: unpacked",
             f"Hull: {getattr(state, 'hull_hp', 0)}/{getattr(state, 'hull_hp_max', 0)} | Modules installed: {len(modules)}",
             f"Hardware: {summary.get('slot_used', 0)}/{summary.get('slot_limit', 0)} | Procedures: {summary.get('procedure_slot_used', 0)}/{summary.get('procedure_slot_limit', 0)} | Weight: {summary.get('weight_used', 0)}/{summary.get('weight_limit', 0)} | Power: idle {summary.get('standby_draw', 0)}/{summary.get('power_output', 0)} active {summary.get('active_draw', 0)}/{summary.get('power_output', 0)}",
             f"Capabilities: {capabilities}",
-            "Install modules from the workshop side; install a power core from Schematic; pack with a backpack battery.",
         ]
         if errors:
             lines.append(f"Not ready: {errors}")
@@ -485,7 +506,7 @@ def drone_sheet_status_lines(record, *, item_catalog=None):
     cargo_used = drone_cargo_slot_count(state)
     cargo_cap = drone_cargo_capacity_slots(state, item_catalog=item_catalog)
     lines = [
-        f"{drone_sheet_label(state)} #{record.get('eid')} | dist {record.get('distance', 0)} | {'adjacent' if record.get('accessible') else 'remote view'}",
+        f"{drone_sheet_label(state)} | {'nearby' if record.get('accessible') else 'remote view'}",
         f"Position: ({getattr(pos, 'x', '?')},{getattr(pos, 'y', '?')},{getattr(pos, 'z', '?')}) | range {getattr(state, 'range_limit', 0)}",
         f"Hull: {getattr(state, 'hull_hp', 0)}/{getattr(state, 'hull_hp_max', 0)} | Battery: {getattr(state, 'battery_charge', 0)}/{getattr(state, 'battery_charge_max', 0)}",
         f"Hardware: {summary.get('slot_used', 0)}/{summary.get('slot_limit', 0)} | Procedures: {summary.get('procedure_slot_used', 0)}/{summary.get('procedure_slot_limit', 0)} | Weight: {summary.get('weight_used', 0)}/{summary.get('weight_limit', 0)} | Power: idle {summary.get('standby_draw', 0)}/{summary.get('power_output', 0)} active {summary.get('active_draw', 0)}/{summary.get('power_output', 0)}",
@@ -569,6 +590,7 @@ def drone_sheet_parts_rows(sim, player_eid, *, item_catalog=None):
             f"Workshop: chassis {summary.get('chassis_used', 0)}/{summary.get('chassis_capacity', 0)} | "
             f"loose parts {summary.get('parts_used', 0)}/{summary.get('parts_capacity', 0)} pts"
         ),
+        "workshop_summary": dict(summary),
         "actionable": False,
     }]
     entries = drone_workshop_entries(workshop, item_catalog=item_catalog)
@@ -581,8 +603,7 @@ def drone_sheet_parts_rows(sim, player_eid, *, item_catalog=None):
             "id": str(entry.get("instance_id", "") or item_id),
             "instance_id": str(entry.get("instance_id", "") or ""),
             "label": (
-                f"{_item_name(item_id, item_catalog=item_catalog)} | {kind.replace('_', ' ')} | {points_text} | "
-                f"{'Enter workbench, U backpack' if kind == 'chassis' else 'U backpack'} | R drop"
+                f"{_item_name(item_id, item_catalog=item_catalog)} | {kind.replace('_', ' ')} | {points_text}"
             ),
             "entry": dict(entry),
             "action": "workshop_part",
@@ -600,8 +621,8 @@ def drone_sheet_parts_rows(sim, player_eid, *, item_catalog=None):
                 "id": f"packed:{entry.get('instance_id', '')}",
                 "instance_id": str(entry.get("instance_id", "") or ""),
                 "label": (
-                    f"Unpack {item_display_name(PACKED_DRONE_ITEM_ID, metadata=metadata, item_catalog=item_catalog)} | "
-                    f"{chassis}-class | battery returns as {battery} | Enter workshop"
+                    f"{item_display_name(PACKED_DRONE_ITEM_ID, metadata=metadata, item_catalog=item_catalog)} | "
+                    f"{chassis}-class | packed with {battery}"
                 ),
                 "entry": dict(entry),
                 "action": "unpack_packed_drone",
@@ -975,7 +996,9 @@ def drone_sheet_schematic_rows(sim, player_eid, state, *, item_catalog=None):
             label_target = "primary" if target == "primary_color" else "secondary"
             rows.append({
                 "id": f"paint:{target}:{color_key}",
-                "label": f"Set {label_target} paint: {color_key}",
+                "label": f"{label_target.title()}: {color_key}",
+                "glyph": "#",
+                "swatch_color": color_key,
                 "action": "paint",
                 "paint_key": target,
                 "paint_color": color_key,
@@ -1053,9 +1076,127 @@ def drone_sheet_battery_rows(sim, player_eid, state, *, item_catalog=None):
             "label": label,
             "entry": dict(entry),
             "compatible": bool(compatible),
+            "action": "pack_drone" if str(getattr(state, "mode", "") or "").strip().lower() == "workshop" else "swap_battery",
             "actionable": bool(compatible),
         })
     return rows or [{"id": "empty", "label": "(no spare drone batteries)", "actionable": False}]
+
+
+def _drone_sheet_row_item_id(row):
+    if not isinstance(row, dict):
+        return ""
+    item_id = str(row.get("item_id", "") or "").strip().lower()
+    if item_id:
+        return item_id
+    entry = row.get("entry") if isinstance(row.get("entry"), dict) else {}
+    return str(entry.get("item_id", "") or entry.get("module_item_id", "") or "").strip().lower()
+
+
+def _decorate_drone_sheet_rows(sim, rows, *, item_catalog=None):
+    target_class = drone_compatibility_target(sim)
+    prepared = []
+    for raw in tuple(rows or ()):
+        row = dict(raw) if isinstance(raw, dict) else {"label": str(raw)}
+        item_id = _drone_sheet_row_item_id(row)
+        if item_id:
+            item_def = (item_catalog or {}).get(item_id, {})
+            row.setdefault("glyph", str(item_def.get("glyph", "*") or "*")[:1] or "*")
+            row.update(compatibility_row_fields(
+                item_id,
+                item_catalog=item_catalog,
+                target_chassis_class=target_class,
+            ))
+            if item_id == PACKED_DRONE_ITEM_ID:
+                entry = row.get("entry") if isinstance(row.get("entry"), dict) else {}
+                metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                packed_class = str(metadata.get("chassis_class", "") or "").strip().upper()
+                if packed_class:
+                    row["drone_class_band"] = packed_class
+        action = str(row.get("action", "") or "").strip().lower()
+        if action == "workshop_part":
+            entry = row.get("entry") if isinstance(row.get("entry"), dict) else {}
+            kind = drone_profile_for_item(entry.get("item_id"), item_catalog=item_catalog).get("kind")
+            row["action_hint"] = (
+                "Enter workbench  U backpack  R drop"
+                if kind == "chassis"
+                else "Enter/U backpack  R drop"
+            )
+        elif action.startswith("program_editor:"):
+            row["action_hint"] = "Enter select"
+        else:
+            row["action_hint"] = DRONE_SHEET_ACTION_HINTS.get(action, "")
+        prepared.append(row)
+    return prepared
+
+
+def drone_sheet_visual_model(record, *, rows=(), tab="status", item_catalog=None):
+    """Prepare the small render-only dashboard for the drone sheet modal."""
+
+    record = record if isinstance(record, dict) else {}
+    state = record.get("state")
+    is_workbench = bool(record.get("workshop_chassis"))
+    title = "Drone Workshop" if is_workbench or state is None else "Drone Control"
+    if state is None:
+        workshop_summary = next(
+            (
+                dict(row.get("workshop_summary") or {})
+                for row in tuple(rows or ())
+                if isinstance(row, dict) and isinstance(row.get("workshop_summary"), dict)
+            ),
+            {},
+        )
+        return {
+            "title": title,
+            "mode": "storage",
+            "subtitle": "Workshop storage",
+            "chassis_class": "",
+            "glyph": "d",
+            "paint": {},
+            "meters": (
+                {"label": "CHASSIS", "used": workshop_summary.get("chassis_used", 0), "limit": workshop_summary.get("chassis_capacity", 0), "color": "item_restricted"},
+                {"label": "PARTS", "used": workshop_summary.get("parts_used", 0), "limit": workshop_summary.get("parts_capacity", 0), "color": "inventory_equipped_clothing"},
+            ),
+            "ports": (),
+            "capabilities": (),
+            "errors": (),
+            "tab": str(tab or "parts"),
+        }
+
+    summary = record.get("summary") if isinstance(record.get("summary"), dict) else {}
+    chassis_class = str(getattr(state, "chassis_class", "") or summary.get("chassis_class", "") or "").strip().upper()
+    chassis_item_id = str(getattr(state, "chassis_item_id", "") or "").strip().lower()
+    chassis_profile = drone_profile_for_item(chassis_item_id, item_catalog=item_catalog)
+    paint = dict(getattr(state, "paint", {}) or {})
+    port_counts = {}
+    for module in tuple(getattr(state, "modules", ()) or ()):
+        item_id = str((module or {}).get("item_id", "") or (module or {}).get("module_item_id", "") or "").strip().lower() if isinstance(module, dict) else ""
+        profile = item_compatibility_profile(item_id, item_catalog=item_catalog)
+        mark = str(profile.get("mark_text", "") or "").strip()
+        if mark:
+            port_counts[mark] = int(port_counts.get(mark, 0)) + 1
+    ports = tuple(
+        f"{mark}{('x' + str(count)) if count > 1 else ''}"
+        for mark, count in sorted(port_counts.items())
+    )
+    return {
+        "title": title,
+        "mode": "workshop" if is_workbench else "deployed",
+        "subtitle": str(record.get("label", "") or (f"{chassis_class}-class drone" if chassis_class else "drone")),
+        "chassis_class": chassis_class,
+        "glyph": str(chassis_profile.get("base_glyph", "d") or "d")[:1] or "d",
+        "paint": paint,
+        "core_name": _item_name(getattr(state, "power_center_item_id", None), item_catalog=item_catalog),
+        "meters": (
+            {"label": "HW", "used": summary.get("slot_used", 0), "limit": summary.get("slot_limit", 0), "color": "inventory_equipped_clothing"},
+            {"label": "RT", "used": summary.get("procedure_slot_used", 0), "limit": summary.get("procedure_slot_limit", 0), "color": "inventory_equipped_consequence"},
+            {"label": "WT", "used": summary.get("weight_used", 0), "limit": summary.get("weight_limit", 0), "color": "survival_meter_low"},
+            {"label": "PW", "used": summary.get("active_draw", 0), "limit": summary.get("power_output", 0), "color": "objective"},
+        ),
+        "ports": ports,
+        "capabilities": tuple(summary.get("capabilities", ()) or ()),
+        "errors": tuple(summary.get("errors", ()) or ()),
+        "tab": str(tab or "status"),
+    }
 
 
 def drone_sheet_tab_rows(sim, player_eid, record, *, tab="status", cargo_side="pack", module_side="drone", item_catalog=None, procedure_editor=None):
@@ -1063,21 +1204,27 @@ def drone_sheet_tab_rows(sim, player_eid, record, *, tab="status", cargo_side="p
     if tab not in DRONE_SHEET_TABS:
         tab = "status"
     if tab == "parts":
-        return drone_sheet_parts_rows(sim, player_eid, item_catalog=item_catalog)
+        return _decorate_drone_sheet_rows(sim, drone_sheet_parts_rows(sim, player_eid, item_catalog=item_catalog), item_catalog=item_catalog)
     state = record.get("state") if isinstance(record, dict) else None
     if state is None:
-        return [{"id": "empty", "label": "No drone selected.", "actionable": False}]
+        return _decorate_drone_sheet_rows(sim, [{"id": "empty", "label": "No drone selected.", "actionable": False}], item_catalog=item_catalog)
     if tab == "cargo":
-        return drone_sheet_cargo_rows(sim, player_eid, state, side=cargo_side, item_catalog=item_catalog)
+        rows = drone_sheet_cargo_rows(sim, player_eid, state, side=cargo_side, item_catalog=item_catalog)
+        return _decorate_drone_sheet_rows(sim, rows, item_catalog=item_catalog)
     if tab == "battery":
-        return drone_sheet_battery_rows(sim, player_eid, state, item_catalog=item_catalog)
+        rows = drone_sheet_battery_rows(sim, player_eid, state, item_catalog=item_catalog)
+        return _decorate_drone_sheet_rows(sim, rows, item_catalog=item_catalog)
     if tab == "modules":
-        return drone_sheet_module_rows(sim, player_eid, record, side=module_side, item_catalog=item_catalog)
+        rows = drone_sheet_module_rows(sim, player_eid, record, side=module_side, item_catalog=item_catalog)
+        return _decorate_drone_sheet_rows(sim, rows, item_catalog=item_catalog)
     if tab == "procedures":
-        return drone_program_sheet_rows(sim, player_eid, record, item_catalog=item_catalog, editor_state=procedure_editor)
+        rows = drone_program_sheet_rows(sim, player_eid, record, item_catalog=item_catalog, editor_state=procedure_editor)
+        return _decorate_drone_sheet_rows(sim, rows, item_catalog=item_catalog)
     if tab == "schematic":
-        return drone_sheet_schematic_rows(sim, player_eid, state, item_catalog=item_catalog)
-    return [{"id": f"status:{idx}", "label": line, "actionable": False} for idx, line in enumerate(drone_sheet_status_lines(record, item_catalog=item_catalog))]
+        rows = drone_sheet_schematic_rows(sim, player_eid, state, item_catalog=item_catalog)
+        return _decorate_drone_sheet_rows(sim, rows, item_catalog=item_catalog)
+    rows = [{"id": f"status:{idx}", "label": line, "actionable": False} for idx, line in enumerate(drone_sheet_status_lines(record, item_catalog=item_catalog))]
+    return _decorate_drone_sheet_rows(sim, rows, item_catalog=item_catalog)
 
 
 def _inventory_can_accept_exact_entry(inventory, entry):

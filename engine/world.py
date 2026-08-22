@@ -4100,7 +4100,7 @@ class World:
         if archetype in self.NAMED_BUSINESS_ARCHETYPES:
             business_name, business_founder = self._business_name_for(archetype, rng, used_business_names)
 
-        return {
+        building_record = {
             "building_id": f"{bx}:{by}:{i}",
             "archetype": archetype,
             "floors": floors,
@@ -4116,6 +4116,9 @@ class World:
             "is_storefront": archetype in self.STOREFRONT_ARCHETYPES,
             "public": archetype in self.PUBLIC_BUILDING_ARCHETYPES,
         }
+        if archetype == "dress_shop":
+            building_record["building_stamp"] = "dress_shop_shell"
+        return building_record
 
     def _apply_vertical_mixed_use_spans(self, blocks, district, rng, used_business_names):
         for block in blocks:
