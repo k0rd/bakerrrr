@@ -5295,24 +5295,23 @@ class RenderSystem(System):
                 compatibility_mark = str(compatibility.get("compatibility_mark", "") or "")[:5]
                 class_band = str(compatibility.get("drone_class_band", "") or "")[:4]
                 row_prefix = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} "
-                compatibility_prefix = f"{compatibility_mark:<5}{class_band:<4} "
-                label = f"{row_prefix}{compatibility_prefix}{name} x{entry['quantity']}{ammo_suffix}{worn_suffix}{storage_suffix}"
-                self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w), color=row_color)
                 compatibility_color = compatibility.get("compatibility_color")
-                if compatibility_mark and compatibility_color:
-                    self.view.draw_text(
-                        panel_x + 1 + len(row_prefix),
-                        list_y + idx,
-                        compatibility_mark,
-                        color=compatibility_color,
-                    )
-                if class_band and compatibility_color:
-                    self.view.draw_text(
-                        panel_x + 1 + len(row_prefix) + 5,
-                        list_y + idx,
-                        class_band,
-                        color=compatibility_color,
-                    )
+                suffix = f"{name} x{entry['quantity']}{ammo_suffix}{worn_suffix}{storage_suffix}"
+                # Keep compatibility marks in one proportional-text flow.
+                # Drawing the complete label and then repainting a mark at a
+                # character-count offset duplicated it beside the item name in
+                # Pygame, whose UI font advances by measured pixel width.
+                self.view.draw_segments(
+                    panel_x + 1,
+                    list_y + idx,
+                    (
+                        _segment(row_prefix, color=row_color),
+                        _segment(f"{compatibility_mark:<5}", color=compatibility_color or row_color),
+                        _segment(f"{class_band:<4} ", color=compatibility_color or row_color),
+                        _segment(suffix, color=row_color),
+                    ),
+                    max_width=row_w,
+                )
 
             if not entries:
                 empty_label = "(empty)"
