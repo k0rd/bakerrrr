@@ -1416,9 +1416,48 @@ def flora_at(sim, x, y, z=0):
     chunk_records = getattr(sim, "chunk_flora_records", {})
     indexed = isinstance(chunk_records, dict) and chunk in chunk_records
     source_rows = tuple(chunk_records.get(chunk, ()) or ()) if indexed else tuple(patches.values())
+    cache = getattr(sim, "_flora_at_chunk_index", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        sim._flora_at_chunk_index = cache
+    cache_key = chunk if indexed else None
+    signature = (id(chunk_records.get(chunk)) if indexed else id(patches), len(source_rows), id(patches))
+    entry = cache.get(cache_key)
+    if not isinstance(entry, dict) or entry.get("signature") != signature:
+        coord_index = {}
+        for stored in source_rows:
+            if not isinstance(stored, dict):
+                continue
+            record_id = str(stored.get("id") or "").strip()
+            record = patches.get(record_id) if record_id else None
+            if not isinstance(record, dict):
+                record = stored
+            try:
+                coord = (
+                    int(record.get("x", 0) or 0),
+                    int(record.get("y", 0) or 0),
+                    int(record.get("z", 0) or 0),
+                )
+            except (TypeError, ValueError):
+                continue
+            coord_index.setdefault(coord, []).append(record_id or record)
+        entry = {
+            "signature": signature,
+            "coords": {coord: tuple(rows) for coord, rows in coord_index.items()},
+        }
+        if len(cache) >= 128 and cache_key not in cache:
+            cache.clear()
+        cache[cache_key] = entry
+
+    rows = []
     seen = set()
-    for stored in source_rows:
-        record_id = str((stored or {}).get("id") or "").strip() if isinstance(stored, dict) else ""
+    for stored in tuple(entry.get("coords", {}).get(target, ()) or ()):
+        if isinstance(stored, str):
+            record_id = stored
+        elif isinstance(stored, dict):
+            record_id = str(stored.get("id") or "").strip()
+        else:
+            record_id = ""
         record = patches.get(record_id) if record_id else None
         if not isinstance(record, dict):
             record = stored
@@ -1426,17 +1465,9 @@ def flora_at(sim, x, y, z=0):
             continue
         if record_id and record_id in seen:
             continue
-        try:
-            if (
-                int(record.get("x", 0) or 0),
-                int(record.get("y", 0) or 0),
-                int(record.get("z", 0) or 0),
-            ) == target:
-                rows.append(record)
-                if record_id:
-                    seen.add(record_id)
-        except (TypeError, ValueError):
-            continue
+        rows.append(record)
+        if record_id:
+            seen.add(record_id)
     return tuple(sorted(rows, key=lambda row: str(row.get("id", ""))))
 
 

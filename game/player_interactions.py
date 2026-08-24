@@ -432,17 +432,25 @@ class PlayerInteractionRuntime:
         candidates.sort(key=lambda row: row[0])
         return candidates[0][1]
 
-    def _field_restraint_entry(self, eid):
+    def _field_restraint_entry(self, eid, opportunity, *, instance_id=None):
         inventory = self.action_system._inventory_for(eid)
         if not inventory:
             return None
+        opportunity_id = _int_or_default((opportunity or {}).get("id"), 0)
         for entry in list(getattr(inventory, "items", ()) or ()):
-            if str(entry.get("item_id", "") or "").strip().lower() == "field_restraint_jab":
-                if int(entry.get("quantity", 0) or 0) > 0:
-                    return entry
+            if str(entry.get("item_id", "") or "").strip().lower() != "field_restraint_jab":
+                continue
+            if instance_id is not None and str(entry.get("instance_id", "") or "") != str(instance_id or ""):
+                continue
+            if int(entry.get("quantity", 0) or 0) <= 0:
+                continue
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            if _int_or_default(metadata.get("quest_opportunity_id"), 0) != opportunity_id:
+                continue
+            return entry
         return None
 
-    def player_restrain_bounty_target(self, eid, pos, target_eid):
+    def player_restrain_bounty_target(self, eid, pos, target_eid, *, restraint_instance_id=None):
         opportunity = self._active_bounty_for_target(target_eid)
         if not isinstance(opportunity, dict):
             return False
@@ -452,6 +460,8 @@ class PlayerInteractionRuntime:
         downed = bool(target_vitality and getattr(target_vitality, "downed", False))
         surrendered = bool(suppression and getattr(suppression, "surrendered", False))
         if not downed and not surrendered:
+            return False
+        if target_vitality is None or getattr(target_vitality, "death_reported_tick", None) is not None:
             return False
         if not target_pos or int(target_pos.z) != int(pos.z):
             return False
@@ -472,7 +482,11 @@ class PlayerInteractionRuntime:
                 dedupe_key=f"bounty_authority_denied:{target_eid}",
             )
             return True
-        entry = self._field_restraint_entry(eid)
+        entry = self._field_restraint_entry(
+            eid,
+            opportunity,
+            instance_id=restraint_instance_id,
+        )
         if entry is None:
             _log_player_feedback(
                 self.sim,

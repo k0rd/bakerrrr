@@ -548,6 +548,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("item_drop_blocked", self.on_item_drop_blocked)
         self.sim.events.subscribe("item_used", self.on_item_used)
         self.sim.events.subscribe("item_use_blocked", self.on_item_use_blocked)
+        self.sim.events.subscribe("bounty_restraint_indicator", self.on_bounty_restraint_indicator)
         self.sim.events.subscribe("mechanical_device_discovered", self.on_mechanical_device_discovered)
         self.sim.events.subscribe("mechanical_device_disarmed", self.on_mechanical_device_disarmed)
         self.sim.events.subscribe("mechanical_device_misfired", self.on_mechanical_device_misfired)
@@ -6227,6 +6228,16 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{item_name} only triggers automatically in a critical state.", kind="interaction")
         elif reason == "downed_requires_medical":
             _log_player_feedback(self.sim, "You need restorative medical aid while downed.", kind="interaction")
+        elif reason == "bounty_restraint_inactive":
+            _log_player_feedback(self.sim, f"{item_name} is dark; its assigned bounty posting is no longer active.", kind="interaction")
+        elif reason == "bounty_restraint_target_unavailable":
+            _log_player_feedback(self.sim, f"{item_name} is dark; its assigned target is no longer recoverable.", kind="interaction")
+        elif reason == "bounty_restraint_out_of_range":
+            target_name = str(event.data.get("target_name", "the assigned target") or "the assigned target").strip()
+            _log_player_feedback(self.sim, f"{item_name} stays inert until you are beside {target_name}.", kind="interaction")
+        elif reason == "bounty_restraint_target_not_ready":
+            target_name = str(event.data.get("target_name", "the assigned target") or "the assigned target").strip()
+            _log_player_feedback(self.sim, f"{item_name} indicates {target_name}, but only fires after they are downed or surrendered.", kind="interaction")
         elif reason == "item_not_usable":
             _log_player_feedback(self.sim, f"{item_name} cannot be used.", kind="interaction")
         elif reason == "item_not_throwable":
@@ -6315,6 +6326,19 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{item_name} conflicts with what you are already wearing.", kind="interaction")
         else:
             _log_player_feedback(self.sim, f"You cannot use {item_name} right now.", kind="interaction")
+
+    def on_bounty_restraint_indicator(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        target_name = str(event.data.get("target_name", "the assigned target") or "the assigned target").strip()
+        state_text = "armed for restraint" if bool(event.data.get("ready")) else "showing its assigned target nearby"
+        self._log(
+            f"An issued immobilizer jab lights up, {state_text}: {target_name}.",
+            channel="opportunity",
+            priority="high",
+            dedupe_window=2,
+            dedupe_key=f"bounty-restraint-indicator:{event.data.get('item_instance_id')}",
+        )
 
     def on_aerosol_trap_placed(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -7353,16 +7377,31 @@ class EventLogSystem(System):
         attacker_eid = event.data.get("eid")
         target_eid = event.data.get("target_eid")
         weapon_name = str(event.data.get("weapon_name", "Unarmed") or "Unarmed").strip() or "Unarmed"
+        physical_property = bool(event.data.get("physical_property"))
+        physical_target_name = str(
+            event.data.get("property_name", "")
+            or event.data.get("target_name", "")
+            or str(event.data.get("physical_kind", "") or "object").replace("_", " ")
+        ).strip() or "object"
 
         if attacker_eid == self.player_eid:
-            target_name = self._npc_label(target_eid)
-            self._log_npc_message(
-                target_eid,
-                f"You strike {target_name} with {weapon_name}.",
-                channel="combat",
-                priority="high",
-                dedupe_window=1,
-            )
+            if physical_property:
+                self._log(
+                    f"You strike {physical_target_name} with {weapon_name}.",
+                    channel="combat",
+                    priority="high",
+                    dedupe_window=1,
+                    dedupe_key=f"melee-property:{event.data.get('property_id')}:{weapon_name}",
+                )
+            else:
+                target_name = self._npc_label(target_eid)
+                self._log_npc_message(
+                    target_eid,
+                    f"You strike {target_name} with {weapon_name}.",
+                    channel="combat",
+                    priority="high",
+                    dedupe_window=1,
+                )
             return
 
         can_see = (
@@ -7386,6 +7425,8 @@ class EventLogSystem(System):
         attacker_name = self._npc_label(attacker_eid)
         if target_eid == self.player_eid:
             message = f"{attacker_name} comes at you with {weapon_name}."
+        elif physical_property:
+            message = f"{attacker_name} strikes {physical_target_name} with {weapon_name}."
         elif target_eid is not None:
             message = f"{attacker_name} strikes {self._npc_label(target_eid)} with {weapon_name}."
         else:
@@ -8984,7 +9025,29 @@ class EventLogSystem(System):
             self.sim.log.add(f"  {summary}")
 
         source_text = opportunity_source_label(source, short=False)
-        details = [f"Source {source_text}", self._opportunity_remaining_text(active_remaining), "Press O for report"]
+        details = [f"Source {source_text}"]
+        consequence = event.data.get("failure_consequence") if isinstance(event.data.get("failure_consequence"), dict) else {}
+        standing_delta = _int_or_default(consequence.get("standing"), 0)
+        reliability_delta = _int_or_default(consequence.get("work_reliability"), 0)
+        issuer_delta = consequence.get("issuer_standing")
+        if issuer_delta is None:
+            issuer_delta = consequence.get("issuer_person_standing")
+        penalty_bits = []
+        if standing_delta < 0:
+            penalty_bits.append(f"standing {standing_delta}")
+        if reliability_delta < 0:
+            penalty_bits.append(f"work reliability {reliability_delta}")
+        try:
+            issuer_delta_value = float(issuer_delta)
+        except (TypeError, ValueError):
+            issuer_delta_value = 0.0
+        if issuer_delta_value < -1e-9:
+            penalty_bits.append(f"issuer regard {issuer_delta_value:+.2f}")
+        if penalty_bits:
+            details.append("Penalty " + ", ".join(penalty_bits))
+        if int(event.data.get("revoked_restraint_jabs", 0) or 0) > 0:
+            details.append("Issued restraint jab deactivated")
+        details.extend((self._opportunity_remaining_text(active_remaining), "Press O for report"))
         self.sim.log.add("  " + " | ".join(details) + ".")
 
     def on_opportunity_added(self, event):

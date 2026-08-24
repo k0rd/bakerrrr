@@ -96,6 +96,8 @@ TREE_SPREADER_MAX_CHECKS = 8
 TREE_REFOREST_RETRY_TICKS = 600
 _STATE_DICT_KEYS = (
     "chunk_index",
+    "z_index",
+    "light_revision_by_z",
     "property_index",
     "building_index",
     "frozen_boundaries",
@@ -336,7 +338,13 @@ def fire_state(sim):
     if not isinstance(state, dict):
         state = {}
         sim.fire_state = state
-    elif _fire_state_runtime_ready(state):
+    elif (
+        bool(state.get("_runtime_normalized"))
+        and isinstance(state.get("z_index"), dict)
+        and isinstance(state.get("light_revision_by_z"), dict)
+    ):
+        # All live mutation paths preserve the normalized containers. Rechecking
+        # every index on every cell lookup turns a large due fire wave quadratic.
         return state
 
     cells = state.get("cells")
@@ -438,6 +446,9 @@ def fire_state(sim):
             building_id = _text(cell.get("building_id"))
             if building_id:
                 _set_bucket(state["building_index"], building_id).add(coord)
+    if normalized_cells and not state.get("z_index"):
+        for coord in normalized_cells:
+            _int_bucket(state["z_index"], coord[2]).add(coord)
     _sync_protected_chunks(sim, state=state)
     state.setdefault("fire_response_dirty", bool(normalized_cells))
     state.setdefault("fire_response_next_tick", 0)
@@ -445,7 +456,12 @@ def fire_state(sim):
     return state
 
 
-def mark_fire_light_changed(sim, *, state=None):
+def mark_fire_light_changed(sim, *, state=None, z=None):
+    state = state if isinstance(state, dict) else fire_state(sim)
+    if z is not None:
+        z_key = _safe_int(z, 0)
+        revisions = state.setdefault("light_revision_by_z", {})
+        revisions[z_key] = _safe_int(revisions.get(z_key), 0) + 1
     return mark_derived_fact_changed(sim, "fire_light")
 
 
@@ -573,12 +589,14 @@ def pop_due_fire_cells(sim, *, current_tick=None, advance_interval=5):
 def _rebuild_fire_indexes(sim):
     state = fire_state(sim)
     state["chunk_index"] = {}
+    state["z_index"] = {}
     state["property_index"] = {}
     state["building_index"] = {}
     for coord, cell in tuple(state.get("cells", {}).items()):
         chunk = _normalize_chunk_key(getattr(sim, "chunk_coords", lambda x, y: None)(coord[0], coord[1]))
         if chunk is not None:
             _set_bucket(state["chunk_index"], chunk).add(coord)
+        _int_bucket(state["z_index"], coord[2]).add(coord)
         property_id = _text(cell.get("property_id"))
         if property_id:
             _set_bucket(state["property_index"], property_id).add(coord)
@@ -594,6 +612,7 @@ def _index_fire_cell(sim, coord, cell):
     chunk = _normalize_chunk_key(sim.chunk_coords(coord[0], coord[1]))
     if chunk is not None:
         _set_bucket(state["chunk_index"], chunk).add(coord)
+    _int_bucket(state["z_index"], coord[2]).add(coord)
     property_id = _text(cell.get("property_id"))
     if property_id:
         _set_bucket(state["property_index"], property_id).add(coord)
@@ -637,6 +656,10 @@ def _unindex_fire_cell(sim, coord, cell, *, sync_protected=True):
         bucket.discard(coord)
         if not bucket:
             state["chunk_index"].pop(chunk, None)
+    z_bucket = _int_bucket(state["z_index"], coord[2])
+    z_bucket.discard(coord)
+    if not z_bucket:
+        state["z_index"].pop(int(coord[2]), None)
     property_id = _text(cell.get("property_id"))
     if property_id:
         bucket = _set_bucket(state["property_index"], property_id)
@@ -796,7 +819,7 @@ def suppress_fire_cell(
     )
 
     if next_fire != previous_fire:
-        mark_fire_light_changed(sim, state=state)
+        mark_fire_light_changed(sim, state=state, z=key[2])
     chunk = _normalize_chunk_key(sim.chunk_coords(key[0], key[1]))
     if next_fire <= 0 and next_smoke <= 0:
         remove_fire_cell(sim, key[0], key[1], key[2], sync_protected=True)
@@ -835,7 +858,7 @@ def remove_fire_cell(sim, x, y, z=0, *, sync_protected=True):
     if not isinstance(cell, dict):
         return False
     if _safe_int(cell.get("fire_intensity"), 0) > 0:
-        mark_fire_light_changed(sim, state=state)
+        mark_fire_light_changed(sim, state=state, z=key[2])
     unschedule_fire_cell_advance(sim, key)
     _unindex_fire_cell(sim, key, cell, sync_protected=sync_protected)
     state.get("frozen_boundaries", {}).pop(key, None)
@@ -871,10 +894,16 @@ def _active_fire_at(sim, key):
     return _safe_int(cell.get("fire_intensity"), 0) > 0
 
 
-def _fire_damage_record_at(sim, prop, key):
+def _fire_damage_record_at(sim, prop, key, *, records_cache=None):
     if not isinstance(prop, dict) or key is None:
         return None
-    for record in property_damage_records(sim, prop):
+    cache_key = id(prop)
+    records = records_cache.get(cache_key) if isinstance(records_cache, dict) else None
+    if records is None:
+        records = tuple(property_damage_records(sim, prop))
+        if isinstance(records_cache, dict):
+            records_cache[cache_key] = records
+    for record in records:
         if _text(record.get("cause")).lower() != "fire":
             continue
         try:
@@ -1267,7 +1296,7 @@ def _mark_terrain_burned(sim, key, *, behavior=None):
     return True
 
 
-def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
+def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None, property_damage_records_cache=None):
     key = _coord_key(x, y, z)
     if sim is None or key is None:
         return dict(_BURN_TIER_PROFILES["none"], burn_tier="none")
@@ -1301,7 +1330,12 @@ def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
 
     spent_record = None
     if not _active_fire_at(sim, key):
-        spent_record = _fire_damage_record_at(sim, linked_prop, key) or _fire_spent_record_at(sim, key)
+        spent_record = _fire_damage_record_at(
+            sim,
+            linked_prop,
+            key,
+            records_cache=property_damage_records_cache,
+        ) or _fire_spent_record_at(sim, key)
     if spent_record is not None:
         structural_damage_kind = _text(spent_record.get("repair_kind")).lower()
         spent_tags = tuple(_text(tag).lower() for tag in tuple(spent_record.get("source_tags", ()) or ()) if _text(tag))
@@ -1484,7 +1518,7 @@ def upsert_fire_cell(
             })
         cells[key] = cell
         if _safe_int(cell.get("fire_intensity"), 0) > 0:
-            mark_fire_light_changed(sim, state=state)
+            mark_fire_light_changed(sim, state=state, z=key[2])
         _index_fire_cell(sim, key, cell)
         if advance_interval is not None:
             schedule_fire_cell_advance(sim, key, advance_interval=advance_interval)
@@ -1503,7 +1537,7 @@ def upsert_fire_cell(
     existing["fire_intensity"] = max(_safe_int(existing.get("fire_intensity"), 0), _safe_int(fire_intensity, 0))
     existing["smoke_intensity"] = max(_safe_int(existing.get("smoke_intensity"), 0), _safe_int(smoke_intensity, 0))
     if _safe_int(existing.get("fire_intensity"), 0) != previous_fire_intensity:
-        mark_fire_light_changed(sim, state=state)
+        mark_fire_light_changed(sim, state=state, z=key[2])
     existing["source_kind"] = _text(source_kind).lower() or _text(existing.get("source_kind")).lower()
     existing["source_eid"] = source_eid if source_eid is not None else existing.get("source_eid")
     existing["source_property_id"] = _text(source_property_id) or existing.get("source_property_id") or behavior.get("property_id")

@@ -80,7 +80,7 @@ from game.item_semantics import (
     item_unknown_inspect_text_for_actor,
 )
 from game.item_compatibility import set_drone_compatibility_target
-from game.opportunities import _item_label
+from game.opportunities import _item_label, bounty_restraint_jab_status
 from game.overworld_runtime import _player_overworld_chunk
 from game.player_action_system import PlayerActionSystem
 from game.player_interactions import (
@@ -7506,7 +7506,24 @@ class InputSystem(System):
             return
 
         effect_labels = []
-        for effect in effects:
+        restraint_status = None
+        if str(entry.get("item_id", "") or "").strip().lower() == "field_restraint_jab":
+            restraint_status = bounty_restraint_jab_status(self.sim, self.player_eid, entry)
+            target_name = str(restraint_status.get("target_name", "assigned target") or "assigned target").strip()
+            if not bool(restraint_status.get("active")):
+                indicator_text = "indicator dark; assignment inactive"
+            elif not bool(restraint_status.get("target_live")):
+                indicator_text = "indicator dark; target unrecoverable"
+            elif bool(restraint_status.get("near_target")):
+                indicator_text = "indicator lit"
+            else:
+                indicator_text = "indicator dark; target not adjacent"
+            effect_labels.extend((
+                f"target-bound to {target_name}",
+                indicator_text,
+                "U restrain downed/surrendered target; never self-usable",
+            ))
+        for effect in (() if restraint_status is not None else effects):
             etype = effect.get("type")
             if etype == "modify_need":
                 need = effect.get("need")

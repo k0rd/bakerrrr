@@ -218,6 +218,7 @@ class PlayerActionSystem(System):
         self.sim.events.subscribe("player_hidden_changed", self.on_player_hidden_changed)
         self.sim.events.subscribe("container_transfer_request", self.on_container_transfer_request)
         self.sim.events.subscribe("cache_transfer_request", self.on_cache_transfer_request)
+        self.sim.events.subscribe("bounty_restraint_use_request", self.on_bounty_restraint_use_request)
 
     def on_player_hidden_changed(self, event):
         if bool(event.data.get("active")):
@@ -225,6 +226,19 @@ class PlayerActionSystem(System):
         self.player_movement.clear_stakeout(
             eid=event.data.get("eid"),
             reason=str(event.data.get("reason", "")).strip().lower() or "lost_hidden",
+        )
+
+    def on_bounty_restraint_use_request(self, event):
+        eid = event.data.get("eid")
+        target_eid = event.data.get("target_eid")
+        pos = self.sim.ecs.get(Position).get(eid)
+        if eid is None or target_eid is None or pos is None:
+            return False
+        return self.player_interactions.player_restrain_bounty_target(
+            eid,
+            pos,
+            target_eid,
+            restraint_instance_id=event.data.get("item_instance_id"),
         )
 
     def _player_interact_direction_state(self):

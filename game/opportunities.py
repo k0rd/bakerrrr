@@ -24,6 +24,7 @@ from game.components import (
     PlayerAssets,
     Position,
     PropertyKnowledge,
+    SuppressionState,
     Vitality,
 )
 from game.civic_records import civic_license_is_active
@@ -72,6 +73,9 @@ SERVICE_JOB_PACKAGE_ITEM_ID = "sealed_packet"
 SERVICE_JOB_NPC_SCAN_COOLDOWN_TICKS = 60
 SERVICE_JOB_NPC_COMPLETE_MIN_TICKS = 80
 SERVICE_JOB_NPC_COMPLETE_MAX_TICKS = 420
+SERVICE_JOB_RELIABILITY_MIN = -12
+SERVICE_JOB_RELIABILITY_MAX = 12
+SERVICE_JOB_RELIABILITY_PAY_STEP = 0.025
 _OPPORTUNITY_URGENCY_KEYWORDS = (
     "urgent",
     "immediate",
@@ -106,6 +110,19 @@ _FAILURE_FAMILY_BY_CODE = {
     "rival_claimed": "rival",
     "rival_burned": "rival",
 }
+
+_ACCOUNTABLE_ACCEPTED_JOB_FAILURE_CODES = frozenset({
+    "expired",
+    "provided_item_lost",
+    "custody_compromised",
+    "booking_required_item_seized",
+    "booking_confiscated",
+    "booking_compromised",
+    "held_required_item_seized",
+    "held_property_seized",
+    "legal_compromise",
+    "target_killed",
+})
 
 FINANCE_ARCHETYPES = {
     "bank",
@@ -5093,6 +5110,10 @@ def service_job_board_offers(sim, player_eid, prop, service, *, limit=4, include
     rng = random.Random(f"{getattr(sim, 'seed', 0)}:service-job-board:{prop_id}:{service}:{tick_bucket}")
     origin_chunk = _service_job_origin_chunk(sim, prop, player_eid)
     deadline_hours = int(SERVICE_JOB_DEADLINE_HOURS.get(service, 8))
+    traits = getattr(sim, "world_traits", None)
+    reliability = _safe_int((traits or {}).get("service_job_reliability"), default=0) if isinstance(traits, dict) else 0
+    reliability = max(SERVICE_JOB_RELIABILITY_MIN, min(SERVICE_JOB_RELIABILITY_MAX, reliability))
+    pay_multiplier = max(0.70, min(1.20, 1.0 + (float(reliability) * SERVICE_JOB_RELIABILITY_PAY_STEP)))
     offers = []
 
     if service in {"courier_jobs", "agency_jobs"}:
@@ -5104,7 +5125,7 @@ def service_job_board_offers(sim, player_eid, prop, service, *, limit=4, include
             target_name = str(target_prop.get("name", target_id) or target_id).strip()
             verb = verbs[(index + rng.randrange(len(verbs))) % len(verbs)]
             verb_key = verb.lower()
-            pay = int(base_pay + (chunk_dist * 10) + min(22, tile_dist // 5) + rng.randint(0, 12))
+            pay = max(1, int(round((base_pay + (chunk_dist * 10) + min(22, tile_dist // 5) + rng.randint(0, 12)) * pay_multiplier)))
             standing = 1 + int(chunk_dist >= 2)
             job_key = f"service_job:{service}:{prop_id}:{target_id}:{tick_bucket}:{index}"
             short_step = _service_job_offer_short_step(service, verb_key, target_name)
@@ -5201,7 +5222,7 @@ def service_job_board_offers(sim, player_eid, prop, service, *, limit=4, include
         for index, row in enumerate(candidates[:limit]):
             wanted_rank, _dist, _name_key, target_eid, pos, tier = row
             target_name = _service_job_actor_name(sim, target_eid)
-            pay = int(72 + ((3 - min(3, wanted_rank)) * 20) + rng.randint(0, 28))
+            pay = max(1, int(round((72 + ((3 - min(3, wanted_rank)) * 20) + rng.randint(0, 28)) * pay_multiplier)))
             job_key = f"service_job:{service}:{prop_id}:{target_eid}:{tick_bucket}:{index}"
             try:
                 target_chunk = sim.chunk_coords(int(pos.x), int(pos.y))
@@ -5615,10 +5636,105 @@ def _grant_bounty_restraint_jab(sim, player_eid, opportunity):
         metadata={
             "quest_opportunity_id": _safe_int(opportunity.get("id"), default=0),
             "quest_kind": "bounty_capture",
+            "bounty_target_eid": _safe_int((opportunity.get("requirements") or {}).get("bounty_target_eid"), default=0),
+            "bounty_target_name": str((opportunity.get("requirements") or {}).get("bounty_target_name", "target") or "target").strip(),
             "issued_by_property_id": str((opportunity.get("issuer") or {}).get("property_id", "") or "").strip(),
         },
     )
     return bool(added)
+
+
+def active_bounty_for_restraint_jab(sim, player_eid, item_entry):
+    """Resolve one issued jab through stored ids without scanning the world."""
+    if sim is None or not isinstance(item_entry, dict):
+        return None
+    if str(item_entry.get("item_id", "") or "").strip().lower() != "field_restraint_jab":
+        return None
+    metadata = item_entry.get("metadata") if isinstance(item_entry.get("metadata"), dict) else {}
+    opportunity_id = _safe_int(metadata.get("quest_opportunity_id"), default=0)
+    target_eid = _safe_int(metadata.get("bounty_target_eid"), default=0)
+    if opportunity_id <= 0 and target_eid <= 0:
+        return None
+
+    state = _state(sim)
+    for opportunity in tuple(state.get("active", ()) or ()):
+        if not isinstance(opportunity, dict):
+            continue
+        if opportunity_id > 0 and _safe_int(opportunity.get("id"), default=0) != opportunity_id:
+            continue
+        requirements = _opportunity_requirements(opportunity)
+        opportunity_target_eid = _safe_int(requirements.get("bounty_target_eid"), default=0)
+        if target_eid > 0 and opportunity_target_eid != target_eid:
+            continue
+        if opportunity_target_eid <= 0 or bool(requirements.get("bounty_restrained")):
+            continue
+        if not bool(requirements.get("player_accepted")):
+            continue
+        assigned_eid = _safe_int(
+            requirements.get("assigned_actor_eid"),
+            default=_safe_int(getattr(sim, "player_eid", 0), default=0),
+        )
+        if assigned_eid != _safe_int(player_eid, default=0):
+            continue
+        return opportunity
+    return None
+
+
+def bounty_restraint_jab_status(sim, player_eid, item_entry, *, activation_range=1):
+    """Return target-bound light/readiness state using direct ECS lookups."""
+    status = {
+        "active": False,
+        "target_live": False,
+        "near_target": False,
+        "target_restrainable": False,
+        "ready": False,
+        "target_eid": 0,
+        "target_name": "target",
+        "distance": None,
+        "opportunity_id": 0,
+    }
+    opportunity = active_bounty_for_restraint_jab(sim, player_eid, item_entry)
+    if not isinstance(opportunity, dict):
+        return status
+    requirements = _opportunity_requirements(opportunity)
+    target_eid = _safe_int(requirements.get("bounty_target_eid"), default=0)
+    target_name = str(requirements.get("bounty_target_name", "target") or "target").strip() or "target"
+    status.update({
+        "active": True,
+        "target_eid": target_eid,
+        "target_name": target_name,
+        "opportunity_id": _safe_int(opportunity.get("id"), default=0),
+    })
+    if target_eid <= 0:
+        return status
+
+    positions = sim.ecs.get(Position)
+    target_pos = positions.get(target_eid)
+    player_pos = positions.get(player_eid)
+    target_vitality = sim.ecs.get(Vitality).get(target_eid)
+    target_live = bool(
+        target_pos is not None
+        and target_vitality is not None
+        and getattr(target_vitality, "death_reported_tick", None) is None
+    )
+    status["target_live"] = target_live
+    if not target_live or player_pos is None or int(target_pos.z) != int(player_pos.z):
+        return status
+
+    distance = max(abs(int(target_pos.x) - int(player_pos.x)), abs(int(target_pos.y) - int(player_pos.y)))
+    near_target = distance <= max(0, int(activation_range))
+    suppression = sim.ecs.get(SuppressionState).get(target_eid)
+    target_restrainable = bool(
+        getattr(target_vitality, "downed", False)
+        or (suppression is not None and getattr(suppression, "surrendered", False))
+    )
+    status.update({
+        "distance": int(distance),
+        "near_target": bool(near_target),
+        "target_restrainable": bool(target_restrainable),
+        "ready": bool(near_target and target_restrainable),
+    })
+    return status
 
 
 def _apply_fallback_bounty_heat(sim, target_eid, prop):
@@ -7369,6 +7485,196 @@ def _apply_organization_favor(sim, opportunity):
     }
 
 
+def _adjust_service_job_reliability(sim, delta):
+    if sim is None:
+        return 0
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        sim.world_traits = {}
+        traits = sim.world_traits
+    before = max(
+        SERVICE_JOB_RELIABILITY_MIN,
+        min(SERVICE_JOB_RELIABILITY_MAX, _safe_int(traits.get("service_job_reliability"), default=0)),
+    )
+    after = max(
+        SERVICE_JOB_RELIABILITY_MIN,
+        min(SERVICE_JOB_RELIABILITY_MAX, before + _safe_int(delta, default=0)),
+    )
+    traits["service_job_reliability"] = int(after)
+    return int(after - before)
+
+
+def _service_job_completion_reliability(sim, opportunity, standing_reward):
+    family = str((opportunity or {}).get("contract_family", "") or "").strip().lower()
+    if family not in SERVICE_JOB_BOARD_SERVICES:
+        return 0
+    return _adjust_service_job_reliability(sim, max(1, _safe_int(standing_reward, default=0)))
+
+
+def _revoke_bounty_restraint_jab(sim, player_eid, opportunity):
+    if sim is None or player_eid is None or not isinstance(opportunity, dict):
+        return 0
+    requirements = _opportunity_requirements(opportunity)
+    if _safe_int(requirements.get("bounty_target_eid"), default=0) <= 0:
+        return 0
+    inventory = sim.ecs.get(Inventory).get(player_eid)
+    if inventory is None:
+        return 0
+    opportunity_id = _safe_int(opportunity.get("id"), default=0)
+    removed = 0
+    for item_entry in list(getattr(inventory, "items", ()) or ()):
+        if str(item_entry.get("item_id", "") or "").strip().lower() != "field_restraint_jab":
+            continue
+        metadata = item_entry.get("metadata") if isinstance(item_entry.get("metadata"), dict) else {}
+        if _safe_int(metadata.get("quest_opportunity_id"), default=0) != opportunity_id:
+            continue
+        result = inventory.remove_item(instance_id=item_entry.get("instance_id"), quantity=1)
+        if result:
+            removed += max(1, _safe_int(result.get("quantity"), default=1))
+    return int(removed)
+
+
+def _player_caused_failed_target_death(sim, player_eid, opportunity):
+    """Return whether an accepted mission target's death belongs to the player.
+
+    Target death can fail a contract regardless of who caused it.  Reputation
+    consequences are narrower: an issuer should not blame the player when a
+    rival or the world killed the target first.
+    """
+    if sim is None or player_eid is None or not isinstance(opportunity, dict):
+        return False
+    requirements = _opportunity_requirements(opportunity)
+    candidate_eids = []
+    bounty_target_eid = _safe_int(requirements.get("bounty_target_eid"), default=0)
+    if bounty_target_eid > 0:
+        candidate_eids.append(bounty_target_eid)
+    candidate_eids.extend(target_eid for target_eid, _name, _stage in _opportunity_target_specs(opportunity))
+    if not candidate_eids:
+        return False
+
+    traits = getattr(sim, "world_traits", None)
+    raw_sources = traits.get("killed_npc_sources", {}) if isinstance(traits, dict) else {}
+    if not isinstance(raw_sources, dict):
+        return False
+    for target_eid in candidate_eids:
+        raw_record = raw_sources.get(target_eid, raw_sources.get(str(target_eid)))
+        raw_source_eid = raw_record.get("source_eid") if isinstance(raw_record, dict) else raw_record
+        source_eid = _safe_int(raw_source_eid, default=0)
+        if source_eid <= 0:
+            continue
+        if source_eid == _safe_int(player_eid, default=0):
+            return True
+        drone = sim.ecs.get(DroneState).get(source_eid)
+        if drone is None:
+            continue
+        controller_eid = _safe_int(getattr(drone, "controller_eid", None), default=0)
+        owner_eid = _safe_int(getattr(drone, "owner_eid", None), default=0)
+        if _safe_int(player_eid, default=0) in {controller_eid, owner_eid}:
+            return True
+    return False
+
+
+def _apply_accepted_job_failure_consequence(sim, player_eid, opportunity, failure_code):
+    if sim is None or player_eid is None or not isinstance(opportunity, dict):
+        return {}
+    family = str(opportunity.get("contract_family", "") or "").strip().lower()
+    requirements = _opportunity_requirements(opportunity)
+    failure_code = str(failure_code or "").strip().lower()
+    issuer = opportunity.get("issuer") if isinstance(opportunity.get("issuer"), dict) else {}
+    if (
+        not bool(requirements.get("player_accepted"))
+        or failure_code not in _ACCOUNTABLE_ACCEPTED_JOB_FAILURE_CODES
+        or (family not in SERVICE_JOB_BOARD_SERVICES and not issuer)
+    ):
+        return {}
+    if failure_code == "target_killed" and not _player_caused_failed_target_death(sim, player_eid, opportunity):
+        return {}
+
+    reward = opportunity.get("reward") if isinstance(opportunity.get("reward"), dict) else {}
+    standing_penalty = max(1, _safe_int(reward.get("standing"), default=1))
+    reliability_delta = (
+        _adjust_service_job_reliability(sim, -standing_penalty)
+        if family in SERVICE_JOB_BOARD_SERVICES
+        else 0
+    )
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        sim.world_traits = {}
+        traits = sim.world_traits
+    traits["opportunity_standing"] = _safe_int(traits.get("opportunity_standing"), default=0) - standing_penalty
+
+    consequence = {"standing": -int(standing_penalty)}
+    if reliability_delta:
+        consequence["work_reliability"] = int(reliability_delta)
+    property_id = str(issuer.get("property_id", "") or "").strip()
+    property_delta = max(0.01, _safe_float(issuer.get("property_standing_delta"), default=0.03))
+    ledger = sim.ecs.get(ContactLedger).get(player_eid)
+    existing = ledger.property_entry(property_id) if ledger is not None and property_id else None
+    if isinstance(existing, dict):
+        before = _safe_float(existing.get("standing"), default=0.0)
+        after = _clamp(before - property_delta, lo=0.0, hi=1.0)
+        existing["standing"] = float(after)
+        existing["tick"] = int(getattr(sim, "tick", 0))
+        consequence["issuer_standing"] = round(float(after - before), 3)
+
+    person_eid = _safe_int(issuer.get("npc_eid"), default=0)
+    person_delta = max(0.015, _safe_float(issuer.get("person_standing_delta"), default=0.04))
+    person_entry = ledger.person_entry(person_eid) if ledger is not None and person_eid > 0 else None
+    if isinstance(person_entry, dict):
+        before_person = _safe_float(person_entry.get("standing"), default=0.0)
+        after_person = _clamp(before_person - person_delta, lo=0.0, hi=1.0)
+        before_snapshot = dict(person_entry)
+        person_entry["standing"] = float(after_person)
+        person_entry["tick"] = int(getattr(sim, "tick", 0))
+        note_person_notebook_mutation(
+            sim,
+            player_eid,
+            person_eid,
+            before=before_snapshot,
+            after=person_entry,
+        )
+        consequence["issuer_person_standing"] = round(float(after_person - before_person), 3)
+
+    social = sim.ecs.get(NPCSocial).get(person_eid) if person_eid > 0 else None
+    bond = social.bonds.get(player_eid) if social is not None else None
+    if isinstance(bond, dict):
+        before_trust = _safe_float(bond.get("trust"), default=0.0)
+        before_closeness = _safe_float(bond.get("closeness"), default=0.0)
+        bond["trust"] = _clamp(before_trust - max(0.025, person_delta * 0.75), lo=0.0, hi=1.0)
+        bond["closeness"] = _clamp(before_closeness - max(0.012, person_delta * 0.35), lo=0.0, hi=1.0)
+        trust_change = float(bond["trust"] - before_trust)
+        closeness_change = float(bond["closeness"] - before_closeness)
+        _record_actor_social_warmth(
+            sim,
+            person_eid,
+            other_eid=player_eid,
+            reason="accepted_job_failed",
+            trust_delta=trust_change,
+            closeness_delta=closeness_change,
+            protectiveness_delta=0.0,
+            post_bond=bond,
+        )
+        consequence["issuer_trust"] = round(trust_change, 3)
+
+    organization_delta = max(0.0, _safe_float(issuer.get("organization_standing_delta"), default=0.0))
+    organization_eid = _safe_int(issuer.get("organization_eid"), default=0)
+    if organization_eid > 0 and organization_delta > 0.0:
+        change = apply_organization_reputation_delta(
+            sim,
+            organization_eid=organization_eid,
+            standing_delta=-organization_delta,
+            source="accepted_job_failure",
+            reason=f"{family}_{failure_code}",
+            source_event="opportunity_failed",
+        )
+        if isinstance(change, dict):
+            consequence["organization_standing"] = round(
+                _safe_float(change.get("standing_delta"), default=0.0),
+                3,
+            )
+    return consequence
+
+
 def _apply_reward(sim, player_eid, reward, *, opportunity=None):
     reward = dict(reward or {})
     applied = {
@@ -7411,6 +7717,10 @@ def _apply_reward(sim, player_eid, reward, *, opportunity=None):
     if standing > 0:
         traits["opportunity_standing"] = _safe_int(traits.get("opportunity_standing"), default=0) + standing
         applied["standing"] = standing
+    if isinstance(opportunity, dict):
+        reliability_delta = _service_job_completion_reliability(sim, opportunity, standing)
+        if reliability_delta:
+            applied["work_reliability"] = int(reliability_delta)
 
     reward_items = []
     raw_items = reward.get("items", ())
@@ -7648,6 +7958,9 @@ def format_reward_text(reward):
     standing = max(0, _safe_int(reward.get("standing"), default=0))
     if standing > 0:
         bits.append(f"+{standing} standing")
+    reliability = _safe_int(reward.get("work_reliability"), default=0)
+    if reliability:
+        bits.append(f"reliability {reliability:+d}")
     for need_key, label in (("energy", "E"), ("safety", "S"), ("social", "So")):
         gain = max(0, _safe_int(reward.get(need_key), default=0))
         if gain > 0:
@@ -7713,6 +8026,17 @@ def _resolve_terminal_entry(
         done["failure_code"] = failure_code
         failure_family = str(done.get("failure_family", "") or "").strip().lower()
         done["failure_family"] = failure_family or _failure_family_for_code(failure_code)
+        consequence = _apply_accepted_job_failure_consequence(
+            sim,
+            player_eid,
+            done,
+            failure_code,
+        )
+        if consequence:
+            done["failure_consequence"] = consequence
+        revoked = _revoke_bounty_restraint_jab(sim, player_eid, done)
+        if revoked > 0:
+            done["revoked_restraint_jabs"] = int(revoked)
         state["failed"].append(done)
     job_key = str(done.get("key", "") or "").strip()
     if job_key.startswith("service_job:"):

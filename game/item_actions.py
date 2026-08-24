@@ -58,6 +58,7 @@ from game.meaningful_objects_runtime import nearest_item_backed_object_fixture, 
 from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.signal_jammer_runtime import activate_signal_jammer_pulse
 from game.property_access import evaluate_property_access as _evaluate_property_access
+from game.opportunities import bounty_restraint_jab_status
 from game.property_runtime import (
     property_covering as _property_covering,
     property_distance as _property_distance,
@@ -108,6 +109,7 @@ class ItemActionRuntime:
         self.sim = item_system.sim
         self.player_eid = item_system.player_eid
         self.catalog = item_system.catalog
+        self._lit_restraint_jab_ids = set()
 
     def _inventory_for(self, eid):
         return self.sim.ecs.get(Inventory).get(eid)
@@ -1109,6 +1111,42 @@ class ItemActionRuntime:
         ))
         return True
 
+    def _use_field_restraint_jab(self, eid, entry, item_def, *, reason="manual"):
+        if str(entry.get("item_id", item_def.get("id", "")) or "").strip().lower() != "field_restraint_jab":
+            return None
+        item_name = self._display_name_for_actor(eid, entry)
+        status = bounty_restraint_jab_status(self.sim, eid, entry)
+        if not bool(status.get("active")):
+            blocked_reason = "bounty_restraint_inactive"
+        elif not bool(status.get("target_live")):
+            blocked_reason = "bounty_restraint_target_unavailable"
+        elif not bool(status.get("near_target")):
+            blocked_reason = "bounty_restraint_out_of_range"
+        elif not bool(status.get("target_restrainable")):
+            blocked_reason = "bounty_restraint_target_not_ready"
+        else:
+            self.sim.emit(Event(
+                "bounty_restraint_use_request",
+                eid=eid,
+                target_eid=status.get("target_eid"),
+                opportunity_id=status.get("opportunity_id"),
+                item_instance_id=entry.get("instance_id"),
+                item_id="field_restraint_jab",
+                item_name=item_name,
+                reason=reason,
+            ))
+            return True
+        self.sim.emit(Event(
+            "item_use_blocked",
+            eid=eid,
+            reason=blocked_reason,
+            item_id="field_restraint_jab",
+            item_name=item_name,
+            target_eid=status.get("target_eid"),
+            target_name=status.get("target_name"),
+        ))
+        return False
+
     def _nearest_alarm_fixture(self, x, y, z, *, radius=1):
         for prop in self.sim.properties_in_radius(int(x), int(y), int(z), r=int(radius)):
             if _property_infrastructure_role(prop) == "alarm_target":
@@ -1589,6 +1627,14 @@ class ItemActionRuntime:
         )
         item_def = self._item_def(entry["item_id"])
         item_name = self._display_name_for_actor(eid, entry)
+        restraint_result = self._use_field_restraint_jab(
+            eid,
+            entry,
+            item_def,
+            reason=reason,
+        )
+        if restraint_result is not None:
+            return bool(restraint_result)
         if is_packed_drone_entry(entry, item_catalog=self.catalog):
             return self._use_packed_drone(
                 eid,
@@ -2421,3 +2467,29 @@ class ItemActionRuntime:
 
     def update(self):
         self.reconcile_player_credsticks()
+        inventory = self._inventory_for(self.player_eid)
+        lit_now = set()
+        for entry in tuple(getattr(inventory, "items", ()) or ()) if inventory is not None else ():
+            if str(entry.get("item_id", "") or "").strip().lower() != "field_restraint_jab":
+                continue
+            status = bounty_restraint_jab_status(self.sim, self.player_eid, entry)
+            if not bool(status.get("active") and status.get("target_live") and status.get("near_target")):
+                continue
+            instance_id = str(entry.get("instance_id", "") or "").strip()
+            if not instance_id:
+                continue
+            lit_now.add(instance_id)
+            if instance_id in self._lit_restraint_jab_ids:
+                continue
+            self.sim.emit(Event(
+                "bounty_restraint_indicator",
+                eid=self.player_eid,
+                item_id="field_restraint_jab",
+                item_name=self._display_name_for_actor(self.player_eid, entry),
+                item_instance_id=instance_id,
+                target_eid=status.get("target_eid"),
+                target_name=status.get("target_name"),
+                target_restrainable=bool(status.get("target_restrainable")),
+                ready=bool(status.get("ready")),
+            ))
+        self._lit_restraint_jab_ids = lit_now

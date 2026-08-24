@@ -1,4 +1,4 @@
-from engine.derived_facts import cached_derived_fact, derived_fact_revision
+from engine.derived_facts import derived_fact_revision
 from game.property_access import (
     DEFAULT_START_HOUR,
     DEFAULT_TICKS_PER_HOUR,
@@ -49,6 +49,9 @@ _FIRE_INTENSITY_PROFILE = {
     2: {"radius": 3, "intensity": 0.56},
     3: {"radius": 4, "intensity": 0.78},
 }
+FIRE_LIGHT_CLUSTER_THRESHOLD = 96
+FIRE_LIGHT_CLUSTER_SIZE = 4
+FIRE_LIGHT_REFRESH_INTERVAL = 5
 
 LIGHT_COLOR_PROFILES = {
     "street_warm": {"rgb": (255, 190, 92), "priority": 1, "pulse": ""},
@@ -519,43 +522,14 @@ def _active_power_cut_cache_key(sim, *, tick=None):
     return tuple(active)
 
 
-def _active_fire_cache_key(sim):
-    state = getattr(sim, "fire_state", None)
+def _active_fire_cache_key(sim, *, z=None):
+    state = fire_state(sim)
     if not isinstance(state, dict):
         return ()
-
-    def build():
-        cells = state.get("cells", {})
-        if not isinstance(cells, dict) or not cells:
-            return ()
-        active = []
-        for coord, cell in cells.items():
-            if not isinstance(cell, dict):
-                continue
-            try:
-                fire_intensity = int(cell.get("fire_intensity", 0) or 0)
-            except (TypeError, ValueError):
-                fire_intensity = 0
-            if fire_intensity <= 0:
-                continue
-            try:
-                x = int(coord[0])
-                y = int(coord[1])
-                z = int(coord[2])
-            except (TypeError, ValueError, IndexError):
-                continue
-            active.append((x, y, z, fire_intensity))
-        active.sort()
-        return tuple(active)
-
-    return cached_derived_fact(
-        sim,
-        "fire.active_lights",
-        "all",
-        build,
-        domains=("fire_light",),
-        max_entries=1,
-    )
+    if z is None:
+        return (int(derived_fact_revision(sim, "fire_light")),)
+    z_key = int(z)
+    return (int(state.get("light_revision_by_z", {}).get(z_key, 0) or 0),)
 
 
 def _power_cut_active_at(sim, x, y, z=0, *, tick=None):
@@ -836,14 +810,23 @@ def _aperture_light_sources(sim, clock):
     return sources
 
 
-def _fire_light_sources(sim):
+def _fire_light_sources(sim, *, z=None):
     bounds = _loaded_property_bounds(sim)
-    sources = []
-    cells = fire_state(sim).get("cells", {})
+    state = fire_state(sim)
+    cells = state.get("cells", {})
     if not isinstance(cells, dict) or not cells:
-        return sources
+        return []
 
-    for coord, cell in cells.items():
+    z_key = None if z is None else int(z)
+    if z_key is None:
+        rows = cells.items()
+    else:
+        rows = (
+            (coord, cells.get(coord))
+            for coord in tuple(state.get("z_index", {}).get(z_key, ()) or ())
+        )
+    active = []
+    for coord, cell in rows:
         if not isinstance(cell, dict):
             continue
         try:
@@ -865,18 +848,66 @@ def _fire_light_sources(sim):
             ):
                 continue
         profile = _FIRE_INTENSITY_PROFILE.get(max(1, min(3, fire_intensity)), _FIRE_INTENSITY_PROFILE[3])
-        sources.append({
+        active.append({
             "x": x,
             "y": y,
             "z": z,
             "radius": int(profile.get("radius", 2) or 2),
             "intensity": _clamp_unit(profile.get("intensity", 0.34), default=0.34),
-            "kind": "fire",
             "building_id": str(cell.get("building_id", "") or "").strip() or None,
             "property_id": str(cell.get("property_id", "") or "").strip() or None,
-            **_light_visual_fields({}, default_profile="fire_orange"),
         })
 
+    visual = _light_visual_fields({}, default_profile="fire_orange")
+    if len(active) <= FIRE_LIGHT_CLUSTER_THRESHOLD:
+        return [
+            {**source, "kind": "fire", "fire_cell_count": 1, **visual}
+            for source in active
+        ]
+
+    groups = {}
+    for source in active:
+        group_key = (
+            int(source["z"]),
+            int(source["x"]) // FIRE_LIGHT_CLUSTER_SIZE,
+            int(source["y"]) // FIRE_LIGHT_CLUSTER_SIZE,
+            source.get("building_id"),
+            source.get("property_id"),
+        )
+        group = groups.setdefault(group_key, {
+            "sum_x": 0,
+            "sum_y": 0,
+            "count": 0,
+            "radius": 0,
+            "intensity": 0.0,
+            "z": int(source["z"]),
+            "building_id": source.get("building_id"),
+            "property_id": source.get("property_id"),
+        })
+        group["sum_x"] += int(source["x"])
+        group["sum_y"] += int(source["y"])
+        group["count"] += 1
+        group["radius"] = max(int(group["radius"]), int(source["radius"]))
+        group["intensity"] = max(float(group["intensity"]), float(source["intensity"]))
+
+    sources = []
+    for group_key in sorted(groups, key=lambda key: (key[0], key[2], key[1], str(key[3]), str(key[4]))):
+        group = groups[group_key]
+        count = max(1, int(group["count"]))
+        base_intensity = _clamp_unit(group["intensity"], default=0.34)
+        combined_intensity = 1.0 - ((1.0 - base_intensity) ** min(3, count))
+        sources.append({
+            "x": int(round(float(group["sum_x"]) / count)),
+            "y": int(round(float(group["sum_y"]) / count)),
+            "z": int(group["z"]),
+            "radius": int(group["radius"]) + (1 if count > 1 else 0),
+            "intensity": _clamp_unit(combined_intensity, default=base_intensity),
+            "kind": "fire",
+            "building_id": group.get("building_id"),
+            "property_id": group.get("property_id"),
+            "fire_cell_count": count,
+            **visual,
+        })
     return sources
 
 
@@ -973,18 +1004,21 @@ def _vehicle_headlight_sources(sim):
     return sources
 
 
-def _local_light_sources(sim, clock=None):
+def _local_light_sources(sim, clock=None, *, z=None):
     if clock is None:
         clock = clock_snapshot(sim)
 
     state = lighting_state(sim)
-    cache_key = (
-        int(clock.get("tick", getattr(sim, "tick", 0))),
+    z_key = None if z is None else int(z)
+    tick = int(clock.get("tick", getattr(sim, "tick", 0)) or 0)
+    fire_key = _active_fire_cache_key(sim, z=z_key)
+    base_cache_key = (
+        z_key,
         str(clock.get("phase", "day")),
         int(clock.get("hour", 0)),
+        _loaded_property_bounds(sim),
         int(len(getattr(sim, "properties", {}))),
-        _active_power_cut_cache_key(sim, tick=clock.get("tick", getattr(sim, "tick", 0))),
-        _active_fire_cache_key(sim),
+        _active_power_cut_cache_key(sim, tick=tick),
         _active_vehicle_light_cache_key(sim),
         tuple(sorted(
             (
@@ -996,24 +1030,71 @@ def _local_light_sources(sim, clock=None):
             for record_id in tuple(getattr(sim, "bioluminescent_flora_ids", ()) or ())
         )),
     )
-    if tuple(state.get("source_cache_key", ())) == cache_key:
-        cached = state.get("local_light_sources", ())
+    source_cache = state.get("local_light_sources_by_z")
+    if not isinstance(source_cache, dict):
+        source_cache = {}
+        state["local_light_sources_by_z"] = source_cache
+    cached_entry = source_cache.get(z_key)
+    cached_fire_key = tuple(cached_entry.get("fire_key", ())) if isinstance(cached_entry, dict) else ()
+    try:
+        fire_refresh_age = tick - int(cached_entry.get("fire_refresh_tick", tick))
+    except (AttributeError, TypeError, ValueError):
+        fire_refresh_age = FIRE_LIGHT_REFRESH_INTERVAL
+    large_fire_refresh_grace = (
+        int(cached_entry.get("fire_population", 0) or 0) > FIRE_LIGHT_CLUSTER_THRESHOLD
+        and 0 <= fire_refresh_age < FIRE_LIGHT_REFRESH_INTERVAL
+    ) if isinstance(cached_entry, dict) else False
+    if (
+        isinstance(cached_entry, dict)
+        and tuple(cached_entry.get("base_key", ())) == base_cache_key
+        and (cached_fire_key == fire_key or large_fire_refresh_grace)
+    ):
+        cached = cached_entry.get("sources", ())
         if isinstance(cached, (list, tuple)):
+            cache_key = tuple(cached_entry.get("key", ()))
+            state["source_cache_key"] = cache_key
+            state["local_light_sources"] = list(cached)
+            state["source_count"] = len(cached)
             return tuple(cached)
 
-    vehicle_sources = tuple(_vehicle_headlight_sources(sim))
-    flora_sources = tuple(_bioluminescent_flora_light_sources(sim))
+    cache_key = base_cache_key + (fire_key,)
+
+    def on_requested_z(source):
+        if z_key is None:
+            return True
+        try:
+            return int(source.get("z", 0)) == z_key
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+    vehicle_sources = tuple(source for source in _vehicle_headlight_sources(sim) if on_requested_z(source))
+    flora_sources = tuple(source for source in _bioluminescent_flora_light_sources(sim) if on_requested_z(source))
     if str(clock.get("phase", "day")).strip().lower() not in _LIGHT_PHASES:
-        sources = tuple(_fire_light_sources(sim) + list(vehicle_sources) + list(flora_sources))
+        sources = tuple(_fire_light_sources(sim, z=z_key) + list(vehicle_sources) + list(flora_sources))
     else:
         sources = tuple(
-            _authored_fixture_light_sources(sim, clock)
-            + _aperture_light_sources(sim, clock)
-            + _fire_light_sources(sim)
+            [source for source in _authored_fixture_light_sources(sim, clock) if on_requested_z(source)]
+            + [source for source in _aperture_light_sources(sim, clock) if on_requested_z(source)]
+            + _fire_light_sources(sim, z=z_key)
             + list(vehicle_sources)
             + list(flora_sources)
         )
 
+    if len(source_cache) >= 16 and z_key not in source_cache:
+        source_cache.clear()
+    fire_population = sum(
+        int(source.get("fire_cell_count", 0) or 0)
+        for source in sources
+        if str(source.get("kind", "") or "").strip().lower() == "fire"
+    )
+    source_cache[z_key] = {
+        "key": cache_key,
+        "base_key": base_cache_key,
+        "fire_key": fire_key,
+        "fire_population": fire_population,
+        "fire_refresh_tick": tick,
+        "sources": [dict(source) for source in sources],
+    }
     state["source_cache_key"] = cache_key
     state["local_light_sources"] = [dict(source) for source in sources]
     state["source_count"] = len(sources)
@@ -1028,11 +1109,17 @@ def _local_light_sources_near(sim, x, y, z, *, clock=None, sampling=None):
         sources = tuple(sampling.get("sources", ()) or ())
         source_key = tuple(sampling.get("source_key", ()))
     else:
-        sources = _local_light_sources(sim, clock=clock)
+        sources = _local_light_sources(sim, clock=clock, z=z)
         source_key = tuple(state.get("source_cache_key", ()))
-    if tuple(state.get("source_spatial_cache_key", ())) != source_key:
+    z_key = int(z)
+    spatial_cache = state.get("local_light_source_spatial_by_z")
+    if not isinstance(spatial_cache, dict):
+        spatial_cache = {}
+        state["local_light_source_spatial_by_z"] = spatial_cache
+    spatial_entry = spatial_cache.get(z_key)
+    if not isinstance(spatial_entry, dict) or tuple(spatial_entry.get("key", ())) != source_key:
         spatial = {}
-        for source in sources:
+        for source_index, source in enumerate(sources):
             try:
                 sx = int(source.get("x"))
                 sy = int(source.get("y"))
@@ -1040,19 +1127,27 @@ def _local_light_sources_near(sim, x, y, z, *, clock=None, sampling=None):
                 radius = max(1, int(source.get("radius", 0)))
             except (AttributeError, TypeError, ValueError):
                 continue
+            if sz != z_key:
+                continue
             for dy in range(-radius, radius + 1):
                 remaining = radius - abs(dy)
                 for dx in range(-remaining, remaining + 1):
-                    spatial.setdefault((sx + dx, sy + dy, sz), []).append(source)
-        state["local_light_source_spatial"] = {
-            key: tuple(rows)
-            for key, rows in spatial.items()
-        }
+                    key = (sx + dx, sy + dy, sz)
+                    existing = spatial.get(key)
+                    spatial[key] = (source_index,) if existing is None else existing + (source_index,)
+        if len(spatial_cache) >= 16 and z_key not in spatial_cache:
+            spatial_cache.clear()
+        spatial_cache[z_key] = {"key": source_key, "cells": spatial}
+        state["local_light_source_spatial"] = spatial
         state["source_spatial_cache_key"] = source_key
-    spatial = state.get("local_light_source_spatial", {})
+    else:
+        spatial = spatial_entry.get("cells", {})
+        state["local_light_source_spatial"] = spatial
+        state["source_spatial_cache_key"] = source_key
     if not isinstance(spatial, dict):
         return ()
-    return tuple(spatial.get((int(x), int(y), int(z)), ()) or ())
+    indexes = tuple(spatial.get((int(x), int(y), z_key), ()) or ())
+    return tuple(sources[index] for index in indexes if 0 <= int(index) < len(sources))
 
 
 def _structure_building_id(sim, x, y, z=0):
@@ -1308,11 +1403,12 @@ def _local_light_level(sim, x, y, z=0, inside=False, aperture_bleed=0.0, clock=N
     )
 
 
-def prepare_ambient_sampling(sim, *, clock=None):
+def prepare_ambient_sampling(sim, *, clock=None, z=None):
     if clock is None:
         clock = clock_snapshot(sim)
 
-    sources = _local_light_sources(sim, clock=clock)
+    z_key = None if z is None else int(z)
+    sources = _local_light_sources(sim, clock=clock, z=z_key)
     state = lighting_state(sim)
     tilemap = getattr(sim, "tilemap", None)
     cache_signature = (
@@ -1322,15 +1418,25 @@ def prepare_ambient_sampling(sim, *, clock=None):
         derived_fact_revision(sim, "transit_nodes"),
         _world_grid_light_event_key(sim),
     )
-    if tuple(state.get("ambient_cache_signature", ())) != cache_signature:
-        state["ambient_cache_signature"] = cache_signature
-        state["ambient_cache"] = {}
-    ambient_cache = state.get("ambient_cache")
+    ambient_caches = state.get("ambient_caches_by_z")
+    if not isinstance(ambient_caches, dict):
+        ambient_caches = {}
+        state["ambient_caches_by_z"] = ambient_caches
+    ambient_entry = ambient_caches.get(z_key)
+    if not isinstance(ambient_entry, dict) or tuple(ambient_entry.get("signature", ())) != cache_signature:
+        ambient_entry = {"signature": cache_signature, "cache": {}}
+        if len(ambient_caches) >= 16 and z_key not in ambient_caches:
+            ambient_caches.clear()
+        ambient_caches[z_key] = ambient_entry
+    ambient_cache = ambient_entry.get("cache")
     if not isinstance(ambient_cache, dict):
         ambient_cache = {}
-        state["ambient_cache"] = ambient_cache
+        ambient_entry["cache"] = ambient_cache
+    state["ambient_cache_signature"] = cache_signature
+    state["ambient_cache"] = ambient_cache
     return {
         "sim": sim,
+        "z": z_key,
         "clock": clock,
         "sources": sources,
         "source_key": tuple(state.get("source_cache_key", ())),
@@ -1340,15 +1446,19 @@ def prepare_ambient_sampling(sim, *, clock=None):
 
 
 def ambient_snapshot(sim, x, y, z=0, clock=None, *, sampling=None):
-    if not isinstance(sampling, dict) or sampling.get("sim") is not sim:
-        sampling = prepare_ambient_sampling(sim, clock=clock)
-    clock = sampling.get("clock") if isinstance(sampling.get("clock"), dict) else clock
-    if clock is None:
-        clock = clock_snapshot(sim)
     try:
         x, y, z = int(x), int(y), int(z)
     except (TypeError, ValueError):
         x, y, z = 0, 0, 0
+    if (
+        not isinstance(sampling, dict)
+        or sampling.get("sim") is not sim
+        or sampling.get("z") not in (None, z)
+    ):
+        sampling = prepare_ambient_sampling(sim, clock=clock, z=z)
+    clock = sampling.get("clock") if isinstance(sampling.get("clock"), dict) else clock
+    if clock is None:
+        clock = clock_snapshot(sim)
 
     # Rendering and perception frequently ask the same exact lighting question
     # several times while simulation time is paused.  The sampling context
@@ -1356,7 +1466,7 @@ def ambient_snapshot(sim, x, y, z=0, clock=None, *, sampling=None):
     # dependencies once for the caller's coherent observation window.
     ambient_cache = sampling.get("ambient_cache")
     if not isinstance(ambient_cache, dict):
-        sampling = prepare_ambient_sampling(sim, clock=clock)
+        sampling = prepare_ambient_sampling(sim, clock=clock, z=z)
         ambient_cache = sampling["ambient_cache"]
     cache_key = (x, y, z)
     cached = ambient_cache.get(cache_key)
@@ -1470,13 +1580,16 @@ def lighting_state(sim):
         "player_glare": {},
         "source_cache_key": (),
         "local_light_sources": [],
+        "local_light_sources_by_z": {},
         "source_spatial_cache_key": (),
         "local_light_source_spatial": {},
+        "local_light_source_spatial_by_z": {},
         "aperture_source_cache_key": (),
         "aperture_light_sources": [],
         "aperture_bleed_cache": {},
         "ambient_cache_signature": (),
         "ambient_cache": {},
+        "ambient_caches_by_z": {},
         "source_count": 0,
     }
     world_traits["lighting"] = state
@@ -1584,7 +1697,8 @@ def update_lighting_state(sim, player_pos=None):
         _local_light_sources(sim, clock=snapshot)
         return state
 
-    _local_light_sources(sim, clock=snapshot)
+    player_z = int(getattr(player_pos, "z", 0) or 0)
+    _local_light_sources(sim, clock=snapshot, z=player_z)
     player_eid = getattr(sim, "player_eid", None)
     if player_eid is not None:
         update_visual_glare_for_entity(sim, player_eid, player_pos, clock=snapshot)

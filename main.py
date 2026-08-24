@@ -733,7 +733,7 @@ def _register_runtime_systems(sim, view, player, *, audio_progress_callback=None
     npc_interaction_system = NPCInteractionSystem(sim, player)
     bodyguard_system = BodyguardSystem(sim)
     cult_system = CultSystem(sim)
-    combat_pacing_system = CombatPacingSystem(sim, player, engage_radius=10, danger_radius=6, calm_frames_to_exit=14)
+    combat_pacing_system = CombatPacingSystem(sim, player, engage_radius=10, danger_radius=6, lost_sight_turns_to_exit=3)
     situation_read_system = SituationReadSystem(sim, player)
     world_streaming_system = WorldStreamingSystem(sim, player)
     noise_system = NoiseSystem(sim)

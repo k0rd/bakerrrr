@@ -95,6 +95,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "_npc_path_search_failures",
     "_routine_will_signatures",
     "_hidden_contact_referral_property_cache",
+    "_flora_at_chunk_index",
     "_herbal_decay_next_tick",
     "_underground_plan_cache",
     "building_regular_chunk_pulse_cache",

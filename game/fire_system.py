@@ -6,7 +6,7 @@ import random
 
 from engine.events import Event
 from engine.systems import System
-from game.components import Collider, DroneState, NPCNeeds, Render, StatusEffects, Vitality
+from game.components import Collider, DroneState, NPCNeeds, Position, Render, StatusEffects, Vitality
 from game.items import apply_item_fire_damage, item_display_name, split_item_stack_metadata
 from game.flora_runtime import apply_flora_fire_damage, flora_at
 from game.physical_target_runtime import (
@@ -58,6 +58,8 @@ ENVIRONMENTAL_CHUNK_IGNITION_CHANCE = 0.05
 FIRE_RESPONSE_KEEP_TICKS = 1200
 FIRE_RESPONSE_REFRESH_INTERVAL = 90
 FIRE_AFTERMATH_HOURS = 6.0
+FOREGROUND_FIRE_ADVANCE_CAP = 96
+BACKGROUND_FIRE_ADVANCE_CAP = 128
 
 
 def _text(value):
@@ -207,16 +209,19 @@ class FireSystem(System):
         self.runs_without_turn = True
         self._loaded_chunk_cache = None
         self._fire_behavior_cache = None
+        self._property_damage_records_cache = None
         self.sim.events.subscribe("explosion_triggered", self.on_explosion_triggered)
         self.sim.events.subscribe("smoke_cloud_released", self.on_smoke_cloud_released)
 
     def _begin_update_caches(self):
         self._loaded_chunk_cache = set(_loaded_chunk_keys(self.sim))
         self._fire_behavior_cache = {}
+        self._property_damage_records_cache = {}
 
     def _end_update_caches(self):
         self._loaded_chunk_cache = None
         self._fire_behavior_cache = None
+        self._property_damage_records_cache = None
 
     def _chunk_is_loaded(self, chunk):
         normalized = tuple(chunk) if isinstance(chunk, (tuple, list)) else None
@@ -227,7 +232,14 @@ class FireSystem(System):
 
     def _behavior_for_cell(self, x, y, z=0, *, prop=None):
         if isinstance(prop, dict):
-            return fire_behavior_for_cell(self.sim, x, y, z, prop=prop)
+            return fire_behavior_for_cell(
+                self.sim,
+                x,
+                y,
+                z,
+                prop=prop,
+                property_damage_records_cache=self._property_damage_records_cache,
+            )
         cache = self._fire_behavior_cache
         key = _coord_key(x, y, z)
         if key is None:
@@ -236,10 +248,28 @@ class FireSystem(System):
             cached = cache.get(key)
             if isinstance(cached, dict):
                 return cached
-            behavior = fire_behavior_for_cell(self.sim, key[0], key[1], key[2], prop=prop)
+            behavior = fire_behavior_for_cell(
+                self.sim,
+                key[0],
+                key[1],
+                key[2],
+                prop=prop,
+                property_damage_records_cache=self._property_damage_records_cache,
+            )
             cache[key] = behavior
             return behavior
-        return fire_behavior_for_cell(self.sim, key[0], key[1], key[2], prop=prop)
+        return fire_behavior_for_cell(
+            self.sim,
+            key[0],
+            key[1],
+            key[2],
+            prop=prop,
+            property_damage_records_cache=self._property_damage_records_cache,
+        )
+
+    def _invalidate_property_damage_cache(self, prop):
+        if isinstance(prop, dict) and isinstance(self._property_damage_records_cache, dict):
+            self._property_damage_records_cache.pop(id(prop), None)
 
     def on_explosion_triggered(self, event):
         x = event.data.get("x")
@@ -838,6 +868,7 @@ class FireSystem(System):
             offender_eid=cell.get("source_eid"),
             damage_tick=tick,
         )
+        self._invalidate_property_damage_cache(prop)
         if not isinstance(result, dict) or not result.get("damaged"):
             return
         state["damage_marks"][mark_key] = tick
@@ -1032,6 +1063,7 @@ class FireSystem(System):
                     offender_eid=source_cell.get("source_eid"),
                     damage_tick=tick,
                 )
+                self._invalidate_property_damage_cache(prop)
                 if not bool(isinstance(result, dict) and result.get("broken")):
                     if existing_smoke <= 0 or (tick - target_last_advanced) >= FIRE_SPREAD_INTERVAL:
                         upsert_fire_cell(
@@ -1212,10 +1244,51 @@ class FireSystem(System):
                     set(state.get("last_smoke_properties", ()) or ()),
                 )
             return
+        player_pos = self.sim.ecs.get(Position).get(getattr(self.sim, "player_eid", None))
+        player_z = int(player_pos.z) if player_pos is not None else None
+        foreground_due = []
+        background_due = []
+        unloaded_due = []
+        for coord in sorted(due_coords):
+            if not self._chunk_is_loaded(self.sim.chunk_coords(coord[0], coord[1])):
+                unloaded_due.append(coord)
+            elif player_z is None or int(coord[2]) == player_z:
+                foreground_due.append(coord)
+            else:
+                background_due.append(coord)
+
+        foreground_selected = foreground_due[:FOREGROUND_FIRE_ADVANCE_CAP]
+        background_selected = background_due[:BACKGROUND_FIRE_ADVANCE_CAP]
+        deferred = foreground_due[FOREGROUND_FIRE_ADVANCE_CAP:] + background_due[BACKGROUND_FIRE_ADVANCE_CAP:]
+        for coord in deferred:
+            schedule_fire_cell_advance(
+                self.sim,
+                coord,
+                due_tick=tick + 1,
+                advance_interval=FIRE_SPREAD_INTERVAL,
+            )
+        background_cycle = max(
+            FIRE_SPREAD_INTERVAL,
+            (len(background_due) + BACKGROUND_FIRE_ADVANCE_CAP - 1) // BACKGROUND_FIRE_ADVANCE_CAP,
+        )
+        foreground_cycle = max(
+            FIRE_SPREAD_INTERVAL,
+            (len(foreground_due) + FOREGROUND_FIRE_ADVANCE_CAP - 1) // FOREGROUND_FIRE_ADVANCE_CAP,
+        )
+        foreground_selected_set = set(foreground_selected)
+        background_selected_set = set(background_selected)
+        due_coords = tuple(unloaded_due + foreground_selected + background_selected)
+        state["last_fire_advance_load"] = {
+            "tick": tick,
+            "foreground_due": len(foreground_due),
+            "background_due": len(background_due),
+            "advanced": len(foreground_selected) + len(background_selected),
+            "deferred": len(deferred),
+        }
         previous_active = set(state.get("last_active_properties", ()) or ())
         previous_smoke = set(state.get("last_smoke_properties", ()) or ())
         changed_chunks = set()
-        fire_light_changed = False
+        fire_light_changed_z = set()
 
         for coord in due_coords:
             cell = state.get("cells", {}).get(coord)
@@ -1261,7 +1334,7 @@ class FireSystem(System):
                 else:
                     cell["fire_intensity"] = max(fire_intensity, 1)
                 if _safe_int(cell.get("fire_intensity"), 0) != fire_intensity:
-                    fire_light_changed = True
+                    fire_light_changed_z.add(int(coord[2]))
                 if _safe_int(cell.get("fire_intensity"), 0) <= 0:
                     spent_record = mark_fire_cell_spent(
                         self.sim,
@@ -1280,15 +1353,21 @@ class FireSystem(System):
             if _safe_int(cell.get("fire_intensity"), 0) <= 0 and _safe_int(cell.get("smoke_intensity"), 0) <= 0:
                 remove_fire_cell(self.sim, coord[0], coord[1], coord[2], sync_protected=False)
             else:
+                if coord in foreground_selected_set:
+                    next_interval = foreground_cycle
+                elif coord in background_selected_set:
+                    next_interval = background_cycle
+                else:
+                    next_interval = FIRE_SPREAD_INTERVAL
                 schedule_fire_cell_advance(
                     self.sim,
                     coord,
-                    due_tick=tick + FIRE_SPREAD_INTERVAL,
-                    advance_interval=FIRE_SPREAD_INTERVAL,
+                    due_tick=tick + next_interval,
+                    advance_interval=next_interval,
                 )
 
-        if fire_light_changed:
-            mark_fire_light_changed(self.sim, state=state)
+        for changed_z in sorted(fire_light_changed_z):
+            mark_fire_light_changed(self.sim, state=state, z=changed_z)
 
         for chunk in changed_chunks:
             refresh_fire_protected_chunk(self.sim, chunk)

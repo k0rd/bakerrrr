@@ -2032,6 +2032,8 @@ class OpportunitySystem(System):
                 playstyles=tuple(entry.get("playstyles", ())),
                 failure_reason=str(entry.get("failure_reason", "")).strip(),
                 failure_code=str(entry.get("failure_code", "")).strip().lower(),
+                failure_consequence=dict(entry.get("failure_consequence", {}) or {}),
+                revoked_restraint_jabs=int(entry.get("revoked_restraint_jabs", 0) or 0),
                 active_remaining=active_count,
             ))
 

@@ -125,6 +125,7 @@ class CoverSystem(System):
 
 class CombatPacingSystem(System):
     RECENT_HIT_DAMAGE_KINDS = {"melee", "ballistic", "explosive"}
+    SOURCELESS_INCOMING_ATTACK_DAMAGE_KINDS = {"melee", "ballistic", "explosive"}
 
     def __init__(
         self,
@@ -132,16 +133,20 @@ class CombatPacingSystem(System):
         player_eid,
         engage_radius=10,
         danger_radius=6,
-        calm_frames_to_exit=12,
+        calm_frames_to_exit=None,
         exposure_threshold=0.58,
+        lost_sight_turns_to_exit=3,
     ):
         super().__init__(sim)
         self.player_eid = player_eid
         self.engage_radius = int(max(3, engage_radius))
         self.danger_radius = int(max(2, danger_radius))
-        self.calm_frames_to_exit = int(max(1, calm_frames_to_exit))
+        if calm_frames_to_exit is not None:
+            # Compatibility for callers from before sight-loss release became turn-counted.
+            lost_sight_turns_to_exit = calm_frames_to_exit
+        self.lost_sight_turns_to_exit = int(max(1, lost_sight_turns_to_exit))
+        self.calm_frames_to_exit = self.lost_sight_turns_to_exit
         self.exposure_threshold = float(max(0.2, min(1.0, exposure_threshold)))
-        self.calm_frames = 0
         self.runs_without_turn = True
 
         _combat_overlay_state(self.sim)
@@ -163,6 +168,29 @@ class CombatPacingSystem(System):
     def _clear_recent_player_drone_attacker(self, overlay=None):
         overlay = overlay if isinstance(overlay, dict) else _combat_overlay_state(self.sim)
         overlay["recent_player_drone_attacker"] = None
+
+    def _clear_recent_player_attacker(self, overlay=None):
+        overlay = overlay if isinstance(overlay, dict) else _combat_overlay_state(self.sim)
+        overlay["recent_player_attacker"] = None
+
+    @staticmethod
+    def _reset_lost_sight_turns(overlay):
+        overlay["lost_sight_turns"] = 0
+        overlay["last_lost_sight_turn_tick"] = None
+
+    def _record_lost_sight_turn(self, overlay):
+        if not bool(getattr(self.sim, "turn_advance_requested", False)):
+            return int(overlay.get("lost_sight_turns", 0) or 0)
+        current_tick = int(getattr(self.sim, "tick", 0) or 0)
+        try:
+            last_tick = int(overlay.get("last_lost_sight_turn_tick"))
+        except (TypeError, ValueError):
+            last_tick = None
+        if last_tick == current_tick:
+            return int(overlay.get("lost_sight_turns", 0) or 0)
+        overlay["last_lost_sight_turn_tick"] = current_tick
+        overlay["lost_sight_turns"] = int(overlay.get("lost_sight_turns", 0) or 0) + 1
+        return int(overlay["lost_sight_turns"])
 
     def _drone_is_player_controlled(self, drone_state):
         for attribute in ("owner_eid", "controller_eid"):
@@ -211,22 +239,66 @@ class CombatPacingSystem(System):
         positions = self.sim.ecs.get(Position)
         target_pos = positions.get(target_eid)
         if not player_pos or not target_pos or int(player_pos.z) != int(target_pos.z):
-            self._clear_recent_hit_target(overlay)
             return None
         if not _entity_visible_to_player(self.sim, self.player_eid, target_eid):
-            self._clear_recent_hit_target(overlay)
             return None
 
         return target_eid, target_pos
 
+    def _incoming_damage_is_combat(self, event, source_eid, damage_kind):
+        if source_eid == int(self.player_eid):
+            return False
+        if bool(event.data.get("environmental_hazard")):
+            return False
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        if damage_kind == "deprivation" or reason in {"hunger", "thirst", "dehydration"}:
+            return False
+        if source_eid is not None:
+            return True
+        return damage_kind in self.SOURCELESS_INCOMING_ATTACK_DAMAGE_KINDS
+
+    def _enter_from_incoming_damage(self, event, source_eid, damage_kind):
+        if not self._incoming_damage_is_combat(event, source_eid, damage_kind):
+            return False
+        positions = self.sim.ecs.get(Position)
+        player_pos = positions.get(self.player_eid)
+        source_pos = positions.get(source_eid) if source_eid is not None else None
+        distance = (
+            _manhattan(player_pos.x, player_pos.y, source_pos.x, source_pos.y)
+            if player_pos is not None and source_pos is not None and int(player_pos.z) == int(source_pos.z)
+            else None
+        )
+        overlay = _combat_overlay_state(self.sim)
+        overlay["threat_count"] = max(1, int(overlay.get("threat_count", 0) or 0))
+        overlay["direct_threat_count"] = max(1, int(overlay.get("direct_threat_count", 0) or 0))
+        overlay["nearest_threat_dist"] = distance
+        if source_eid is not None:
+            overlay["recent_player_attacker"] = {
+                "source_eid": int(source_eid),
+                "last_hit_tick": int(getattr(self.sim, "tick", 0) or 0),
+                "damage_kind": damage_kind,
+            }
+        self._reset_lost_sight_turns(overlay)
+        if not bool(overlay.get("active")):
+            overlay["active"] = True
+            self.sim.emit(Event(
+                "combat_overlay_entered",
+                player_eid=self.player_eid,
+                threat_count=overlay["threat_count"],
+                direct_threat_count=overlay["direct_threat_count"],
+                ambient_threat_count=int(overlay.get("ambient_threat_count", 0) or 0),
+                pursuit_target_count=int(overlay.get("pursuit_target_count", 0) or 0),
+                nearest_threat_dist=distance,
+                source_eid=source_eid,
+                damage_kind=damage_kind,
+                incoming_player_hit=True,
+            ))
+        self.sim.turn_based = True
+        return True
+
     def on_entity_damaged(self, event):
-        source_eid = self._int_or_none(event.data.get("source_eid"))
         target_eid = self._int_or_none(event.data.get("target_eid"))
-        if source_eid is None or target_eid is None:
-            return
-        if int(source_eid) != int(self.player_eid):
-            return
-        if int(target_eid) == int(self.player_eid):
+        if target_eid is None:
             return
         try:
             damage = int(event.data.get("damage", 0) or 0)
@@ -236,6 +308,12 @@ class CombatPacingSystem(System):
             return
 
         damage_kind = str(event.data.get("damage_kind", "") or "").strip().lower()
+        source_eid = self._int_or_none(event.data.get("source_eid"))
+        if int(target_eid) == int(self.player_eid):
+            self._enter_from_incoming_damage(event, source_eid, damage_kind)
+            return
+        if source_eid is None or int(source_eid) != int(self.player_eid):
+            return
         if damage_kind not in self.RECENT_HIT_DAMAGE_KINDS:
             return
         if not self._target_available_for_recent_hit_pacing(target_eid):
@@ -288,7 +366,7 @@ class CombatPacingSystem(System):
         overlay["threat_count"] = max(1, int(overlay.get("threat_count", 0) or 0))
         overlay["direct_threat_count"] = max(1, int(overlay.get("direct_threat_count", 0) or 0))
         overlay["nearest_threat_dist"] = distance
-        self.calm_frames = 0
+        self._reset_lost_sight_turns(overlay)
         if not bool(overlay.get("active")):
             overlay["active"] = True
             self.sim.emit(Event(
@@ -303,6 +381,41 @@ class CombatPacingSystem(System):
                 incoming_drone_attack=True,
             ))
         self.sim.turn_based = True
+
+    def _recent_player_attacker(self, player_pos, counted_eids):
+        overlay = _combat_overlay_state(self.sim)
+        record = overlay.get("recent_player_attacker")
+        if not isinstance(record, dict):
+            self._clear_recent_player_attacker(overlay)
+            return None
+        source_eid = self._int_or_none(record.get("source_eid"))
+        if source_eid is None or source_eid == int(self.player_eid):
+            self._clear_recent_player_attacker(overlay)
+            return None
+        if source_eid in counted_eids:
+            return None
+        source_pos = self.sim.ecs.get(Position).get(source_eid)
+        if source_pos is None:
+            self._clear_recent_player_attacker(overlay)
+            return None
+        vitality = self.sim.ecs.get(Vitality).get(source_eid)
+        if vitality is not None and (
+            int(getattr(vitality, "hp", 0) or 0) <= 0
+            or bool(getattr(vitality, "downed", False))
+        ):
+            self._clear_recent_player_attacker(overlay)
+            return None
+        suppression = self.sim.ecs.get(SuppressionState).get(source_eid)
+        if suppression is not None and bool(getattr(suppression, "surrendered", False)):
+            self._clear_recent_player_attacker(overlay)
+            return None
+        if (
+            player_pos is None
+            or int(source_pos.z) != int(player_pos.z)
+            or not _entity_visible_to_player(self.sim, self.player_eid, source_eid)
+        ):
+            return None
+        return source_eid, source_pos
 
     def _recent_player_drone_attacker(self, player_pos, counted_eids):
         overlay = _combat_overlay_state(self.sim)
@@ -326,9 +439,10 @@ class CombatPacingSystem(System):
             or target_eid != int(self.player_eid)
             or _entity_is_downed(self.sim, drone_eid)
             or int(drone_pos.z) != int(player_pos.z)
-            or _manhattan(player_pos.x, player_pos.y, drone_pos.x, drone_pos.y) > self.engage_radius
         ):
             self._clear_recent_player_drone_attacker(overlay)
+            return None
+        if not _entity_visible_to_player(self.sim, self.player_eid, drone_eid):
             return None
         return drone_eid, drone_pos
 
@@ -360,17 +474,16 @@ class CombatPacingSystem(System):
             if not pos or pos.z != player_pos.z:
                 continue
 
-            dist = _manhattan(player_pos.x, player_pos.y, pos.x, pos.y)
-            if dist > self.engage_radius:
-                continue
-
             if not _entity_visible_to_player(self.sim, self.player_eid, eid):
                 continue
 
+            dist = _manhattan(player_pos.x, player_pos.y, pos.x, pos.y)
             relation = _combat_relation_to_player(self.sim, eid, player_eid=self.player_eid)
             if relation == COMBAT_RELATION_DIRECT:
                 direct_count += 1
             elif relation == COMBAT_RELATION_AMBIENT:
+                if dist > self.engage_radius:
+                    continue
                 ambient_count += 1
             else:
                 continue
@@ -386,6 +499,16 @@ class CombatPacingSystem(System):
             pursuit_count = 1
             threat_count += 1
             dist = _manhattan(player_pos.x, player_pos.y, target_pos.x, target_pos.y)
+            if nearest is None or dist < nearest:
+                nearest = dist
+
+        incoming_attacker = self._recent_player_attacker(player_pos, counted_eids)
+        if incoming_attacker is not None:
+            attacker_eid, attacker_pos = incoming_attacker
+            counted_eids.add(int(attacker_eid))
+            direct_count += 1
+            threat_count += 1
+            dist = _manhattan(player_pos.x, player_pos.y, attacker_pos.x, attacker_pos.y)
             if nearest is None or dist < nearest:
                 nearest = dist
 
@@ -426,9 +549,9 @@ class CombatPacingSystem(System):
         should_engage = False
         exposed = player_exposure >= self.exposure_threshold
         retain_exposed = player_exposure >= max(0.35, self.exposure_threshold - 0.12)
-        if int(snapshot.get("pursuit_count", 0) or 0) > 0:
+        if int(snapshot.get("pursuit_count", 0) or 0) > 0 or int(snapshot.get("direct_count", 0) or 0) > 0:
             should_engage = True
-        elif threat_count > 0:
+        elif int(snapshot.get("ambient_count", 0) or 0) > 0:
             if nearest is None:
                 should_engage = exposed
             elif nearest <= self.danger_radius:
@@ -438,7 +561,7 @@ class CombatPacingSystem(System):
                 should_engage = True
 
         if should_engage:
-            self.calm_frames = 0
+            self._reset_lost_sight_turns(overlay)
             if not overlay["active"]:
                 overlay["active"] = True
                 self.sim.turn_based = True
@@ -454,10 +577,13 @@ class CombatPacingSystem(System):
             return
 
         if overlay["active"]:
-            self.calm_frames += 1
-            if self.calm_frames >= self.calm_frames_to_exit:
+            lost_sight_turns = self._record_lost_sight_turn(overlay)
+            if lost_sight_turns >= self.lost_sight_turns_to_exit:
                 overlay["active"] = False
-                self.calm_frames = 0
+                self._reset_lost_sight_turns(overlay)
+                self._clear_recent_hit_target(overlay)
+                self._clear_recent_player_attacker(overlay)
+                self._clear_recent_player_drone_attacker(overlay)
                 self.sim.emit(Event(
                     "combat_overlay_exited",
                     player_eid=self.player_eid,

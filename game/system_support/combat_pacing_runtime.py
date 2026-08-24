@@ -24,7 +24,10 @@ def _combat_overlay_state(sim):
     overlay.setdefault("ambient_threat_count", 0)
     overlay.setdefault("pursuit_target_count", 0)
     overlay.setdefault("recent_hit_target", None)
+    overlay.setdefault("recent_player_attacker", None)
     overlay.setdefault("recent_player_drone_attacker", None)
+    overlay.setdefault("lost_sight_turns", 0)
+    overlay.setdefault("last_lost_sight_turn_tick", None)
     overlay.setdefault("nearest_threat_dist", None)
     overlay.setdefault("player_exposure", 1.0)
     return overlay

@@ -116,6 +116,7 @@ from game.release_runtime import debug_mode_enabled, release_control_text
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
     append_external_opportunity,
+    bounty_restraint_jab_status,
     evaluate_opportunity_board,
     evaluate_opportunity_facts,
     format_reward_text,
@@ -3227,7 +3228,7 @@ class RenderSystem(System):
         lighting_state = _lighting_state(self.sim)
         if int(lighting_state.get("tick", -1)) != int(getattr(self.sim, "tick", 0)):
             lighting_state = _update_lighting_state(self.sim, player_pos=player_pos)
-        ambient_sampling = _prepare_ambient_sampling(self.sim, clock=lighting_state)
+        ambient_sampling = _prepare_ambient_sampling(self.sim, clock=lighting_state, z=active_z)
         if debug_ui.get("open"):
             debug_panel = _build_debug_overlay(
                 self.sim,
@@ -5278,6 +5279,17 @@ class RenderSystem(System):
                 row_prefix = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} "
                 compatibility_color = compatibility.get("compatibility_color")
                 suffix = f"{name} x{entry['quantity']}{ammo_suffix}{worn_suffix}{storage_suffix}"
+                restraint_indicator = ""
+                restraint_indicator_color = row_color
+                if str(entry.get("item_id", "") or "").strip().lower() == "field_restraint_jab":
+                    restraint_status = bounty_restraint_jab_status(self.sim, self.player_eid, entry)
+                    lit = bool(
+                        restraint_status.get("active")
+                        and restraint_status.get("target_live")
+                        and restraint_status.get("near_target")
+                    )
+                    restraint_indicator = " [●]" if lit else " [○]"
+                    restraint_indicator_color = "property_service" if lit else "human_slate"
                 # Keep compatibility marks in one proportional-text flow.
                 # Drawing the complete label and then repainting a mark at a
                 # character-count offset duplicated it beside the item name in
@@ -5290,6 +5302,7 @@ class RenderSystem(System):
                         _segment(f"{compatibility_mark:<5}", color=compatibility_color or row_color),
                         _segment(f"{class_band:<4} ", color=compatibility_color or row_color),
                         _segment(suffix, color=row_color),
+                        _segment(restraint_indicator, color=restraint_indicator_color),
                     ),
                     max_width=row_w,
                 )
