@@ -51,9 +51,11 @@ from game.appearance_loadout import (
     is_appearance_item,
     seed_npc_appearance_from_description,
 )
+from game.civic_records import seed_professional_civic_licenses
 from game.drone_distribution import drone_distribution_metadata
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot, world_distributed_item_pool
 from game.human_identity import seed_human_identity_profile
+from game.item_semantics import inventory_has_camera_phone
 from game.npc_names import generate_human_personal_name, human_descriptor
 from game.npc_relationships import seed_relationship_from_home_bond
 from game.organizations import ensure_property_organization, sync_actor_organization_affiliations
@@ -65,6 +67,9 @@ from game.system_support.npc_behavior_runtime import behavior_profile_for_spawn
 from game.underground_culture import assign_underground_culture_member
 from game.vehicle_motion import local_route_accessible_at, vehicle_top_speed
 from game.weapon_equipment_runtime import equip_linked_weapon_item
+
+
+NPC_PERSONAL_PHONE_CHANCE = 0.72
 
 
 RESIDENTIAL_ARCHETYPES = {
@@ -2996,8 +3001,15 @@ def _seed_npc_inventory(sim, eid, rng, role, workplace_prop=None, home_prop=None
             record_fashion=False,
         )
 
-    pool = [item_id for item_id in _inventory_pool_for(role, workplace_prop=workplace_prop, home_prop=home_prop) if item_id in ITEM_CATALOG]
     inventory = sim.ecs.get(Inventory).get(eid)
+    if inventory is not None and not inventory_has_camera_phone(inventory, item_catalog=ITEM_CATALOG):
+        phone_rng = random.Random(
+            f"{sim.seed}:npc_personal_phone:{eid}:{str(role or '').strip().lower()}"
+        )
+        if phone_rng.random() < NPC_PERSONAL_PHONE_CHANCE:
+            _give_item(sim, eid, "phone", quantity=1)
+
+    pool = [item_id for item_id in _inventory_pool_for(role, workplace_prop=workplace_prop, home_prop=home_prop) if item_id in ITEM_CATALOG]
     if inventory is not None:
         pool = [item_id for item_id in pool if inventory.find(item_id=item_id) is None]
     if pool:
@@ -3070,6 +3082,7 @@ def _spawn_human(
     home_prop=None,
     economy_profile=None,
     personal_name=None,
+    seed_civic_licenses=True,
 ):
     role = str(role or "civilian").strip().lower() or "civilian"
     glyph = {
@@ -3187,6 +3200,14 @@ def _spawn_human(
         home_prop=home_prop,
         economy_profile=economy_profile if isinstance(economy_profile, dict) else chunk_economy_profile(sim),
     )
+    if seed_civic_licenses:
+        seed_professional_civic_licenses(
+            sim,
+            eid,
+            career=career or "resident",
+            workplace_prop=workplace_prop,
+            seed_token=actor_seed_token,
+        )
     _seed_npc_inventory(sim, eid, rng, role, workplace_prop=workplace_prop, home_prop=home_prop)
     seed_npc_appearance_from_description(sim, eid, seed_token=actor_seed_token)
     _seed_npc_gear(sim, eid, rng, role, workplace_prop=workplace_prop, home_prop=home_prop)

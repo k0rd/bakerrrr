@@ -17,6 +17,7 @@ from game.civic_records import (
     civic_census_lines,
     civic_license_is_active,
     civic_license_ledger_lines,
+    civic_license_record,
     civic_people_records,
     civic_person_record_lines,
     civic_records_authority,
@@ -4652,9 +4653,15 @@ class ServiceMenuSystem(System):
         self.sim.set_time_paused(True, reason="dialog")
         topics = [{"id": "civic_records:root", "label": "Back to civic records"}]
         for license_kind in ("hunting", "cultivation", "bounty"):
-            active = civic_license_is_active(self.sim, self.player_eid, license_kind)
+            record = civic_license_record(self.sim, self.player_eid, license_kind) or {}
+            status = str(record.get("status", "") or "").strip().lower()
             fee = int(LICENSE_FEES[license_kind])
-            label = f"{license_kind.title()} license — active" if active else f"Buy {license_kind} license — {fee}c"
+            if status == "active":
+                label = f"{license_kind.title()} license — active"
+            elif status in {"suspended", "revoked"}:
+                label = f"{license_kind.title()} license — {status}"
+            else:
+                label = f"Buy {license_kind} license — {fee}c"
             topics.append({"id": f"civic_records:license_buy|{license_kind}", "label": label})
         state.update({
             "title": f"Permit Ledger: {authority['authority_name']}",
@@ -4691,6 +4698,16 @@ class ServiceMenuSystem(System):
                 f"The {kind_label.lower()} cannot be issued while your justice file reads {tier}.",
                 "The recovery desk has left the application unfiled and charged nothing.",
             ]
+        elif result.get("reason") == "suspended":
+            remaining = max(0, int(result.get("review_remaining_ticks", 0) or 0))
+            ticks_per_hour = max(1, int((self.sim.world_traits.get("clock", {}) or {}).get("ticks_per_hour", 600) or 600))
+            hours = max(1, (remaining + ticks_per_hour - 1) // ticks_per_hour)
+            lines = [
+                f"Your {kind_label.lower()} remains suspended under official review for about {hours} more hour{'s' if hours != 1 else ''}.",
+                "After that interval, renewal still requires a clear justice file. Nothing was charged.",
+            ]
+        elif result.get("reason") == "revoked":
+            lines = [f"Your {kind_label.lower()} has been revoked and cannot be renewed at this counter."]
         else:
             lines = ["That license cannot be issued at this counter."]
         state.update({

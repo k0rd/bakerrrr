@@ -445,19 +445,24 @@ def observation_quality(sim, observer_eid, subject_eid, *, source_kind="witnesse
     """Estimate how much identifying detail an observation can carry."""
 
     kind = _text(source_kind).lower()
+    exact_description = kind in {"expert_justice_witness", "phone_photo", "expert_phone_photo"}
     if observer_eid is not None and subject_eid is not None:
         try:
             if int(observer_eid) == int(subject_eid):
                 return 1.0
         except (TypeError, ValueError):
             pass
+    if exact_description:
+        return max(0.0, min(1.0, float(confidence or 0.0)))
     observer_pos = sim.ecs.get(Position).get(observer_eid) if observer_eid is not None else None
     subject_pos = sim.ecs.get(Position).get(subject_eid) if subject_eid is not None else None
-    if observer_pos is not None and subject_pos is not None and int(observer_pos.z) == int(subject_pos.z):
+    if kind in {"camera", "linked_drone_camera", "drone_radio_feed"}:
+        # The observing actor may be a remote owner or controller.  Their body
+        # position must not stand in for the camera's optical distance.
+        quality = 0.76
+    elif observer_pos is not None and subject_pos is not None and int(observer_pos.z) == int(subject_pos.z):
         distance = abs(int(observer_pos.x) - int(subject_pos.x)) + abs(int(observer_pos.y) - int(subject_pos.y))
         quality = max(0.18, 0.98 - (distance * 0.055))
-    elif kind in {"camera", "linked_drone_camera", "drone_radio_feed"}:
-        quality = 0.76
     else:
         quality = 0.48
     if subject_pos is not None:
@@ -492,6 +497,7 @@ def build_witness_subject_account(
         same_actor = int(observer_eid) == int(subject_eid)
     except (TypeError, ValueError):
         same_actor = observer_eid == subject_eid
+    source_key = _text(source_kind).lower()
     quality = observation_quality(
         sim,
         observer_eid,
@@ -535,13 +541,22 @@ def build_witness_subject_account(
         "identity_confidence": round(1.0 if same_actor else max(face_visibility, recognition_memory), 3) if recognized else 0.0,
         "description": visible_actor_description(sim, subject_eid, quality=quality) if quality >= 0.16 else {},
         "observation": {
-            "source": _text(source_kind).lower() or "witnessed",
+            "source": source_key or "witnessed",
             "quality": round(float(quality), 3),
             "face_visibility": round(float(face_visibility), 3),
             "distance": distance,
             "ambient": ambient,
             "light_phase": light_phase,
             "tick": int(getattr(sim, "tick", 0) or 0),
+            "exact_description": source_key in {"expert_justice_witness", "phone_photo", "expert_phone_photo"},
+            "description_basis": (
+                "phone_photo"
+                if source_key in {"phone_photo", "expert_phone_photo"}
+                else "expert_observation"
+                if source_key == "expert_justice_witness"
+                else "ordinary_observation"
+            ),
+            "durable_visual_reference": source_key in {"phone_photo", "expert_phone_photo"},
         },
     }
 
@@ -655,14 +670,23 @@ def transmitted_subject_account(
         incoming["presented_name"] = ""
         carried_identity_confidence = 0.0
 
-    incoming.update({
-        "identification": identification,
-        "identity_confidence": round(carried_identity_confidence, 3),
-        "description": _degraded_description(
+    preserve_exact_description = bool(
+        preserve_reporter_account
+        and original_observation.get("exact_description", False)
+    )
+    carried_description = (
+        deepcopy(incoming.get("description"))
+        if preserve_exact_description and isinstance(incoming.get("description"), dict)
+        else _degraded_description(
             incoming.get("description"),
             propagation_depth=0 if preserve_reporter_account else depth,
             corruption_kind="" if preserve_reporter_account else corruption,
-        ),
+        )
+    )
+    incoming.update({
+        "identification": identification,
+        "identity_confidence": round(carried_identity_confidence, 3),
+        "description": carried_description,
         "observation": original_observation,
         "transmission": {
             "channel": channel_key,
@@ -893,6 +917,11 @@ def preferred_subject_account(existing, incoming):
     if old_rank <= 1:
         old_conf = float((old.get("observation") or {}).get("quality", old_conf) or 0.0)
         new_conf = float((new.get("observation") or {}).get("quality", new_conf) or 0.0)
+    if abs(new_conf - old_conf) <= 1e-9:
+        old_durable = bool((old.get("observation") or {}).get("durable_visual_reference", False))
+        new_durable = bool((new.get("observation") or {}).get("durable_visual_reference", False))
+        if old_durable != new_durable:
+            return new if new_durable else old
     return new if new_conf > old_conf else old
 
 

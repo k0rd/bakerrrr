@@ -294,6 +294,7 @@ THREAT_STATES = {"protecting", "investigating"}
 class CriminalJusticeSystem(System):
 
     DETENTION_QUEUE_WINDOW = 30
+    SCENE_APPREHENSION_WINDOW = 120
     NPC_WANTED_PICKUP_WINDOW = 180
     DETENTION_RADIUS = 10
     JUSTICE_SITE_SEARCH_RADIUS = 24
@@ -467,6 +468,14 @@ class CriminalJusticeSystem(System):
         if not isinstance(records, dict):
             records = {}
             state["detention_approaches"] = records
+        return records
+
+    def _scene_apprehension_records(self):
+        state = self._justice_state()
+        records = state.get("scene_apprehensions")
+        if not isinstance(records, dict):
+            records = {}
+            state["scene_apprehensions"] = records
         return records
 
     def _bounty_pickup_records(self):
@@ -684,6 +693,157 @@ class CriminalJusticeSystem(System):
         inventory = self.sim.ecs.get(Inventory).get(eid)
         return inventory_has_phone(inventory, item_catalog=ITEM_CATALOG)
 
+    def _firsthand_account_for(self, observer_eid, offender_eid):
+        enforcer, _law_drive, _priority = self._actor_is_enforcer(observer_eid)
+        source_kind = "expert_justice_witness" if enforcer else "witnessed"
+        return build_witness_subject_account(
+            self.sim,
+            observer_eid,
+            offender_eid,
+            source_kind=source_kind,
+            confidence=1.0,
+        )
+
+    def _agency_visual_identity_account(self, incident, report_data):
+        """Resolve a transmitted visual record against registered identity.
+
+        The witness still owns only their visual account.  This upgrade exists
+        solely inside justice casework after a real phone photograph or fixed
+        camera-network frame arrives. A strongly obscured face or an actor
+        without a registered personal name remains unresolved. Drone feeds do
+        not gain stored-footage semantics through this path.
+        """
+
+        account = deepcopy(report_data.get("subject_account")) if isinstance(report_data.get("subject_account"), dict) else None
+        if not isinstance(incident, dict) or not isinstance(account, dict):
+            return account
+        method = str(report_data.get("method", "") or "").strip().lower()
+        phone_photo = method == "cell_phone"
+        fixed_camera_frame = bool(
+            method == "camera_network"
+            and report_data.get("fixed_camera_frame")
+            and str(report_data.get("visual_source_kind", "") or "").strip().lower() == "camera"
+            and report_data.get("visual_source_eid") is None
+        )
+        if not phone_photo and not fixed_camera_frame:
+            return account
+        observation = account.get("observation") if isinstance(account.get("observation"), dict) else {}
+        if not isinstance(account.get("description"), dict) or not account.get("description"):
+            return account
+        if phone_photo and not (
+            bool(observation.get("durable_visual_reference", False))
+            and bool(observation.get("exact_description", False))
+        ):
+            return account
+        if float(observation.get("face_visibility", 0.0) or 0.0) < 0.52:
+            return account
+        subject_eid = incident.get("primary_actor_eid")
+        try:
+            subject_eid = int(subject_eid)
+        except (TypeError, ValueError):
+            return account
+        identity = actor_identity_snapshot(self.sim, subject_eid) or {}
+        name = str(identity.get("personal_name", "") or "").strip()
+        taxonomy = str(identity.get("taxonomy_class", "") or "").strip().lower()
+        creature_type = str(identity.get("creature_type", "") or "").strip().lower()
+        if not name or (taxonomy and taxonomy != "hominid") or (creature_type and creature_type != "human"):
+            return account
+
+        if fixed_camera_frame:
+            observation = dict(observation)
+            observation.update({
+                "durable_visual_reference": True,
+                "description_basis": "fixed_camera_frame",
+                "transmitted_visual_method": "camera_network",
+            })
+            account["observation"] = observation
+        account.update({
+            "identification": "verified",
+            "suspect_eid": subject_eid,
+            "presented_name": name,
+            "identity_confidence": 0.97,
+            "agency_resolution": {
+                "basis": "photo_registry_match" if phone_photo else "camera_registry_match",
+                "matched_tick": int(getattr(self.sim, "tick", 0)),
+                "source_method": method,
+                "confidence": 0.97,
+            },
+        })
+        return account
+
+    def _firsthand_scene_enforcers(self, event, offender_eid, *, observation=None, include_victim=False):
+        observation = observation if isinstance(observation, dict) else self._event_accountability(
+            event,
+            offender_eid=offender_eid,
+        )
+        channels = {
+            str(channel or "").strip().lower()
+            for channel in tuple(observation.get("accountable_observation_channels", ()) or ())
+        }
+        candidates = []
+        if "actor_witness" in channels:
+            candidates.extend(tuple(observation.get("accountable_observer_eids", ()) or ()))
+        if include_victim:
+            victim_eid = event.data.get("victim_eid", event.data.get("target_eid"))
+            if victim_eid is not None:
+                candidates.append(victim_eid)
+
+        results = []
+        for raw_eid in candidates:
+            try:
+                observer_eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            if observer_eid == int(offender_eid) or observer_eid in results:
+                continue
+            enforcer, _law_drive, _priority = self._actor_is_enforcer(observer_eid)
+            if enforcer:
+                results.append(observer_eid)
+        return tuple(results)
+
+    def _resolve_actionable_event_subject(
+        self,
+        event,
+        offender_eid,
+        *,
+        observation=None,
+        include_victim=False,
+        allow_position_backfill=False,
+    ):
+        """Resolve a name when possible, while preserving live body continuity.
+
+        An officer does not need to know a legal identity to stop the exact
+        person they just witnessed.  Unknown subjects stay scene-bound until
+        contact; a report may separately distribute their description.
+        """
+
+        observation = observation if isinstance(observation, dict) else self._event_accountability(
+            event,
+            offender_eid=offender_eid,
+            allow_position_backfill=allow_position_backfill,
+        )
+        scene_enforcers = self._firsthand_scene_enforcers(
+            event,
+            offender_eid,
+            observation=observation,
+            include_victim=include_victim,
+        )
+        resolved_eid = None
+        if self._event_has_justice_report_channel(
+            event,
+            offender_eid=offender_eid,
+            allow_position_backfill=allow_position_backfill,
+        ):
+            resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        if resolved_eid is None:
+            for observer_eid in scene_enforcers:
+                resolved_eid = subject_account_resolves_identity(
+                    self._firsthand_account_for(observer_eid, offender_eid)
+                )
+                if resolved_eid is not None:
+                    break
+        return resolved_eid, scene_enforcers
+
     def _mark_incident_accounted(self, incident_id, field="justice_accounted"):
         incident = incident_record(self.sim, incident_id)
         if not isinstance(incident, dict):
@@ -722,13 +882,7 @@ class CriminalJusticeSystem(System):
                     observer_eid = int(raw_observer_eid)
                 except (TypeError, ValueError):
                     continue
-                account = build_witness_subject_account(
-                    self.sim,
-                    observer_eid,
-                    offender_eid,
-                    source_kind="witnessed",
-                    confidence=1.0,
-                )
+                account = self._firsthand_account_for(observer_eid, offender_eid)
                 resolved = subject_account_resolves_identity(account)
                 if resolved is not None:
                     return resolved
@@ -758,14 +912,10 @@ class CriminalJusticeSystem(System):
             knowledge = self.sim.ecs.get(IncidentKnowledge).get(observer_eid)
             record = knowledge.records.get(int(incident_id)) if knowledge is not None else None
             account = (record or {}).get("subject_account") if isinstance((record or {}).get("subject_account"), dict) else None
-            if not isinstance(account, dict):
-                account = build_witness_subject_account(
-                    self.sim,
-                    observer_eid,
-                    offender_eid,
-                    source_kind="witnessed",
-                    confidence=1.0,
-                )
+            firsthand_account = self._firsthand_account_for(observer_eid, offender_eid)
+            account = preferred_subject_account(account, firsthand_account)
+            if isinstance(record, dict):
+                record["subject_account"] = dict(account)
             best_account = preferred_subject_account(best_account, account)
             case, changed, newly_resolved = record_justice_identity_report(
                 self.sim,
@@ -885,6 +1035,8 @@ class CriminalJusticeSystem(System):
             "bounty",
             reason=str(force_read.get("bounty_authority_reason", force_read.get("force_reason", "outside posted authority")) or "outside posted authority").strip(),
             action=str(data.get("action", force_read.get("bounty_action_kind", "force")) or "force").strip().lower(),
+            misuse_kind=str(force_read.get("bounty_action_kind", "") or "").strip().lower(),
+            severity_score=data.get("offense_score", data.get("severity_score", data.get("severity", 0))),
             target_eid=data.get("target_eid", data.get("victim_eid")),
             incident_id=data.get("knowledge_incident_id", data.get("incident_id")),
         )
@@ -6170,6 +6322,308 @@ class CriminalJusticeSystem(System):
             "surrendered",
         }
 
+    def _queue_scene_apprehension(self, offender_eid, enforcer_eids, offense):
+        try:
+            offender_eid = int(offender_eid)
+        except (TypeError, ValueError):
+            return False
+        responders = []
+        for raw_eid in tuple(enforcer_eids or ()):
+            try:
+                responder_eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            if responder_eid != offender_eid and responder_eid not in responders:
+                responders.append(responder_eid)
+        if not responders or not isinstance(offense, dict):
+            return False
+
+        records = self._scene_apprehension_records()
+        key = str(offender_eid)
+        tick = int(getattr(self.sim, "tick", 0))
+        record = records.get(key)
+        if not isinstance(record, dict):
+            record = {
+                "offender_eid": offender_eid,
+                "responder_eids": [],
+                "offenses": [],
+                "started_tick": tick,
+            }
+            records[key] = record
+        known_responders = list(record.get("responder_eids", ()) or ())
+        for responder_eid in responders:
+            if responder_eid not in known_responders:
+                known_responders.append(responder_eid)
+        record["responder_eids"] = known_responders[:6]
+        record["expires_at"] = tick + int(self.SCENE_APPREHENSION_WINDOW)
+
+        incident_id = offense.get("knowledge_incident_id")
+        signature = (
+            str(offense.get("source_event", "") or "").strip().lower(),
+            str(offense.get("incident_type", "") or "").strip().lower(),
+            str(offense.get("property_id", "") or "").strip(),
+            int(incident_id or 0),
+        )
+        offenses = list(record.get("offenses", ()) or ())
+        existing_signatures = {
+            (
+                str(row.get("source_event", "") or "").strip().lower(),
+                str(row.get("incident_type", "") or "").strip().lower(),
+                str(row.get("property_id", "") or "").strip(),
+                int(row.get("knowledge_incident_id", 0) or 0),
+            )
+            for row in offenses
+            if isinstance(row, dict)
+        }
+        added = signature not in existing_signatures
+        if added:
+            offenses.append(dict(offense))
+            record["offenses"] = offenses[-8:]
+            self.sim.emit(Event(
+                "justice_scene_apprehension_authorized",
+                offender_eid=offender_eid,
+                officer_eids=tuple(responders),
+                incident_id=incident_id,
+                incident_type=signature[1],
+                identity_resolved=False,
+                x=offense.get("x"),
+                y=offense.get("y"),
+                z=offense.get("z", 0),
+            ))
+        return True
+
+    def _clear_scene_apprehension(self, offender_eid, *, reason="ended"):
+        record = self._scene_apprehension_records().pop(str(int(offender_eid)), None)
+        if not isinstance(record, dict):
+            return False
+        for raw_eid in tuple(record.get("responder_eids", ()) or ()):
+            try:
+                responder_eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            ai = self.sim.ecs.get(AI).get(responder_eid)
+            will = self.sim.ecs.get(NPCWill).get(responder_eid)
+            if ai is None or str(getattr(ai, "response_role", "") or "").strip().lower() != "justice_scene_apprehension":
+                continue
+            context = getattr(ai, "investigation_context", None)
+            if is_purposeful_observation(context, purpose="justice_detention"):
+                ai.investigation_context = finish_purposeful_observation(
+                    context,
+                    current_tick=self.sim.tick,
+                    reason=reason,
+                )
+            ai.response_role = None
+            ai.incident_id = None
+            if str(getattr(ai, "state", "idle") or "idle").strip().lower() in {"idle", "investigating"}:
+                _sync_ai_intent(ai, will, self.sim.tick, "idle", score=0.0, target=None, target_eid=None)
+        self.sim.emit(Event(
+            "justice_scene_apprehension_ended",
+            offender_eid=int(offender_eid),
+            reason=str(reason or "ended").strip().lower(),
+        ))
+        return True
+
+    def _record_scene_apprehension_offenses(self, record):
+        offender_eid = int(record.get("offender_eid"))
+        latest_change = None
+        for offense in tuple(record.get("offenses", ()) or ()):
+            if not isinstance(offense, dict):
+                continue
+            incident_id = offense.get("knowledge_incident_id")
+            source_incident = incident_record(self.sim, incident_id)
+            if isinstance(source_incident, dict) and bool(source_incident.get("justice_accounted", False)):
+                continue
+            change = self._record_incident(
+                offender_eid,
+                incident_type=offense.get("incident_type"),
+                severity=int(offense.get("severity", 0) or 0),
+                source_event=offense.get("source_event"),
+                property_id=offense.get("property_id"),
+                x=offense.get("x"),
+                y=offense.get("y"),
+                witnessed=True,
+                note=offense.get("note", ""),
+            )
+            if change is None:
+                continue
+            latest_change = change
+            self._mark_incident_accounted(incident_id)
+            if bool(offense.get("structural_restitution", False)):
+                prop = self.sim.properties.get(str(offense.get("property_id", "") or ""))
+                if isinstance(prop, dict):
+                    self._record_structural_restitution_claim(
+                        offender_eid,
+                        prop,
+                        damage_tick=int(getattr(self.sim, "tick", 0)),
+                    )
+            force_read = offense.get("force_read") if isinstance(offense.get("force_read"), dict) else None
+            if force_read is not None:
+                force_data = dict(offense.get("force_data") or {}) if isinstance(offense.get("force_data"), dict) else {}
+                force_data.setdefault("severity", offense.get("severity", 0))
+                self._record_bounty_misuse_review(
+                    offender_eid,
+                    force_read,
+                    data=force_data,
+                    factual_offender_eid=offender_eid,
+                )
+        return latest_change
+
+    def _scene_apprehension_responder(self, record):
+        for raw_eid in tuple(record.get("responder_eids", ()) or ()):
+            try:
+                responder_eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            if self._position_for(responder_eid) is None or _entity_is_downed(self.sim, responder_eid):
+                continue
+            return responder_eid
+        return None
+
+    def _scene_apprehension_response_interrupted(self, responder_eid):
+        ai = self.sim.ecs.get(AI).get(responder_eid)
+        if ai is None or _entity_is_downed(self.sim, responder_eid):
+            return True
+        if _actor_in_live_combat(self.sim, responder_eid):
+            return True
+        response_role = str(getattr(ai, "response_role", "") or "").strip().lower()
+        if response_role not in {
+            "",
+            "justice_scene_apprehension",
+            "reporting_incident",
+            "helping_victim",
+            "seeking_safety",
+            "warning",
+        }:
+            return True
+        state = str(getattr(ai, "state", "idle") or "idle").strip().lower()
+        return state in {
+            "protecting",
+            "chasing",
+            "holding",
+            "following",
+            "ejecting_target",
+            "leaving_property",
+            "surrendered",
+        }
+
+    def _advance_scene_apprehension(self, offender_eid, record):
+        tick = int(getattr(self.sim, "tick", 0))
+        if tick > int(record.get("expires_at", tick) or tick):
+            self._clear_scene_apprehension(offender_eid, reason="scene_window_expired")
+            return False
+        offender_pos = self._position_for(offender_eid)
+        if offender_pos is None:
+            self._clear_scene_apprehension(offender_eid, reason="target_unavailable")
+            return False
+        snapshot = _justice_snapshot(self.sim, offender_eid)
+        if bool(snapshot.get("in_custody", False)):
+            self._clear_scene_apprehension(offender_eid, reason="already_in_custody")
+            return False
+
+        responder_eid = self._scene_apprehension_responder(record)
+        if responder_eid is None:
+            self._clear_scene_apprehension(offender_eid, reason="no_firsthand_officer")
+            return False
+        if self._scene_apprehension_response_interrupted(responder_eid):
+            return True
+        ai = self.sim.ecs.get(AI).get(responder_eid)
+        will = self.sim.ecs.get(NPCWill).get(responder_eid)
+        if ai is None or will is None:
+            self._clear_scene_apprehension(offender_eid, reason="invalid_responder")
+            return False
+
+        context, contact, target = self._purposeful_actor_approach(
+            responder_eid,
+            offender_eid,
+            purpose="justice_detention",
+            existing=getattr(ai, "investigation_context", None),
+            notice_radius=self.JUSTICE_DETENTION_NOTICE_RADIUS,
+            capture_subject_account=True,
+        )
+        ai.investigation_context = context
+        responder_pos = self._position_for(responder_eid)
+        at_contact = bool(
+            contact == "visible"
+            and responder_pos is not None
+            and _manhattan(responder_pos.x, responder_pos.y, offender_pos.x, offender_pos.y)
+            <= int(self.JUSTICE_DETENTION_CONTACT_RADIUS)
+        )
+        if at_contact:
+            self._record_scene_apprehension_offenses(record)
+            snapshot = _justice_snapshot(self.sim, offender_eid)
+            tier = str(snapshot.get("wanted_tier", "clear") or "clear").strip().lower()
+            self.sim.emit(Event(
+                "justice_scene_suspect_stopped",
+                offender_eid=int(offender_eid),
+                officer_eid=int(responder_eid),
+                wanted_tier=tier,
+                identity_resolved=False,
+            ))
+            if offender_eid == self.player_eid:
+                if self._player_surrender_prompt_open() or _actor_in_live_combat(self.sim, self.player_eid):
+                    return True
+                opened = bool(self._open_player_justice_prompt(responder_eid, snapshot=snapshot, respect_cooldown=False))
+                if opened:
+                    self._clear_scene_apprehension(offender_eid, reason="scene_contact_prompted")
+                return opened
+            if tier in {"wanted", "arrest_on_sight"}:
+                detained = self._complete_pending_npc_detention(offender_eid, responder_eid, snapshot=snapshot)
+                if detained:
+                    self._clear_scene_apprehension(offender_eid, reason="scene_contact_detained")
+                return detained
+            self._clear_scene_apprehension(offender_eid, reason="scene_contact_questioned")
+            return True
+
+        if target is None:
+            self._clear_scene_apprehension(offender_eid, reason="lost_contact")
+            return False
+        was_approaching = str(getattr(ai, "response_role", "") or "").strip().lower() == "justice_scene_apprehension"
+        _sync_ai_intent(
+            ai,
+            will,
+            self.sim.tick,
+            "investigating",
+            score=90.0,
+            target=target,
+            target_eid=None,
+        )
+        ai.response_role = "justice_scene_apprehension"
+        ai.incident_id = next(
+            (
+                row.get("knowledge_incident_id")
+                for row in reversed(tuple(record.get("offenses", ()) or ()))
+                if isinstance(row, dict) and row.get("knowledge_incident_id") is not None
+            ),
+            None,
+        )
+        if not was_approaching:
+            self.sim.emit(Event(
+                "justice_scene_apprehension_started",
+                npc_eid=int(responder_eid),
+                target_eid=int(offender_eid),
+                x=target[0],
+                y=target[1],
+                z=target[2],
+            ))
+        return True
+
+    def _process_scene_apprehensions(self):
+        handled_player = False
+        records = self._scene_apprehension_records()
+        for raw_eid, record in tuple(records.items()):
+            try:
+                offender_eid = int(raw_eid)
+            except (TypeError, ValueError):
+                records.pop(raw_eid, None)
+                continue
+            if not isinstance(record, dict):
+                records.pop(raw_eid, None)
+                continue
+            handled = self._advance_scene_apprehension(offender_eid, record)
+            if offender_eid == self.player_eid:
+                handled_player = bool(handled) or handled_player
+        return handled_player
+
     def _find_detaining_enforcer(self, offender_eid, *, radius=None, preferred_eid=None):
         positions = self.sim.ecs.get(Position)
         offender_pos = positions.get(offender_eid)
@@ -6266,10 +6720,27 @@ class CriminalJusticeSystem(System):
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
-        if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
-            return
-        resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        resolved_eid, scene_enforcers = self._resolve_actionable_event_subject(
+            event,
+            offender_eid,
+            observation=observation,
+        )
         if resolved_eid is None:
+            self._queue_scene_apprehension(
+                offender_eid,
+                scene_enforcers,
+                {
+                    "incident_type": "trespass",
+                    "severity": int(event.data.get("severity_score", 0) or 0),
+                    "source_event": "property_trespass",
+                    "property_id": event.data.get("property_id"),
+                    "x": event.data.get("x"),
+                    "y": event.data.get("y"),
+                    "z": event.data.get("z", 0),
+                    "note": str(event.data.get("severity_label", "trespass") or "").strip().lower(),
+                    "knowledge_incident_id": event.data.get("knowledge_incident_id"),
+                },
+            )
             return
         offender_eid = resolved_eid
         change = self._record_incident(
@@ -6297,10 +6768,28 @@ class CriminalJusticeSystem(System):
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
-        if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
-            return
-        resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        resolved_eid, scene_enforcers = self._resolve_actionable_event_subject(
+            event,
+            offender_eid,
+            observation=observation,
+        )
         if resolved_eid is None:
+            self._queue_scene_apprehension(
+                offender_eid,
+                scene_enforcers,
+                {
+                    "incident_type": "tamper",
+                    "severity": int(event.data.get("severity_score", 0) or 0),
+                    "source_event": "property_tamper",
+                    "property_id": property_id,
+                    "x": event.data.get("x"),
+                    "y": event.data.get("y"),
+                    "z": event.data.get("z", 0),
+                    "note": "property_tamper",
+                    "knowledge_incident_id": event.data.get("knowledge_incident_id"),
+                    "structural_restitution": True,
+                },
+            )
             return
         offender_eid = resolved_eid
         change = self._record_incident(
@@ -6383,10 +6872,27 @@ class CriminalJusticeSystem(System):
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
-        if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
-            return
-        resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        resolved_eid, scene_enforcers = self._resolve_actionable_event_subject(
+            event,
+            offender_eid,
+            observation=observation,
+        )
         if resolved_eid is None:
+            self._queue_scene_apprehension(
+                offender_eid,
+                scene_enforcers,
+                {
+                    "incident_type": "theft",
+                    "severity": 72,
+                    "source_event": "item_stolen",
+                    "property_id": event.data.get("property_id"),
+                    "x": event.data.get("x"),
+                    "y": event.data.get("y"),
+                    "z": event.data.get("z", 0),
+                    "note": str(event.data.get("item_name", event.data.get("item_id", "item")) or "").strip(),
+                    "knowledge_incident_id": event.data.get("knowledge_incident_id"),
+                },
+            )
             return
         offender_eid = resolved_eid
         change = self._record_incident(
@@ -6420,9 +6926,13 @@ class CriminalJusticeSystem(System):
         }:
             return
         observation = self._event_accountability(event, offender_eid=offender_eid)
-        if not bool(observation.get("has_accountable_observation")):
-            return
-        if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
+        scene_enforcers = self._firsthand_scene_enforcers(
+            event,
+            offender_eid,
+            observation=observation,
+            include_victim=context in VIOLENT_OFFENSE_CONTEXTS,
+        )
+        if not bool(observation.get("has_accountable_observation")) and not scene_enforcers:
             return
         force_read = None
         severity = int(event.data.get("offense_score", 0) or 0)
@@ -6441,8 +6951,33 @@ class CriminalJusticeSystem(System):
             severity = mitigated_force_severity(severity, force_read)
             if severity <= 0:
                 return
-        resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        resolved_eid, scene_enforcers = self._resolve_actionable_event_subject(
+            event,
+            offender_eid,
+            observation=observation,
+            include_victim=context in VIOLENT_OFFENSE_CONTEXTS,
+        )
         if resolved_eid is None:
+            self._queue_scene_apprehension(
+                offender_eid,
+                scene_enforcers,
+                {
+                    "incident_type": self._incident_type_from_context(context),
+                    "severity": severity,
+                    "source_event": "action_offense",
+                    "x": event.data.get("x"),
+                    "y": event.data.get("y"),
+                    "z": event.data.get("z", 0),
+                    "note": f"{str(event.data.get('action', 'action') or '').strip().lower()}/{context}/{(force_read or {}).get('force_context', '')}".strip("/"),
+                    "knowledge_incident_id": event.data.get("knowledge_incident_id"),
+                    "force_read": dict(force_read) if isinstance(force_read, dict) else None,
+                    "force_data": {
+                        field: event.data.get(field)
+                        for field in ("target_eid", "victim_eid", "context", "action")
+                        if event.data.get(field) not in (None, "", ())
+                    },
+                },
+            )
             return
         offender_eid = resolved_eid
         if force_read is not None:
@@ -6567,12 +7102,6 @@ class CriminalJusticeSystem(System):
         )
         if not bool(observation.get("has_accountable_observation")):
             return
-        if not self._event_has_justice_report_channel(
-            event,
-            offender_eid=offender_eid,
-            allow_position_backfill=True,
-        ):
-            return
         force_read = self._homicide_force_read(event.data, offender_eid)
         self._remember_force_context(offender_eid, force_read, data=event.data)
         self.sim.emit(Event(
@@ -6588,8 +7117,33 @@ class CriminalJusticeSystem(System):
         if severity <= 0:
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"), field="justice_force_reviewed")
             return
-        resolved_eid = self._resolve_reportable_event_subject(event, offender_eid)
+        resolved_eid, scene_enforcers = self._resolve_actionable_event_subject(
+            event,
+            offender_eid,
+            observation=observation,
+            allow_position_backfill=True,
+        )
         if resolved_eid is None:
+            self._queue_scene_apprehension(
+                offender_eid,
+                scene_enforcers,
+                {
+                    "incident_type": "homicide",
+                    "severity": severity,
+                    "source_event": "npc_killed",
+                    "x": event.data.get("x"),
+                    "y": event.data.get("y"),
+                    "z": event.data.get("z", 0),
+                    "note": f"homicide/{str(event.data.get('target_name', '') or '').strip()}/{str(event.data.get('reason', '') or '').strip().lower()}/{force_read.get('force_context', '')}".strip("/"),
+                    "knowledge_incident_id": event.data.get("knowledge_incident_id"),
+                    "force_read": dict(force_read),
+                    "force_data": {
+                        field: event.data.get(field)
+                        for field in ("target_eid", "victim_eid", "context", "action")
+                        if event.data.get(field) not in (None, "", ())
+                    },
+                },
+            )
             return
         offender_eid = resolved_eid
         self._record_bounty_misuse_review(
@@ -6619,10 +7173,15 @@ class CriminalJusticeSystem(System):
             return
         if event_is_vision_only(incident):
             return
+        report_data = dict(event.data)
+        report_data["subject_account"] = self._agency_visual_identity_account(
+            incident,
+            report_data,
+        )
         case, case_changed, newly_resolved = record_justice_identity_report(
             self.sim,
             incident,
-            dict(event.data),
+            report_data,
         )
         case_payload = justice_case_event_payload(case)
         incident["officially_reported"] = True
@@ -7786,8 +8345,9 @@ class CriminalJusticeSystem(System):
             self._clear_player_surrender_offer_records()
         for change in _decay_justice_records(self.sim):
             self._emit_change_events(change, source_event="justice_decay", reason=str(change.get("reason", "cooldown")))
-        arrest_started = self._process_guard_initiated_player_arrest()
-        if not arrest_started:
+        scene_player_handled = self._process_scene_apprehensions()
+        arrest_started = False if scene_player_handled else self._process_guard_initiated_player_arrest()
+        if not arrest_started and not scene_player_handled:
             self._process_guard_initiated_player_identity_check()
         self._process_bounty_pickups()
         self._process_pending_detentions()

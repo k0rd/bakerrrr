@@ -98,6 +98,10 @@ from game.cultivation_runtime import (
     find_npc_flora_harvest_target,
     npc_harvest_flora_at_actor,
 )
+from game.civic_records import (
+    begin_npc_civic_license_application as _begin_npc_civic_license_application,
+    complete_npc_civic_license_application as _complete_npc_civic_license_application,
+)
 from game.npc_self_protection_runtime import (
     active_self_protection_action,
     apply_self_protection_quirk,
@@ -2385,6 +2389,7 @@ class NPCWillSystem(System):
         "seeking_criminal_affiliation",
         "soliciting_player",
         "seeking_poker_table",
+        "seeking_civic_license",
         "war_advancing",
         "war_holding",
         "war_mobilizing",
@@ -2784,6 +2789,7 @@ class NPCWillSystem(System):
             "lounging": "routine",
             "socializing": "routine",
             "shopping": "shopping",
+            "seeking_civic_license": "civic_license",
             "resting": "routine",
         }
         if _entity_is_downed(self.sim, eid):
@@ -3604,7 +3610,19 @@ class NPCWillSystem(System):
                 "selling_scavenged",
                 "socializing",
                 "working",
+                "seeking_civic_license",
             }:
+                civic_application = _begin_npc_civic_license_application(self.sim, eid)
+                if isinstance(civic_application, dict):
+                    civic_target = civic_application.get("target")
+                    if isinstance(civic_target, (tuple, list)) and len(civic_target) >= 2:
+                        civic_target = tuple(civic_target)
+                        self._set_intent(eid, ai, will, "seeking_civic_license", 62.0, civic_target, None)
+                        _mark_actor_urgent(self.sim, eid, family="move", reason="civic_license_application", ttl_ticks=18)
+                        _mark_actor_urgent(self.sim, eid, family="will", reason="civic_license_application", ttl_ticks=18)
+                        _schedule_actor_due(self.sim, eid, "move", delay_ticks=0, reason="civic_license_application")
+                        _schedule_actor_due(self.sim, eid, "will", delay_ticks=12, reason="civic_license_application")
+                        continue
                 claimed_service_job = _npc_claim_service_job_from_board(self.sim, eid)
                 if isinstance(claimed_service_job, dict):
                     service_target = _service_job_claim_target(self.sim, claimed_service_job)
@@ -4866,6 +4884,7 @@ class NPCInvestigateSystem(System):
         "seeking_safe_spot": 2,
         "seeking_shelter": 2,
         "seeking_poker_table": 2,
+        "seeking_civic_license": 2,
         "patrolling": 3,
         "working": 3,
         "lounging": 4,
@@ -4910,6 +4929,7 @@ class NPCInvestigateSystem(System):
         "seeking_safe_spot",
         "seeking_shelter",
         "seeking_poker_table",
+        "seeking_civic_license",
         "patrolling",
         "working",
         "lounging",
@@ -4949,6 +4969,7 @@ class NPCInvestigateSystem(System):
         "seeking_safe_spot",
         "seeking_shelter",
         "seeking_poker_table",
+        "seeking_civic_license",
         "patrolling",
         "working",
         "lounging",
@@ -5453,6 +5474,24 @@ class NPCInvestigateSystem(System):
                 self._schedule_move_due(npc_eid, getattr(self.sim, "tick", 0))
         else:
             self._unschedule_move_due(npc_eid)
+
+    def _finish_civic_license_application(self, eid, ai, wills):
+        result = _complete_npc_civic_license_application(self.sim, eid)
+        if str(result.get("reason", "") or "").strip().lower() == "not_arrived":
+            return False
+        _clear_opportunity_active_target(self.sim, eid, "seeking_civic_license")
+        ai.state = "idle"
+        ai.target = None
+        ai.target_eid = None
+        will = wills.get(eid)
+        if will is not None:
+            will.intent = "idle"
+            will.score = 0.0
+            will.target = None
+            will.target_eid = None
+            will.last_tick = self.sim.tick
+        _schedule_actor_due(self.sim, eid, "will", delay_ticks=0, reason="civic_license_application_resolved")
+        return True
 
     def on_noise(self, event):
         source_eid = event.data["source_eid"]
@@ -7422,6 +7461,9 @@ class NPCInvestigateSystem(System):
                 if ai.state == "protecting":
                     self.sim.emit(Event("npc_guarding_target", npc_eid=eid, target_eid=ai.target_eid, x=tx, y=ty, z=tz))
 
+                if ai.state == "seeking_civic_license":
+                    self._finish_civic_license_application(eid, ai, wills)
+
                 if ai.state == "socializing":
                     arrived_prop = _property_covering(self.sim, tx, ty, tz) or _property_covering(self.sim, pos.x, pos.y, pos.z)
                     if isinstance(arrived_prop, dict) and str(arrived_prop.get("id", "") or "").strip():
@@ -7493,6 +7535,14 @@ class NPCInvestigateSystem(System):
                 else:
                     self.next_move_tick[eid] = self.sim.tick + arrival_cooldown
                 continue
+
+            if ai.state == "seeking_civic_license" and _manhattan(pos.x, pos.y, tx, ty) <= 1:
+                if self._finish_civic_license_application(eid, ai, wills):
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + 1
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + 1
+                    continue
 
             if ai.state == "working" and _manhattan(pos.x, pos.y, tx, ty) <= 1:
                 service_claim = _mark_service_job_claim_arrival(self.sim, eid, pos)

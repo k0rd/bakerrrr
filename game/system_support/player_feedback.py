@@ -46,6 +46,13 @@ PLAYER_FEEDBACK_LOG_STYLES = {
         "badge": "MAKE",
         "badge_color": "item_tool",
     },
+    "justice": {
+        "channel": "alerts",
+        "priority": "high",
+        "dedupe_window": 4,
+        "badge": "LAW",
+        "badge_color": "item_restricted",
+    },
     "game": {
         "channel": "general",
         "priority": "high",

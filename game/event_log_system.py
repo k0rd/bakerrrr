@@ -510,6 +510,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("flora_planting_blocked", self.on_flora_planting_blocked)
         self.sim.events.subscribe("flora_crossbred", self.on_flora_crossbred)
         self.sim.events.subscribe("flora_crossbreed_blocked", self.on_flora_crossbreed_blocked)
+        self.sim.events.subscribe("civic_license_misuse_noted", self.on_civic_license_misuse_noted)
+        self.sim.events.subscribe("civic_license_suspended", self.on_civic_license_suspended)
         self.sim.events.subscribe("potted_plant_placed", self.on_potted_plant_placed)
         self.sim.events.subscribe("potted_plant_picked_up", self.on_potted_plant_picked_up)
         self.sim.events.subscribe("herbal_medicine_crafted", self.on_herbal_medicine_crafted)
@@ -612,6 +614,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("aerosol_trap_placed", self.on_aerosol_trap_placed)
         self.sim.events.subscribe("aerosol_trap_triggered", self.on_aerosol_trap_triggered)
         self.sim.events.subscribe("report_device_used", self.on_report_device_used)
+        self.sim.events.subscribe("phone_report_transmitted", self.on_phone_report_transmitted)
         self.sim.events.subscribe("justice_vehicle_misuse_barked", self.on_justice_vehicle_misuse_barked)
         self.sim.events.subscribe("meaningful_object_owner_reaction", self.on_meaningful_object_owner_reaction)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
@@ -751,6 +754,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("run_pressure_mitigated", self.on_run_pressure_mitigated)
         self.sim.events.subscribe("justice_record_changed", self.on_justice_record_changed)
         self.sim.events.subscribe("justice_wanted_tier_changed", self.on_justice_wanted_tier_changed)
+        self.sim.events.subscribe("justice_scene_apprehension_started", self.on_justice_scene_apprehension_started)
         self.sim.events.subscribe("justice_mutual_fight_questioning_recorded", self.on_justice_mutual_fight_questioning_recorded)
         self.sim.events.subscribe("justice_mutual_fight_unready_ordered", self.on_justice_mutual_fight_unready_ordered)
         self.sim.events.subscribe("actor_detained", self.on_actor_detained)
@@ -3072,6 +3076,11 @@ class EventLogSystem(System):
             tail = f" The patch still has {remaining} small cut{'s' if remaining != 1 else ''} left."
         else:
             tail = ""
+        if event.data.get("cultivated_product"):
+            if bool(event.data.get("cultivation_permit_verified")):
+                tail += " Its cultivation provenance is registered for lawful sale."
+            else:
+                tail += " It has no cultivation registration for lawful storefront sale."
         if plant_part and plant_part not in {"plant material", "leaf", "open blossom"}:
             output_phrase = f"{plant_part} as {output_name}"
         else:
@@ -3117,19 +3126,20 @@ class EventLogSystem(System):
         plant_name = str(event.data.get("plant_name") or "plant").strip() or "plant"
         container = str(event.data.get("container_kind") or "ground").replace("_", " ").strip() or "ground"
         failed = bool(event.data.get("failed"))
+        registration = " Your cultivation license registers the planting." if bool(event.data.get("cultivation_permit_verified")) else ""
         if failed:
             _log_player_feedback(
                 self.sim,
-                f"You plant {plant_name}, but this place is wrong for it. The start is already withering.",
+                f"You plant {plant_name}, but this place is wrong for it. The start is already withering.{registration}",
                 kind="craft",
             )
             return
         if container == "pot":
-            _log_player_feedback(self.sim, f"You settle {plant_name} into a plant pot.", kind="craft")
+            _log_player_feedback(self.sim, f"You settle {plant_name} into a plant pot.{registration}", kind="craft")
         elif container == "planter":
-            _log_player_feedback(self.sim, f"You plant {plant_name} in the planter.", kind="craft")
+            _log_player_feedback(self.sim, f"You plant {plant_name} in the planter.{registration}", kind="craft")
         else:
-            _log_player_feedback(self.sim, f"You plant {plant_name} in the ground.", kind="craft")
+            _log_player_feedback(self.sim, f"You plant {plant_name} in the ground.{registration}", kind="craft")
 
     def on_flora_planting_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -3164,11 +3174,8 @@ class EventLogSystem(System):
             f"You brush {pollen} blossoms across {target}.",
             kind="craft",
         )
-        _log_player_feedback(
-            self.sim,
-            f"You collect {output}.",
-            kind="craft",
-        )
+        registration = " Your cultivation license registers the seed." if bool(event.data.get("cultivation_permit_verified")) else ""
+        _log_player_feedback(self.sim, f"You collect {output}.{registration}", kind="craft")
 
     def on_flora_crossbreed_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -3191,6 +3198,32 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, "The pollen is no longer available in your pack.", kind="craft")
         else:
             _log_player_feedback(self.sim, "That cross will not take right now.", kind="craft")
+
+    def on_civic_license_misuse_noted(self, event):
+        if event.data.get("subject_eid") != self.player_eid:
+            return
+        if str(event.data.get("license_kind", "") or "").strip().lower() != "bounty":
+            return
+        if str(event.data.get("status", "") or "").strip().lower() == "suspended":
+            return
+        count = max(1, int(event.data.get("misuse_count", 1) or 1))
+        _log_player_feedback(
+            self.sim,
+            f"Civic records place review flag {count} on your bounty credential after reported misuse.",
+            kind="justice",
+        )
+
+    def on_civic_license_suspended(self, event):
+        if event.data.get("subject_eid") != self.player_eid:
+            return
+        if str(event.data.get("license_kind", "") or "").strip().lower() != "bounty":
+            return
+        kind = str(event.data.get("misuse_kind", "misuse") or "misuse").replace("_", " ")
+        _log_player_feedback(
+            self.sim,
+            f"Civic records suspend your bounty credential after {kind}. The permit desk requires a review interval and a clear justice file before renewal.",
+            kind="justice",
+        )
 
     def on_potted_plant_placed(self, event):
         if event.data.get("eid") == self.player_eid:
@@ -6367,7 +6400,7 @@ class EventLogSystem(System):
         if method == "radio":
             message = f"{self._npc_label(npc_eid)} keys a radio and calls for help."
         else:
-            message = f"{self._npc_label(npc_eid)} makes a quick phone call."
+            message = f"{self._npc_label(npc_eid)} raises a phone, photographs the scene, and starts a call."
         self._log_npc_message(
             npc_eid,
             message,
@@ -6375,6 +6408,19 @@ class EventLogSystem(System):
             priority="normal",
             dedupe_window=6,
             dedupe_key=f"report-device:{npc_eid}:{event.data.get('incident_id')}:{method or 'device'}",
+        )
+
+    def on_phone_report_transmitted(self, event):
+        npc_eid = event.data.get("npc_eid")
+        if npc_eid == self.player_eid or not self._player_can_perceive_entity(npc_eid):
+            return
+        self._log_npc_message(
+            npc_eid,
+            f"{self._npc_label(npc_eid)} finishes the call. The report goes through.",
+            channel="alerts",
+            priority="high",
+            dedupe_window=6,
+            dedupe_key=f"phone-report-transmitted:{npc_eid}:{event.data.get('incident_id')}",
         )
 
     def on_justice_vehicle_misuse_barked(self, event):
@@ -9529,6 +9575,22 @@ class EventLogSystem(System):
                 f"justice-record:{str(event.data.get('jurisdiction_key', jurisdiction)).strip().lower()}:"
                 f"{str(event.data.get('incident_type', '')).strip().lower()}:{str(event.data.get('property_id', '')).strip().lower()}"
             ),
+        )
+
+    def on_justice_scene_apprehension_started(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        officer_name = _entity_display_name(
+            self.sim,
+            event.data.get("npc_eid"),
+            title_case=True,
+        ) or "An officer"
+        self._log(
+            f"{officer_name} moves to stop you after witnessing the offense.",
+            channel="mission",
+            priority="high",
+            dedupe_window=10,
+            dedupe_key=f"justice-scene-apprehension:{event.data.get('npc_eid')}:{self.player_eid}",
         )
 
     def on_justice_wanted_tier_changed(self, event):

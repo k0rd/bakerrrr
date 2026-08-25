@@ -54,6 +54,13 @@ SHADY_BUYER_ARCHETYPES = {
     "pawn_shop",
 }
 
+OFF_BOOK_CULTIVATION_BUYER_ARCHETYPES = {
+    "backroom_clinic",
+    "backroom_market",
+    "herbalist_camp",
+    "junk_market",
+}
+
 TACTICAL_BUYER_ARCHETYPES = {
     "surplus_store",
     "outfitter",
@@ -463,6 +470,17 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
     }
     inspection_grade = str(metadata.get("inspection_grade", "uncertified") or "uncertified").strip().lower()
     uncertified_game_product = bool(game_product and (inspection_grade != "clean" or not bool(metadata.get("permit_verified"))))
+    herbal_mixture = "herbal_medicine" in tags
+    cultivated_product = bool(
+        not herbal_mixture
+        and (
+            metadata.get("cultivated_product")
+            or metadata.get("cultivation_id")
+            or str(metadata.get("cultivation_source_kind", "") or "").strip()
+        )
+    )
+    cultivation_permit_verified = bool(metadata.get("cultivation_permit_verified"))
+    unregistered_cultivated_product = bool(cultivated_product and not cultivation_permit_verified)
 
     if _player_owns_store(sim, actor_eid, prop):
         actual = INTEREST_WANTED
@@ -476,6 +494,14 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
         actual = INTEREST_REFUSED
         price_mult = 0.0
         reason = "game products need clean permit and inspection provenance"
+    elif unregistered_cultivated_product and archetype in OFF_BOOK_CULTIVATION_BUYER_ARCHETYPES:
+        actual = INTEREST_WANTED
+        price_mult = 0.38
+        reason = "off-book buyer accepts unregistered cultivation"
+    elif unregistered_cultivated_product:
+        actual = INTEREST_UNUSUAL
+        price_mult = 0.24
+        reason = "cultivated plant commerce needs active registration"
     elif homemade_aerosol_trap:
         if _homemade_trap_sale_allowed(sim, actor_eid, prop, entry, archetype=archetype, service_eid=service_eid):
             actual = INTEREST_UNUSUAL
@@ -526,7 +552,9 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
         price_mult = 0.35
         reason = "unusual for this shop"
 
-    if homemade_aerosol_trap and actual == INTEREST_UNUSUAL:
+    if unregistered_cultivated_product and archetype not in OFF_BOOK_CULTIVATION_BUYER_ARCHETYPES:
+        accepted = False
+    elif homemade_aerosol_trap and actual == INTEREST_UNUSUAL:
         accepted = True
     elif actual == INTEREST_UNUSUAL and not unusual_sale_allowed(sim, actor_eid, prop, entry, service_eid=service_eid):
         accepted = False
@@ -544,6 +572,8 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
         risk_label = "stolen risk"
     elif uncertified_game_product:
         risk_label = "uncertified game"
+    elif unregistered_cultivated_product:
+        risk_label = "unregistered cultivation"
     elif "illegal" in tags:
         risk_label = "contraband"
     elif homemade_aerosol_trap:

@@ -21,6 +21,8 @@ from game.items import ITEM_CATALOG, item_display_name, item_instance_condition
 LEGAL_STATUSES = {"legal", "restricted", "suspicious", "illegal", "stolen", "unknown"}
 PHONE_TAGS = {"phone", "cellular", "communication", "radio", "comms"}
 PHONE_ITEM_IDS = {"mobile_phone", "burner_phone", "unregistered_mobile_phone", "cell_phone", "phone", "radio", "walkie_talkie", "two_way_radio"}
+CAMERA_PHONE_TAGS = {"phone", "cellular"}
+CAMERA_PHONE_ITEM_IDS = {"mobile_phone", "burner_phone", "unregistered_mobile_phone", "cell_phone", "phone"}
 HERBAL_SECONDARY_TRAIT_LABELS = {
     "potentiator": "+effect",
     "diluter": "-effect",
@@ -614,3 +616,17 @@ def inventory_has_item_matching(inventory, *, tags=(), item_ids=(), item_catalog
 
 def inventory_has_phone(inventory, item_catalog=None) -> bool:
     return inventory_has_item_matching(inventory, tags=PHONE_TAGS, item_ids=PHONE_ITEM_IDS, item_catalog=item_catalog)
+
+
+def inventory_has_camera_phone(inventory, item_catalog=None) -> bool:
+    """Return whether an inventory has a phone that can preserve a scene image.
+
+    Radios remain valid report devices, but do not silently gain a camera.
+    """
+
+    return inventory_has_item_matching(
+        inventory,
+        tags=CAMERA_PHONE_TAGS,
+        item_ids=CAMERA_PHONE_ITEM_IDS,
+        item_catalog=item_catalog,
+    )

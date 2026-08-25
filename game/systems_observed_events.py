@@ -717,7 +717,7 @@ class ObservedIncidentConsequenceSystem(System):
             source_record["deferred_report_pending"] = True
 
         target = decision.get("target") or self._cue_target_position(incident)
-        self.sim.emit(Event(
+        cue_event = Event(
             "observed_response_cue",
             npc_eid=eid,
             incident_id=incident_id,
@@ -729,8 +729,10 @@ class ObservedIncidentConsequenceSystem(System):
             preferred_methods=tuple(decision.get("preferred_methods", ())),
             deferred_report=deferred_report,
             deferred_report_methods=("cell_phone", "alarm", "work_phone", "home_phone", "peace_officer"),
-        ))
-        self._soft_apply_response_intent(eid, cue_kind, target, decision.get("target_eid"), decision.get("score", 0.0))
+        )
+        self.sim.emit(cue_event)
+        if str(cue_event.data.get("response_route_status", "") or "").strip().lower() not in {"started", "completed"}:
+            self._soft_apply_response_intent(eid, cue_kind, target, decision.get("target_eid"), decision.get("score", 0.0))
         knowledge = self.sim.ecs.get(IncidentKnowledge).get(eid)
         if knowledge is not None:
             knowledge.mark_shared(incident_id, tick=now, channel=cue_kind)

@@ -927,6 +927,10 @@ class WorldEventsSystem(System):
                 career=str(career or "resident").strip().lower() or "resident",
                 work=anchor,
                 shift_window=(0, 0),
+                seed_civic_licenses=not (
+                    event_key == "hunter_party"
+                    and str(career or "").strip().lower() in {"hunter", "trapper"}
+                ),
             )
             self._set_event_actor_intent(eid, "holding", hold_spot, score=34.0)
             if event_key == "hunter_party" and str(career or "").strip().lower() in {"hunter", "trapper"}:

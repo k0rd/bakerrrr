@@ -13,6 +13,7 @@ from engine.events import Event
 from engine.systems import System
 from engine.visibility import has_line_of_sight
 
+from game.civic_records import civic_license_is_active
 from game.components import Inventory, PlayerAssets, Position
 from game.flora_runtime import (
     EXHAUSTED_FLORA_STAGES,
@@ -1542,6 +1543,29 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         "harvested_tick": _safe_int(getattr(sim, "tick", 0), 0),
         "legal_status": "legal",
     }
+    cultivation_id = str(record.get("cultivation_id", "") or "").strip()
+    cultivated_product = bool(
+        record.get("cultivated_product")
+        or (record.get("cultivator_eid") is not None and cultivation_id)
+    )
+    if cultivation_id and cultivated_product:
+        permit_holder_eid = None
+        for candidate_eid in (record.get("cultivator_eid"), eid):
+            if candidate_eid is None:
+                continue
+            if civic_license_is_active(sim, candidate_eid, "cultivation"):
+                permit_holder_eid = candidate_eid
+                break
+        metadata.update({
+            "cultivated_product": True,
+            "cultivation_id": cultivation_id,
+            "cultivation_source_kind": record.get("cultivation_source_kind") or "actor_planted",
+            "cultivated_by_eid": record.get("cultivator_eid"),
+            "cultivation_registered": permit_holder_eid is not None,
+            "cultivation_permit_verified": permit_holder_eid is not None,
+            "cultivation_permit_holder_eid": permit_holder_eid,
+            "cultivation_inspection_grade": "registered" if permit_holder_eid is not None else "unregistered",
+        })
     for key in (
         "ecology_origin",
         "environmental_morph",
@@ -1623,6 +1647,9 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         harvest_limit=_safe_int(updated_record.get("harvest_limit"), 1),
         harvest_remaining=remaining_after,
         harvest_exhausted=remaining_after <= 0,
+        cultivation_id=metadata.get("cultivation_id"),
+        cultivated_product=bool(metadata.get("cultivated_product")),
+        cultivation_permit_verified=bool(metadata.get("cultivation_permit_verified")),
         x=int(record.get("x", 0) or 0),
         y=int(record.get("y", 0) or 0),
         z=int(record.get("z", 0) or 0),

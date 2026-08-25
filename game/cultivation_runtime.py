@@ -9,6 +9,7 @@ from collections.abc import Mapping
 
 from engine.events import Event
 from engine.systems import System
+from game.civic_records import civic_license_is_active
 from game.components import AI, Inventory, NPCNeeds, Occupation, Position
 from game.color_words import color_word_display_name, normalize_color_word
 from game.flora_genetics import normalize_flora_genetics
@@ -115,6 +116,29 @@ GENERIC_PLANT_NAME_WORDS = {
     "lichen",
     "reed",
 }
+
+
+def cultivation_permit_snapshot(sim, eid):
+    """Return identity-bound registration provenance for cultivation output."""
+
+    if sim is None or eid is None:
+        return {
+            "cultivation_registered": False,
+            "cultivation_permit_verified": False,
+            "cultivation_permit_holder_eid": None,
+        }
+    try:
+        holder_eid = int(eid)
+    except (TypeError, ValueError):
+        holder_eid = eid
+    verified = bool(civic_license_is_active(sim, holder_eid, "cultivation"))
+    return {
+        "cultivation_registered": verified,
+        "cultivation_permit_verified": verified,
+        "cultivation_permit_holder_eid": holder_eid if verified else None,
+    }
+
+
 SHAPE_NAME_WORDS = {
     "bell",
     "star",
@@ -539,6 +563,12 @@ def _flora_record_from_cultivation(sim, record):
     return normalize_flora_harvest_state({
         "id": flora_id,
         "cultivation_id": record.get("id"),
+        "cultivated_product": bool(record.get("cultivated_product")),
+        "cultivation_source_kind": record.get("cultivation_source_kind"),
+        "cultivator_eid": record.get("cultivator_eid"),
+        "cultivation_registered": bool(record.get("cultivation_registered")),
+        "cultivation_permit_verified": bool(record.get("cultivation_permit_verified")),
+        "cultivation_permit_holder_eid": record.get("cultivation_permit_holder_eid"),
         "plant_id": record.get("plant_id"),
         "name": record.get("plant_name") or row.get("name") or record.get("plant_id"),
         "x": _safe_int(record.get("x"), 0),
@@ -722,13 +752,15 @@ def _biome_fit(sim, source, x, y, z=0):
     }
 
 
-def _new_cultivation_record(sim, source, *, container_kind, x=None, y=None, z=0, planter_property_id=None, pot_instance_id=None, carried_by_eid=None, biome_fit=None, stage=None):
+def _new_cultivation_record(sim, source, *, container_kind, x=None, y=None, z=0, planter_property_id=None, pot_instance_id=None, carried_by_eid=None, cultivator_eid=None, biome_fit=None, stage=None):
     cid = _next_cultivation_id(sim)
     now = _safe_int(getattr(sim, "tick", 0), 0)
     growth_form = _key(source.get("growth_form"), "flower")
     failed = isinstance(biome_fit, Mapping) and not bool(biome_fit.get("ok", True))
     stage = _key(stage, "withering" if failed else "seeded")
     harvest_limit = max(1, flora_harvest_limit({"growth_form": growth_form, "rarity": source.get("rarity")}))
+    permit = cultivation_permit_snapshot(sim, cultivator_eid)
+    natural_crossbreed = bool(isinstance(biome_fit, Mapping) and biome_fit.get("natural_crossbreed"))
     record = {
         "id": cid,
         "plant_id": source.get("plant_id"),
@@ -779,6 +811,10 @@ def _new_cultivation_record(sim, source, *, container_kind, x=None, y=None, z=0,
         "paused_ticks": 0,
         "source_item_id": source.get("item_id"),
         "source_instance_id": source.get("instance_id"),
+        "cultivated_product": cultivator_eid is not None and not natural_crossbreed,
+        "cultivation_source_kind": "actor_planted" if cultivator_eid is not None else "natural_crossbreed" if natural_crossbreed else "natural",
+        "cultivator_eid": cultivator_eid,
+        **permit,
     }
     if x is not None and y is not None:
         record.update({"x": int(x), "y": int(y), "z": int(z), "chunk": list(_chunk_for_xy(sim, x, y))})
@@ -833,6 +869,7 @@ def plant_source_in_pot(sim, eid, source, pot_entry):
         container_kind="pot",
         pot_instance_id=pot_entry.get("instance_id"),
         carried_by_eid=eid,
+        cultivator_eid=eid,
         biome_fit={"ok": True, "container_override": True},
     )
     records = ensure_cultivation_state(sim)
@@ -853,6 +890,8 @@ def plant_source_in_pot(sim, eid, source, pot_entry):
         container_kind="pot",
         consumed_item_id=source.get("item_id"),
         consumed_instance_id=source.get("instance_id"),
+        cultivation_registered=bool(record.get("cultivation_registered")),
+        cultivation_permit_verified=bool(record.get("cultivation_permit_verified")),
     ))
     return {"ok": True, "record": record, "container_kind": "pot", "consumed": removed}
 
@@ -880,6 +919,7 @@ def plant_source_at(sim, eid, source, x, y, z=0, *, container_kind="ground", pla
         y=int(y),
         z=int(z),
         planter_property_id=planter_property_id,
+        cultivator_eid=eid,
         biome_fit=biome_fit,
     )
     records = ensure_cultivation_state(sim)
@@ -896,6 +936,8 @@ def plant_source_at(sim, eid, source, x, y, z=0, *, container_kind="ground", pla
         consumed_instance_id=source.get("instance_id"),
         biome_fit=dict(biome_fit),
         failed=not bool(biome_fit.get("ok", True)),
+        cultivation_registered=bool(record.get("cultivation_registered")),
+        cultivation_permit_verified=bool(record.get("cultivation_permit_verified")),
         x=int(x),
         y=int(y),
         z=int(z),
@@ -1199,6 +1241,11 @@ def crossbreed_with_flora(sim, eid, source, target):
     if fertility <= 0:
         return {"ok": False, "reason": "spent_fertility", "target_name": target.get("name")}
     seed_metadata = _hybrid_seed_metadata(sim, source, target)
+    seed_metadata.update({
+        "cultivated_product": True,
+        "cultivation_source_kind": "assisted_crossbreed",
+        **cultivation_permit_snapshot(sim, eid),
+    })
     owner_tag = "player" if int(eid) == int(getattr(sim, "player_eid", -999999)) else "npc"
     if not _inventory_can_accept(inventory, SEED_PACKET_ITEM_ID, 1, metadata=seed_metadata, owner_eid=eid, owner_tag=owner_tag):
         return {"ok": False, "reason": "inventory_full", "target_name": target.get("name")}
@@ -1232,6 +1279,8 @@ def crossbreed_with_flora(sim, eid, source, target):
         output_item_name=item_display_name(SEED_PACKET_ITEM_ID, metadata=seed_metadata, item_catalog=ITEM_CATALOG),
         output_instance_id=instance_id,
         hybrid_generation=seed_metadata.get("hybrid_generation"),
+        cultivation_registered=bool(seed_metadata.get("cultivation_registered")),
+        cultivation_permit_verified=bool(seed_metadata.get("cultivation_permit_verified")),
         consumed_item_id=source.get("item_id"),
         consumed_instance_id=source.get("instance_id"),
         x=target.get("x"),

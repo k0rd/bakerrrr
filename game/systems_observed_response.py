@@ -19,7 +19,11 @@ from engine.visibility import observer_can_see_position
 
 from game.components import AI, IncidentKnowledge, Inventory, JusticeProfile, NPCWill, NPCRoutine, Position
 from game.incident_runtime import incident_record, mark_incident_registry_changed
-from game.identity_evidence import transmitted_subject_account
+from game.identity_evidence import (
+    build_witness_subject_account,
+    preferred_subject_account,
+    transmitted_subject_account,
+)
 from game.incident_silencing import incident_spread_suppressed
 from game.items import item_display_name
 from game.item_semantics import inventory_has_phone, item_tags
@@ -37,7 +41,7 @@ RESPONSE_STATE_BY_CUE = {
 }
 REPORT_METHOD_PRIORITY = ("camera_network", "cell_phone", "peace_officer", "alarm", "work_phone", "home_phone")
 DEFAULT_RESPONSE_TTL = 900
-DELAYED_REPORT_METHODS = {"peace_officer", "alarm", "work_phone", "home_phone"}
+DELAYED_REPORT_METHODS = {"cell_phone", "peace_officer", "alarm", "work_phone", "home_phone"}
 
 
 def _int(value, default=0):
@@ -173,11 +177,10 @@ class ObservedIncidentResponseSystem(System):
             "completed": False,
         }
 
-        # If the NPC has a phone/radio, reporting is immediate and local. Still
-        # emit a report event so authority/report systems can dedupe globally.
-        if cue_kind == "report_authority" and route.get("method") in {"cell_phone", "radio", "camera_network"}:
-            if route.get("method") == "cell_phone":
-                self._emit_report_device_used(pending, x=pos.x, y=pos.y, z=pos.z)
+        # Radios and fixed camera networks transmit immediately. A personal
+        # phone first creates visible photographic evidence, then requires a
+        # short, interruptible call hold before anything reaches authority.
+        if cue_kind == "report_authority" and route.get("method") in {"radio", "camera_network"}:
             self._emit_authority_report(pending, x=pos.x, y=pos.y, z=pos.z)
             if route.get("method") == "radio":
                 assist_eid = self._call_remote_peace_officer(pending, reporter_pos=pos, incident=incident)
@@ -186,15 +189,18 @@ class ObservedIncidentResponseSystem(System):
                 self.sim.observed_response_stats["radio_reports"] += 1
             if route.get("method") == "camera_network":
                 self.sim.observed_response_stats["camera_reports"] += 1
-            elif route.get("method") == "cell_phone":
-                self.sim.observed_response_stats["phone_reports"] += 1
             self._clear_actor_cue(npc_eid, incident_id)
             event.data["response_route_status"] = "completed"
             return
 
         self.pending[npc_eid] = pending
         self.sim.observed_response_stats["queued"] += 1
-        self._apply_pending_intent(pending)
+        if cue_kind == "report_authority" and route.get("method") == "cell_phone":
+            self._capture_phone_photo(pending, incident)
+            self._emit_report_device_used(pending, x=pos.x, y=pos.y, z=pos.z)
+            self._begin_report_hold(pending, pos)
+        else:
+            self._apply_pending_intent(pending)
         event.data["response_route_status"] = "started"
 
     def on_incident_witness_resolution(self, event):
@@ -279,6 +285,9 @@ class ObservedIncidentResponseSystem(System):
                     self._drop_cue(npc_eid, cue, reason="report_interrupted")
                     continue
                 if now >= _int(cue.get("report_ready_tick"), now + 1):
+                    if _key(cue.get("method")) == "cell_phone":
+                        self._emit_phone_report_transmitted(cue, x=pos.x, y=pos.y, z=pos.z)
+                        self.sim.observed_response_stats["phone_reports"] += 1
                     self._emit_authority_report(cue, x=pos.x, y=pos.y, z=pos.z)
                     self._finish_cue(npc_eid, cue)
                     continue
@@ -595,7 +604,65 @@ class ObservedIncidentResponseSystem(System):
             return 0
         clock = getattr(self.sim, "world_traits", {}).get("clock", {})
         ticks_per_hour = _int((clock or {}).get("ticks_per_hour"), 600)
+        if method_key == "cell_phone":
+            # Roughly thirty seconds at the default clock: enough turns for a
+            # visible witness response without turning every call into a trek.
+            return max(2, int(round(float(ticks_per_hour) / 120.0)))
         return max(1, int(round(float(ticks_per_hour) / 60.0)))
+
+    def _capture_phone_photo(self, cue, incident):
+        """Freeze a visible suspect image when the phone action actually starts."""
+
+        if not isinstance(incident, dict):
+            return False
+        reporter_eid = _int(cue.get("npc_eid"), -1)
+        incident_id = _int(cue.get("incident_id"), -1)
+        subject_eid = _int(incident.get("primary_actor_eid"), -1)
+        if reporter_eid < 0 or subject_eid < 0:
+            return False
+        positions = self.sim.ecs.get(Position)
+        reporter_pos = positions.get(reporter_eid)
+        subject_pos = positions.get(subject_eid)
+        if reporter_pos is None or subject_pos is None or int(reporter_pos.z) != int(subject_pos.z):
+            return False
+        if not observer_can_see_position(
+            self.sim,
+            reporter_eid,
+            int(reporter_pos.x),
+            int(reporter_pos.y),
+            int(reporter_pos.z),
+            int(subject_pos.x),
+            int(subject_pos.y),
+            int(subject_pos.z),
+            radius=18,
+        ):
+            return False
+
+        ai = self.sim.ecs.get(AI).get(reporter_eid)
+        justice = self.sim.ecs.get(JusticeProfile).get(reporter_eid)
+        expert = bool(
+            _key(getattr(ai, "role", "")) in PEACE_ROLES
+            or getattr(justice, "enforce_all", False)
+            or _float(getattr(justice, "justice", 0.0), 0.0) >= 0.78
+        )
+        account = build_witness_subject_account(
+            self.sim,
+            reporter_eid,
+            subject_eid,
+            source_kind="expert_phone_photo" if expert else "phone_photo",
+            confidence=1.0,
+        )
+        knowledge = self.sim.ecs.get(IncidentKnowledge).get(reporter_eid)
+        record = knowledge.records.get(incident_id) if knowledge is not None else None
+        if not isinstance(record, dict):
+            return False
+        record["subject_account"] = preferred_subject_account(
+            record.get("subject_account"),
+            account,
+        )
+        cue["phone_photo_captured"] = True
+        cue["phone_photo_tick"] = int(getattr(self.sim, "tick", 0))
+        return True
 
     def _begin_report_hold(self, cue, pos):
         now = int(getattr(self.sim, "tick", 0))
@@ -662,6 +729,13 @@ class ObservedIncidentResponseSystem(System):
             propagation_depth=(reporter_record or {}).get("propagation_depth", 0),
             preserve_reporter_account=True,
         )
+        visual_source_kind = _key((reporter_record or {}).get("source_kind"))
+        visual_source_eid = (reporter_record or {}).get("source_eid")
+        fixed_camera_frame = bool(
+            _key(cue.get("method")) == "camera_network"
+            and visual_source_kind == "camera"
+            and visual_source_eid is None
+        )
         if isinstance(incident, dict):
             incident["officially_reported"] = True
             if followup:
@@ -691,6 +765,9 @@ class ObservedIncidentResponseSystem(System):
             "y": _int(y, 0),
             "z": _int(z, 0),
             "subject_account": subject_account,
+            "visual_source_kind": visual_source_kind,
+            "visual_source_eid": visual_source_eid,
+            "fixed_camera_frame": fixed_camera_frame,
         }
         if followup and isinstance(reports.get(str(incident_id)), dict):
             original = reports[str(incident_id)]
@@ -716,6 +793,9 @@ class ObservedIncidentResponseSystem(System):
             y=_int(y, 0),
             z=_int(z, 0),
             subject_account=subject_account,
+            visual_source_kind=visual_source_kind,
+            visual_source_eid=visual_source_eid,
+            fixed_camera_frame=fixed_camera_frame,
             followup_statement=followup,
             **observation,
         ))
@@ -731,6 +811,19 @@ class ObservedIncidentResponseSystem(System):
             item_id=_text(cue.get("report_device_item_id")),
             item_name=_text(cue.get("report_device_item_name")) or ("Two-Way Radio" if method == "radio" else "Phone"),
             assist_eid=assist_eid,
+            x=_int(x, 0),
+            y=_int(y, 0),
+            z=_int(z, 0),
+        ))
+
+    def _emit_phone_report_transmitted(self, cue, *, x=None, y=None, z=None):
+        self.sim.emit(Event(
+            "phone_report_transmitted",
+            npc_eid=_int(cue.get("npc_eid"), -1),
+            incident_id=_int(cue.get("incident_id"), -1),
+            method="cell_phone",
+            item_id=_text(cue.get("report_device_item_id")),
+            item_name=_text(cue.get("report_device_item_name")) or "Phone",
             x=_int(x, 0),
             y=_int(y, 0),
             z=_int(z, 0),

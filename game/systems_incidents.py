@@ -257,6 +257,28 @@ class IncidentKnowledgeSystem(System):
             ))
         )
 
+    def _observer_is_expert_justice_witness(self, eid):
+        if eid is None or _observer_is_active_bodyguard(self.sim, eid):
+            return False
+        role = self._observer_role(eid)
+        justice = self.sim.ecs.get(JusticeProfile).get(eid)
+        return bool(
+            role in {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
+            or (justice and (
+                justice.enforce_all
+                or float(getattr(justice, "justice", 0.0) or 0.0) >= 0.78
+            ))
+        )
+
+    def _direct_account_source(self, eid, source_key):
+        source = str(source_key or "").strip().lower()
+        if source not in {"witnessed", "victim"}:
+            return source
+        expert = self._observer_is_expert_justice_witness(eid)
+        if expert:
+            return "expert_justice_witness"
+        return source
+
     def _human_scene_actor(self, eid):
         identity = self.sim.ecs.get(CreatureIdentity).get(eid)
         ai = self.sim.ecs.get(AI).get(eid)
@@ -365,11 +387,12 @@ class IncidentKnowledgeSystem(System):
             subject_account = None
         if subject_account is None and incident.get("primary_actor_eid") is not None:
             if source_key in DIRECT_PARTICIPANT_ACCOUNT_SOURCES:
+                account_source = self._direct_account_source(eid, source_key)
                 subject_account = build_witness_subject_account(
                     self.sim,
                     eid,
                     incident.get("primary_actor_eid"),
-                    source_kind=source_key,
+                    source_kind=account_source,
                     confidence=confidence,
                 )
 
