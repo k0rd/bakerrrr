@@ -9738,13 +9738,18 @@ class EventLogSystem(System):
         ignored_reason_labels = [str(label).strip() for label in list(event.data.get("ignored_reason_labels", ()) or ()) if str(label).strip()]
         penalty_breakdown = event.data.get("penalty_breakdown") if isinstance(event.data.get("penalty_breakdown"), dict) else {}
         held_property_name = str(event.data.get("held_property_name", property_name)).strip() or property_name
+        booking_exonerated = bool(event.data.get("booking_exonerated", False))
         status_text = {
             "questioning": "wanted for questioning",
             "wanted": "wanted",
             "arrest_on_sight": "arrest on sight",
             "clear": "clear",
         }.get(after_tier, after_tier.replace("_", " ").strip() or "clear")
-        summary = f"Booking: processed at {property_name}."
+        summary = (
+            f"Booking review at {property_name}: the reported charge was not supported."
+            if booking_exonerated
+            else f"Booking: processed at {property_name}."
+        )
         if hold_hours > 0:
             summary += f" Held about {hold_hours:g}h."
         if fine_due > 0:

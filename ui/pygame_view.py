@@ -236,6 +236,7 @@ class PygameView:
         self._procedural_surface_cache_hits = 0
         self._procedural_surface_cache_misses = 0
         self._procedural_cache_source_position = None
+        self._procedural_cache_target_position = None
         self._drawable_render_last_error = None
         self.key_queue = deque()
         self.input_queue = deque()
@@ -8954,15 +8955,16 @@ class PygameView:
         semantic_id=None,
         effects=None,
         light_tint=None,
+        visual_source=None,
     ):
         """Resolve one procedural cell once, then retain its alpha surface."""
 
         x = int(x)
         y = int(y)
         normalized_tint = self._normalize_light_tint(light_tint)
+        source = tuple(visual_source) if isinstance(visual_source, (list, tuple)) else (x, y)
         cache_key = (
-            x,
-            y,
+            self._render_cache_key_value(source),
             str(ch)[:1] or " ",
             self._render_cache_key_value(color),
             str(color_word or "").strip().lower(),
@@ -8997,9 +8999,11 @@ class PygameView:
         self._procedural_surface_cache_misses += 1
         target_surface = self.surface
         previous_source = self._procedural_cache_source_position
+        previous_target = self._procedural_cache_target_position
         capture = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
         self.surface = capture
-        self._procedural_cache_source_position = (x, y)
+        self._procedural_cache_source_position = source
+        self._procedural_cache_target_position = (x, y)
         try:
             shape = self._draw_procedural_shape(
                 0,
@@ -9015,6 +9019,7 @@ class PygameView:
         finally:
             self.surface = target_surface
             self._procedural_cache_source_position = previous_source
+            self._procedural_cache_target_position = previous_target
 
         cached_surface = capture if shape else None
         self._bounded_cache_store(
@@ -9368,6 +9373,7 @@ class PygameView:
                     effects=call.get("effects", ()),
                     overlays=call.get("overlays", ()),
                     light_tint=call.get("light_tint"),
+                    visual_source=call.get("visual_source"),
                 )
                 continue
             if kind == "text":
@@ -9439,7 +9445,7 @@ class PygameView:
 
         return x, y, text
 
-    def _draw_overlay_stack(self, x, y, overlays, attrs=0, light_tint=None):
+    def _draw_overlay_stack(self, x, y, overlays, attrs=0, light_tint=None, visual_source=None):
         for overlay in overlays or ():
             if not isinstance(overlay, dict):
                 continue
@@ -9462,6 +9468,7 @@ class PygameView:
                 semantic_id=semantic_id,
                 effects=overlay.get("effects", ()),
                 light_tint=light_tint,
+                visual_source=visual_source,
             ):
                 continue
             paint_color = self._paint_color(color, color_word)
@@ -9474,7 +9481,7 @@ class PygameView:
                 preserve_background=True,
             )
 
-    def _draw_char(self, x, y, ch, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, overlays=None, light_tint=None):
+    def _draw_char(self, x, y, ch, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, overlays=None, light_tint=None, visual_source=None):
         region = self._clip_text(x, y, str(ch)[:1] or " ")
         if region is None:
             return
@@ -9485,14 +9492,14 @@ class PygameView:
         previous_light_tint = self._active_surface_light_tint
         self._active_surface_light_tint = self._normalize_light_tint(light_tint)
         try:
-            if self._draw_cached_procedural_shape(x, y, text[0], color=color, color_word=color_word, attrs=attrs, semantic_id=semantic_id, effects=effects, light_tint=light_tint):
-                self._draw_overlay_stack(x, y, overlays, attrs=attrs, light_tint=light_tint)
+            if self._draw_cached_procedural_shape(x, y, text[0], color=color, color_word=color_word, attrs=attrs, semantic_id=semantic_id, effects=effects, light_tint=light_tint, visual_source=visual_source):
+                self._draw_overlay_stack(x, y, overlays, attrs=attrs, light_tint=light_tint, visual_source=visual_source)
                 return
             preserve_background = self._preserve_background_for_color(color)
             paint_color = self._paint_color(color, color_word)
 
             self._draw_font_char(x, y, text[0], color=paint_color, attrs=attrs, preserve_background=preserve_background)
-            self._draw_overlay_stack(x, y, overlays, attrs=attrs, light_tint=light_tint)
+            self._draw_overlay_stack(x, y, overlays, attrs=attrs, light_tint=light_tint, visual_source=visual_source)
         finally:
             self._active_surface_light_tint = previous_light_tint
 
@@ -9874,7 +9881,7 @@ class PygameView:
         self.surface.blit(surface, (int(pixel_x), dest_y))
         return self.cell_px
 
-    def draw(self, x, y, glyph, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None, light_tint=None):
+    def draw(self, x, y, glyph, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None, light_tint=None, visual_source=None):
         if self._wants_layered_draw(layer=layer, priority=priority):
             self._queue_draw_call(
                 "glyph",
@@ -9888,6 +9895,7 @@ class PygameView:
                 effects=tuple(effects or ()),
                 overlays=tuple(overlays or ()),
                 light_tint=dict(light_tint or {}) if isinstance(light_tint, dict) else light_tint,
+                visual_source=tuple(visual_source) if isinstance(visual_source, (list, tuple)) else visual_source,
                 layer=layer,
                 priority=0 if priority is None else int(priority),
             )
@@ -9904,6 +9912,7 @@ class PygameView:
             effects=effects,
             overlays=overlays,
             light_tint=light_tint,
+            visual_source=visual_source,
         )
 
     def _draw_text_now(self, x, y, text, color=None, attrs=0):

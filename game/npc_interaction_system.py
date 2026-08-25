@@ -142,6 +142,7 @@ from game.identity_evidence import remember_presented_identity
 from game.appearance_loadout import (
     appearance_color_key,
     human_live_conversation_presentation,
+    public_exposure_profile,
 )
 from game.cult_runtime import (
     actor_cult_ids,
@@ -361,6 +362,10 @@ from game.system_support.npc_behavior_runtime import (
     _street_item_value,
 )
 from game.system_support.street_vendor_trade_runtime import STREET_TRADE_SOURCE_KIND, street_vendor_contact_profile
+from game.system_support.awareness_runtime import (
+    observation_payload_for_position,
+    observation_payload_from_observers,
+)
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
     ACTION_OFFENSE_CONTEXT_BONUS,
@@ -1045,6 +1050,8 @@ class NPCInteractionSystem(System):
         self.sim.events.subscribe("npc_warn_property", self.on_npc_warn_property)
         self.sim.events.subscribe("contractor_hired", self.on_contractor_hired)
         self.sim.events.subscribe("entity_moved", self.on_entity_moved)
+        self.sim.events.subscribe("appearance_item_equipped", self.on_appearance_changed)
+        self.sim.events.subscribe("appearance_item_unequipped", self.on_appearance_changed)
         self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
         self.sim.events.subscribe("npc_downed", self.on_npc_downed)
         self.sim.events.subscribe("npc_killed", self.on_npc_killed)
@@ -15880,6 +15887,164 @@ class NPCInteractionSystem(System):
                 lines.append(self._social_need_line(context.get("npc_needs"), context.get("bond")))
         self.sim.emit(Event("npc_interacted", eid=self.player_eid, npc_eid=npc_eid, lines=lines[:4], guarded=bool(context.get("guarded"))))
 
+    def _public_exposure_refuses_dialogue(self, context):
+        """Apply a witnessed public-order and social response to visible exposure."""
+
+        if not isinstance(context, dict) or not bool(context.get("human", True)):
+            return False
+        npc_eid = context.get("npc_eid")
+        if npc_eid is None:
+            return False
+        exposure = public_exposure_profile(self.sim, self.player_eid)
+        if not bool(exposure.get("indecent")):
+            return False
+
+        memory = self._dialogue_memory(npc_eid)
+        level = str(exposure.get("level", "basewear_only") or "basewear_only").strip().lower()
+        self._record_witnessed_public_exposure(
+            observer_eids=(npc_eid,),
+            observation_channel="direct_conversation",
+            exposure=exposure,
+        )
+
+        street_profile = context.get("street_trade_profile")
+        street_profile = street_profile if isinstance(street_profile, dict) else {}
+        vendor = bool(context.get("trade_available") or str(street_profile.get("vendor_kind", "") or "").strip())
+        attempt = max(0, int(memory.get("exposure_talk_attempts", 0) or 0)) + 1
+        memory["exposure_talk_attempts"] = attempt
+        chance = 0.8 if level == "basewear_only" else 0.94
+        if vendor:
+            chance += 0.12
+        traits = context.get("npc_traits") or NPCTraits()
+        chance -= float(getattr(traits, "empathy", 0.5) or 0.5) * 0.08
+        bond = context.get("bond") or self._bond_snapshot(npc_eid) or {}
+        chance -= float(bond.get("closeness", 0.0) or 0.0) * 0.08
+        chance = max(0.62, min(0.99, chance))
+        roll = random.Random(
+            f"{self.sim.seed}:public-exposure-talk:{self.player_eid}:{npc_eid}:{level}:{attempt}"
+        ).random()
+        if roll > chance:
+            return False
+
+        lines = (
+            (
+                "Put on actual clothes before you try to shop here.",
+                "No. Get dressed before you come to my counter.",
+                "I am not doing business with you dressed like that.",
+            )
+            if vendor
+            else (
+                "Put some clothes on before you talk to me.",
+                "No. Get dressed and then we can talk.",
+                "I do not want to have this conversation while you are dressed like that.",
+            )
+        )
+        if level == "uncovered":
+            lines = (
+                "No. Cover yourself and get away from me.",
+                "Put some clothes on. I am not talking to you like this.",
+                "Absolutely not. Get dressed.",
+            )
+        line = lines[int(roll * len(lines)) % len(lines)]
+        self._shift_dialogue_bond(
+            npc_eid,
+            trust_delta=-0.075 if vendor else -0.055,
+            closeness_delta=-0.045 if vendor else -0.035,
+            guarded=False,
+        )
+        memory["refusal_until_tick"] = max(
+            int(memory.get("refusal_until_tick", 0) or 0),
+            int(self.sim.tick) + BOUNDARY_REFUSAL_TICKS,
+        )
+        memory["refusal_reason"] = "indecent_exposure"
+        self.sim.emit(Event(
+            "npc_conversation_refused",
+            npc_eid=npc_eid,
+            target_eid=self.player_eid,
+            line=line,
+            reason="indecent_exposure",
+            exposure_level=level,
+            vendor=vendor,
+        ))
+        return True
+
+    def _record_witnessed_public_exposure(
+        self,
+        *,
+        observer_eids=None,
+        observation_channel="actor_witness",
+        exposure=None,
+    ):
+        """Record only newly witnessed exposure, using bounded nearby lookup."""
+
+        exposure = exposure if isinstance(exposure, dict) else public_exposure_profile(self.sim, self.player_eid)
+        observed_at = getattr(self, "_public_exposure_observed_at", None)
+        if not isinstance(observed_at, dict):
+            observed_at = {}
+            self._public_exposure_observed_at = observed_at
+        if not bool(exposure.get("indecent")):
+            observed_at.clear()
+            return ()
+
+        pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if pos is None:
+            return ()
+        channel = str(observation_channel or "actor_witness").strip().lower() or "actor_witness"
+        if observer_eids is None:
+            observation = observation_payload_for_position(
+                self.sim,
+                pos.x,
+                pos.y,
+                pos.z,
+                exclude_eid=self.player_eid,
+                offender_eid=self.player_eid,
+                observation_channels=(channel,),
+            )
+        else:
+            observation = observation_payload_from_observers(
+                self.sim,
+                observer_eids,
+                offender_eid=self.player_eid,
+                observation_channels=(channel,),
+            )
+        accountable = tuple(observation.get("accountable_observer_eids", ()) or ())
+        if not accountable:
+            return ()
+
+        tick = int(self.sim.tick)
+        level = str(exposure.get("level", "basewear_only") or "basewear_only").strip().lower()
+        eligible = []
+        for observer_eid in accountable:
+            record = observed_at.get(int(observer_eid), {})
+            last_level = str(record.get("level", "") or "").strip().lower() if isinstance(record, dict) else ""
+            raw_last_tick = record.get("tick", -999999) if isinstance(record, dict) else -999999
+            last_tick = int(-999999 if raw_last_tick is None else raw_last_tick)
+            if last_level != level or tick - last_tick >= 120:
+                eligible.append(int(observer_eid))
+        if not eligible:
+            return ()
+
+        eligible = tuple(dict.fromkeys(eligible))
+        for observer_eid in eligible:
+            observed_at[observer_eid] = {"level": level, "tick": tick}
+            _emit_action_offense_event(
+                self.sim,
+                self.player_eid,
+                "public_exposure",
+                pos.x,
+                pos.y,
+                pos.z,
+                context="indecent_exposure",
+                score=int(exposure.get("offense_score", 18) or 18),
+                observer_eids=(observer_eid,),
+                accountable_observer_eids=(observer_eid,),
+                observation_channels=(channel,),
+                witnessed=True,
+                exposure_level=level,
+                exposure_observer_eid=observer_eid,
+            )
+        return eligible
+
     def _start_dialogue_with_npc(self, npc_eid, *, prompt_lines=(), highlight_topic_ids=(), allow_distant=False):
         if npc_eid is None:
             return False
@@ -15890,6 +16055,8 @@ class NPCInteractionSystem(System):
         if not context:
             return False
         if context.get("human") and self._refuse_dialogue_if_active(context):
+            return False
+        if context.get("human") and self._public_exposure_refuses_dialogue(context):
             return False
         fresh = not self._recently_interacted(npc_eid)
         bond = self._conversation_bond(
@@ -16740,6 +16907,7 @@ class NPCInteractionSystem(System):
     def on_entity_moved(self, event):
         if event.data.get("eid") != self.player_eid:
             return
+        self._record_witnessed_public_exposure()
         contractors = getattr(self.sim, "contractors", {})
         if not isinstance(contractors, dict) or not contractors:
             return
@@ -16754,6 +16922,11 @@ class NPCInteractionSystem(System):
                 self._assign_peaceful_surrender_follow(npc_eid, self.player_eid, player_pos, rec)
             else:
                 self._assign_contractor_backup(npc_eid, self.player_eid, player_pos, rec)
+
+    def on_appearance_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._record_witnessed_public_exposure()
 
     def on_entity_damaged(self, event):
         if event.data.get("target_eid") != self.player_eid:

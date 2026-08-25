@@ -29,6 +29,16 @@ PROVISIONAL_MIN_SEVERITY = 35
 PROVISIONAL_MIN_MATCH_SCORE = 0.92
 PROVISIONAL_MIN_EVIDENCE_WEIGHT = 0.32
 PROVISIONAL_MIN_MATCHED_CUES = 2
+SUSPICION_MAX_AGE_TICKS = 240
+SUSPICION_MAX_SCENE_DISTANCE = 12
+SUSPICION_MIN_SEVERITY = 24
+SUSPICION_MIN_MATCH_SCORE = 0.70
+SUSPICION_MIN_EVIDENCE_WEIGHT = 0.20
+SUSPICION_MIN_MATCHED_CUES = 1
+ADJUDICATION_MIN_MATCH_SCORE = 0.84
+ADJUDICATION_MIN_EVIDENCE_WEIGHT = 0.28
+ADJUDICATION_MIN_MATCHED_CUES = 2
+ADJUDICATION_MIN_STRENGTH = 0.78
 
 
 def _text(value):
@@ -282,9 +292,9 @@ def record_justice_identity_report(sim, incident, report_data):
                 case["provisional_confirmation"] = True
                 provisional_confirmed = True
             else:
-                row["status"] = "misidentified"
+                row["status"] = "misidentified_pending_capture"
                 if _text(row.get("adjudication_status")).lower() == "convicted_on_evidence":
-                    row["adjudication_status"] = "conviction_overturned"
+                    row["adjudication_status"] = "conviction_contested_by_identification"
                 row["resolved_tick"] = tick
                 case["misidentification_confirmed"] = True
                 case["misidentified_actor_eid"] = _int(row.get("actor_eid"), -1)
@@ -293,14 +303,14 @@ def record_justice_identity_report(sim, incident, report_data):
         for row in tuple(case.get("evidentiary_convictions", ()) or ()):
             if not isinstance(row, dict) or _text(row.get("status") or "active").lower() != "active":
                 continue
-            row["status"] = "confirmed" if _int(row.get("actor_eid"), -1) == int(resolved_eid) else "overturned"
+            row["status"] = "confirmed" if _int(row.get("actor_eid"), -1) == int(resolved_eid) else "misidentified_pending_capture"
             row["resolved_tick"] = tick
             row["resolved_subject_eid"] = int(resolved_eid)
         if misidentified_actor_eids:
             case["misidentified_actor_eids"] = tuple(dict.fromkeys(misidentified_actor_eids))
             case["provisional_status"] = "misidentified"
             case["institutional_error"] = True
-            case["correction_status"] = "pending"
+            case["correction_status"] = "pending_actual_offender_capture"
             case["correction_required_tick"] = tick
         elif provisional_confirmed:
             case["provisional_status"] = "confirmed"
@@ -387,15 +397,16 @@ def unresolved_case_matches_for_actor(sim, actor_eid, *, jurisdiction_key="", mi
 def provisional_attribution_read(sim, case, actor_eid, *, match=None):
     """Measure whether a factual unresolved case can support a fallible arrest.
 
-    This is deliberately much stricter than an investigative resemblance.  It
-    combines a very strong, contradiction-free visual match with an almost
-    immediate encounter near the factual scene.  Passing it still does not
-    resolve identity: it only permits an institution to act on a provisional
-    inference which may be wrong.
+    Detention and conviction deliberately use different thresholds.  A nearby
+    person who mostly matches an actionable report can be detained on
+    reasonable suspicion; booking needs stronger corroboration.  Neither path
+    resolves canonical identity, and consistent misinformation can therefore
+    still produce a wrongful result.
     """
 
     result = {
         "eligible": False,
+        "detainable": False,
         "factual_incident": False,
         "age_ticks": None,
         "scene_distance": None,
@@ -407,7 +418,10 @@ def provisional_attribution_read(sim, case, actor_eid, *, match=None):
         "conflicting_cues": (),
         "contextual_cues": (),
         "evidence_strength": 0.0,
+        "adjudication_strength": 0.0,
         "convictable": False,
+        "detention_reasons": (),
+        "adjudication_reasons": (),
         "reasons": (),
     }
     if not isinstance(case, dict) or _text(case.get("status")).lower() != "unresolved":
@@ -495,12 +509,68 @@ def provisional_attribution_read(sim, case, actor_eid, *, match=None):
     result["reasons"] = tuple(reasons)
     result["eligible"] = not reasons
     result["evidence_strength"] = round(max(0.0, min(1.0, evidence_strength)), 3)
-    result["convictable"] = bool(
-        not reasons
-        and evidence_strength >= 0.88
-        and (independent_report_count >= 2 or bool(contextual_cues))
-    )
     result["independent_report_count"] = independent_report_count
+
+    detention_reasons = []
+    if severity < SUSPICION_MIN_SEVERITY:
+        detention_reasons.append("crime_not_serious_enough_for_detention")
+    if age_ticks > SUSPICION_MAX_AGE_TICKS:
+        detention_reasons.append("reported_suspect_no_longer_nearby_in_time")
+    if not same_level or distance > SUSPICION_MAX_SCENE_DISTANCE:
+        detention_reasons.append("reported_suspect_no_longer_nearby")
+    if score < SUSPICION_MIN_MATCH_SCORE:
+        detention_reasons.append("description_not_close_enough_for_suspicion")
+    if evidence_weight < SUSPICION_MIN_EVIDENCE_WEIGHT:
+        detention_reasons.append("description_too_sparse_for_suspicion")
+    if len(matched_cues) < SUSPICION_MIN_MATCHED_CUES:
+        detention_reasons.append("no_matching_description_cue")
+    if len(conflicting_cues) >= 2 or (conflicting_cues and score < 0.82):
+        detention_reasons.append("close_contact_materially_contradicts_report")
+    result["detention_reasons"] = tuple(detention_reasons)
+    result["detainable"] = not detention_reasons
+
+    authoritative_reporters = set()
+    for report in tuple(case.get("reports", ()) or ()):
+        if not isinstance(report, dict):
+            continue
+        account = report.get("subject_account") if isinstance(report.get("subject_account"), dict) else {}
+        description = account.get("description") if isinstance(account.get("description"), dict) else {}
+        observation = account.get("observation") if isinstance(account.get("observation"), dict) else {}
+        basis = _text(observation.get("description_basis")).lower()
+        if not description or not (
+            bool(observation.get("durable_visual_reference", False))
+            or basis in {"phone_photo", "expert_observation"}
+        ):
+            continue
+        reporter_eid = _int(report.get("reporter_eid"), -1)
+        authoritative_reporters.add(reporter_eid if reporter_eid > 0 else f"report:{len(authoritative_reporters)}")
+    authoritative_report_count = len(authoritative_reporters)
+    source_support = 1.0 if authoritative_report_count else 0.0
+    adjudication_strength = (
+        (score * 0.54)
+        + (evidence_weight * 0.24)
+        + (min(1.0, float(independent_report_count) / 2.0) * 0.12)
+        + (source_support * 0.10)
+    )
+    adjudication_reasons = []
+    if max(0, _int(case.get("report_conflict_count"), 0)) > 0:
+        adjudication_reasons.append("materially_conflicting_statements")
+    if score < ADJUDICATION_MIN_MATCH_SCORE:
+        adjudication_reasons.append("description_match_below_booking_threshold")
+    if evidence_weight < ADJUDICATION_MIN_EVIDENCE_WEIGHT:
+        adjudication_reasons.append("description_evidence_below_booking_threshold")
+    if len(matched_cues) < ADJUDICATION_MIN_MATCHED_CUES:
+        adjudication_reasons.append("too_few_booking_cues")
+    if conflicting_cues:
+        adjudication_reasons.append("booking_description_contradiction")
+    if independent_report_count < 2 and not contextual_cues and authoritative_report_count <= 0:
+        adjudication_reasons.append("uncorroborated_statement")
+    if adjudication_strength < ADJUDICATION_MIN_STRENGTH:
+        adjudication_reasons.append("insufficient_total_booking_evidence")
+    result["authoritative_report_count"] = authoritative_report_count
+    result["adjudication_strength"] = round(max(0.0, min(1.0, adjudication_strength)), 3)
+    result["adjudication_reasons"] = tuple(adjudication_reasons)
+    result["convictable"] = not adjudication_reasons
     return result
 
 
@@ -520,7 +590,7 @@ def record_provisional_justice_attribution(
     if not isinstance(case, dict):
         return None
     read = read if isinstance(read, dict) else provisional_attribution_read(sim, case, actor_eid, match=match)
-    if not bool(read.get("eligible", False)):
+    if not bool(read.get("detainable", read.get("eligible", False))):
         return None
     tick = _int(getattr(sim, "tick", 0), 0)
     actor_id = _int(actor_eid, -1)
@@ -535,7 +605,7 @@ def record_provisional_justice_attribution(
         "officer_eid": _int(officer_eid, -1),
         "status": "active",
         "disposition": _text(disposition).lower() or "provisional_suspect",
-        "basis": "fresh_scene_description_match",
+        "basis": "nearby_reported_description_match",
         "match": deepcopy(match) if isinstance(match, dict) else {},
         "read": deepcopy(read),
         "canonical_identity_resolved": False,

@@ -39,7 +39,7 @@ APPEARANCE_SLOT_METADATA_KEY = "appearance_slot"
 
 APPEARANCE_SLOTS = AppearanceLoadout.VALID_SLOTS
 BASEWEAR_SLOTS = AppearanceLoadout.BASEWEAR_SLOTS
-ALL_APPEARANCE_SLOTS = APPEARANCE_SLOTS + BASEWEAR_SLOTS
+ALL_APPEARANCE_SLOTS = tuple(dict.fromkeys(APPEARANCE_SLOTS + BASEWEAR_SLOTS))
 APPEARANCE_SLOT_LABELS = {
     "base_top": "Base top",
     "base_bottom": "Base bottom",
@@ -919,52 +919,101 @@ def _basewear_presentation_family(sim, eid):
 
 
 def ensure_player_basewear(sim, eid, *, loadout=None, seed_token=""):
+    """Issue the player's starter base garments as ordinary worn items once.
+
+    Older saves may still carry the former intrinsic profile dictionaries in
+    ``loadout.basewear``.  They enter the same inventory/equipment path here;
+    after that, removing, dropping, selling, and replacing basewear all use the
+    ordinary clothing rules.
+    """
+
     if not _is_player_appearance_owner(sim, eid):
         return {}
     if loadout is None:
         loadout = sim.ecs.get(AppearanceLoadout).get(eid)
     if loadout is None:
         return {}
-    basewear = AppearanceLoadout._clean_basewear(getattr(loadout, "basewear", None))
-    missing = [slot for slot in BASEWEAR_SLOTS if not isinstance(basewear.get(slot), dict) or not basewear.get(slot)]
-    if not missing:
-        loadout.basewear = basewear
-        return dict(basewear)
+    inventory = _inventory_for(sim, eid)
+    if inventory is None:
+        return {}
+
+    def _current_profiles():
+        profiles = {}
+        for current_slot in BASEWEAR_SLOTS:
+            instance_id = str(loadout.slots.get(current_slot) or "").strip()
+            entry = inventory.find(instance_id=instance_id) if instance_id else None
+            profile = appearance_metadata_for_entry(entry) if entry else {}
+            if profile:
+                profiles[current_slot] = {**dict(profile), "item_id": _key(entry.get("item_id"))}
+        return profiles
+
+    current = _current_profiles()
+    if bool(getattr(loadout, "basewear_initialized", False)):
+        return current
+
+    legacy = AppearanceLoadout._clean_basewear(getattr(loadout, "basewear", None))
 
     family = _basewear_presentation_family(sim, eid)
     pools = STARTER_BASEWEAR_POOLS.get(family, STARTER_BASEWEAR_POOLS["mixed"])
     rng = random.Random(f"player-basewear:{getattr(sim, 'seed', 0)}:{eid}:{family}:{seed_token}")
-    created = []
-    for slot in missing:
-        pool = tuple(pools.get(slot) or STARTER_BASEWEAR_POOLS["mixed"].get(slot) or ())
-        if not pool:
+    issued = dict(current)
+    pending = []
+    for slot in BASEWEAR_SLOTS:
+        if slot in issued:
             continue
-        item_id = rng.choice(pool)
-        metadata = cosmetic_variant_metadata(
-            item_id,
-            seed_token=f"starter-basewear:{getattr(sim, 'seed', 0)}:{eid}:{family}:{slot}:{seed_token}",
-            item_catalog=ITEM_CATALOG,
-            sim=sim,
-        )
-        if slot == "base_bottom" and isinstance(basewear.get("base_top"), dict) and rng.random() < 0.62:
-            metadata = _metadata_with_color(metadata, color=basewear["base_top"].get("color_word") or basewear["base_top"].get("color"))
-        state = _basewear_state_from_metadata(item_id, metadata, starter=True)
-        if state:
-            basewear[slot] = state
-            created.append(slot)
+        legacy_state = dict(legacy.get(slot) or {})
+        if legacy_state:
+            item_id = _key(legacy_state.get("item_id") or legacy_state.get("appearance_type"))
+            metadata = _basewear_loose_metadata(legacy_state)
+        else:
+            pool = tuple(pools.get(slot) or STARTER_BASEWEAR_POOLS["mixed"].get(slot) or ())
+            if not pool:
+                continue
+            item_id = rng.choice(pool)
+            metadata = cosmetic_variant_metadata(
+                item_id,
+                seed_token=f"starter-basewear:{getattr(sim, 'seed', 0)}:{eid}:{family}:{slot}:{seed_token}",
+                item_catalog=ITEM_CATALOG,
+                sim=sim,
+            )
+            metadata["starter_basewear"] = True
+            nested = dict(metadata.get(APPEARANCE_METADATA_KEY) or {})
+            nested["starter_basewear"] = True
+            metadata[APPEARANCE_METADATA_KEY] = nested
+        pending.append([slot, item_id, metadata])
 
-    if created and not any(
-        _key((basewear.get(slot) or {}).get("emblem"))
-        or bool((basewear.get(slot) or {}).get("flora_motif"))
-        for slot in BASEWEAR_SLOTS
+    if pending and not any(
+        _key(appearance_metadata_for_entry({"item_id": item_id, "metadata": metadata}).get("emblem"))
+        or bool(appearance_metadata_for_entry({"item_id": item_id, "metadata": metadata}).get("flora_motif"))
+        for _slot, item_id, metadata in pending
     ):
-        target_slot = "base_bottom" if isinstance(basewear.get("base_bottom"), dict) else created[-1]
-        target = dict(basewear.get(target_slot) or {})
-        target["emblem"] = rng.choice(BASEWEAR_EMBLEMS)
-        target["display_name"] = _title_words(_basewear_phrase(target))
-        basewear[target_slot] = target
-    loadout.basewear = AppearanceLoadout._clean_basewear(basewear)
-    return dict(loadout.basewear)
+        target = pending[-1]
+        target[2] = dict(target[2])
+        target[2]["emblem"] = rng.choice(BASEWEAR_EMBLEMS)
+        nested = dict(target[2].get(APPEARANCE_METADATA_KEY) or {})
+        nested["emblem"] = target[2]["emblem"]
+        target[2][APPEARANCE_METADATA_KEY] = nested
+
+    for slot, item_id, metadata in pending:
+        if not item_id:
+            continue
+        worn_metadata = _metadata_with_worn(metadata, worn=True, slot=slot)
+        added, instance_id = inventory.add_item(
+            item_id=item_id,
+            quantity=1,
+            stack_max=ITEM_CATALOG.get(item_id, {}).get("stack_max", 1),
+            instance_factory=sim.new_item_instance_id,
+            owner_eid=eid,
+            owner_tag="player",
+            metadata=worn_metadata,
+        )
+        if not added or not instance_id:
+            continue
+        loadout.slots[slot] = str(instance_id)
+
+    loadout.basewear = AppearanceLoadout._clean_basewear(None)
+    loadout.basewear_initialized = True
+    return _current_profiles()
 
 
 def player_basewear_profile(sim, eid, slot):
@@ -974,85 +1023,15 @@ def player_basewear_profile(sim, eid, slot):
     loadout = appearance_loadout_for(sim, eid, create=True)
     if loadout is None:
         return {}
-    return dict((getattr(loadout, "basewear", {}) or {}).get(slot) or {})
+    inventory = _inventory_for(sim, eid)
+    instance_id = str(loadout.slots.get(slot) or "").strip()
+    entry = inventory.find(instance_id=instance_id) if inventory is not None and instance_id else None
+    profile = appearance_metadata_for_entry(entry) if entry else {}
+    return {**dict(profile), "item_id": _key(entry.get("item_id"))} if profile else {}
 
 
 def replace_player_basewear(sim, eid, instance_id):
-    if not _is_player_appearance_owner(sim, eid):
-        return AppearanceEquipResult(False, reason="player_only")
-    loadout = appearance_loadout_for(sim, eid, create=True)
-    inventory, entry = _find_entry_by_instance(sim, eid, instance_id)
-    if loadout is None or inventory is None or entry is None:
-        return AppearanceEquipResult(False, reason="missing_item")
-    if not is_basewear_item(entry, item_catalog=ITEM_CATALOG):
-        return AppearanceEquipResult(False, reason="not_basewear")
-    incoming = _basewear_state_from_metadata(entry.get("item_id"), entry.get("metadata"), starter=False)
-    slot = _key(incoming.get("slot"))
-    if slot not in BASEWEAR_SLOTS:
-        return AppearanceEquipResult(False, reason="invalid_slot")
-    current = dict((getattr(loadout, "basewear", {}) or {}).get(slot) or {})
-    if not current:
-        ensure_player_basewear(sim, eid, loadout=loadout)
-        current = dict((getattr(loadout, "basewear", {}) or {}).get(slot) or {})
-    item_name = _display_name(sim, eid, entry)
-    removed = inventory.remove_item(instance_id=instance_id, quantity=1)
-    if not removed:
-        return AppearanceEquipResult(False, reason="remove_failed", slot=slot, item_name=item_name)
-
-    previous_item_id = _key(current.get("item_id") or current.get("appearance_type"))
-    previous_name = _text(current.get("display_name")) or _title_words(_basewear_phrase(current))
-    if previous_item_id in BASEWEAR_ITEM_IDS:
-        restored, _old_instance_id = inventory.add_item(
-            item_id=previous_item_id,
-            quantity=1,
-            stack_max=ITEM_CATALOG.get(previous_item_id, {}).get("stack_max", 1),
-            instance_factory=sim.new_item_instance_id,
-            owner_eid=eid,
-            owner_tag="player",
-            metadata=_basewear_loose_metadata(current),
-        )
-        if not restored:
-            inventory.add_item(
-                item_id=removed.get("item_id"),
-                quantity=removed.get("quantity", 1),
-                stack_max=ITEM_CATALOG.get(removed.get("item_id"), {}).get("stack_max", 1),
-                instance_id=removed.get("instance_id"),
-                owner_eid=removed.get("owner_eid"),
-                owner_tag=removed.get("owner_tag"),
-                metadata=removed.get("metadata"),
-            )
-            return AppearanceEquipResult(False, reason="pack_full", slot=slot, item_name=item_name)
-
-    loadout.basewear[slot] = incoming
-    record_cosmetic_popularity(
-        sim,
-        entry.get("item_id"),
-        removed.get("metadata"),
-        source="player",
-        source_token=f"basewear:{eid}",
-    )
-    sim.emit(Event(
-        "appearance_basewear_replaced",
-        eid=eid,
-        item_id=entry.get("item_id"),
-        instance_id=str(instance_id),
-        item_name=item_name,
-        slot=slot,
-        previous_item_id=previous_item_id,
-        previous_item_name=previous_name,
-    ))
-    sim.emit(Event(
-        "appearance_item_equipped",
-        eid=eid,
-        item_id=entry.get("item_id"),
-        instance_id=str(instance_id),
-        item_name=item_name,
-        slot=slot,
-        reason="basewear_replaced",
-        previous_item_id=previous_item_id,
-        previous_item_name=previous_name,
-    ))
-    return AppearanceEquipResult(True, action="replaced", slot=slot, item_name=item_name)
+    return equip_appearance_item(sim, eid, instance_id)
 
 
 def tattoo_service_metadata(*, seed_token="", prop=None):
@@ -1645,8 +1624,6 @@ def equip_appearance_item(sim, eid, instance_id, preferred_slot=None, *, record_
             return unequip_appearance_slot(sim, eid, slot)
     if not is_appearance_item(entry):
         return AppearanceEquipResult(False, reason="not_appearance_item", item_name=item_name)
-    if is_basewear_item(entry, item_catalog=ITEM_CATALOG):
-        return replace_player_basewear(sim, eid, instance_id)
 
     profile = appearance_metadata_for_entry(entry)
     slots = tuple(profile.get("slots", ()) or ())
@@ -1690,8 +1667,6 @@ def equip_appearance_item(sim, eid, instance_id, preferred_slot=None, *, record_
 
 def unequip_appearance_slot(sim, eid, slot):
     slot = _key(slot)
-    if slot in BASEWEAR_SLOTS:
-        return AppearanceEquipResult(False, reason="basewear_requires_replacement", slot=slot)
     loadout = appearance_loadout_for(sim, eid, create=False)
     if loadout is None or slot not in APPEARANCE_SLOTS:
         return AppearanceEquipResult(False, reason="invalid_slot", slot=slot)
@@ -1778,6 +1753,63 @@ def appearance_worn_instance_ids(sim, eid):
     if loadout is None:
         return set()
     return set(loadout.worn_instance_ids())
+
+
+def public_exposure_profile(sim, eid):
+    """Describe visible clothing coverage without inferring hidden garments."""
+
+    loadout = appearance_loadout_for(sim, eid, create=False)
+    if loadout is None:
+        return {
+            "level": "unknown",
+            "label": "clothing state unavailable",
+            "indecent": False,
+            "offense_score": 0,
+            "uncovered": (),
+            "visible_basewear": (),
+            "covered": {},
+            "basewear": {},
+        }
+    slots = dict(getattr(loadout, "slots", {}) or {}) if loadout is not None else {}
+    armor = sim.ecs.get(ArmorLoadout).get(eid) if sim is not None else None
+    body_armor = bool(
+        armor is not None
+        and getattr(armor, "equipped_instance_id", None)
+        and str(getattr(armor, "slot", "body") or "body").strip().lower() == "body"
+    )
+    full_body = bool(str(slots.get("full_body") or "").strip()) or body_armor
+    covered = {
+        "top": full_body or bool(str(slots.get("top") or "").strip()),
+        "bottom": full_body or bool(str(slots.get("bottom") or "").strip()),
+    }
+    base = {
+        "top": bool(str(slots.get("base_top") or "").strip()),
+        "bottom": bool(str(slots.get("base_bottom") or "").strip()),
+    }
+    uncovered = tuple(part for part in ("top", "bottom") if not covered[part] and not base[part])
+    visible_basewear = tuple(part for part in ("top", "bottom") if not covered[part] and base[part])
+    if uncovered:
+        level = "uncovered"
+        label = "partly or fully unclothed"
+        offense_score = 30
+    elif visible_basewear:
+        level = "basewear_only"
+        label = "wearing exposed basewear"
+        offense_score = 18
+    else:
+        level = "dressed"
+        label = "dressed"
+        offense_score = 0
+    return {
+        "level": level,
+        "label": label,
+        "indecent": level != "dressed",
+        "offense_score": offense_score,
+        "uncovered": uncovered,
+        "visible_basewear": visible_basewear,
+        "covered": dict(covered),
+        "basewear": dict(base),
+    }
 
 
 def _indefinite_article_phrase(text):
@@ -2339,11 +2371,6 @@ def appearance_slot_rows(sim, eid):
     for slot in APPEARANCE_SLOT_ORDER:
         label = APPEARANCE_SLOT_LABELS.get(slot, slot.replace("_", " ").title())
         value = "empty"
-        if slot in BASEWEAR_SLOTS:
-            state = dict((getattr(loadout, "basewear", {}) or {}).get(slot) or {})
-            value = _text(state.get("display_name")) or (_title_words(_basewear_phrase(state)) if state else "protected fallback")
-            rows.append(f"{label}: {value} (replace only)")
-            continue
         instance_id = str(loadout.slots.get(slot) or "").strip()
         if instance_id and inventory is not None:
             entry = inventory.find(instance_id=instance_id)
@@ -2467,8 +2494,8 @@ def _appearance_render_color_part(sim, eid, slot):
     }
 
 
-def _basewear_render_color_part(loadout, slot):
-    state = dict((getattr(loadout, "basewear", {}) or {}).get(slot) or {}) if loadout is not None else {}
+def _basewear_render_color_part(sim, eid, slot):
+    state = player_basewear_profile(sim, eid, slot)
     if not state:
         return None
     word = _key(state.get("color_word") or state.get("color"))
@@ -2540,8 +2567,8 @@ def appearance_render_colors(sim, eid):
             eid,
             ("necklace", "bracelet", "ring_left", "ring_right", "earrings"),
         ),
-        "base_top": _basewear_render_color_part(loadout, "base_top"),
-        "base_bottom": _basewear_render_color_part(loadout, "base_bottom"),
+        "base_top": _basewear_render_color_part(sim, eid, "base_top"),
+        "base_bottom": _basewear_render_color_part(sim, eid, "base_bottom"),
     }
     for role, part in parts.items():
         if not part:

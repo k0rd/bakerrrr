@@ -38,6 +38,7 @@ from game.appearance_loadout import (
     equip_appearance_item,
     is_appearance_item,
     mark_inventory_instance_worn,
+    player_basewear_profile,
     seed_player_starting_outfit,
     stow_cosmetic_outer_for_armor,
 )
@@ -1465,9 +1466,9 @@ def bootstrap_normal_run(
     )
     player_appearance = sim.ecs.get(AppearanceLoadout).get(player)
     starter_basewear = {
-        str(slot): dict(profile)
-        for slot, profile in dict(getattr(player_appearance, "basewear", {}) or {}).items()
-        if isinstance(profile, dict) and profile
+        str(slot): dict(basewear_profile)
+        for slot in ("base_top", "base_bottom")
+        if (basewear_profile := player_basewear_profile(sim, player, slot))
     }
 
     starter_loadout_id = _pick_normal_start_loadout(profile, run_rng)

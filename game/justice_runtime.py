@@ -31,6 +31,7 @@ INCIDENT_REPEAT_COOLDOWNS = {
     "homicide": 28,
     "hunting_violation": 16,
     "protected_species_violation": 24,
+    "indecent_exposure": 14,
 }
 
 INCIDENT_LABELS = {
@@ -48,6 +49,7 @@ INCIDENT_LABELS = {
     "homicide": "homicide",
     "hunting_violation": "hunting violation",
     "protected_species_violation": "protected-species hunting",
+    "indecent_exposure": "indecent exposure",
 }
 
 
@@ -713,6 +715,8 @@ def _incident_weight(incident_type, *, severity=0, witnessed=False):
         return min(18, 9 + (severity // 16) + witnessed_bonus)
     if incident_type == "contraband":
         return min(16, 7 + (severity // 14) + witnessed_bonus)
+    if incident_type == "indecent_exposure":
+        return min(12, 4 + (severity // 18) + witnessed_bonus)
     if incident_type == "obstruction":
         return min(14, 5 + (severity // 18) + witnessed_bonus)
     if incident_type == "failure_to_identify":
@@ -766,6 +770,7 @@ def record_incident(
     source_case_id=None,
     source_incident_id=None,
     attribution_basis="",
+    repeat_scope="",
 ):
     state = _state(sim)
     record = _offender_record(state, offender_eid, create=True)
@@ -783,7 +788,7 @@ def record_incident(
 
     jurisdiction = jurisdiction_for_position(sim, x=x, y=y)
     source_key = _text(source_event).lower() or incident_type
-    repeat_scope = _text(source_case_id).lower() or _text(property_id).lower() or jurisdiction["key"]
+    repeat_scope = _text(repeat_scope).lower() or _text(source_case_id).lower() or _text(property_id).lower() or jurisdiction["key"]
     recent_key = f"{incident_type}:{source_key}:{repeat_scope}"
     cooldown = int(INCIDENT_REPEAT_COOLDOWNS.get(incident_type, 12))
     last_tick = _safe_int(record.get("recent_keys", {}).get(recent_key), default=-10_000)
@@ -821,6 +826,7 @@ def record_incident(
         "source_case_id": _text(source_case_id),
         "source_incident_id": _safe_int(source_incident_id, default=0) or None,
         "attribution_basis": _text(attribution_basis).lower(),
+        "repeat_scope": repeat_scope,
         "active_contribution": max(0, int(after_score) - int(before_score)),
         "legal_status": "provisional" if bool(provisional) else "active",
     }

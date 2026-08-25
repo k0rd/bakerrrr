@@ -1517,7 +1517,7 @@ class RenderSystem(System):
             break
         return visible_lines
 
-    def _draw(self, x, y, glyph, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None, light_tint=None):
+    def _draw(self, x, y, glyph, color=None, color_word=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None, light_tint=None, visual_source=None):
         kwargs = {"attrs": int(attrs or 0)}
         if color is not None:
             kwargs["color"] = color
@@ -1535,6 +1535,8 @@ class RenderSystem(System):
             kwargs["priority"] = int(priority)
         if isinstance(light_tint, dict) and light_tint:
             kwargs["light_tint"] = light_tint
+        if visual_source is not None and hasattr(self.view, "pygame"):
+            kwargs["visual_source"] = tuple(visual_source)
         try:
             self.view.draw(x, y, glyph, **kwargs)
             return
@@ -1561,7 +1563,7 @@ class RenderSystem(System):
         except TypeError:
             self.view.draw(x, y, glyph)
 
-    def _draw_appearance(self, x, y, appearance, attrs=0, light_tint=None):
+    def _draw_appearance(self, x, y, appearance, attrs=0, light_tint=None, visual_source=None):
         if not appearance or not bool(getattr(appearance, "visible", True)):
             return
         self._draw(
@@ -1577,6 +1579,7 @@ class RenderSystem(System):
             layer=getattr(appearance, "layer", None),
             priority=getattr(appearance, "priority", None),
             light_tint=light_tint,
+            visual_source=visual_source,
         )
 
     def _draw_vision_scene(self, scene, screen_w, screen_h):
@@ -3878,7 +3881,13 @@ class RenderSystem(System):
                             layer="terrain",
                             priority=-1000,
                         )
-                    self._draw_appearance(sx, sy, appearance, attrs=attrs)
+                    self._draw_appearance(
+                        sx,
+                        sy,
+                        appearance,
+                        attrs=attrs,
+                        visual_source=(wx, wy, active_z),
+                    )
                     if visible_now:
                         hallucination = None
                         if tile_hallucination_intensity > 0.0:
@@ -3943,6 +3952,7 @@ class RenderSystem(System):
                     appearance,
                     attrs=attrs,
                     light_tint=_surface_light_tint(wx, wy, active_z),
+                    visual_source=(wx, wy, active_z),
                 )
 
             active_quest_target = active_final_operation_target_property_id(self.sim)

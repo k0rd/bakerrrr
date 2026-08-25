@@ -1146,6 +1146,7 @@ class IncidentKnowledgeSystem(System):
             "bounty_authority_exclusions",
             "bounty_authority_evaluated_tick",
             "related_incident_id",
+            "exposure_observer_eid",
         ):
             value = event.data.get(field)
             if value not in (None, "", ()):
@@ -1452,11 +1453,16 @@ class IncidentKnowledgeSystem(System):
                 or (context not in WILDLIFE_OFFENSE_CONTEXTS and offense_score >= 24)
             )
         )
+        exposure_observer_eid = event.data.get("exposure_observer_eid")
         incident = self._create_incident(
             event,
             kind="action_offense",
             severity=offense_score,
-            merge_subject=f"{action}:{context}",
+            merge_subject=(
+                f"{action}:{context}:observer:{int(exposure_observer_eid)}"
+                if context == "indecent_exposure" and exposure_observer_eid is not None
+                else f"{action}:{context}"
+            ),
             official_reportable=official_reportable,
             note=f"{action}/{context}",
             tags=(context, action, event.data.get("offense_tier")),

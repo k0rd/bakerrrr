@@ -81,6 +81,7 @@ from game.system_support.offense_runtime import (
     ASSAULT_OFFENSE_CONTEXTS,
     CIVIC_WILDLIFE_OFFENSE_CONTEXTS,
     OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS,
+    PUBLIC_ORDER_OFFENSE_CONTEXTS,
     VIOLENT_OFFENSE_CONTEXTS,
     WITNESS_TAMPERING_OFFENSE_CONTEXTS,
     _emit_action_offense_event,
@@ -125,6 +126,7 @@ from game.justice_identity_runtime import (
     justice_case_for_incident,
     justice_case_recently_checked,
     justice_case_event_payload,
+    justice_identity_state,
     provisional_attribution_read,
     record_justice_case_encounter,
     record_justice_identity_report,
@@ -347,6 +349,7 @@ class CriminalJusticeSystem(System):
         "wanted": 3.0,
         "arrest_on_sight": 6.0,
     }
+    EXONERATED_BOOKING_REVIEW_HOURS = 0.5
     NPC_BOOKING_HOURS_BY_TIER = {
         "wanted": 4.0,
         "arrest_on_sight": 8.0,
@@ -377,6 +380,7 @@ class CriminalJusticeSystem(System):
         self.sim.events.subscribe("justice_case_canvas_choice", self.on_justice_case_canvas_choice)
         self.sim.events.subscribe("justice_report_candidate_contact", self.on_justice_report_candidate_contact)
         self.sim.events.subscribe("justice_case_canvas_contact", self.on_justice_case_canvas_contact)
+        self.sim.events.subscribe("actor_detained", self.on_actor_detained_case_correction)
 
     def _emit_change_events(self, change, *, source_event="", reason=""):
         if not isinstance(change, dict):
@@ -560,6 +564,7 @@ class CriminalJusticeSystem(System):
         source_case_id=None,
         source_incident_id=None,
         attribution_basis="",
+        repeat_scope="",
     ):
         change = _record_justice_incident(
             self.sim,
@@ -576,6 +581,7 @@ class CriminalJusticeSystem(System):
             source_case_id=source_case_id,
             source_incident_id=source_incident_id,
             attribution_basis=attribution_basis,
+            repeat_scope=repeat_scope,
         )
         if change is not None:
             self._emit_change_events(change, source_event=source_event, reason=incident_type)
@@ -1396,6 +1402,7 @@ class CriminalJusticeSystem(System):
                 *VIOLENT_OFFENSE_CONTEXTS,
                 *CIVIC_WILDLIFE_OFFENSE_CONTEXTS,
                 *WITNESS_TAMPERING_OFFENSE_CONTEXTS,
+                *PUBLIC_ORDER_OFFENSE_CONTEXTS,
             }:
                 return None
             if context in VIOLENT_OFFENSE_CONTEXTS:
@@ -1418,6 +1425,7 @@ class CriminalJusticeSystem(System):
             "trespass", "tamper", "theft", "contraband", "unarmed_assault", "melee_assault",
             "armed_assault", "explosive_discharge", "homicide", "hunting_violation", "protected_species_violation",
             "witness_intimidation", "witness_bribery",
+            "indecent_exposure",
         }:
             return None
         return profile
@@ -1463,7 +1471,7 @@ class CriminalJusticeSystem(System):
             provisional=True,
             source_case_id=case.get("case_id"),
             source_incident_id=case.get("incident_id"),
-            attribution_basis="fresh_scene_description_match",
+            attribution_basis="nearby_reported_description_match",
         )
         attribution["justice_record_created"] = change is not None
         attribution["justice_change"] = dict(change) if isinstance(change, dict) else None
@@ -1574,6 +1582,109 @@ class CriminalJusticeSystem(System):
         incident = change.get("incident") if isinstance(change.get("incident"), dict) else None
         if isinstance(incident, dict):
             incident["active_contribution"] = int(residual)
+
+    def _booking_provisional_adjudication(self, case, attribution, inspection):
+        """Decide a fallible case at booking without resolving hidden identity."""
+
+        if not isinstance(case, dict) or not isinstance(attribution, dict):
+            return {
+                "applicable": False,
+                "status": "ordinary_booking",
+                "convicted": True,
+                "exonerated": False,
+                "strength": 1.0,
+                "reasons": (),
+            }
+        match = attribution.get("match") if isinstance(attribution.get("match"), dict) else {}
+        read = provisional_attribution_read(
+            self.sim,
+            case,
+            self.player_eid,
+            match=match,
+        )
+        counts = inspection.get("counts") if isinstance((inspection or {}).get("counts"), dict) else {}
+        profile = case.get("provisional_crime_profile") if isinstance(case.get("provisional_crime_profile"), dict) else {}
+        incident_type = str(profile.get("incident_type", "") or "").strip().lower()
+        incident_evidence = max(0, int(counts.get("incident_evidence", 0) or 0))
+        stolen_evidence = max(0, int(counts.get("reported_stolen", 0) or 0)) if incident_type == "theft" else 0
+        physical_evidence_count = incident_evidence + stolen_evidence
+        conflicts = tuple(read.get("conflicting_cues", ()) or ())
+        physical_support = bool(
+            physical_evidence_count > 0
+            and float(read.get("match_score", 0.0) or 0.0) >= 0.70
+            and len(conflicts) < 2
+        )
+        strength = max(
+            float(read.get("adjudication_strength", 0.0) or 0.0),
+            0.86 if physical_support else 0.0,
+        )
+        convicted = bool(read.get("convictable", False) or physical_support)
+        reasons = list(tuple(read.get("adjudication_reasons", ()) or ()))
+        if physical_support:
+            reasons = ["incident_specific_physical_evidence"]
+        status = "convicted_on_booking_evidence" if convicted else "exonerated_at_booking_review"
+        attribution["booking_read"] = deepcopy(read)
+        attribution["booking_physical_evidence_count"] = int(physical_evidence_count)
+        attribution["adjudication_strength"] = round(float(strength), 3)
+        attribution["adjudication_status"] = status
+        attribution["adjudication_tick"] = int(getattr(self.sim, "tick", 0) or 0)
+        legal_change = None
+        if convicted:
+            attribution["punishment_status"] = "convicted_at_booking"
+            convictions = list(case.get("evidentiary_convictions", ()) or ())
+            if not any(
+                isinstance(row, dict)
+                and int(row.get("actor_eid", -1) or -1) == int(self.player_eid)
+                and str(row.get("status", "active") or "active").strip().lower() == "active"
+                for row in convictions
+            ):
+                convictions.append({
+                    "tick": int(getattr(self.sim, "tick", 0) or 0),
+                    "actor_eid": int(self.player_eid),
+                    "officer_eid": int(attribution.get("officer_eid", -1) or -1),
+                    "evidence_strength": round(float(strength), 3),
+                    "wrongful_risk": True,
+                    "status": "active",
+                })
+                case["evidentiary_convictions"] = convictions[-12:]
+        else:
+            legal_change = _exonerate_provisional_justice_case(
+                self.sim,
+                self.player_eid,
+                case.get("case_id"),
+            )
+            attribution["status"] = "exonerated_at_booking"
+            attribution["punishment_status"] = "exonerated_at_booking"
+            case["provisional_status"] = "exonerated_at_booking"
+            self.pending_detentions.pop(int(self.player_eid), None)
+            if isinstance(legal_change, dict):
+                self._emit_change_events(
+                    legal_change,
+                    source_event="justice_booking_adjudication",
+                    reason="booking_exoneration",
+                )
+        case["updated_tick"] = int(getattr(self.sim, "tick", 0) or 0)
+        result = {
+            "applicable": True,
+            "status": status,
+            "convicted": convicted,
+            "exonerated": not convicted,
+            "strength": round(float(strength), 3),
+            "reasons": tuple(reasons),
+            "physical_evidence_count": int(physical_evidence_count),
+            "legal_change": legal_change,
+        }
+        self.sim.emit(Event(
+            "justice_booking_adjudicated",
+            eid=self.player_eid,
+            officer_eid=attribution.get("officer_eid"),
+            case_id=case.get("case_id"),
+            incident_id=case.get("incident_id"),
+            canonical_identity_resolved=False,
+            wrongful_risk=bool(convicted),
+            **{key: value for key, value in result.items() if key != "legal_change"},
+        ))
+        return result
 
     def _refund_player_exoneration(self, attribution):
         financial = attribution.get("financial_outcome") if isinstance((attribution or {}).get("financial_outcome"), dict) else {}
@@ -1817,15 +1928,55 @@ class CriminalJusticeSystem(System):
             applied += 1
         return applied
 
+    def _actual_offender_secured_for_case(self, case):
+        """Require physical custody before a conviction can be overturned."""
+
+        if not isinstance(case, dict):
+            return False
+        actual_eid = case.get("resolved_subject_eid")
+        try:
+            actual_eid = int(actual_eid)
+        except (TypeError, ValueError):
+            return False
+        snapshot = _justice_snapshot(self.sim, actual_eid)
+        if bool(snapshot.get("in_custody", False)):
+            return True
+        custody = self._npc_custody_records().get(str(actual_eid))
+        return bool(isinstance(custody, dict) and custody.get("active", False))
+
+    def on_actor_detained_case_correction(self, event):
+        """Revisit only cases whose newly proven offender was just secured."""
+
+        try:
+            detained_eid = int(event.data.get("eid"))
+        except (TypeError, ValueError):
+            return
+        for case in tuple(justice_identity_state(self.sim).get("cases", {}).values()):
+            if not isinstance(case, dict):
+                continue
+            try:
+                actual_eid = int(case.get("resolved_subject_eid"))
+            except (TypeError, ValueError):
+                continue
+            if actual_eid != detained_eid:
+                continue
+            self._resolve_case_provisional_aftermath(case)
+
     def _resolve_case_provisional_aftermath(self, case):
         if not isinstance(case, dict) or not bool(case.get("misidentification_confirmed", False)):
+            return ()
+        if not self._actual_offender_secured_for_case(case):
+            case["correction_status"] = "pending_actual_offender_capture"
             return ()
         outcomes = []
         tick = int(getattr(self.sim, "tick", 0) or 0)
         for attribution in tuple(case.get("provisional_attributions", ()) or ()):
             if not isinstance(attribution, dict):
                 continue
-            if str(attribution.get("status", "") or "").strip().lower() != "misidentified":
+            if str(attribution.get("status", "") or "").strip().lower() not in {
+                "misidentified",
+                "misidentified_pending_capture",
+            }:
                 continue
             if bool(attribution.get("correction_applied", False)):
                 continue
@@ -1937,6 +2088,8 @@ class CriminalJusticeSystem(System):
                 **finance,
             }
             attribution["correction_applied"] = True
+            attribution["status"] = "misidentified"
+            attribution["adjudication_status"] = "conviction_overturned_after_actual_offender_capture"
             attribution["correction_tick"] = tick
             attribution["correction_outcome"] = dict(outcome)
             attribution["punishment_status"] = "exonerated_after_misidentification"
@@ -1958,6 +2111,14 @@ class CriminalJusticeSystem(System):
         case["correction_outcomes"] = list(case.get("correction_outcomes", ()) or ()) + outcomes
         case["correction_status"] = "complete" if outcomes else case.get("correction_status", "pending")
         if outcomes:
+            corrected_eids = {int(row.get("actor_eid", -1) or -1) for row in outcomes}
+            for conviction in tuple(case.get("evidentiary_convictions", ()) or ()):
+                if not isinstance(conviction, dict):
+                    continue
+                if int(conviction.get("actor_eid", -1) or -1) not in corrected_eids:
+                    continue
+                conviction["status"] = "overturned_after_actual_offender_capture"
+                conviction["overturned_tick"] = tick
             case["correction_completed_tick"] = tick
             case["updated_tick"] = tick
         return tuple(outcomes)
@@ -3557,7 +3718,7 @@ class CriminalJusticeSystem(System):
             return
 
         change = None
-        if bool(read.get("eligible", False)):
+        if bool(read.get("detainable", read.get("eligible", False))):
             disposition = "evidence_supported_conviction" if bool(read.get("convictable", False)) else "investigator_scene_attribution"
             change = self._record_provisional_attribution_consequence(
                 case,
@@ -3573,6 +3734,8 @@ class CriminalJusticeSystem(System):
             candidate_eid=candidate_eid,
             incident_id=incident_id,
             evidence_strength=float(read.get("evidence_strength", 0.0) or 0.0),
+            suspicion_supported=bool(read.get("detainable", False)),
+            conviction_supported=bool(read.get("convictable", False)),
             detained=isinstance(change, dict),
         ))
         self._finish_received_report_search(
@@ -4053,28 +4216,29 @@ class CriminalJusticeSystem(System):
                     accepted=False,
                 )
 
-        eligible = bool(provisional_read.get("eligible", False)) and isinstance(case, dict)
+        detainable = bool(
+            provisional_read.get("detainable", provisional_read.get("eligible", False))
+        ) and isinstance(case, dict)
         explanation_succeeded = False
-        if eligible and choice == "explain":
+        if detainable and choice == "explain" and not bool(provisional_read.get("convictable", False)):
             skill_defense = 0.72 + float(self._questioning_skill_bonus("explain"))
             scene_distance = provisional_read.get("scene_distance")
             age_ticks = provisional_read.get("age_ticks")
-            scene_distance = 6.0 if scene_distance is None else float(scene_distance)
-            age_ticks = 24.0 if age_ticks is None else float(age_ticks)
-            proximity = max(0.0, 1.0 - (scene_distance / 6.0))
-            freshness = max(0.0, 1.0 - (age_ticks / 24.0))
+            scene_distance = 12.0 if scene_distance is None else float(scene_distance)
+            age_ticks = 240.0 if age_ticks is None else float(age_ticks)
+            proximity = max(0.0, 1.0 - (scene_distance / 12.0))
+            freshness = max(0.0, 1.0 - (age_ticks / 240.0))
             evidence_pressure = (
-                0.77
-                + max(0.0, float(provisional_read.get("match_score", 0.92) or 0.92) - 0.92) * 0.5
-                + proximity * 0.04
-                + freshness * 0.03
+                0.68
+                + max(0.0, float(provisional_read.get("match_score", 0.70) or 0.70) - 0.70) * 0.34
+                + proximity * 0.025
+                + freshness * 0.02
             )
             explanation_succeeded = skill_defense >= evidence_pressure
-        provisional_punishment = bool(eligible and not explanation_succeeded and not deception_succeeded)
+        provisional_punishment = bool(detainable and not explanation_succeeded and not deception_succeeded)
         identity_refusal_offense = bool(
             choice == "decline"
             and bool(prompt.get("formal_identity_demand", False))
-            and not provisional_punishment
         )
         obstruction_offense = bool(deception_attempted and not deception_succeeded)
         if deception_attempted:
@@ -4087,7 +4251,9 @@ class CriminalJusticeSystem(System):
             )
         else:
             outcome = (
-                "provisionally_attributed_for_booking"
+                "refusal_and_suspicion_detention"
+                if provisional_punishment and identity_refusal_offense
+                else "provisionally_attributed_for_booking"
                 if provisional_punishment
                 else "failure_to_identify_recorded"
                 if identity_refusal_offense
@@ -4166,7 +4332,10 @@ class CriminalJusticeSystem(System):
                 )
                 for row in reversed(tuple(case.get("provisional_attributions", ()) or ())):
                     if isinstance(row, dict) and row.get("actor_eid") == self.player_eid:
-                        row["punishment_status"] = "booked" if booked else "justice_record_active"
+                        if str(row.get("adjudication_status", "") or "").strip().lower() == "exonerated_at_booking_review":
+                            row["punishment_status"] = "exonerated_at_booking"
+                        else:
+                            row["punishment_status"] = "booked" if booked else "justice_record_active"
                         break
                 return bool(booked or provisional_change)
         casework_kind = str(prompt.get("casework_kind", "") or "").strip().lower()
@@ -4715,18 +4884,20 @@ class CriminalJusticeSystem(System):
                     ai,
                     will,
                     self.sim.tick,
-                    "protecting",
+                    "investigating",
                     score=86.0,
                     target=target,
                     target_eid=self.player_eid,
                 )
+                ai.response_role = "justice_detention"
                 continue
             if ai is not None:
-                ai.state = "protecting"
+                ai.state = "investigating"
                 ai.target = target
                 ai.target_eid = self.player_eid
+                ai.response_role = "justice_detention"
             if will is not None:
-                will.intent = "protecting"
+                will.intent = "investigating"
                 will.score = 86.0
                 will.target = target
                 will.target_eid = self.player_eid
@@ -6069,6 +6240,22 @@ class CriminalJusticeSystem(System):
         player_pos = self._position_for(self.player_eid)
         if snapshot is None or player_pos is None:
             return False
+        initial_snapshot = dict(snapshot)
+        inspection = inspection if isinstance(inspection, dict) else self._inspect_actor_inventory(
+            self.player_eid,
+            update_inventory=True,
+            inspector_eid=by_eid,
+        )
+        adjudication = self._booking_provisional_adjudication(
+            provisional_case,
+            provisional_attribution,
+            inspection,
+        )
+        penalty_snapshot = (
+            _justice_snapshot(self.sim, self.player_eid)
+            if bool(adjudication.get("exonerated", False))
+            else snapshot
+        )
         if self._player_surrender_prompt_open():
             self._close_player_surrender_prompt()
 
@@ -6118,11 +6305,6 @@ class CriminalJusticeSystem(System):
             reason="justice_booking",
         )
 
-        inspection = inspection if isinstance(inspection, dict) else self._inspect_actor_inventory(
-            self.player_eid,
-            update_inventory=True,
-            inspector_eid=by_eid,
-        )
         counts = inspection.get("counts", {}) if isinstance(inspection, dict) else {}
         match_labels = self._inspection_match_labels(inspection)
         match_reasons = self._inspection_match_reasons(inspection)
@@ -6130,8 +6312,8 @@ class CriminalJusticeSystem(System):
         stolen_intent_counts = dict(inspection.get("stolen_intent_counts", {}) or {}) if isinstance(inspection, dict) else {}
         force_context = self._force_event_payload(self.player_eid)
         evidence_surcharge = int(self._inspection_evidence_surcharge(inspection))
-        homicide_surcharge = int(self._player_homicide_surcharge(snapshot))
-        homicide_count = int(max(0, snapshot.get("homicide_count", 0) or 0))
+        homicide_surcharge = int(self._player_homicide_surcharge(penalty_snapshot))
+        homicide_count = int(max(0, penalty_snapshot.get("homicide_count", 0) or 0))
         protective = (
             local_protective_pressure_snapshot(
                 self.sim,
@@ -6151,20 +6333,29 @@ class CriminalJusticeSystem(System):
         elif jumpsuit_issue:
             confiscation["booking_jumpsuit_issue_failed"] = True
             confiscation["booking_jumpsuit_issue_reason"] = jumpsuit_issue.get("reason")
-        fine_due = int(self._player_fine_amount(snapshot)) + int(evidence_surcharge)
-        restitution_due = int(snapshot.get("restitution_due", 0) or 0)
-        restitution_property_count = int(snapshot.get("restitution_property_count", 0) or 0)
+        fine_due = (
+            int(self._player_fine_amount(penalty_snapshot)) + int(evidence_surcharge)
+            if int(penalty_snapshot.get("active_score", 0) or 0) >= 6
+            else 0
+        )
+        restitution_due = int(penalty_snapshot.get("restitution_due", 0) or 0)
+        restitution_property_count = int(penalty_snapshot.get("restitution_property_count", 0) or 0)
         fine_result = self._collect_player_fine(fine_due)
         penalty_breakdown = self._player_penalty_breakdown(
-            snapshot,
+            penalty_snapshot,
             fine_due=fine_due,
             fine_result=fine_result,
             evidence_surcharge=evidence_surcharge,
             multiplier=1.0,
             disposition="booking",
         )
+        hold_hours = (
+            float(self.EXONERATED_BOOKING_REVIEW_HOURS)
+            if bool(adjudication.get("exonerated", False))
+            else float(self.BOOKING_HOURS_BY_TIER.get(starting_tier, 1.0))
+        )
         hold_ticks = self._advance_time_for_booking(
-            self._hours_to_ticks(self.BOOKING_HOURS_BY_TIER.get(starting_tier, 1.0)),
+            self._hours_to_ticks(hold_hours),
             property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
             property_name=(booking_prop or {}).get("name", "Justice Office") if isinstance(booking_prop, dict) else "Justice Office",
             held_by_eid=by_eid,
@@ -6172,7 +6363,7 @@ class CriminalJusticeSystem(System):
         release_change = _release_justice_from_custody(
             self.sim,
             self.player_eid,
-            new_score=self._booking_release_score(snapshot),
+            new_score=self._booking_release_score(penalty_snapshot),
             x=booking_x,
             y=booking_y,
         )
@@ -6193,7 +6384,7 @@ class CriminalJusticeSystem(System):
         self._record_player_provisional_booking_outcome(
             provisional_case,
             provisional_attribution,
-            snapshot=snapshot,
+            snapshot=initial_snapshot,
             hold_ticks=hold_ticks,
             fine_due=fine_due,
             fine_result=fine_result,
@@ -6211,7 +6402,7 @@ class CriminalJusticeSystem(System):
             hold_hours=round(float(hold_ticks) / float(self._ticks_per_hour()), 2) if hold_ticks > 0 else 0.0,
             before_tier=starting_tier,
             after_tier=str((release_change or {}).get("after_tier", "clear")).strip().lower() or "clear",
-            before_score=int(snapshot.get("active_score", 0) or 0),
+            before_score=int(initial_snapshot.get("active_score", 0) or 0),
             after_score=int((release_change or {}).get("after_score", 0) or 0),
             fine_due=int(fine_due),
             restitution_due=int(restitution_due),
@@ -6248,6 +6439,11 @@ class CriminalJusticeSystem(System):
             inspected_latent_claim_count=int(counts.get("latent_claim_violation", 0) or 0),
             inspected_reported_stolen_count=int(counts.get("reported_stolen", 0) or 0),
             inspected_incident_evidence_count=int(counts.get("incident_evidence", 0) or 0),
+            adjudication_status=str(adjudication.get("status", "ordinary_booking") or "ordinary_booking"),
+            adjudication_strength=float(adjudication.get("strength", 0.0) or 0.0),
+            adjudication_reasons=tuple(adjudication.get("reasons", ()) or ()),
+            booking_exonerated=bool(adjudication.get("exonerated", False)),
+            canonical_identity_resolved=False if bool(adjudication.get("applicable", False)) else None,
             questioning_disposition=str(questioning_disposition or "").strip().lower(),
             incident_match_labels=match_labels,
             incident_match_reasons=match_reasons,
@@ -6280,19 +6476,24 @@ class CriminalJusticeSystem(System):
             y=booking_y,
             z=booking_z,
         ))
+        result_lines = self._booking_result_lines(
+            booking_prop=booking_prop,
+            hold_ticks=hold_ticks,
+            fine_due=fine_due,
+            fine_result=fine_result,
+            penalty_breakdown=penalty_breakdown,
+            confiscation=confiscation,
+            restitution_due=restitution_due,
+            restitution_property_count=restitution_property_count,
+            evidence_surcharge=evidence_surcharge,
+        )
+        if bool(adjudication.get("exonerated", False)):
+            result_lines.insert(1, "Booking review did not support the reported charge. You are released from that allegation.")
+        elif bool(adjudication.get("applicable", False)):
+            result_lines.insert(1, "Witness statements and available evidence support a conviction on the reported charge.")
         self._present_justice_result(
-            "Booking Complete",
-            self._booking_result_lines(
-                booking_prop=booking_prop,
-                hold_ticks=hold_ticks,
-                fine_due=fine_due,
-                fine_result=fine_result,
-                penalty_breakdown=penalty_breakdown,
-                confiscation=confiscation,
-                restitution_due=restitution_due,
-                restitution_property_count=restitution_property_count,
-                evidence_surcharge=evidence_surcharge,
-            ),
+            "Released After Booking Review" if bool(adjudication.get("exonerated", False)) else "Booking Complete",
+            result_lines,
             property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
             subtitle=str((booking_prop or {}).get("name", "Justice Office") if isinstance(booking_prop, dict) else "Justice Office").strip() or "Justice Office",
         )
@@ -6923,6 +7124,7 @@ class CriminalJusticeSystem(System):
             *VIOLENT_OFFENSE_CONTEXTS,
             *CIVIC_WILDLIFE_OFFENSE_CONTEXTS,
             *WITNESS_TAMPERING_OFFENSE_CONTEXTS,
+            *PUBLIC_ORDER_OFFENSE_CONTEXTS,
         }:
             return
         observation = self._event_accountability(event, offender_eid=offender_eid)
@@ -6997,6 +7199,11 @@ class CriminalJusticeSystem(System):
             y=event.data.get("y"),
             witnessed=True,
             note=f"{str(event.data.get('action', 'action') or '').strip().lower()}/{context}/{(force_read or {}).get('force_context', '')}".strip("/"),
+            repeat_scope=(
+                f"observer:{int(event.data.get('exposure_observer_eid'))}"
+                if context in PUBLIC_ORDER_OFFENSE_CONTEXTS and event.data.get("exposure_observer_eid") is not None
+                else ""
+            ),
         )
         if change is not None:
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
@@ -7326,6 +7533,7 @@ class CriminalJusticeSystem(System):
                 *VIOLENT_OFFENSE_CONTEXTS,
                 *CIVIC_WILDLIFE_OFFENSE_CONTEXTS,
                 *WITNESS_TAMPERING_OFFENSE_CONTEXTS,
+                *PUBLIC_ORDER_OFFENSE_CONTEXTS,
             }:
                 return
             force_read = None
@@ -7361,6 +7569,11 @@ class CriminalJusticeSystem(System):
                 y=incident.get("y"),
                 witnessed=True,
                 note=f"{str(incident.get('action', 'action') or '').strip().lower()}/{context}/{(force_read or {}).get('force_context', '')}".strip("/"),
+                repeat_scope=(
+                    f"observer:{int(incident.get('exposure_observer_eid'))}"
+                    if context in PUBLIC_ORDER_OFFENSE_CONTEXTS and incident.get("exposure_observer_eid") is not None
+                    else ""
+                ),
             )
         else:
             return

@@ -205,6 +205,14 @@ def _worn_appearance_rows(sim, eid):
     if loadout is None:
         return ()
     inventory = sim.ecs.get(Inventory).get(eid)
+    armor = sim.ecs.get(ArmorLoadout).get(eid)
+    body_armor = bool(
+        armor is not None
+        and getattr(armor, "equipped_instance_id", None)
+        and str(getattr(armor, "slot", "body") or "body").strip().lower() == "body"
+    )
+    slots = dict(getattr(loadout, "slots", {}) or {})
+    full_body_covered = bool(_text(slots.get("full_body"))) or body_armor
     rows = []
     seen = set()
     slot_order = (
@@ -214,6 +222,8 @@ def _worn_appearance_rows(sim, eid):
         "bracelet",
         "ring_left",
         "ring_right",
+        "base_top",
+        "base_bottom",
         "top",
         "bottom",
         "full_body",
@@ -221,6 +231,10 @@ def _worn_appearance_rows(sim, eid):
         "shoes",
     )
     for slot in slot_order:
+        if slot == "base_top" and (full_body_covered or bool(_text(slots.get("top")))):
+            continue
+        if slot == "base_bottom" and (full_body_covered or bool(_text(slots.get("bottom")))):
+            continue
         instance_id = _text(getattr(loadout, "slots", {}).get(slot))
         if not instance_id or instance_id in seen or inventory is None:
             continue
@@ -252,26 +266,6 @@ def _worn_appearance_rows(sim, eid):
             "personal_token_salience": round(max(0.0, min(1.0, float(token.get("salience", 0.0) or 0.0))), 3),
         })
 
-    occupied = {str(row.get("slot", "")) for row in rows}
-    basewear = dict(getattr(loadout, "basewear", {}) or {})
-    for base_slot, outer_slot in (("base_top", "top"), ("base_bottom", "bottom")):
-        if outer_slot in occupied or "full_body" in occupied:
-            continue
-        profile = basewear.get(base_slot)
-        if not isinstance(profile, dict):
-            continue
-        rows.append({
-            "slot": base_slot,
-            "item_id": _text(profile.get("item_id")),
-            "label": _text(profile.get("label") or profile.get("appearance_type")).replace("_", " "),
-            "color": _text(profile.get("color_word") or profile.get("color")).lower(),
-            "material": _text(profile.get("material")).lower(),
-            "style": _text(profile.get("style") or profile.get("detail")).lower(),
-            "pattern": _text(profile.get("pattern")).lower(),
-            "emblem": _text(profile.get("emblem")).lower(),
-        })
-
-    armor = sim.ecs.get(ArmorLoadout).get(eid)
     armor_id = _text(getattr(armor, "equipped_item_id", "")) if armor is not None else ""
     if armor_id:
         item = ITEM_CATALOG.get(armor_id, {})

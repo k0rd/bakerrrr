@@ -4056,6 +4056,8 @@ class ArmorLoadout:
 
 class AppearanceLoadout:
     VALID_SLOTS = (
+        "base_top",
+        "base_bottom",
         "hat",
         "earrings",
         "necklace",
@@ -4080,11 +4082,15 @@ class AppearanceLoadout:
         skin_marks=None,
         makeup_regions=None,
         basewear=None,
+        basewear_initialized=False,
         skin_marks_seeded=False,
         description_appearance_seeded=False,
     ):
         self.slots = self._clean_slots(slots)
+        # ``basewear`` is retained only as a compatibility input for saves
+        # made before base garments became ordinary worn inventory items.
         self.basewear = self._clean_basewear(basewear)
+        self.basewear_initialized = bool(basewear_initialized)
         self.body_overrides = self._clean_overrides(body_overrides)
         self.skin_marks = self._clean_skin_marks(skin_marks)
         self.makeup_regions = self._clean_overrides(makeup_regions)
@@ -4162,6 +4168,7 @@ class AppearanceLoadout:
     def normalize(self):
         self.slots = self._clean_slots(getattr(self, "slots", None))
         self.basewear = self._clean_basewear(getattr(self, "basewear", None))
+        self.basewear_initialized = bool(getattr(self, "basewear_initialized", False))
         self.body_overrides = self._clean_overrides(getattr(self, "body_overrides", None))
         self.skin_marks = self._clean_skin_marks(getattr(self, "skin_marks", None))
         self.makeup_regions = self._clean_overrides(getattr(self, "makeup_regions", None))
