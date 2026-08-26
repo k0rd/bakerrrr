@@ -460,7 +460,7 @@ def craft_mechanical_recipe(sim, eid, plan_entry, *, item_catalog=None, recipe_c
     sim.emit(Event("mechanical_device_crafted", **event_payload))
     if eid == getattr(sim, "player_eid", None):
         rough = " rough but usable" if quality == "poor" else f" {quality}"
-        _log_player_feedback(sim, f"You build a{rough} {event_payload['output_item_name']}.", kind="crafting")
+        _log_player_feedback(sim, f"You build a{rough} {event_payload['output_item_name']}.", kind="craft")
     return {"ok": True, "recipe": recipe, "metadata": output_metadata, **event_payload}
 
 
@@ -528,7 +528,7 @@ def begin_mechanical_recipe_craft(sim, eid, plan_entry, *, item_catalog=None, re
         started_tick=started_tick,
         target_end_tick=started_tick + duration,
     ))
-    _log_player_feedback(sim, f"You lay out the parts for {recipe['name']}.", kind="crafting")
+    _log_player_feedback(sim, f"You lay out the parts for {recipe['name']}.", kind="craft")
     return {
         "ok": True,
         "action": "started",
@@ -1576,7 +1576,42 @@ class MechanicalDeviceSystem(System):
         actor_eid = live.get("craft_actor_eid")
         recipe_id = _key(live.get("craft_recipe_id"))
         plan_instance_id = str(live.get("craft_plan_instance_id", "") or "").strip()
+
+        def resolve_completed_build(*, completed_tick=None):
+            now = _int(getattr(self.sim, "tick", 0))
+            effective_completed_tick = max(now, _int(completed_tick, now))
+            inventory = _inventory_for(self.sim, actor_eid)
+            plan_entry = inventory.find(instance_id=plan_instance_id) if inventory is not None and plan_instance_id else None
+            result = (
+                craft_mechanical_recipe(self.sim, actor_eid, plan_entry)
+                if plan_entry is not None
+                else {"ok": False, "reason": "plan_missing"}
+            )
+            self.sim.emit(Event(
+                "mechanical_crafting_resolved",
+                eid=actor_eid,
+                recipe_id=recipe_id,
+                completed=bool(result.get("ok")),
+                reason=str(result.get("reason", "") or "").strip().lower(),
+                time_advanced_ticks=max(
+                    _int(live.get("elapsed_ticks"), 0),
+                    effective_completed_tick - _int(live.get("started_tick"), effective_completed_tick),
+                ),
+                output_item_id=result.get("output_item_id"),
+                output_instance_id=result.get("output_instance_id"),
+            ))
+            if not result.get("ok") and actor_eid == getattr(self.sim, "player_eid", None):
+                _log_player_feedback(
+                    self.sim,
+                    "The build cannot be completed from the parts still at hand.",
+                    kind="craft",
+                )
+            live.clear()
+            return True
+
         if not bool(live.get("active")):
+            if bool(live.get("completed")) and bool(live.get("result_pending")):
+                return resolve_completed_build(completed_tick=live.get("target_end_tick"))
             if bool(live.get("interrupted")) or bool(live.get("result_pending")):
                 reason = _key(live.get("interruption_reason")) or "interrupted"
                 self.sim.emit(Event(
@@ -1587,10 +1622,21 @@ class MechanicalDeviceSystem(System):
                     elapsed_ticks=_int(live.get("elapsed_ticks"), 0),
                 ))
                 if actor_eid == getattr(self.sim, "player_eid", None):
+                    message = {
+                        "position_changed": "You leave the work spot, breaking off construction; the laid-out parts remain yours.",
+                        "entity_damaged": "Taking damage breaks off your construction work; the laid-out parts remain yours.",
+                        "woken_by_noise": "A nearby disturbance breaks your concentration; the laid-out parts remain yours.",
+                        "justice_surrender": "The surrender interrupts your construction work; the laid-out parts remain yours.",
+                        "justice_questioning": "The questioning interrupts your construction work; the laid-out parts remain yours.",
+                        "justice_identity_check": "The identity check interrupts your construction work; the laid-out parts remain yours.",
+                        "actor_detained": "Being detained ends your construction work; the laid-out parts remain yours.",
+                        "justice_booking_completed": "Booking ends your construction work; the laid-out parts remain yours.",
+                        "player_killed": "Your construction work ends; the laid-out parts remain yours.",
+                    }.get(reason, "Your construction work breaks off; the laid-out parts remain yours.")
                     _log_player_feedback(
                         self.sim,
-                        "Your construction work breaks off; the laid-out parts remain yours.",
-                        kind="crafting",
+                        message,
+                        kind="craft",
                     )
                 live.clear()
                 return True
@@ -1608,34 +1654,12 @@ class MechanicalDeviceSystem(System):
             live["result_pending"] = True
             live["interruption_reason"] = "position_changed"
             return self._advance_player_crafting()
-        if now < _int(live.get("target_end_tick"), now + 1):
+        # Systems run before Simulation advances its tick.  Resolve during the
+        # final construction tick so the shared live-timeskip coordinator does
+        # not mark a legitimately finished build as a pending interruption.
+        if now + 1 < _int(live.get("target_end_tick"), now + 1):
             return False
-
-        inventory = _inventory_for(self.sim, actor_eid)
-        plan_entry = inventory.find(instance_id=plan_instance_id) if inventory is not None and plan_instance_id else None
-        result = (
-            craft_mechanical_recipe(self.sim, actor_eid, plan_entry)
-            if plan_entry is not None
-            else {"ok": False, "reason": "plan_missing"}
-        )
-        self.sim.emit(Event(
-            "mechanical_crafting_resolved",
-            eid=actor_eid,
-            recipe_id=recipe_id,
-            completed=bool(result.get("ok")),
-            reason=str(result.get("reason", "") or "").strip().lower(),
-            time_advanced_ticks=max(0, now - _int(live.get("started_tick"), now)),
-            output_item_id=result.get("output_item_id"),
-            output_instance_id=result.get("output_instance_id"),
-        ))
-        if not result.get("ok") and actor_eid == getattr(self.sim, "player_eid", None):
-            _log_player_feedback(
-                self.sim,
-                "The build cannot be completed from the parts still at hand.",
-                kind="crafting",
-            )
-        live.clear()
-        return True
+        return resolve_completed_build(completed_tick=now + 1)
 
     def update(self):
         self._advance_player_crafting()
