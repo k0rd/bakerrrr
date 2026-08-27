@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import Mapping, Tuple
 
 from engine.buildings import building_exterior_profile
-from game.components import AI, CreatureIdentity, NPCSocial, NPCWill, Occupation, Render, Vitality
+from game.components import AI, AnimalGenome, CreatureIdentity, NPCSocial, NPCWill, Occupation, Render, Vitality
 from game.appearance_loadout import (
     appearance_render_colors,
     humanoid_render_profile,
@@ -704,6 +704,66 @@ def creature_color_key(identity, *, role=""):
     return taxonomy_colors.get(taxonomy)
 
 
+def creature_form_effects(identity, *, root_animal_id=""):
+    """Carry recognizable species silhouettes to graphical renderers.
+
+    Taxonomy remains the stable terminal/semantic identity.  These effects are
+    deliberately narrower: they let a graphical renderer distinguish body
+    plans that would otherwise collapse into one generic taxonomy shape.
+    """
+    if not identity:
+        return ()
+    common_name = str(getattr(identity, "common_name", "") or "").strip().lower()
+    species = str(getattr(identity, "species", "") or "").strip().lower()
+    root_id = str(root_animal_id or getattr(identity, "root_animal_id", "") or "").strip().lower()
+    effects = []
+    if root_id:
+        effects.append(f"creature_root_{root_id}")
+    named_forms = (
+        ("pigeon", ("pigeon", "columba ")),
+        ("crab", ("crab", "brachyura")),
+        ("bear", ("bear", "ursus ")),
+        ("raccoon", ("raccoon", "procyon ")),
+        ("possum", ("possum", "didelphis ")),
+        ("rabbit", ("rabbit", "cottontail", "hare", "sylvilagus ", "lepus ")),
+        ("skunk", ("skunk", "mephitis ")),
+        ("porcupine", ("porcupine", "erethizon ")),
+        ("armadillo", ("armadillo", "dasypus ")),
+        ("otter", ("otter", "lontra ")),
+        ("bat", ("bat", "myotis ")),
+        ("turtle", ("turtle", "terrapene ", "chelydra ")),
+        ("snake", ("snake", "moccasin", "agkistrodon ", "crotalus ")),
+        ("frog", ("frog", "hyla ")),
+        ("owl", ("owl", "tyto ")),
+        ("turkey", ("turkey", "meleagris ")),
+        ("quail", ("quail", "colinus ")),
+    )
+    identity_text = f"{common_name} {species}"
+    form = next(
+        (candidate for candidate, cues in named_forms if any(cue in identity_text for cue in cues)),
+        "",
+    )
+    if not form:
+        form = {
+            "shore_scuttler": "crab",
+            "heavy_forager": "bear",
+            "small_grazer": "rabbit",
+            "warning_scavenger": "skunk",
+            "quilled_forager": "porcupine",
+            "armored_forager": "armadillo",
+            "water_prowler": "otter",
+            "echo_flier": "bat",
+            "armored_crawler": "turtle",
+            "long_crawler": "snake",
+            "soft_leaper": "frog",
+            "night_hunter": "owl",
+            "ground_flock": "ground_bird",
+        }.get(root_id, "")
+    if form:
+        effects.append(f"creature_form_{form}")
+    return tuple(effects)
+
+
 def _entity_state_semantic(identity, vitality):
     if vitality is None:
         return None
@@ -948,6 +1008,11 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
         color = color or taxonomy
         semantic_id = catalog.semantic_id_for(glyph, color, preferred_categories=("entities",))
 
+    creature_root = ""
+    if taxonomy != "hominid" and sim is not None and eid is not None:
+        genome = sim.ecs.get(AnimalGenome).get(eid)
+        creature_root = str(getattr(genome, "root_animal_id", "") or "").strip().lower()
+
     return _semantic_snapshot(
         glyph,
         color=color,
@@ -955,7 +1020,11 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
         semantic_id=semantic_id,
         catalog=catalog,
         preferred_categories=("entities",),
-        effects=humanoid_effects if taxonomy == "hominid" else (),
+        effects=(
+            humanoid_effects
+            if taxonomy == "hominid"
+            else creature_form_effects(identity, root_animal_id=creature_root)
+        ),
     )
 
 

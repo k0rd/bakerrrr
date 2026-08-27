@@ -712,6 +712,9 @@ class CreatureIdentity:
         gender_inference_source=None,
         phenotype_descriptor=None,
         fauna_line_name=None,
+        fauna_species_id=None,
+        ancestral_species=None,
+        fauna_population_key=None,
     ):
         self.taxonomy_class = str(taxonomy_class or "other").strip().lower() or "other"
         self.species = str(species or "unknown species").strip().lower() or "unknown species"
@@ -746,6 +749,23 @@ class CreatureIdentity:
         self.fauna_line_name = (
             str(fauna_line_name).replace("_", " ").strip().lower()
             if fauna_line_name
+            else None
+        )
+        self.fauna_species_id = (
+            str(fauna_species_id).strip().lower().replace(" ", "_")
+            if fauna_species_id
+            else None
+        )
+        if isinstance(ancestral_species, str):
+            ancestral_species = (ancestral_species,)
+        self.ancestral_species = tuple(dict.fromkeys(
+            str(value).strip().lower()
+            for value in tuple(ancestral_species or ())
+            if str(value).strip()
+        ))
+        self.fauna_population_key = (
+            str(fauna_population_key).strip().lower().replace(" ", "_")
+            if fauna_population_key
             else None
         )
 

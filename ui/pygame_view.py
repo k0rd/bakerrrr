@@ -4562,6 +4562,115 @@ class PygameView:
                 hip_half = max(2, hip_half - max(0, px // 32))
         return shoulder_half, hip_half
 
+    def _actor_body_garment_mask(self, effects=()):
+        """Return the body pixels that fitted basewear is allowed to cover.
+
+        Ordinary clothes may deliberately change a person's silhouette.  Base
+        layers are different: at map scale they are paint on the existing body,
+        so their cut, trim, and drawable DSL all share this final invariant.
+        """
+
+        px = self.cell_px
+        mask = self.pygame.Surface((px, px), self.pygame.SRCALPHA)
+        body = (255, 255, 255, 255)
+        effect_set = {
+            str(effect).strip().lower()
+            for effect in tuple(effects or ())
+            if str(effect).strip()
+        }
+
+        def suffix(prefix, default=""):
+            for effect in effect_set:
+                if effect.startswith(prefix):
+                    return effect.removeprefix(prefix)
+            return default
+
+        presentation = suffix("actor_presentation_", "mixed")
+        silhouette = suffix("actor_silhouette_", "")
+        mid_x = px // 2
+
+        if px <= 10:
+            # The legacy actor itself is a compact token rather than an
+            # articulated person, but basewear still must not enlarge it.
+            inset = max(1, px // 8)
+            self.pygame.draw.circle(mask, body, (mid_x, px // 2), max(2, (px // 2) - inset))
+            return mask
+
+        shoulder_half, hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
+        if px <= 28:
+            def q(value):
+                return int(round(float(value) * px / 16.0))
+
+            shoulder_y = q(7)
+            waist_y = q(9)
+            hip_y = q(11)
+            foot_y = min(px - 1, q(15))
+            waist_half = max(1, min(shoulder_half, hip_half) - 1)
+            torso = [
+                (mid_x - shoulder_half, shoulder_y),
+                (mid_x + shoulder_half, shoulder_y),
+                (mid_x + waist_half, waist_y),
+                (mid_x + hip_half, hip_y),
+                (mid_x - hip_half, hip_y),
+                (mid_x - waist_half, waist_y),
+            ]
+            self.pygame.draw.polygon(mask, body, torso)
+            leg_gap = max(1, q(1))
+            self.pygame.draw.lines(mask, body, False, [(mid_x - leg_gap, hip_y), (mid_x - leg_gap, q(13)), (q(6), foot_y)], 1)
+            self.pygame.draw.lines(mask, body, False, [(mid_x + leg_gap, hip_y), (mid_x + leg_gap, q(13)), (q(10), foot_y)], 1)
+            return mask
+
+        stroke_w = max(1, px // 20)
+        head_r = max(2, px // 8)
+        head_y = max(head_r + 1, px // 4)
+        shoulder_y = head_y + head_r + max(1, px // 18)
+        hip_y = px - max(5, px // 4)
+        foot_y = px - max(2, px // 12)
+        body_corner = max(1, px // 16)
+        if presentation == "femme":
+            waist_y = shoulder_y + max(2, (hip_y - shoulder_y) // 2)
+            waist_half = max(1, min(shoulder_half, hip_half) - max(1, px // 20))
+            torso = [
+                (mid_x - shoulder_half + body_corner, shoulder_y),
+                (mid_x + shoulder_half - body_corner, shoulder_y),
+                (mid_x + shoulder_half, shoulder_y + body_corner),
+                (mid_x + waist_half, waist_y),
+                (mid_x + hip_half, hip_y - body_corner),
+                (mid_x + hip_half - body_corner, hip_y),
+                (mid_x - hip_half + body_corner, hip_y),
+                (mid_x - hip_half, hip_y - body_corner),
+                (mid_x - waist_half, waist_y),
+                (mid_x - shoulder_half, shoulder_y + body_corner),
+            ]
+        else:
+            torso = [
+                (mid_x - shoulder_half + body_corner, shoulder_y),
+                (mid_x + shoulder_half - body_corner, shoulder_y),
+                (mid_x + shoulder_half, shoulder_y + body_corner),
+                (mid_x + hip_half, hip_y - body_corner),
+                (mid_x + hip_half - body_corner, hip_y),
+                (mid_x - hip_half + body_corner, hip_y),
+                (mid_x - hip_half, hip_y - body_corner),
+                (mid_x - shoulder_half, shoulder_y + body_corner),
+            ]
+        self.pygame.draw.polygon(mask, body, torso)
+        leg_gap = max(1, px // 18)
+        stance_half = max(2, px // 7)
+        limb_w = max(1, stroke_w + 1)
+        for top_x, bottom_x in ((mid_x - leg_gap, mid_x - stance_half), (mid_x + leg_gap, mid_x + stance_half)):
+            self.pygame.draw.line(mask, body, (top_x, hip_y), (bottom_x, foot_y), limb_w)
+        return mask
+
+    def _clip_fitted_basewear_to_actor(self, overlay, *, kind, effects=()):
+        if kind not in {"base_top", "base_bottom"}:
+            return overlay
+        overlay.blit(
+            self._actor_body_garment_mask(effects),
+            (0, 0),
+            special_flags=self.pygame.BLEND_RGBA_MULT,
+        )
+        return overlay
+
     def _actor_eye_rgba(self, effects=(), *, alpha=255):
         effect_set = {str(effect).strip().lower() for effect in (effects or ()) if str(effect).strip()}
         eye_keys = {
@@ -5011,6 +5120,344 @@ class PygameView:
             self.pygame.draw.line(overlay, fill, (q(10), q(4)), (q(12), q(7)), 1)
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_genetic_creature_parts(self, overlay, genetics, *, fill, stroke, shadow, accent, stroke_w):
+        """Assemble one animal from six independently inherited anchored parts."""
+
+        def q(value):
+            return int(round(float(value) * self.cell_px / 16.0))
+
+        frame_id = genetics["body_frame"]
+        head_id = genetics["head"]
+        forelimbs = genetics["forelimbs"]
+        hindlimbs = genetics["hindlimbs"]
+        tail_id = genetics["tail"]
+        surface_id = genetics["surface"]
+
+        body_specs = {
+            "compact_avian": (4, 7, 8, 6, 11, 6),
+            "ground_avian": (3, 7, 9, 7, 12, 6),
+            "raptor_avian": (4, 6, 8, 7, 11, 5),
+            "upright_avian": (5, 5, 7, 10, 9, 4),
+            "compact_insect": (5, 7, 6, 6, 11, 8),
+            "segmented_insect": (4, 7, 8, 5, 12, 8),
+            "compact_quadruped": (4, 8, 8, 5, 12, 8),
+            "domed_crawler": (3, 7, 10, 7, 13, 10),
+            "domed_quadruped": (3, 7, 10, 7, 13, 9),
+            "hunched_quadruped": (3, 7, 9, 7, 12, 8),
+            "lean_quadruped": (3, 8, 10, 4, 13, 8),
+            "long_quadruped": (2, 8, 12, 4, 14, 8),
+            "low_quadruped": (3, 9, 10, 4, 13, 9),
+            "low_reptile": (2, 9, 11, 4, 13, 9),
+            "squat_amphibian": (4, 8, 8, 6, 12, 8),
+            "stocky_quadruped": (3, 7, 10, 6, 13, 8),
+            "streamlined_aquatic": (3, 7, 10, 6, 13, 8),
+            "tall_quadruped": (3, 7, 10, 5, 13, 5),
+            "wide_crustacean": (3, 7, 10, 6, 10, 6),
+            "winged_mammal": (7, 5, 3, 8, 8, 5),
+        }
+        bx, by, bw, bh, hx, hy = body_specs.get(frame_id, body_specs["compact_quadruped"])
+        body = self.pygame.Rect(q(bx), q(by), max(3, q(bw)), max(3, q(bh)))
+        head_anchor = (q(hx), q(hy))
+        tail_anchor = (body.left + q(1), body.centery)
+        fore_anchor = (body.right - q(2), body.bottom - q(1))
+        hind_anchor = (body.left + q(3), body.bottom - q(1))
+
+        # Tails and broad appendages sit behind the body.  Their attachment
+        # point is stable even when an improbable allele puts one on a very
+        # different frame, which is what makes descendants visibly recombinant.
+        if tail_id in {"broad_fan", "display_fan"}:
+            fan = [tail_anchor, (q(max(1, bx - 4)), q(max(2, by - 3))), (q(max(1, bx - 5)), tail_anchor[1]), (q(max(1, bx - 4)), q(min(15, by + bh + 2)))]
+            self.pygame.draw.polygon(overlay, accent, fan)
+            self.pygame.draw.lines(overlay, stroke, True, fan, max(1, stroke_w))
+            if tail_id == "display_fan":
+                for tip in fan[1:]:
+                    self.pygame.draw.line(overlay, shadow, tail_anchor, tip, max(1, stroke_w))
+        elif tail_id in {"feather_fan", "square_fan", "short_fan", "forked_fan"}:
+            length = 3 if tail_id == "short_fan" else 5
+            far_x = q(max(1, bx - length))
+            fan = [tail_anchor, (far_x, tail_anchor[1] - q(1)), (far_x, tail_anchor[1] + q(2)), (tail_anchor[0], tail_anchor[1] + q(2))]
+            if tail_id == "forked_fan":
+                fan.insert(2, (far_x + q(2), tail_anchor[1] + q(1)))
+            self.pygame.draw.polygon(overlay, accent, fan)
+            self.pygame.draw.lines(overlay, stroke, True, fan, max(1, stroke_w))
+            if tail_id == "feather_fan":
+                self.pygame.draw.line(overlay, shadow, tail_anchor, (far_x, tail_anchor[1] + q(1)), max(1, stroke_w))
+        elif tail_id in {"bushy", "plumed", "warning_plume"}:
+            if tail_id == "bushy":
+                plume = (tail_anchor, (q(max(1, bx - 2)), tail_anchor[1] - q(1)), (q(max(1, bx - 5)), tail_anchor[1] - q(2)), (q(max(1, bx - 6)), tail_anchor[1]))
+            else:
+                plume = (tail_anchor, (q(max(1, bx - 2)), q(max(2, by - 1))), (q(max(1, bx - 1)), q(max(1, by - 4))), (q(min(15, bx + 2)), q(max(2, by - 2))))
+            self.pygame.draw.lines(overlay, stroke, False, plume, max(3, q(3 if tail_id == "warning_plume" else 2)))
+            self.pygame.draw.lines(overlay, accent, False, plume, max(1, stroke_w))
+        elif tail_id == "curled":
+            curl_rect = self.pygame.Rect(q(max(1, bx - 4)), q(max(2, by - 3)), max(4, q(5)), max(4, q(5)))
+            self.pygame.draw.arc(overlay, stroke, curl_rect, 0.25, math.tau - 0.45, max(2, stroke_w + 1))
+        elif tail_id not in {"none", "short"}:
+            end_y = tail_anchor[1]
+            width = max(1, stroke_w)
+            if tail_id in {"heavy_tapered", "paddle"}:
+                width = max(2, q(2))
+                end_y += q(2)
+            elif tail_id == "bare":
+                end_y += q(3)
+            elif tail_id == "long":
+                end_y -= q(2)
+            end = (q(max(0, bx - (5 if tail_id in {"long", "bare", "ringed"} else 4))), end_y)
+            self.pygame.draw.line(overlay, stroke, tail_anchor, end, width)
+            self.pygame.draw.line(overlay, accent, tail_anchor, end, max(1, width - stroke_w))
+            if tail_id == "ringed":
+                for index in range(1, 4):
+                    px = int(tail_anchor[0] + ((end[0] - tail_anchor[0]) * index / 4.0))
+                    py = int(tail_anchor[1] + ((end[1] - tail_anchor[1]) * index / 4.0))
+                    self.pygame.draw.circle(overlay, shadow, (px, py), max(1, width // 2))
+            elif tail_id == "rattle":
+                for index in range(3):
+                    self.pygame.draw.circle(overlay, accent, (end[0] - index * max(1, q(1)), end[1]), max(1, q(1)), max(1, stroke_w))
+            elif tail_id in {"fin", "paddle"}:
+                tip = [(end[0], end[1]), (max(0, end[0] - q(2)), end[1] - q(2)), (max(0, end[0] - q(2)), end[1] + q(2))]
+                self.pygame.draw.polygon(overlay, accent, tip)
+                self.pygame.draw.lines(overlay, stroke, True, tip, max(1, stroke_w))
+        elif tail_id == "short":
+            self.pygame.draw.circle(overlay, accent, (max(q(1), tail_anchor[0] - q(1)), tail_anchor[1]), max(1, q(1)))
+
+        wing_types = {"broad_wings", "membrane_wings", "soft_wings", "wings"}
+        if forelimbs in wing_types:
+            if forelimbs == "wings":
+                pass
+            elif forelimbs == "membrane_wings":
+                left_wing = [(body.centerx, body.top + q(2)), (q(3), q(3)), (q(1), q(6)), (q(3), q(9)), (q(1), q(12)), (body.centerx, body.centery)]
+                right_wing = [(self.cell_px - px, py) for px, py in reversed(left_wing)]
+                for wing in (left_wing, right_wing):
+                    self.pygame.draw.polygon(overlay, fill, wing)
+                    self.pygame.draw.lines(overlay, stroke, True, wing, max(1, stroke_w))
+            elif forelimbs == "soft_wings":
+                for side in (-1, 1):
+                    wing_rect = self.pygame.Rect(body.centerx + side * q(1) - (q(6) if side < 0 else 0), q(3), max(3, q(6)), max(4, q(7)))
+                    self.pygame.draw.ellipse(overlay, (accent[0], accent[1], accent[2], 118), wing_rect)
+                    self.pygame.draw.ellipse(overlay, stroke, wing_rect, max(1, stroke_w))
+            else:
+                reach = 1 if forelimbs == "broad_wings" else 3
+                drop = 14 if forelimbs == "broad_wings" else 12
+                for side in (-1, 1):
+                    root = (body.centerx + side * q(1), body.centery)
+                    wing = [root, (q(8 + side * (8 - reach)), q(3)), (q(8 + side * (7 - reach)), q(drop)), (body.centerx + side * q(2), body.bottom)]
+                    self.pygame.draw.polygon(overlay, fill, wing)
+                    self.pygame.draw.lines(overlay, stroke, True, wing, max(1, stroke_w))
+
+        if frame_id == "serpentine":
+            body_path = [(q(1), q(11)), (q(4), q(8)), (q(7), q(12)), (q(10), q(8)), (q(13), q(10))]
+            self.pygame.draw.lines(overlay, stroke, False, body_path, max(2, q(3)))
+            self.pygame.draw.lines(overlay, fill, False, body_path, max(1, q(2)))
+            body = self.pygame.Rect(q(3), q(7), max(6, q(9)), max(4, q(6)))
+            head_anchor = (q(13), q(9))
+            fore_anchor = hind_anchor = (q(8), q(11))
+        elif frame_id == "wide_crustacean":
+            shell = [(q(4), q(7)), (q(12), q(7)), (q(14), q(10)), (q(12), q(13)), (q(4), q(13)), (q(2), q(10))]
+            self.pygame.draw.polygon(overlay, fill, shell)
+            self.pygame.draw.lines(overlay, stroke, True, shell, max(1, stroke_w))
+        elif frame_id == "segmented_insect":
+            for segment in (
+                self.pygame.Rect(q(3), q(8), max(3, q(4)), max(3, q(4))),
+                self.pygame.Rect(q(6), q(7), max(3, q(4)), max(3, q(5))),
+                self.pygame.Rect(q(9), q(8), max(3, q(4)), max(3, q(4))),
+            ):
+                self.pygame.draw.ellipse(overlay, fill, segment)
+                self.pygame.draw.ellipse(overlay, stroke, segment, max(1, stroke_w))
+        elif frame_id in {"domed_crawler", "domed_quadruped"}:
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, max(1, stroke_w + 1))
+            self.pygame.draw.arc(overlay, accent, body.inflate(-q(2), -q(2)), 0.0, math.tau, max(1, stroke_w))
+        elif frame_id == "streamlined_aquatic":
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, max(1, stroke_w))
+            dorsal = [(body.centerx - q(1), body.top + q(1)), (body.centerx + q(1), body.top - q(2)), (body.centerx + q(2), body.top + q(1))]
+            self.pygame.draw.polygon(overlay, accent, dorsal)
+        else:
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, max(1, stroke_w))
+            if frame_id == "tall_quadruped":
+                neck = self.pygame.Rect(body.right - q(2), head_anchor[1], max(2, q(3)), max(3, body.centery - head_anchor[1] + q(1)))
+                self.pygame.draw.rect(overlay, fill, neck, border_radius=max(1, q(1)))
+                self.pygame.draw.rect(overlay, stroke, neck, max(1, stroke_w), border_radius=max(1, q(1)))
+
+        # Surface primitives live on the shared body anchor, so color/pattern
+        # overlays can remain independent phenotype axes above them.
+        if surface_id in {"banded_armor", "chitin", "shell"}:
+            for index in range(1, 4):
+                px = body.left + int(body.w * index / 4.0)
+                self.pygame.draw.arc(overlay, accent, (px - q(1), body.top + q(1), max(2, q(3)), max(3, body.h - q(2))), 1.45, 4.84, max(1, stroke_w))
+        elif surface_id == "scales":
+            for row, py in enumerate((body.top + body.h // 3, body.top + (2 * body.h // 3))):
+                for px in range(body.left + q(2) + row * q(1), body.right - q(1), max(2, q(3))):
+                    self.pygame.draw.arc(overlay, accent, (px - q(1), py - q(1), max(2, q(2)), max(2, q(2))), 0.0, math.pi, max(1, stroke_w))
+        elif surface_id in {"quills", "bristles"}:
+            count = 6 if surface_id == "quills" else 4
+            for index in range(count):
+                px = body.left + q(1) + int((body.w - q(2)) * index / max(1, count - 1))
+                height = q(4 if surface_id == "quills" else 2)
+                self.pygame.draw.line(overlay, accent, (px, body.top + q(1)), (px - q(1), max(0, body.top - height)), max(1, stroke_w))
+        elif surface_id in {"feathers", "powdered_wings"}:
+            for index in range(3):
+                py = body.top + q(2 + index)
+                self.pygame.draw.arc(overlay, accent, (body.left + q(2 + index), py, max(3, body.w // 2), max(2, q(3))), 0.15, 2.75, max(1, stroke_w))
+        elif surface_id in {"fur", "dense_fur"}:
+            tufts = 4 if surface_id == "dense_fur" else 2
+            for index in range(tufts):
+                px = body.left + q(2) + index * max(1, (body.w - q(4)) // max(1, tufts - 1))
+                self.pygame.draw.line(overlay, accent, (px, body.top + q(1)), (px + q(1), body.top - q(1)), max(1, stroke_w))
+
+        if forelimbs == "wings":
+            folded_wing = [
+                (body.left + q(2), body.top + q(1)),
+                (body.right - q(1), body.centery),
+                (body.left + q(3), body.bottom - q(1)),
+            ]
+            self.pygame.draw.polygon(overlay, accent, folded_wing)
+            self.pygame.draw.lines(overlay, stroke, True, folded_wing, max(1, stroke_w))
+
+        # Legs and manipulators are deliberately attached after the body so a
+        # winged rabbit, web-footed canid, or clawed pigeon remains legible.
+        def draw_ground_limb(anchor, limb_id, *, rear=False):
+            ax, ay = anchor
+            direction = -1 if rear else 1
+            if limb_id in {"none", "serpentine", "swimming"}:
+                if limb_id == "swimming":
+                    fin = [(ax, ay), (ax + direction * q(2), ay + q(1)), (ax, ay + q(2))]
+                    self.pygame.draw.polygon(overlay, accent, fin)
+                return
+            if limb_id in {"hopping", "long_hopping"}:
+                knee = (ax - q(2), min(q(14), ay + q(2)))
+                foot = (ax + q(2 if limb_id == "long_hopping" else 1), q(15))
+                self.pygame.draw.lines(overlay, shadow, False, (anchor, knee, foot), max(1, stroke_w + (1 if limb_id == "long_hopping" else 0)))
+                return
+            if limb_id == "scuttling":
+                for offset in (-1, 0, 1):
+                    root = (ax, ay + offset * q(1))
+                    self.pygame.draw.lines(overlay, shadow, False, (root, (ax + direction * q(2), ay + offset * q(2)), (ax + direction * q(4), ay + q(2 + offset))), max(1, stroke_w))
+                return
+            end_x = ax + direction * (q(1) if limb_id in {"running", "stalking", "climbing"} else 0)
+            end = (end_x, q(15))
+            self.pygame.draw.line(overlay, shadow, anchor, end, max(1, stroke_w + (1 if limb_id in {"walking", "hooves"} else 0)))
+            if limb_id in {"perching", "talons", "webbed", "clinging", "climbing"}:
+                toe_spread = q(2) if limb_id == "webbed" else q(1)
+                self.pygame.draw.line(overlay, shadow, end, (end[0] - toe_spread, end[1]), max(1, stroke_w))
+                self.pygame.draw.line(overlay, shadow, end, (end[0] + toe_spread, end[1]), max(1, stroke_w))
+
+        draw_ground_limb(hind_anchor, hindlimbs, rear=True)
+        if hindlimbs not in {"none", "serpentine", "swimming"}:
+            draw_ground_limb((body.right - q(3), body.bottom - q(1)), hindlimbs)
+
+        if forelimbs not in wing_types:
+            if forelimbs == "crab_claws":
+                for side in (-1, 1):
+                    wrist = (body.centerx + side * q(5), q(5))
+                    self.pygame.draw.line(overlay, stroke, (body.centerx + side * q(3), body.top + q(2)), wrist, max(1, stroke_w))
+                    claw = [(wrist[0], wrist[1]), (wrist[0] + side * q(2), wrist[1] - q(2)), (wrist[0], wrist[1] - q(1)), (wrist[0] + side * q(1), wrist[1] + q(1))]
+                    self.pygame.draw.polygon(overlay, accent, claw)
+                    self.pygame.draw.lines(overlay, stroke, True, claw, max(1, stroke_w))
+            elif forelimbs == "insect_legs":
+                for side in (-1, 1):
+                    for offset in (-1, 0, 1):
+                        root = (body.centerx + side * q(2), body.centery + offset * q(1))
+                        self.pygame.draw.lines(overlay, shadow, False, (root, (root[0] + side * q(3), root[1] - q(1)), (root[0] + side * q(5), root[1] + offset * q(2))), max(1, stroke_w))
+            elif forelimbs == "fins":
+                fin = [(body.centerx, body.centery), (body.centerx + q(3), body.bottom + q(2)), (body.centerx - q(1), body.bottom)]
+                self.pygame.draw.polygon(overlay, accent, fin)
+                self.pygame.draw.lines(overlay, stroke, True, fin, max(1, stroke_w))
+            elif forelimbs not in {"none", "splayed"}:
+                draw_ground_limb(fore_anchor, "walking")
+                if forelimbs in {"claws", "digging_claws", "paws", "hooves"}:
+                    spread = q(2) if forelimbs == "digging_claws" else q(1)
+                    self.pygame.draw.line(overlay, accent, (fore_anchor[0], q(15)), (fore_anchor[0] + spread, q(15)), max(1, stroke_w))
+            elif forelimbs == "splayed":
+                for anchor, direction in ((fore_anchor, 1), ((body.left + q(2), body.bottom - q(1)), -1)):
+                    self.pygame.draw.lines(overlay, shadow, False, (anchor, (anchor[0] + direction * q(2), q(13)), (anchor[0] + direction * q(3), q(15))), max(1, stroke_w))
+
+        head_r = max(2, q(2))
+        long_head = head_id in {"boar", "broad_snake", "fish", "grazer", "long_canine", "long_jaw", "otter", "snapping"}
+        head_rect = self.pygame.Rect(head_anchor[0] - head_r, head_anchor[1] - head_r, max(3, head_r * (3 if long_head else 2)), max(3, head_r * 2))
+        if head_id == "eye_stalks":
+            for side in (-1, 1):
+                eye_x = body.centerx + side * q(2)
+                self.pygame.draw.line(overlay, stroke, (eye_x, body.top + q(1)), (eye_x, body.top - q(2)), max(1, stroke_w))
+                self.pygame.draw.circle(overlay, shadow, (eye_x, body.top - q(2)), max(1, q(1)))
+        elif head_id in {"frog", "owl_disc"}:
+            center = (head_anchor[0], head_anchor[1])
+            radius = max(2, q(3 if head_id == "owl_disc" else 2))
+            self.pygame.draw.circle(overlay, accent, center, radius)
+            self.pygame.draw.circle(overlay, stroke, center, radius, max(1, stroke_w))
+            for side in (-1, 1):
+                eye = (center[0] + side * q(1), center[1] - q(1))
+                self.pygame.draw.circle(overlay, shadow, eye, max(1, q(1)))
+            if head_id == "owl_disc":
+                self.pygame.draw.polygon(overlay, stroke, [(center[0] - q(1), center[1] + q(1)), (center[0] + q(1), center[1] + q(1)), (center[0], center[1] + q(2))])
+        elif head_id in {"insect", "mandibled"}:
+            self.pygame.draw.circle(overlay, fill, head_anchor, head_r)
+            self.pygame.draw.circle(overlay, stroke, head_anchor, head_r, max(1, stroke_w))
+            for side in (-1, 1):
+                self.pygame.draw.line(overlay, stroke, (head_anchor[0] + side * q(1), head_anchor[1] - q(1)), (head_anchor[0] + side * q(3), head_anchor[1] - q(3)), max(1, stroke_w))
+                if head_id == "mandibled":
+                    self.pygame.draw.arc(overlay, accent, (head_anchor[0] + side * q(1) - q(2), head_anchor[1], max(3, q(3)), max(3, q(3))), 0.0, math.pi, max(1, stroke_w))
+        else:
+            self.pygame.draw.ellipse(overlay, fill, head_rect)
+            self.pygame.draw.ellipse(overlay, stroke, head_rect, max(1, stroke_w))
+            rabbit_heads = {"hare_long_ears", "rabbit", "rabbit_short_ears"}
+            canine_heads = {"canine", "domestic_canine", "fox", "long_canine", "pointed_canine"}
+            avian_heads = {"crow_beak", "hooked_beak", "long_beak", "pigeon", "quail", "short_beak", "turkey"}
+            if head_id in rabbit_heads:
+                ear_height = q(6 if head_id == "hare_long_ears" else 4)
+                for offset in (0, q(2)):
+                    ear = self.pygame.Rect(head_rect.left + offset, max(0, head_rect.top - ear_height + q(1)), max(2, q(2)), max(4, ear_height))
+                    self.pygame.draw.ellipse(overlay, accent, ear)
+                    self.pygame.draw.ellipse(overlay, stroke, ear, max(1, stroke_w))
+            elif head_id in {"bear", "otter", "rodent"}:
+                for ear_x in (head_rect.left + q(1), head_rect.right - q(1)):
+                    self.pygame.draw.circle(overlay, accent, (ear_x, head_rect.top), max(1, q(1)))
+                    self.pygame.draw.circle(overlay, stroke, (ear_x, head_rect.top), max(1, q(1)), max(1, stroke_w))
+                if head_id == "rodent":
+                    nose = (min(self.cell_px - 1, head_rect.right + q(1)), head_rect.centery + q(1))
+                    self.pygame.draw.circle(overlay, shadow, nose, max(1, q(1)))
+                    for offset in (-1, 1):
+                        self.pygame.draw.line(overlay, accent, nose, (nose[0] - q(3), nose[1] + offset * q(1)), max(1, stroke_w))
+            elif head_id == "grazer":
+                for side in (-1, 1):
+                    ear = [(head_rect.centerx, head_rect.top + q(1)), (head_rect.centerx + side * q(3), head_rect.top - q(1)), (head_rect.centerx + side * q(1), head_rect.top + q(2))]
+                    self.pygame.draw.polygon(overlay, accent, ear)
+                    self.pygame.draw.lines(overlay, stroke, True, ear, max(1, stroke_w))
+            elif head_id in canine_heads | {"feline", "pointed"}:
+                for offset in (0, head_rect.w - q(2)):
+                    ear = [(head_rect.left + offset, head_rect.top + q(1)), (head_rect.left + offset + q(1), head_rect.top - q(2)), (head_rect.left + offset + q(2), head_rect.top + q(1))]
+                    self.pygame.draw.polygon(overlay, accent, ear)
+                    self.pygame.draw.lines(overlay, stroke, True, ear, max(1, stroke_w))
+                if head_id in canine_heads:
+                    snout = [(head_rect.right - q(1), head_rect.centery - q(1)), (min(self.cell_px - 1, head_rect.right + q(2)), head_rect.centery), (head_rect.right - q(1), head_rect.centery + q(1))]
+                    self.pygame.draw.polygon(overlay, accent, snout)
+            elif head_id in avian_heads:
+                beak_length = 4 if head_id == "long_beak" else 3 if head_id in {"crow_beak", "hooked_beak"} else 2
+                beak = [(head_rect.right - q(1), head_rect.centery - q(1)), (min(self.cell_px - 1, head_rect.right + q(beak_length)), head_rect.centery), (head_rect.right - q(1), head_rect.centery + q(1))]
+                self.pygame.draw.polygon(overlay, accent, beak)
+                self.pygame.draw.lines(overlay, stroke, True, beak, max(1, stroke_w))
+                if head_id == "hooked_beak":
+                    self.pygame.draw.line(overlay, stroke, beak[1], (beak[1][0] - q(1), beak[1][1] + q(2)), max(1, stroke_w))
+                elif head_id == "turkey":
+                    self.pygame.draw.line(overlay, accent, (head_rect.centerx, head_rect.bottom), (head_rect.centerx, head_rect.bottom + q(3)), max(1, stroke_w))
+            elif head_id in {"snake", "broad_snake", "lizard", "long_jaw", "snapping", "turtle"}:
+                jaw_end = min(self.cell_px - 1, head_rect.right + q(2 if head_id not in {"long_jaw", "snapping"} else 3))
+                self.pygame.draw.line(overlay, accent, (head_rect.centerx, head_rect.centery), (jaw_end, head_rect.centery + q(1)), max(1, stroke_w))
+            elif head_id == "boar":
+                self.pygame.draw.circle(overlay, accent, (min(self.cell_px - 1, head_rect.right), head_rect.centery), max(1, q(1)))
+                self.pygame.draw.arc(overlay, stroke, (head_rect.right - q(1), head_rect.centery, max(2, q(3)), max(2, q(3))), 1.5, 3.3, max(1, stroke_w))
+            elif head_id == "fish":
+                self.pygame.draw.arc(overlay, accent, (head_rect.left, head_rect.top, max(3, q(3)), max(3, head_rect.h)), 4.65, 1.55, max(1, stroke_w))
+            elif head_id in {"masked", "raccoon"}:
+                self.pygame.draw.line(overlay, shadow, (head_rect.left, head_rect.centery), (head_rect.right, head_rect.centery), max(2, q(2)))
+            elif head_id == "bat":
+                for side in (-1, 1):
+                    ear = [(head_anchor[0] + side * q(1), head_rect.top + q(1)), (head_anchor[0] + side * q(2), max(0, head_rect.top - q(3))), (head_anchor[0], head_rect.top)]
+                    self.pygame.draw.polygon(overlay, accent, ear)
+            eye = (min(self.cell_px - 1, head_rect.right - q(1)), max(0, head_rect.centery - q(1)))
+            self.pygame.draw.circle(overlay, shadow, eye, max(1, self.cell_px // 28))
+
     def _draw_creature_overlay(self, x, y, color=None, attrs=0, *, kind="other", effects=()):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.05)
         cell_x = int(x) * self.cell_px
@@ -5035,14 +5482,236 @@ class PygameView:
             min(255, int(frame[2] * 1.04) + 18),
             168,
         )
-        if kind not in {"fish", "avian"}:
+        effect_set = {str(effect).strip().lower() for effect in (effects or ()) if str(effect).strip()}
+        form = ""
+        genetics = {}
+        abilities = set()
+        for effect in effect_set:
+            if effect.startswith("creature_form_"):
+                form = effect.removeprefix("creature_form_")
+            elif effect.startswith("genetic_ability:"):
+                abilities.add(effect.split(":", 1)[1])
+            elif effect.startswith("genetic_") and ":" in effect:
+                axis, value = effect.split(":", 1)
+                genetics[axis.removeprefix("genetic_")] = value
+
+        morphology_axes = ("body_frame", "head", "forelimbs", "hindlimbs", "tail", "surface")
+        genetic_morphology = all(genetics.get(axis) for axis in morphology_axes)
+
+        def q(value):
+            return int(round(float(value) * self.cell_px / 16.0))
+
+        airborne_frame = genetic_morphology and genetics["body_frame"] in {
+            "compact_avian", "raptor_avian", "streamlined_aquatic", "upright_avian", "winged_mammal",
+        }
+        if kind not in {"fish", "avian"} and form != "bat" and not airborne_frame:
             self._draw_contact_shadow(
                 overlay,
                 self.pygame.Rect(max(2, self.cell_px // 7), self.cell_px - max(3, self.cell_px // 7), self.cell_px - max(4, self.cell_px // 4), max(2, self.cell_px // 10)),
                 alpha=72,
             )
 
-        if kind == "feline":
+        if genetic_morphology:
+            self._draw_genetic_creature_parts(
+                overlay,
+                genetics,
+                fill=fill,
+                stroke=stroke,
+                shadow=shadow,
+                accent=accent,
+                stroke_w=stroke_w,
+            )
+        elif form == "crab":
+            shell = [
+                (q(5), q(7)),
+                (q(11), q(7)),
+                (q(13), q(9)),
+                (q(12), q(12)),
+                (q(4), q(12)),
+                (q(3), q(9)),
+            ]
+            # Four splayed walking legs on each side establish the lateral
+            # body plan before the shell can read as another round token.
+            leg_paths = (
+                ((q(5), q(8)), (q(3), q(7)), (q(1), q(6))),
+                ((q(4), q(9)), (q(2), q(9)), (q(1), q(10))),
+                ((q(4), q(10)), (q(2), q(11)), (q(1), q(12))),
+                ((q(5), q(11)), (q(3), q(13)), (q(2), q(14))),
+            )
+            for path in leg_paths:
+                self.pygame.draw.lines(overlay, shadow, False, path, max(1, stroke_w))
+                mirrored = tuple((2 * mid_x - px, py) for px, py in path)
+                self.pygame.draw.lines(overlay, shadow, False, mirrored, max(1, stroke_w))
+            self.pygame.draw.polygon(overlay, fill, shell)
+            self.pygame.draw.lines(overlay, stroke, True, shell, stroke_w)
+            self.pygame.draw.arc(
+                overlay,
+                accent,
+                (q(5), q(7), max(2, q(6)), max(2, q(4))),
+                0.1,
+                3.05,
+                max(1, stroke_w),
+            )
+            # Raised claws with split pincers remain readable at 16px.
+            for side in (-1, 1):
+                shoulder = (mid_x + side * q(3), q(8))
+                wrist = (mid_x + side * q(5), q(5))
+                self.pygame.draw.line(overlay, stroke, shoulder, wrist, max(1, stroke_w))
+                claw_center_x = mid_x + side * q(6)
+                claw = [
+                    (claw_center_x, q(5)),
+                    (claw_center_x + side * q(1), q(3)),
+                    (claw_center_x - side * q(1), q(4)),
+                    (claw_center_x - side * q(1), q(2)),
+                    (claw_center_x + side * q(1), q(4)),
+                ]
+                self.pygame.draw.polygon(overlay, accent, claw)
+                self.pygame.draw.lines(overlay, stroke, False, claw, max(1, stroke_w))
+            for eye_x in (q(6), q(10)):
+                self.pygame.draw.line(overlay, stroke, (eye_x, q(7)), (eye_x, q(6)), max(1, stroke_w))
+                self.pygame.draw.circle(overlay, shadow, (eye_x, q(6)), max(1, self.cell_px // 24))
+        elif form == "bat":
+            left_wing = [(q(7), q(7)), (q(4), q(4)), (q(1), q(5)), (q(3), q(9)), (q(1), q(12)), (q(6), q(10))]
+            right_wing = [(2 * mid_x - px, py) for px, py in reversed(left_wing)]
+            for wing in (left_wing, right_wing):
+                self.pygame.draw.polygon(overlay, fill, wing)
+                self.pygame.draw.lines(overlay, stroke, True, wing, max(1, stroke_w))
+            self.pygame.draw.ellipse(overlay, fill, (q(7), q(5), max(3, q(3)), max(6, q(8))))
+            self.pygame.draw.ellipse(overlay, stroke, (q(7), q(5), max(3, q(3)), max(6, q(8))), stroke_w)
+            for side in (-1, 1):
+                ear = [(mid_x + side * q(1), q(6)), (mid_x + side * q(2), q(3)), (mid_x, q(5))]
+                self.pygame.draw.polygon(overlay, accent, ear)
+                self.pygame.draw.lines(overlay, stroke, True, ear, max(1, stroke_w))
+            self.pygame.draw.circle(overlay, shadow, (mid_x, q(7)), max(1, self.cell_px // 24))
+        elif form == "rabbit":
+            body_rect = self.pygame.Rect(q(3), q(8), max(6, q(9)), max(4, q(6)))
+            head_center = (q(11), q(7))
+            head_r = max(2, q(2))
+            self.pygame.draw.ellipse(overlay, fill, body_rect)
+            self.pygame.draw.ellipse(overlay, stroke, body_rect, stroke_w)
+            self.pygame.draw.circle(overlay, fill, head_center, head_r)
+            self.pygame.draw.circle(overlay, stroke, head_center, head_r, stroke_w)
+            for offset in (-1, 1):
+                ear = self.pygame.Rect(head_center[0] + offset * q(1) - max(1, q(1) // 2), q(1 + (offset > 0)), max(2, q(2)), max(5, q(6)))
+                self.pygame.draw.ellipse(overlay, accent, ear)
+                self.pygame.draw.ellipse(overlay, stroke, ear, max(1, stroke_w))
+            self.pygame.draw.circle(overlay, accent, (q(3), q(10)), max(1, q(1)))
+            self.pygame.draw.ellipse(overlay, shadow, (q(7), q(11), max(3, q(5)), max(2, q(3))))
+            self.pygame.draw.circle(overlay, shadow, (q(12), q(6)), max(1, self.cell_px // 24))
+        elif form == "bear":
+            body_rect = self.pygame.Rect(q(3), q(7), max(7, q(10)), max(5, q(7)))
+            head_center = (q(4), q(7))
+            head_r = max(2, q(3))
+            self.pygame.draw.ellipse(overlay, fill, body_rect)
+            self.pygame.draw.ellipse(overlay, stroke, body_rect, stroke_w)
+            self.pygame.draw.circle(overlay, fill, head_center, head_r)
+            self.pygame.draw.circle(overlay, stroke, head_center, head_r, stroke_w)
+            for ear_x in (q(2), q(5)):
+                self.pygame.draw.circle(overlay, accent, (ear_x, q(4)), max(1, q(1)))
+                self.pygame.draw.circle(overlay, stroke, (ear_x, q(4)), max(1, q(1)), max(1, stroke_w))
+            for leg_x in (q(5), q(11)):
+                self.pygame.draw.line(overlay, shadow, (leg_x, q(11)), (leg_x, q(15)), max(1, q(2)))
+            self.pygame.draw.circle(overlay, accent, (q(13), q(9)), max(1, q(1)))
+        elif form in {"raccoon", "possum"}:
+            body_rect = self.pygame.Rect(q(4), q(8), max(6, q(8)), max(4, q(5)))
+            self.pygame.draw.ellipse(overlay, fill, body_rect)
+            self.pygame.draw.ellipse(overlay, stroke, body_rect, stroke_w)
+            if form == "raccoon":
+                head = self.pygame.Rect(q(2), q(7), max(4, q(4)), max(4, q(4)))
+                self.pygame.draw.ellipse(overlay, fill, head)
+                self.pygame.draw.ellipse(overlay, stroke, head, stroke_w)
+                self.pygame.draw.line(overlay, shadow, (q(2), q(9)), (q(6), q(8)), max(1, q(2)))
+                tail = [(q(11), q(9)), (q(14), q(7)), (q(15), q(9)), (q(13), q(11))]
+                self.pygame.draw.lines(overlay, accent, False, tail, max(2, q(2)))
+                for ring_x in (q(12), q(14)):
+                    self.pygame.draw.line(overlay, stroke, (ring_x, q(8)), (ring_x, q(10)), max(1, stroke_w))
+            else:
+                head = [(q(5), q(8)), (q(1), q(10)), (q(5), q(11))]
+                self.pygame.draw.polygon(overlay, fill, head)
+                self.pygame.draw.lines(overlay, stroke, True, head, max(1, stroke_w))
+                self.pygame.draw.circle(overlay, accent, (q(5), q(7)), max(1, q(1)))
+                self.pygame.draw.arc(overlay, accent, (q(10), q(7), max(5, q(6)), max(5, q(7))), 4.4, 6.5, max(1, stroke_w))
+            for leg_x in (q(6), q(10)):
+                self.pygame.draw.line(overlay, shadow, (leg_x, q(11)), (leg_x, q(14)), max(1, stroke_w))
+        elif form in {"skunk", "porcupine", "armadillo", "otter"}:
+            body_rect = self.pygame.Rect(q(3), q(8), max(7, q(9)), max(4, q(5)))
+            if form == "otter":
+                body_rect = self.pygame.Rect(q(2), q(9), max(8, q(11)), max(3, q(4)))
+            self.pygame.draw.ellipse(overlay, fill, body_rect)
+            self.pygame.draw.ellipse(overlay, stroke, body_rect, stroke_w)
+            head_center = (q(12), q(9))
+            self.pygame.draw.circle(overlay, fill, head_center, max(2, q(2)))
+            self.pygame.draw.circle(overlay, stroke, head_center, max(2, q(2)), stroke_w)
+            if form == "skunk":
+                tail_path = [(q(4), q(10)), (q(2), q(7)), (q(3), q(3)), (q(6), q(6))]
+                self.pygame.draw.lines(overlay, stroke, False, tail_path, max(3, q(4)))
+                self.pygame.draw.lines(overlay, accent, False, tail_path, max(1, q(1)))
+                self.pygame.draw.line(overlay, accent, (q(5), q(8)), (q(11), q(10)), max(1, q(1)))
+            elif form == "porcupine":
+                for spike_x in range(q(4), q(12), max(1, q(2))):
+                    self.pygame.draw.line(overlay, accent, (spike_x, q(9)), (spike_x - q(1), q(4 + (spike_x % 2))), max(1, stroke_w))
+            elif form == "armadillo":
+                for band_x in (q(6), q(8), q(10)):
+                    self.pygame.draw.arc(overlay, accent, (band_x - q(1), q(8), max(2, q(3)), max(3, q(5))), 1.5, 4.75, max(1, stroke_w))
+                self.pygame.draw.line(overlay, accent, (q(3), q(10)), (q(1), q(12)), max(1, stroke_w))
+            else:
+                self.pygame.draw.line(overlay, accent, (q(3), q(11)), (q(0), q(13)), max(2, q(2)))
+                self.pygame.draw.circle(overlay, shadow, (q(13), q(8)), max(1, self.cell_px // 24))
+            for leg_x in (q(6), q(10)):
+                self.pygame.draw.line(overlay, shadow, (leg_x, body_rect.bottom - 1), (leg_x, q(15)), max(1, stroke_w))
+        elif form == "turtle":
+            shell = self.pygame.Rect(q(3), q(7), max(7, q(10)), max(5, q(7)))
+            self.pygame.draw.ellipse(overlay, fill, shell)
+            self.pygame.draw.ellipse(overlay, stroke, shell, stroke_w)
+            self.pygame.draw.arc(overlay, accent, shell.inflate(-q(2), -q(2)), 0.0, math.tau, max(1, stroke_w))
+            self.pygame.draw.circle(overlay, fill, (q(14), q(10)), max(1, q(2)))
+            self.pygame.draw.circle(overlay, stroke, (q(14), q(10)), max(1, q(2)), stroke_w)
+            for foot in ((q(4), q(13)), (q(11), q(13)), (q(4), q(8)), (q(11), q(8))):
+                self.pygame.draw.ellipse(overlay, accent, (foot[0] - q(1), foot[1] - q(1), max(2, q(3)), max(2, q(2))))
+        elif form == "snake":
+            path = [(q(1), q(11)), (q(4), q(8)), (q(7), q(12)), (q(10), q(8)), (q(13), q(10))]
+            self.pygame.draw.lines(overlay, stroke, False, path, max(2, q(3)))
+            self.pygame.draw.lines(overlay, fill, False, path, max(1, q(2)))
+            self.pygame.draw.polygon(overlay, accent, [(q(12), q(8)), (q(15), q(9)), (q(13), q(11))])
+            self.pygame.draw.circle(overlay, shadow, (q(14), q(9)), max(1, self.cell_px // 24))
+        elif form == "frog":
+            body_rect = self.pygame.Rect(q(4), q(7), max(6, q(8)), max(4, q(6)))
+            self.pygame.draw.ellipse(overlay, fill, body_rect)
+            self.pygame.draw.ellipse(overlay, stroke, body_rect, stroke_w)
+            for eye_x in (q(6), q(10)):
+                self.pygame.draw.circle(overlay, accent, (eye_x, q(6)), max(1, q(2)))
+                self.pygame.draw.circle(overlay, shadow, (eye_x, q(6)), max(1, self.cell_px // 24))
+            for side in (-1, 1):
+                hip = (mid_x + side * q(3), q(11))
+                knee = (mid_x + side * q(6), q(13))
+                foot = (mid_x + side * q(7), q(15))
+                self.pygame.draw.lines(overlay, shadow, False, (hip, knee, foot), max(1, stroke_w))
+        elif form in {"owl", "ground_bird", "turkey", "quail"}:
+            if form == "owl":
+                body_rect = self.pygame.Rect(q(4), q(5), max(6, q(8)), max(7, q(10)))
+                self.pygame.draw.ellipse(overlay, fill, body_rect)
+                self.pygame.draw.ellipse(overlay, stroke, body_rect, stroke_w)
+                self.pygame.draw.circle(overlay, accent, (mid_x, q(7)), max(3, q(4)))
+                for eye_x in (q(7), q(9)):
+                    self.pygame.draw.circle(overlay, shadow, (eye_x, q(7)), max(1, q(1)))
+                self.pygame.draw.polygon(overlay, stroke, [(q(7), q(9)), (q(9), q(9)), (mid_x, q(11))])
+            else:
+                if form == "turkey":
+                    self.pygame.draw.arc(overlay, accent, (q(1), q(2), max(9, q(11)), max(9, q(12))), 1.35, 4.95, max(2, q(2)))
+                body_rect = self.pygame.Rect(q(4), q(7 if form != "quail" else 8), max(6, q(8)), max(5, q(7 if form != "quail" else 6)))
+                self.pygame.draw.ellipse(overlay, fill, body_rect)
+                self.pygame.draw.ellipse(overlay, stroke, body_rect, stroke_w)
+                head_center = (q(11), q(6 if form != "quail" else 7))
+                self.pygame.draw.circle(overlay, fill, head_center, max(2, q(2)))
+                self.pygame.draw.circle(overlay, stroke, head_center, max(2, q(2)), stroke_w)
+                self.pygame.draw.polygon(overlay, accent, [(q(12), q(6)), (q(15), q(7)), (q(12), q(8))])
+                if form == "turkey":
+                    self.pygame.draw.line(overlay, accent, (q(11), q(7)), (q(11), q(10)), max(1, q(1)))
+                elif form == "quail":
+                    self.pygame.draw.arc(overlay, accent, (q(9), q(2), max(3, q(4)), max(3, q(5))), 2.8, 5.2, max(1, stroke_w))
+                for leg_x in (q(7), q(9)):
+                    self.pygame.draw.line(overlay, shadow, (leg_x, body_rect.bottom - 1), (leg_x, q(15)), max(1, stroke_w))
+        elif kind == "feline":
             body = self.pygame.Rect(inset + max(2, self.cell_px // 8), mid_y - max(1, self.cell_px // 12), max(6, self.cell_px - max(6, self.cell_px // 2)), max(5, self.cell_px // 3))
             head = self.pygame.Rect(body.left - max(1, self.cell_px // 10), body.top - max(1, self.cell_px // 10), max(4, self.cell_px // 3), max(4, self.cell_px // 3))
             ears = [
@@ -5082,23 +5751,60 @@ class PygameView:
                     max(1, stroke_w),
                 )
         elif kind == "avian":
-            body = self.pygame.Rect(mid_x - max(3, self.cell_px // 5), mid_y - max(3, self.cell_px // 6), max(6, self.cell_px // 2), max(7, self.cell_px // 2))
+            pigeon = form == "pigeon"
+            body = self.pygame.Rect(q(4 if pigeon else 3), q(7), max(5, q(8 if pigeon else 9)), max(4, q(6 if pigeon else 5)))
+            head_r = max(2, q(2 if pigeon else 1.7))
+            head_center = (q(10 if pigeon else 11), q(5 if pigeon else 6))
+            tail = [
+                (body.left + q(2), body.centery),
+                (q(1), q(11 if pigeon else 10)),
+                (body.left + q(1), body.bottom - q(1)),
+            ]
             wing = [
-                (body.left + max(2, self.cell_px // 10), body.top + max(2, self.cell_px // 10)),
-                (body.right - max(2, self.cell_px // 10), body.centery),
-                (body.left + max(3, self.cell_px // 8), body.bottom - max(2, self.cell_px // 10)),
+                (body.left + q(2), body.top + q(1)),
+                (body.right - q(1), body.centery),
+                (body.left + q(3), body.bottom - q(1)),
             ]
             beak = [
-                (body.right - max(1, self.cell_px // 12), body.top + max(3, self.cell_px // 8)),
-                (body.right + max(2, self.cell_px // 10), body.top + max(1, self.cell_px // 3)),
-                (body.right - max(1, self.cell_px // 12), body.top + max(1, self.cell_px // 2)),
+                (head_center[0] + head_r - 1, head_center[1] - q(1)),
+                (min(self.cell_px - 1, head_center[0] + head_r + q(2 if pigeon else 3)), head_center[1]),
+                (head_center[0] + head_r - 1, head_center[1] + q(1)),
             ]
+            self.pygame.draw.polygon(overlay, accent, tail)
+            self.pygame.draw.lines(overlay, stroke, True, tail, max(1, stroke_w))
             self.pygame.draw.ellipse(overlay, fill, body)
             self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.circle(overlay, fill, head_center, head_r)
+            self.pygame.draw.circle(overlay, stroke, head_center, head_r, stroke_w)
             self.pygame.draw.polygon(overlay, accent, wing)
-            self.pygame.draw.polygon(overlay, stroke, wing, stroke_w)
+            self.pygame.draw.lines(overlay, stroke, True, wing, max(1, stroke_w))
             self.pygame.draw.polygon(overlay, accent, beak)
-            self.pygame.draw.polygon(overlay, stroke, beak, stroke_w)
+            self.pygame.draw.lines(overlay, stroke, True, beak, max(1, stroke_w))
+            eye = (head_center[0] + max(1, head_r // 3), head_center[1] - max(1, head_r // 3))
+            self.pygame.draw.circle(overlay, shadow, eye, max(1, self.cell_px // 28))
+            leg_y = min(self.cell_px - q(2), body.bottom + q(1))
+            for leg_x in (q(7), q(9)):
+                self.pygame.draw.line(overlay, shadow, (leg_x, body.bottom - q(1)), (leg_x, leg_y), max(1, stroke_w))
+                self.pygame.draw.line(overlay, shadow, (leg_x - q(1), leg_y), (leg_x + q(1), leg_y), max(1, stroke_w))
+            if pigeon:
+                # The short iridescent collar and two wing bars are the most
+                # stable pigeon cues once plumage colors are abstracted away.
+                self.pygame.draw.arc(
+                    overlay,
+                    accent,
+                    (q(7), q(4), max(3, q(5)), max(3, q(5))),
+                    0.55,
+                    2.4,
+                    max(1, stroke_w),
+                )
+                for offset in (0, q(1)):
+                    self.pygame.draw.line(
+                        overlay,
+                        stroke,
+                        (body.left + q(3) + offset, body.top + q(2)),
+                        (body.left + q(5) + offset, body.bottom - q(2)),
+                        max(1, stroke_w),
+                    )
         elif kind in {"insect", "arachnid"}:
             abdomen = self.pygame.Rect(mid_x - max(2, self.cell_px // 8), mid_y, max(4, self.cell_px // 4), max(4, self.cell_px // 4))
             thorax = self.pygame.Rect(mid_x - max(2, self.cell_px // 8), mid_y - max(2, self.cell_px // 6), max(4, self.cell_px // 4), max(4, self.cell_px // 4))
@@ -5160,27 +5866,25 @@ class PygameView:
             tail_end_y = body.centery + (max(2, self.cell_px // 8) if kind == "amphibian" else 0)
             self.pygame.draw.line(overlay, accent, (body.left + max(1, self.cell_px // 20), body.centery), (body.left - max(4, self.cell_px // 8), tail_end_y), max(1, stroke_w))
         else:
-            body = self.pygame.Rect(mid_x - max(3, self.cell_px // 6), mid_y - max(3, self.cell_px // 8), max(6, self.cell_px // 2), max(6, self.cell_px // 2))
+            # Unknown mammal-like wildlife should at least retain a head,
+            # body, stance, and tail instead of falling back to a circle.
+            body = self.pygame.Rect(mid_x - max(2, self.cell_px // 5), mid_y - max(1, self.cell_px // 12), max(6, self.cell_px // 2), max(4, self.cell_px // 3))
+            head = self.pygame.Rect(body.left - max(2, self.cell_px // 7), body.top - max(1, self.cell_px // 12), max(4, self.cell_px // 4), max(4, self.cell_px // 4))
             self.pygame.draw.ellipse(overlay, fill, body)
             self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
-            self.pygame.draw.arc(
+            self.pygame.draw.ellipse(overlay, fill, head)
+            self.pygame.draw.ellipse(overlay, stroke, head, stroke_w)
+            ear_r = max(1, self.cell_px // 16)
+            self.pygame.draw.circle(overlay, accent, (head.left + ear_r + 1, head.top), ear_r)
+            for leg_x in (body.left + max(2, self.cell_px // 7), body.right - max(2, self.cell_px // 7)):
+                self.pygame.draw.line(overlay, shadow, (leg_x, body.bottom - 1), (leg_x, min(self.cell_px - inset, body.bottom + max(2, self.cell_px // 7))), max(1, stroke_w))
+            self.pygame.draw.line(
                 overlay,
                 accent,
-                (body.left, body.top + max(1, self.cell_px // 10), body.w, max(4, body.h - max(2, self.cell_px // 6))),
-                0.45,
-                2.6,
+                (body.right - max(1, self.cell_px // 12), body.centery),
+                (min(self.cell_px - inset, body.right + max(3, self.cell_px // 6)), body.top - max(1, self.cell_px // 12)),
                 max(1, stroke_w),
             )
-
-        genetics = {}
-        abilities = set()
-        for raw in tuple(effects or ()):
-            token = str(raw or "").strip().lower()
-            if token.startswith("genetic_ability:"):
-                abilities.add(token.split(":", 1)[1])
-            elif token.startswith("genetic_") and ":" in token:
-                axis, value = token.split(":", 1)
-                genetics[axis.removeprefix("genetic_")] = value
 
         if genetics:
             accent_rgb = color_word_rgb(genetics.get("accent"), fallback=frame) or frame
@@ -6127,7 +6831,7 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_actor_outfit_overlay_legacy(self, x, y, color=None, attrs=0, *, kind="secondary"):
+    def _draw_actor_outfit_overlay_legacy(self, x, y, color=None, attrs=0, *, kind="secondary", effects=()):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
@@ -6219,6 +6923,7 @@ class PygameView:
         else:
             self.pygame.draw.circle(overlay, fill, (px // 2, px // 2), max(2, px // 8))
 
+        self._clip_fitted_basewear_to_actor(overlay, kind=kind, effects=effects)
         self.surface.blit(overlay, (cell_x, cell_y))
 
     @staticmethod
@@ -6362,7 +7067,7 @@ class PygameView:
                 return value.removeprefix(prefix)
         return default
 
-    def _draw_actor_drawable_overlay(self, x, y, color=None, attrs=0, *, effects=()):
+    def _draw_actor_drawable_overlay(self, x, y, color=None, attrs=0, *, kind="secondary", effects=()):
         """Draw one opted-in garment through the shared drawable catalogue.
 
         Returning false is the explicit compatibility seam: callers continue
@@ -6494,6 +7199,7 @@ class PygameView:
                         radius=max(1, self.cell_px // 36),
                     )
 
+        self._clip_fitted_basewear_to_actor(raster.overlay, kind=kind, effects=effects)
         self.surface.blit(raster.overlay, (int(x) * self.cell_px, int(y) * self.cell_px))
         return True
 
@@ -6745,16 +7451,17 @@ class PygameView:
         if emblem:
             self._draw_clipped_actor_pattern_mark(overlay, pattern_centers()[0], emblem, frame)
 
+        self._clip_fitted_basewear_to_actor(overlay, kind=kind, effects=effects)
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_actor_outfit_overlay(self, x, y, color=None, attrs=0, *, kind="secondary", effects=()):
-        if self._draw_actor_drawable_overlay(x, y, color=color, attrs=attrs, effects=effects):
+        if self._draw_actor_drawable_overlay(x, y, color=color, attrs=attrs, kind=kind, effects=effects):
             return
         # Compatibility only. Built-in wearables all carry a catalogue
         # drawable, so the historical name-aware code below is reached solely
         # by old/external effects or a recoverable drawable-resolution failure.
         if self.cell_px <= 10:
-            self._draw_actor_outfit_overlay_legacy(x, y, color=color, attrs=attrs, kind=kind)
+            self._draw_actor_outfit_overlay_legacy(x, y, color=color, attrs=attrs, kind=kind, effects=effects)
             return
         if self.cell_px <= 28:
             self._draw_actor_outfit_overlay_small(x, y, color=color, attrs=attrs, kind=kind, effects=effects)
@@ -7256,6 +7963,7 @@ class PygameView:
             # Lace, finish, prints, and embroidery may decorate the cut, but
             # they must not silently fill its negative space back in.
             overlay.blit(basewear_clip, (0, 0), special_flags=self.pygame.BLEND_RGBA_MULT)
+        self._clip_fitted_basewear_to_actor(overlay, kind=kind, effects=effects)
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_actor_identity_rune_overlay(self, x, y, color=None, attrs=0, *, effects=()):

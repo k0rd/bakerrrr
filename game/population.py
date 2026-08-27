@@ -3394,6 +3394,17 @@ def _spawn_wildlife(sim, rng, profile, position):
     speed = round(rng.uniform(float(speed_lo), float(speed_hi)), 2)
     behavior = _wildlife_behavior_for_profile(profile)
     physical = _animal_physical_profile_for_profile(profile)
+    fauna_species_id = str(
+        profile.get("fauna_species_id")
+        or profile.get("id")
+        or species
+    ).strip().lower().replace(" ", "_").replace("-", "_") or "local_creature"
+    fauna_population_key = str(
+        profile.get("fauna_population_key")
+        or f"species:{fauna_species_id}"
+    ).strip().lower().replace(" ", "_").replace("-", "_")
+    ecology = _ecology_profile_for_profile(profile)
+    ecology.species = fauna_species_id
     identity_token = (
         f"wildlife:{profile.get('id', 'creature')}:"
         f"{int(home[0])}:{int(home[1])}:{int(home[2])}"
@@ -3422,6 +3433,9 @@ def _spawn_wildlife(sim, rng, profile, position):
             common_name=common_name,
             coat_variant=profile.get("coat_variant"),
             fauna_line_name=profile.get("fauna_line_name"),
+            fauna_species_id=fauna_species_id,
+            ancestral_species=profile.get("ancestral_species"),
+            fauna_population_key=fauna_population_key,
         ),
         AI("wildlife"),
         MovementThrottle(
@@ -3443,7 +3457,7 @@ def _spawn_wildlife(sim, rng, profile, position):
         Vitality(max_hp=max(6, max_hp)),
         CoverState(),
         physical,
-        _ecology_profile_for_profile(profile),
+        ecology,
         _animal_context_for_profile(profile),
         _animal_social_profile_for_profile(profile),
         AnimalMemory(),

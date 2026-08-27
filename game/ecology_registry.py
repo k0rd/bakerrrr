@@ -876,8 +876,13 @@ def register_native_fauna_line(sim, eid, genome=None, *, source="natural_breedin
     adult_ecology = getattr(reproduction, "adult_ecology_profile", None)
     adult_ecology = adult_ecology if isinstance(adult_ecology, Mapping) else {}
     adult_max_hp = int(getattr(reproduction, "adult_max_hp", getattr(vitality, "max_hp", max(6, round(adult_size * 0.5)))) or max(6, round(adult_size * 0.5)))
-    population_species = _key(getattr(ecology, "species", "") or getattr(identity, "species", ""), "local_creature")
-    population_key = f"species:{population_species}"
+    population_species = _key(
+        getattr(identity, "fauna_species_id", "")
+        or getattr(ecology, "species", "")
+        or getattr(identity, "species", ""),
+        "local_creature",
+    )
+    population_key = _key(getattr(identity, "fauna_population_key", "")) or f"species:{population_species}"
     shared_population = _shared_fauna_population_payload(
         registry,
         population_key,
@@ -893,6 +898,11 @@ def register_native_fauna_line(sim, eid, genome=None, *, source="natural_breedin
         "presentation": {
             "taxonomy_class": _key(getattr(identity, "taxonomy_class", ""), "other"),
             "species": str(getattr(identity, "species", "") or "local creature").strip().lower(),
+            "fauna_species_id": population_species,
+            "emergent_species": population_species.startswith("fauna_species:"),
+            "ancestral_species": list(getattr(identity, "ancestral_species", ()) or ()),
+            "fauna_population_key": population_key,
+            "population_name": str(getattr(identity, "species", "") or common_name).strip().lower(),
             "common_name": common_name,
             "fauna_line_name": str(getattr(identity, "fauna_line_name", "") or common_name).strip().lower(),
             "coat_variant": _key(getattr(identity, "coat_variant", "")),
@@ -941,6 +951,10 @@ def register_native_fauna_line(sim, eid, genome=None, *, source="natural_breedin
         native_id=native_id,
         lineage_name=record["presentation"]["common_name"],
         root_animal_id=record["root_animal_id"],
+        species=record["presentation"]["species"],
+        species_id=record["presentation"]["fauna_species_id"],
+        population_key=population_key,
+        emergent_species=record["presentation"]["emergent_species"],
         source=record["source"],
         newly_native=not bool(existing),
     ))
@@ -977,6 +991,10 @@ def native_fauna_profiles(sim):
             "native_genome": copy.deepcopy(dict(genome)),
             "taxonomy_class": _key(presentation.get("taxonomy_class"), "other"),
             "species": str(presentation.get("species") or "local creature").strip().lower(),
+            "fauna_species_id": _key(presentation.get("fauna_species_id") or ecology.get("species") or presentation.get("species"), "local_creature"),
+            "emergent_species": bool(presentation.get("emergent_species", False)),
+            "ancestral_species": tuple(presentation.get("ancestral_species") or ()),
+            "fauna_population_key": _key(presentation.get("fauna_population_key") or record.get("population_key")),
             "common_names": (common_name,),
             "fauna_line_name": str(presentation.get("fauna_line_name") or common_name).strip().lower(),
             "coat_variant": _key(presentation.get("coat_variant")),
@@ -1080,7 +1098,12 @@ def ecology_species_registry_rows(sim, domain):
             name = str(record.get("lineage_name") or presentation.get("common_name") or "local creature").strip()
             appearance = _fauna_registry_appearance(record)
             population = fauna_population_snapshot(sim, native_id)
-            population_name = str(ecology.get("species") or presentation.get("species") or name).replace("_", " ").strip()
+            population_name = str(
+                presentation.get("population_name")
+                or presentation.get("species")
+                or ecology.get("species")
+                or name
+            ).replace("_", " ").strip()
         else:
             identity = record.get("identity") if isinstance(record.get("identity"), Mapping) else {}
             name = str(record.get("lineage_name") or identity.get("name") or identity.get("plant_name") or "local plant").strip()

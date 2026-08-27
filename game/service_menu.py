@@ -4743,6 +4743,7 @@ class ServiceMenuSystem(System):
         transcript = [
             f"{authority['authority_name']} accepts one cull declaration per fauna species per run.",
             "A declaration lowers the whole species population by one 20-point tier; coat, pattern, and other micro-variations remain members of it.",
+            "Substantially transformed bred fauna can establish a separately managed species; reproductive roots alone do not merge populations.",
             "Five deliberate declarations across five distinct runs can end in extinction; the registry never treats repeated clicks as population history.",
         ]
         if not rows:

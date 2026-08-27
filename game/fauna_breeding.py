@@ -36,13 +36,20 @@ from game.components import (
 from game.ecology_registry import ecology_registry_write_batch, register_native_fauna_line
 from game.fauna_genetics import (
     GENERIC_BODY_CHANNELS,
+    animal_descendant_is_emergent_species,
+    animal_emergent_species_id,
     animal_genome_from_payload,
     animal_genome_payload,
     apply_animal_genome_expression,
     fauna_genomes_compatible,
     inherit_animal_genome,
+    taxonomy_for_animal_genome,
 )
-from game.fauna_naming import apply_fauna_phenotype_descriptor, generate_fauna_line_name
+from game.fauna_naming import (
+    apply_fauna_phenotype_descriptor,
+    generate_fauna_line_name,
+    generate_fauna_species_name,
+)
 
 
 BREEDING_UPDATE_INTERVAL = 120
@@ -257,6 +264,73 @@ def _average(left, right, field, default):
     return sum(values) / len(values) if values else float(default)
 
 
+def _fauna_species_id(identity, ecology=None):
+    explicit = _key(getattr(identity, "fauna_species_id", "")) if identity is not None else ""
+    if explicit:
+        return explicit
+    ecological = _key(getattr(ecology, "species", "")) if ecology is not None else ""
+    if ecological:
+        return ecological
+    return _key(getattr(identity, "species", ""), "local_creature") if identity is not None else "local_creature"
+
+
+def _fauna_ancestry(identity):
+    values = tuple(getattr(identity, "ancestral_species", ()) or ()) if identity is not None else ()
+    if not values and identity is not None:
+        values = (getattr(identity, "species", "local creature"),)
+    return tuple(dict.fromkeys(
+        str(value).strip().lower()
+        for value in values
+        if str(value).strip()
+    ))
+
+
+def _descendant_species_profile(child, left, right, left_identity, right_identity, left_ecology, right_ecology):
+    parent_species_ids = tuple(dict.fromkeys((
+        _fauna_species_id(left_identity, left_ecology),
+        _fauna_species_id(right_identity, right_ecology),
+    )))
+    parent_taxonomies = (
+        getattr(left_identity, "taxonomy_class", "other"),
+        getattr(right_identity, "taxonomy_class", "other"),
+    )
+    emergent = animal_descendant_is_emergent_species(
+        child,
+        left,
+        right,
+        parent_species=parent_species_ids,
+        parent_taxonomies=parent_taxonomies,
+    )
+    if emergent:
+        species_id = animal_emergent_species_id(
+            child,
+            left,
+            right,
+            parent_species_ids=parent_species_ids,
+        )
+        species_name = generate_fauna_species_name(
+            child,
+            parent_species_ids=parent_species_ids,
+            mixed_parent_species=len(set(parent_species_ids)) > 1,
+        )
+    else:
+        species_id = parent_species_ids[0] if parent_species_ids else "local_creature"
+        species_name = str(
+            getattr(left_identity, "species", "")
+            or getattr(right_identity, "species", "")
+            or species_id
+        ).strip().lower()
+    ancestry = tuple(dict.fromkeys(_fauna_ancestry(left_identity) + _fauna_ancestry(right_identity)))
+    return {
+        "emergent": emergent,
+        "species_id": species_id,
+        "species_name": species_name or "local creature",
+        "taxonomy_class": taxonomy_for_animal_genome(child, fallback=parent_taxonomies[0]),
+        "ancestral_species": ancestry,
+        "population_key": f"species:{species_id}",
+    }
+
+
 def _spawn_fauna_offspring(sim, carrier_eid, co_parent_eid, co_parent_genome_payload, *, brood_index, assisted_by_eid=None):
     positions = sim.ecs.get(Position)
     parent_pos = positions.get(carrier_eid)
@@ -306,13 +380,25 @@ def _spawn_fauna_offspring(sim, carrier_eid, co_parent_eid, co_parent_genome_pay
         parent_names=parent_common_names,
         seed_token=token,
     )
+    species_profile = _descendant_species_profile(
+        child_genome,
+        carrier_genome,
+        co_parent_genome,
+        parent_identity,
+        co_parent_identity,
+        parent_ecology,
+        co_parent_ecology,
+    )
     identity = CreatureIdentity(
-        taxonomy_class=str(getattr(parent_identity, "taxonomy_class", "other") or "other"),
-        species=str(getattr(parent_identity, "species", "local creature") or "local creature"),
+        taxonomy_class=species_profile["taxonomy_class"],
+        species=species_profile["species_name"],
         creature_type="animal",
         common_name=f"young {line_name}",
         coat_variant=None,
         fauna_line_name=line_name,
+        fauna_species_id=species_profile["species_id"],
+        ancestral_species=species_profile["ancestral_species"],
+        fauna_population_key=species_profile["population_key"],
     )
     physical = AnimalPhysicalProfile(
         size_score=max(1.0, adult_size * 0.58),
@@ -320,7 +406,7 @@ def _spawn_fauna_offspring(sim, carrier_eid, co_parent_eid, co_parent_genome_pay
         juvenile=True,
     )
     ecology = EcologyProfile(
-        species=str(getattr(parent_ecology, "species", "") or getattr(co_parent_ecology, "species", "") or line_name).strip().lower(),
+        species=species_profile["species_id"],
         predator_score=_average(parent_ecology, co_parent_ecology, "predator_score", 10.0),
         prey_score=_average(parent_ecology, co_parent_ecology, "prey_score", 24.0),
         scavenger_score=_average(parent_ecology, co_parent_ecology, "scavenger_score", 18.0),
@@ -428,6 +514,12 @@ def _spawn_fauna_offspring(sim, carrier_eid, co_parent_eid, co_parent_genome_pay
         color_word=child_genome.expressed.get("color_word"),
         pattern=child_genome.expressed.get("pattern"),
         abilities=tuple(child_genome.expressed.get("abilities") or ()),
+        taxonomy_class=species_profile["taxonomy_class"],
+        species=species_profile["species_name"],
+        species_id=species_profile["species_id"],
+        emergent_species=species_profile["emergent"],
+        ancestral_species=species_profile["ancestral_species"],
+        population_key=species_profile["population_key"],
         x=child_pos[0],
         y=child_pos[1],
         z=child_pos[2],
