@@ -1718,6 +1718,23 @@ class IncidentKnowledgeSystem(System):
             z = int(event.data.get("z", 0) or 0)
         except (TypeError, ValueError):
             z = 0
+        if event.type == "fire_started" and not (
+            tuple(event.data.get("observer_eids", ()) or ())
+            or tuple(event.data.get("accountable_observer_eids", ()) or ())
+        ):
+            # A fire is reportable only when somebody actually notices its
+            # starting cell.  Do this bounded visibility read once at ignition;
+            # spreading fires must not multiply witness scans across every new
+            # burning tile.
+            event.data.update(
+                observation_payload_for_position(
+                    self.sim,
+                    x,
+                    y,
+                    z,
+                    observation_channels=("actor_witness",),
+                )
+            )
         chunk_subject = ""
         try:
             chunk_x, chunk_y = self.sim.chunk_coords(int(x), int(y))

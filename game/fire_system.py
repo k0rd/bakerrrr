@@ -9,6 +9,7 @@ from engine.systems import System
 from game.components import Collider, DroneState, NPCNeeds, Position, Render, StatusEffects, Vitality
 from game.items import apply_item_fire_damage, item_display_name, split_item_stack_metadata
 from game.flora_runtime import apply_flora_fire_damage, flora_at
+from game.incident_runtime import incident_record, latest_reported_incident
 from game.physical_target_runtime import (
     apply_physical_property_damage,
     physical_property_profile,
@@ -212,6 +213,16 @@ class FireSystem(System):
         self._property_damage_records_cache = None
         self.sim.events.subscribe("explosion_triggered", self.on_explosion_triggered)
         self.sim.events.subscribe("smoke_cloud_released", self.on_smoke_cloud_released)
+        self.sim.events.subscribe("incident_authority_reported", self.on_incident_authority_reported)
+        # Reconcile persisted response seeds/scenes against canonical reports on
+        # the first ordinary fire update after startup as well as after calls.
+        fire_state(self.sim)["fire_response_dirty"] = True
+
+    def on_incident_authority_reported(self, event):
+        incident = incident_record(self.sim, event.data.get("incident_id"))
+        if not isinstance(incident, dict) or _text(incident.get("kind")).lower() != "structure_fire":
+            return
+        fire_state(self.sim)["fire_response_dirty"] = True
 
     def _begin_update_caches(self):
         self._loaded_chunk_cache = set(_loaded_chunk_keys(self.sim))
@@ -1388,6 +1399,7 @@ class FireSystem(System):
             if summary.get("active"):
                 summaries[property_id] = summary
         active_properties = set(summaries)
+        response_properties = set()
 
         for property_id in tuple(active_properties):
             prop = getattr(self.sim, "properties", {}).get(property_id)
@@ -1396,6 +1408,14 @@ class FireSystem(System):
             summary = summaries[property_id]
             if not summary.get("active") or not summary.get("public_frontage"):
                 continue
+            incident = latest_reported_incident(
+                self.sim,
+                kind="structure_fire",
+                property_id=property_id,
+            )
+            if not isinstance(incident, dict):
+                continue
+            response_properties.add(property_id)
             seed_id = _text(response_seed_ids.get(property_id)) or f"fire-response:{property_id}"
             response_seed_ids[property_id] = seed_id
             seed_state["active"][seed_id] = {
@@ -1410,6 +1430,9 @@ class FireSystem(System):
                 ),
                 "end_tick": _safe_int(getattr(self.sim, "tick", 0), 0) + max(FIRE_RESPONSE_KEEP_TICKS, ticks_per_hour),
                 "priority_score": 24.0 + float(summary.get("active_cells", 0) or 0),
+                "response_incident_id": _safe_int(incident.get("id"), -1),
+                "reported_by_eid": incident.get("reported_by_eid"),
+                "report_method": _text(incident.get("report_method")).lower(),
                 "blueprint": {
                     "scene_type": "gathering",
                     "fixture_name": "Response Barrier",
@@ -1423,14 +1446,7 @@ class FireSystem(System):
                             "fixed_position": False,
                             "work_authority": "emergency_response",
                             "emergency_authority": True,
-                        },
-                        {
-                            "role": "guard",
-                            "career": "traffic_guard",
-                            "linger_ticks": 16,
-                            "fixed_position": True,
-                            "work_authority": "emergency_cordon",
-                            "emergency_authority": True,
+                            "dispatch_ingress": True,
                         },
                     ],
                     "keep_hours": 1,
@@ -1445,7 +1461,7 @@ class FireSystem(System):
             }
 
         for property_id, seed_id in tuple(response_seed_ids.items()):
-            if property_id in active_properties:
+            if property_id in response_properties:
                 continue
             seed_state["active"].pop(_text(seed_id), None)
             response_seed_ids.pop(property_id, None)

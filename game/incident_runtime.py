@@ -421,6 +421,28 @@ def incident_records(sim):
     )
 
 
+def latest_reported_incident(sim, *, kind, property_id):
+    kind = _text(kind).lower()
+    property_id = _text(property_id)
+    if not kind or not property_id:
+        return None
+    rows = [
+        incident
+        for incident in incident_records(sim)
+        if _text(incident.get("kind")).lower() == kind
+        and _text(incident.get("property_id")) == property_id
+        and bool(incident.get("officially_reported", False))
+    ]
+    rows.sort(
+        key=lambda row: (
+            _int_or_default(row.get("last_observed_tick"), _int_or_default(row.get("created_tick"), 0)),
+            _int_or_default(row.get("id"), 0),
+        ),
+        reverse=True,
+    )
+    return rows[0] if rows else None
+
+
 def incident_propagation_allowed(record, propagation_depth):
     if not isinstance(record, dict):
         return False

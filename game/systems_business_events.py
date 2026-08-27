@@ -9,9 +9,9 @@ import random
 
 from engine.events import Event
 from engine.systems import System
-from engine.visibility import has_line_of_sight
+from engine.visibility import has_line_of_sight, observer_can_see_position
 from game.civic_records import civic_license_is_active
-from game.incident_runtime import incident_record, incident_records
+from game.incident_runtime import incident_record, incident_records, latest_reported_incident
 from game.location_presentation_runtime import _location_building_category
 from game.meaningful_objects_runtime import materialize_place_object_near
 from game.opportunities import tracked_target_scene_rows
@@ -4603,6 +4603,30 @@ def _business_event_seed_scene_specs(sim, active_chunk, player_pos):
         blueprint = dict(seed.get("blueprint", {}) or {})
         if not blueprint:
             continue
+        seed_kind = str(seed.get("kind", "") or "").strip().lower()
+        response_incident = None
+        if seed_kind == "fire_response":
+            response_incident = latest_reported_incident(
+                sim,
+                kind="structure_fire",
+                property_id=target_property_id,
+            )
+            if not isinstance(response_incident, dict):
+                continue
+            # Old saves may retain the pre-dispatch response blueprint.  Apply
+            # the live invariant here too: only response workers enter, and
+            # they enter from the dispatch ingress rather than the frontage.
+            actor_specs = []
+            for actor_spec in tuple(blueprint.get("actor_specs", ()) or ()):
+                if not isinstance(actor_spec, dict):
+                    continue
+                career = str(actor_spec.get("career", "") or "").strip().lower()
+                if career not in {"firefighter", "response_worker"}:
+                    continue
+                grounded_spec = dict(actor_spec)
+                grounded_spec["dispatch_ingress"] = True
+                actor_specs.append(grounded_spec)
+            blueprint["actor_specs"] = actor_specs
         distance = _manhattan(player_pos.x, player_pos.y, anchor[0], anchor[1])
         specs.append({
             "scene_id": f"seed:{str(seed.get('seed_id', '') or '').strip()}",
@@ -4610,7 +4634,10 @@ def _business_event_seed_scene_specs(sim, active_chunk, player_pos):
             "prop": prop,
             "pulse": {
                 "category": str(seed.get("category", "") or "").strip().lower(),
-                "event_phase": str(seed.get("kind", "") or "").strip().lower(),
+                "event_phase": seed_kind,
+                "response_incident_id": (response_incident or {}).get("id", seed.get("response_incident_id")),
+                "reported_by_eid": (response_incident or {}).get("reported_by_eid", seed.get("reported_by_eid")),
+                "report_method": str((response_incident or {}).get("report_method", seed.get("report_method", "")) or "").strip().lower(),
             },
             "anchor": anchor,
             "score": float(seed.get("priority_score", 16.0) or 16.0) - (float(distance) * 0.02),
@@ -5938,6 +5965,48 @@ class BusinessPulseSceneSystem(System):
                     return tiles
         return tiles
 
+    def _response_ingress_tiles(self, anchor, *, reserved=None, limit=4):
+        """Find loaded, unseen tiles from which dispatched responders can enter."""
+        player_pos = self._player_pos()
+        if player_pos is None:
+            return []
+        notice_radius = 14
+        chunk_size = max(8, int(getattr(self.sim, "chunk_size", 16) or 16))
+        candidates = self._open_air_support_tiles(
+            anchor,
+            reserved=reserved,
+            min_radius=max(notice_radius + 1, chunk_size),
+            max_radius=max(notice_radius + 6, chunk_size * 2),
+            limit=64,
+        )
+        eligible = []
+        for tile in candidates:
+            if self.sim.detail_for_xy(int(tile[0]), int(tile[1])) == "unloaded":
+                continue
+            if int(tile[2]) != int(player_pos.z):
+                continue
+            if observer_can_see_position(
+                self.sim,
+                self.player_eid,
+                int(player_pos.x),
+                int(player_pos.y),
+                int(player_pos.z),
+                int(tile[0]),
+                int(tile[1]),
+                int(tile[2]),
+                notice_radius,
+            ):
+                continue
+            eligible.append(tile)
+        eligible.sort(
+            key=lambda tile: (
+                -_manhattan(int(player_pos.x), int(player_pos.y), int(tile[0]), int(tile[1])),
+                int(tile[1]),
+                int(tile[0]),
+            )
+        )
+        return eligible[: max(0, int(limit))]
+
     def _candidate_scene_specs(self):
         active_chunk = self._active_chunk_coord()
         player_pos = self._player_pos()
@@ -6496,6 +6565,15 @@ class BusinessPulseSceneSystem(System):
             "emergency_authority": bool(actor_spec.get("emergency_authority", False)),
             "required_work_license": str(actor_spec.get("required_work_license", "") or "").strip().lower(),
         }
+        response_incident_id = scene.get("response_incident_id")
+        if response_incident_id not in (None, "", -1):
+            note.update({
+                "received_report": True,
+                "response_incident_id": int(response_incident_id),
+                "knowledge_channel": "dispatch_handoff",
+                "reported_by_eid": scene.get("reported_by_eid"),
+                "report_method": str(scene.get("report_method", "") or "").strip().lower(),
+            })
         note.update(public_place_mood_fields(scene))
         intel_note = {}
         if source_kind == "seed":
@@ -6604,6 +6682,21 @@ class BusinessPulseSceneSystem(System):
             "linger_ticks": max(4, int((actor_spec or {}).get("linger_ticks", 18) or 18)),
         }
         self._decorate_scene_actor(scene, actor_spec, eid, rng=rng)
+        if bool((actor_spec or {}).get("dispatch_ingress")):
+            ai = self.sim.ecs.get(AI).get(eid)
+            if ai is not None:
+                ai.incident_id = scene.get("response_incident_id")
+                ai.response_role = "firefighter_dispatched"
+                ai.suppress_report_for_incident_id = scene.get("response_incident_id")
+            self.sim.emit(Event(
+                "incident_responder_assigned",
+                incident_id=scene.get("response_incident_id"),
+                npc_eid=int(eid),
+                response_role="firefighter_dispatched",
+                x=int(route_points[0][0]),
+                y=int(route_points[0][1]),
+                z=int(route_points[0][2]),
+            ))
         return eid
 
     def _set_scene_actor_route(self, scene, eid, points):
@@ -6843,9 +6936,10 @@ class BusinessPulseSceneSystem(System):
     def _materialize_gathering_scene(self, scene, blueprint, rng):
         anchor = scene["anchor"]
         reserved = {anchor}
+        fire_response = str(scene.get("event_phase", "") or "").strip().lower() == "fire_response"
         support_tiles = self._anchor_support_tiles(anchor, reserved=reserved, limit=6)
         fixture_tile = support_tiles[0] if support_tiles else None
-        if fixture_tile is not None:
+        if fixture_tile is not None and not fire_response:
             scene_prop = self._scene_property(scene)
             interaction = _business_event_scene_fixture_interaction(
                 self.sim,
@@ -6879,11 +6973,19 @@ class BusinessPulseSceneSystem(System):
             reserved.add(fixture_tile)
 
         cluster_tiles = [anchor] + self._anchor_support_tiles(anchor, reserved=reserved, limit=8)
+        response_ingress_tiles = self._response_ingress_tiles(anchor, reserved=reserved, limit=8) if fire_response else []
         actor_specs = list(blueprint.get("actor_specs", ()) or ())
         for index, actor_spec in enumerate(actor_specs):
-            spawn_pos = cluster_tiles[index % len(cluster_tiles)]
-            route_points = [spawn_pos]
-            if not bool((actor_spec or {}).get("fixed_position")) and len(cluster_tiles) > 1:
+            dispatch_ingress = bool((actor_spec or {}).get("dispatch_ingress"))
+            if dispatch_ingress:
+                if not response_ingress_tiles:
+                    continue
+                spawn_pos = response_ingress_tiles[index % len(response_ingress_tiles)]
+                route_points = [anchor]
+            else:
+                spawn_pos = cluster_tiles[index % len(cluster_tiles)]
+                route_points = [spawn_pos]
+            if not dispatch_ingress and not bool((actor_spec or {}).get("fixed_position")) and len(cluster_tiles) > 1:
                 route_points.append(cluster_tiles[(index + 1) % len(cluster_tiles)])
             eid = self._spawn_scene_actor(scene, actor_spec, spawn_pos=spawn_pos, route_points=route_points, rng=rng)
             if eid is not None:
@@ -6932,6 +7034,9 @@ class BusinessPulseSceneSystem(System):
                 or (spec.get("pulse") or {}).get("required_work_license", "")
                 or ""
             ).strip().lower(),
+            "response_incident_id": (spec.get("pulse") or {}).get("response_incident_id"),
+            "reported_by_eid": (spec.get("pulse") or {}).get("reported_by_eid"),
+            "report_method": str((spec.get("pulse") or {}).get("report_method", "") or "").strip().lower(),
         }
         scene.update(public_place_mood_fields(spec.get("pulse") or {}))
         rng = random.Random(f"{self.sim.seed}:business-scene:{scene['scene_id']}")
@@ -7610,12 +7715,27 @@ class BusinessPulseSceneSystem(System):
         elif event_phase == "soft_front":
             self._process_soft_front_scene(scene, prop, player_pos)
 
+    def _fire_response_scene_is_grounded(self, scene):
+        if str((scene or {}).get("event_phase", "") or "").strip().lower() != "fire_response":
+            return True
+        incident = incident_record(self.sim, (scene or {}).get("response_incident_id"))
+        return bool(
+            isinstance(incident, dict)
+            and str(incident.get("kind", "") or "").strip().lower() == "structure_fire"
+            and bool(incident.get("officially_reported", False))
+        )
+
     def update(self):
         active_chunk = self._active_chunk_coord()
         player_pos = self._player_pos()
         state = _business_event_scene_state(self.sim)
         active = state.setdefault("active", {})
         chunk_tallies = _chunk_entity_tallies(self.sim)
+        for scene_id, scene in tuple(active.items()):
+            if self._fire_response_scene_is_grounded(scene):
+                continue
+            active.pop(scene_id, None)
+            self._dematerialize_scene(scene, chunk_tallies=chunk_tallies)
         _prune_business_event_seeds(self.sim, active_scene_ids=active.keys())
 
         if active_chunk is None or player_pos is None:
