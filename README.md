@@ -1,6 +1,10 @@
 # BAKERRRR
 (older screenshots at the end)
 <img width="1550" height="973" alt="image" src="https://github.com/user-attachments/assets/4a3aa869-75cc-4203-9b3e-409e8fbf780a" />
+<img width="1502" height="978" alt="Screenshot_20260814_220138" src="https://github.com/user-attachments/assets/28d30ed6-1f7c-4122-bd31-4daaa423717a" />
+<img width="1534" height="1000" alt="Screenshot_20260819_233604" src="https://github.com/user-attachments/assets/5bab6900-7f30-4e2e-ae1c-cd4297a9ed49" />
+<img width="1514" height="983" alt="Screenshot_20260819_060837" src="https://github.com/user-attachments/assets/e2dcb494-a783-442e-9125-05c7ba4245c3" />
+
 <img width="1532" height="981" alt="image" src="https://github.com/user-attachments/assets/372067bc-53c8-499e-af6f-5f68022b1cd0" />
 <img width="1540" height="994" alt="image" src="https://github.com/user-attachments/assets/c8445d84-55b5-4950-a071-59c043523ac1" />
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/109c5f99-cd15-485f-9bff-1b97b323c643" />
