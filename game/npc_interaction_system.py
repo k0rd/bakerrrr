@@ -328,6 +328,7 @@ from game.dialogue_runtime import (
     _grant_dialogue_guard_grace,
     _infrastructure_target_property,
     _person_contact_entry,
+    player_modal_active as _player_modal_active,
     _property_access_summary,
     _property_contact_benefits,
     _property_contact_entry,
@@ -16105,6 +16106,8 @@ class NPCInteractionSystem(System):
     def on_npc_interact(self, event):
         if event.data.get("eid") != self.player_eid:
             return
+        if bool(event.data.get("handled", False)):
+            return
         self._start_dialogue_with_npc(
             event.data.get("npc_eid"),
             allow_distant=bool(event.data.get("allow_distant")),
@@ -16132,11 +16135,55 @@ class NPCInteractionSystem(System):
         else:
             highlight_topic_ids = tuple(raw_highlights or ())
 
+        if _player_modal_active(self.sim, include_dialog=False):
+            self._deferred_npc_dialogue_requests()[int(npc_eid)] = {
+                "npc_eid": int(npc_eid),
+                "prompt_lines": prompt_lines,
+                "highlight_topic_ids": highlight_topic_ids,
+                "allow_distant": bool(event.data.get("allow_distant", False)),
+                "queued_tick": int(getattr(self.sim, "tick", 0) or 0),
+            }
+            return
+
         self._start_dialogue_with_npc(
             npc_eid,
             prompt_lines=prompt_lines,
             highlight_topic_ids=highlight_topic_ids,
+            allow_distant=bool(event.data.get("allow_distant", False)),
         )
+
+    def _deferred_npc_dialogue_requests(self):
+        state = getattr(self.sim, "deferred_npc_dialogue_requests", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.deferred_npc_dialogue_requests = state
+        return state
+
+    def _resume_deferred_npc_dialogue_request(self):
+        if _player_modal_active(self.sim):
+            return False
+        deferred = self._deferred_npc_dialogue_requests()
+        ordered = sorted(
+            tuple(deferred.items()),
+            key=lambda row: (
+                int((row[1] or {}).get("queued_tick", 0) or 0) if isinstance(row[1], dict) else 0,
+                int(row[0]),
+            ),
+        )
+        for raw_npc_eid, request in ordered:
+            deferred.pop(raw_npc_eid, None)
+            if not isinstance(request, dict):
+                continue
+            npc_eid = request.get("npc_eid", raw_npc_eid)
+            opened = self._start_dialogue_with_npc(
+                npc_eid,
+                prompt_lines=tuple(request.get("prompt_lines", ()) or ()),
+                highlight_topic_ids=tuple(request.get("highlight_topic_ids", ()) or ()),
+                allow_distant=bool(request.get("allow_distant", False)),
+            )
+            if opened:
+                return True
+        return False
 
     def on_npc_warn_property(self, event):
         if event.data.get("offender_eid") != self.player_eid:
@@ -16244,8 +16291,7 @@ class NPCInteractionSystem(System):
     def _tick_relationship_dialogue_requests(self):
         if map_mode_active(self.sim):
             return
-        state = self._dialog_ui_state()
-        if state.get("open") or self.player_eid is None:
+        if _player_modal_active(self.sim) or self.player_eid is None:
             return
         player_pos = self.sim.ecs.get(Position).get(self.player_eid)
         if not player_pos:
@@ -16791,6 +16837,8 @@ class NPCInteractionSystem(System):
     def update(self):
         tick = self.sim.tick
         if tick % self.CONTRACTOR_TICK_INTERVAL != 0:
+            return
+        if self._resume_deferred_npc_dialogue_request():
             return
         self._tick_relationship_dialogue_requests()
         self._tick_contractors()

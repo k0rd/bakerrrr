@@ -73,6 +73,7 @@ from game.appearance_loadout import (
 )
 from game.item_semantics import inventory_has_phone
 from game.incident_silencing import incident_case_cooperation_withheld
+from game.dialogue_runtime import player_modal_active as _player_modal_active
 from game.quick_travel_ramps import map_mode_active
 from engine.systems import System
 from game.system_support.offense_runtime import (
@@ -2375,6 +2376,102 @@ class CriminalJusticeSystem(System):
         state.setdefault("machine_action", None)
         return state
 
+    def _deferred_player_contact_records(self):
+        records = getattr(self.sim, "justice_deferred_player_contacts", None)
+        if not isinstance(records, dict):
+            records = {}
+            self.sim.justice_deferred_player_contacts = records
+        return records
+
+    def _defer_player_contact(self, event_type, data):
+        payload = dict(data or {})
+        if event_type == "justice_report_candidate_contact":
+            contact_eid = payload.get("officer_eid")
+            actor_eid = payload.get("candidate_eid")
+        else:
+            contact_eid = payload.get("investigator_eid")
+            actor_eid = payload.get("actor_eid")
+        key = ":".join(
+            str(value)
+            for value in (
+                event_type,
+                contact_eid,
+                actor_eid,
+                payload.get("incident_id"),
+            )
+        )
+        self._deferred_player_contact_records()[key] = {
+            "event_type": str(event_type),
+            "data": payload,
+            "queued_tick": int(getattr(self.sim, "tick", 0) or 0),
+        }
+        return True
+
+    def _clear_deferred_player_contact_pending(self, event_type, data):
+        payload = data if isinstance(data, dict) else {}
+        if event_type == "justice_report_candidate_contact":
+            contact_eid = payload.get("officer_eid")
+            pending_key = "contact_pending"
+        else:
+            contact_eid = payload.get("investigator_eid")
+            pending_key = "canvas_contact_pending"
+        _ai, context = self._received_report_context(contact_eid, payload.get("incident_id"))
+        if context is None:
+            return
+        updated = dict(context)
+        updated[pending_key] = False
+        self._resume_received_report_route(contact_eid, updated)
+
+    def _deferred_player_contact_still_adjacent(self, event_type, data):
+        payload = data if isinstance(data, dict) else {}
+        if event_type == "justice_report_candidate_contact":
+            contact_eid = payload.get("officer_eid")
+            actor_eid = payload.get("candidate_eid")
+        else:
+            contact_eid = payload.get("investigator_eid")
+            actor_eid = payload.get("actor_eid")
+        if contact_eid is None or actor_eid is None:
+            return False
+        try:
+            if int(actor_eid) != int(self.player_eid):
+                return False
+        except (TypeError, ValueError):
+            return False
+        contact_pos = self._position_for(contact_eid)
+        player_pos = self._position_for(self.player_eid)
+        if contact_pos is None or player_pos is None or _entity_is_downed(self.sim, contact_eid):
+            return False
+        return bool(
+            int(contact_pos.z) == int(player_pos.z)
+            and _manhattan(contact_pos.x, contact_pos.y, player_pos.x, player_pos.y) <= 1
+        )
+
+    def _resume_deferred_player_contact(self):
+        if _player_modal_active(self.sim):
+            return False
+        records = self._deferred_player_contact_records()
+        ordered = sorted(
+            tuple(records.items()),
+            key=lambda row: (
+                int((row[1] or {}).get("queued_tick", 0) or 0) if isinstance(row[1], dict) else 0,
+                str(row[0]),
+            ),
+        )
+        for key, record in ordered:
+            records.pop(key, None)
+            if not isinstance(record, dict):
+                continue
+            event_type = str(record.get("event_type", "") or "").strip()
+            data = record.get("data") if isinstance(record.get("data"), dict) else {}
+            if event_type not in {"justice_report_candidate_contact", "justice_case_canvas_contact"}:
+                continue
+            if not self._deferred_player_contact_still_adjacent(event_type, data):
+                self._clear_deferred_player_contact_pending(event_type, data)
+                continue
+            self.sim.emit(Event(event_type, **data))
+            return True
+        return False
+
     def _reset_dialog_ui(self, state=None):
         state = state if isinstance(state, dict) else self._dialog_ui_state()
         state.update({
@@ -3428,6 +3525,8 @@ class CriminalJusticeSystem(System):
         }
 
     def _open_player_questioning_prompt(self, npc_eid=None, *, snapshot=None, source_prop=None):
+        if _player_modal_active(self.sim):
+            return False
         snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot()
         if snapshot is None:
             return False
@@ -3645,6 +3744,9 @@ class CriminalJusticeSystem(System):
         if str(case.get("status", "") or "").strip().lower() != "unresolved":
             self._finish_received_report_search(officer_eid, context, reason="case_resolved")
             return
+        if int(candidate_eid) == int(self.player_eid) and _player_modal_active(self.sim):
+            self._defer_player_contact(event.type, event.data)
+            return
         report_account = context.get("subject_account") if isinstance(context.get("subject_account"), dict) else {}
         close_account = build_witness_subject_account(
             self.sim,
@@ -3823,10 +3925,8 @@ class CriminalJusticeSystem(System):
         if context is None:
             return
         if int(actor_eid) == int(self.player_eid):
-            if self._player_surrender_prompt_open() or bool(self._dialog_ui_state().get("open", False)):
-                updated = dict(context)
-                updated["canvas_contact_pending"] = False
-                self._resume_received_report_route(investigator_eid, updated)
+            if _player_modal_active(self.sim):
+                self._defer_player_contact(event.type, event.data)
                 return
             case = justice_case_for_incident(self.sim, incident_id) or {}
             kind = str(case.get("kind", "incident") or "incident").strip().replace("_", " ")
@@ -4052,6 +4152,8 @@ class CriminalJusticeSystem(System):
         )
 
     def _open_player_identity_check_prompt(self, npc_eid, match_row):
+        if _player_modal_active(self.sim):
+            return False
         if npc_eid is None or not isinstance(match_row, dict):
             return False
         case = match_row.get("case") if isinstance(match_row.get("case"), dict) else {}
@@ -4679,6 +4781,8 @@ class CriminalJusticeSystem(System):
         return True
 
     def _open_player_surrender_prompt(self, npc_eid, *, snapshot=None, source_prop=None, respect_cooldown=False):
+        if _player_modal_active(self.sim):
+            return False
         try:
             npc_eid = int(npc_eid)
         except (TypeError, ValueError):
@@ -7704,11 +7808,29 @@ class CriminalJusticeSystem(System):
         if npc_will is not None and str(npc_will.intent or "").strip().lower() in THREAT_STATES and npc_will.target_eid == self.player_eid:
             return
         snapshot = self._player_bookable_snapshot()
-        if snapshot is not None and self._open_player_justice_prompt(npc_eid, snapshot=snapshot, respect_cooldown=False):
-            event.data["handled"] = True
+        identity_match = None if snapshot is not None else self._player_unresolved_identity_match()
+        if snapshot is None and identity_match is None:
             return
-        identity_match = self._player_unresolved_identity_match()
-        if identity_match is not None and self._open_player_identity_check_prompt(npc_eid, identity_match):
+
+        # Depending on system registration order, the ordinary talk handler
+        # may already have opened this exact player-initiated conversation.
+        # It is safe to hand that one interaction to justice; an unrelated
+        # modal must remain untouched.
+        state = self._dialog_ui_state()
+        if (
+            bool(state.get("open"))
+            and str(state.get("kind", "conversation") or "conversation").strip().lower() == "conversation"
+            and state.get("npc_eid") == npc_eid
+        ):
+            self.sim.set_time_paused(False, reason="dialog")
+            self._reset_dialog_ui(state)
+
+        opened = (
+            self._open_player_justice_prompt(npc_eid, snapshot=snapshot, respect_cooldown=False)
+            if snapshot is not None
+            else self._open_player_identity_check_prompt(npc_eid, identity_match)
+        )
+        if opened:
             event.data["handled"] = True
 
     def on_justice_surrender_choice(self, event):
@@ -8552,6 +8674,8 @@ class CriminalJusticeSystem(System):
             ))
 
     def update(self):
+        if self._resume_deferred_player_contact():
+            return
         if self._player_surrender_prompt_open() and self._player_bookable_snapshot() is None:
             self._close_player_surrender_prompt()
         if self._player_bookable_snapshot() is None:

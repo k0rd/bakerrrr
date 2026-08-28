@@ -15,6 +15,42 @@ from game.property_runtime import (
 from game.system_support.entity_naming import _entity_display_name
 
 
+PLAYER_MODAL_STATE_NAMES = (
+    "casino_ui",
+    "dialog_ui",
+    "help_ui",
+    "character_ui",
+    "report_ui",
+    "log_ui",
+    "debug_ui",
+    "inventory_ui",
+    "trade_ui",
+    "action_menu_ui",
+    "drone_command_ui",
+    "drone_sheet_ui",
+    "wire_kit_ui",
+    "wire_connection_ui",
+    "wire_scene_ui",
+)
+
+
+def player_modal_active(sim, *, include_dialog=True):
+    """Return whether a panel currently owns the player's input.
+
+    This is deliberately a read-only check.  Dialogue-producing systems can
+    use it without creating UI state or importing the input system.
+    """
+    if sim is None:
+        return False
+    for state_name in PLAYER_MODAL_STATE_NAMES:
+        if not include_dialog and state_name == "dialog_ui":
+            continue
+        state = getattr(sim, state_name, None)
+        if isinstance(state, dict) and bool(state.get("open", False)):
+            return True
+    return False
+
+
 def active_contractor_record(sim, npc_eid, *, ally_eid=None, jobs=None):
     if sim is None or npc_eid is None:
         return None
