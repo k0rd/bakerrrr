@@ -1447,6 +1447,7 @@ class FireSystem(System):
                             "work_authority": "emergency_response",
                             "emergency_authority": True,
                             "dispatch_ingress": True,
+                            "site_affiliated": False,
                         },
                     ],
                     "keep_hours": 1,

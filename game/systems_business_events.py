@@ -4625,6 +4625,7 @@ def _business_event_seed_scene_specs(sim, active_chunk, player_pos):
                     continue
                 grounded_spec = dict(actor_spec)
                 grounded_spec["dispatch_ingress"] = True
+                grounded_spec["site_affiliated"] = False
                 actor_specs.append(grounded_spec)
             blueprint["actor_specs"] = actor_specs
         distance = _manhattan(player_pos.x, player_pos.y, anchor[0], anchor[1])
@@ -6668,7 +6669,9 @@ class BusinessPulseSceneSystem(System):
             role,
             (int(spawn_pos[0]), int(spawn_pos[1]), int(spawn_pos[2])),
             career=career,
-            home=unique_points[0],
+            home=(int(spawn_pos[0]), int(spawn_pos[1]), int(spawn_pos[2]))
+            if bool((actor_spec or {}).get("dispatch_ingress"))
+            else unique_points[0],
         )
         ai = self.sim.ecs.get(AI).get(eid)
         will = self.sim.ecs.get(NPCWill).get(eid)
@@ -6937,6 +6940,15 @@ class BusinessPulseSceneSystem(System):
         anchor = scene["anchor"]
         reserved = {anchor}
         fire_response = str(scene.get("event_phase", "") or "").strip().lower() == "fire_response"
+        if fire_response:
+            # The barrier is carried in by the dispatched crew.  Retain its
+            # blueprint now, but do not create anything at the fire frontage
+            # until a responder has physically crossed the map to the scene.
+            scene["response_fixture_blueprint"] = {
+                "name": str(blueprint.get("fixture_name", "Response Barrier") or "Response Barrier"),
+                "fixture_type": str(blueprint.get("fixture_type", "fire_response_barrier") or "fire_response_barrier"),
+                "glyph": str(blueprint.get("fixture_glyph", "!") or "!")[:1],
+            }
         support_tiles = self._anchor_support_tiles(anchor, reserved=reserved, limit=6)
         fixture_tile = support_tiles[0] if support_tiles else None
         if fixture_tile is not None and not fire_response:
@@ -7725,6 +7737,94 @@ class BusinessPulseSceneSystem(System):
             and bool(incident.get("officially_reported", False))
         )
 
+    def _materialize_arrived_fire_response_fixture(self, scene):
+        if str((scene or {}).get("event_phase", "") or "").strip().lower() != "fire_response":
+            return None
+        if bool((scene or {}).get("response_fixture_deployed", False)):
+            return None
+        anchor = (scene or {}).get("anchor")
+        if not isinstance(anchor, (tuple, list)) or len(anchor) < 3:
+            return None
+        anchor = (int(anchor[0]), int(anchor[1]), int(anchor[2]))
+
+        actor_state = _business_event_actor_state(self.sim)
+        positions = self.sim.ecs.get(Position)
+        arrived_eid = None
+        for raw_eid in tuple((scene or {}).get("spawned_entity_ids", ()) or ()):
+            try:
+                eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            note = actor_state.get(eid, {}) if isinstance(actor_state, dict) else {}
+            career = str((note or {}).get("career", "") or "").strip().lower()
+            pos = positions.get(eid)
+            if career not in {"firefighter", "response_worker"} or pos is None or _entity_is_downed(self.sim, eid):
+                continue
+            if int(pos.z) != anchor[2]:
+                continue
+            if _manhattan(int(pos.x), int(pos.y), anchor[0], anchor[1]) <= _FIRE_RESPONSE_WORK_RANGE:
+                arrived_eid = eid
+                break
+        if arrived_eid is None:
+            return None
+
+        reserved = {anchor}
+        for raw_eid in tuple((scene or {}).get("spawned_entity_ids", ()) or ()):
+            try:
+                pos = positions.get(int(raw_eid))
+            except (TypeError, ValueError):
+                pos = None
+            if pos is not None:
+                reserved.add((int(pos.x), int(pos.y), int(pos.z)))
+        support_tiles = self._anchor_support_tiles(anchor, reserved=reserved, limit=6)
+        if not support_tiles:
+            return None
+
+        fixture = (scene or {}).get("response_fixture_blueprint")
+        fixture = fixture if isinstance(fixture, dict) else {}
+        fixture_type = str(fixture.get("fixture_type", "fire_response_barrier") or "fire_response_barrier")
+        rng = random.Random(
+            f"{self.sim.seed}:business-scene-response-fixture:"
+            f"{scene.get('scene_id', '')}:{scene.get('response_incident_id', '')}"
+        )
+        interaction = _business_event_scene_fixture_interaction(
+            self.sim,
+            scene,
+            self._scene_property(scene),
+            fixture_type=fixture_type,
+            rng=rng,
+        )
+        fixture_property_id = self._register_scene_fixture(
+            scene,
+            support_tiles[0],
+            name=fixture.get("name", "Response Barrier"),
+            fixture_type=fixture_type,
+            glyph=fixture.get("glyph", "!"),
+            extra_metadata=(interaction or {}).get("property_metadata"),
+        )
+        if not fixture_property_id:
+            return None
+        if isinstance(interaction, dict):
+            container_kind = str(
+                ((interaction.get("property_metadata") or {}).get("container_kind", "scene"))
+            ).strip().lower() or "scene"
+            loot_entries = [
+                dict(entry)
+                for entry in tuple(interaction.get("loot_entries", ()) or ())
+                if isinstance(entry, dict)
+            ]
+            if loot_entries:
+                container_entries = _property_runtime_container_entries(
+                    self.sim,
+                    fixture_property_id,
+                    container_kind=container_kind,
+                )
+                container_entries[:] = loot_entries
+        scene["response_fixture_deployed"] = True
+        scene["response_fixture_deployed_by_eid"] = int(arrived_eid)
+        scene["response_fixture_deployed_tick"] = int(self.sim.tick)
+        return fixture_property_id
+
     def update(self):
         active_chunk = self._active_chunk_coord()
         player_pos = self._player_pos()
@@ -7766,6 +7866,7 @@ class BusinessPulseSceneSystem(System):
         for scene in list(active.values()):
             self._update_scene_consequences(scene)
             self._update_scene_actor_routes(scene)
+            self._materialize_arrived_fire_response_fixture(scene)
         self._prune_chunk_spillover(active_chunk, tallies=chunk_tallies)
         _prune_business_event_seeds(self.sim, active_scene_ids=active.keys())
 
