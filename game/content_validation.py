@@ -776,6 +776,9 @@ def _validate_items(path, report, *, drawable_ids=None):
         if "name" in item:
             _validate_non_empty_string(report, source, item_path + ["name"], item["name"], field_name="name")
 
+        if "description" in item and not isinstance(item.get("description"), str):
+            report.error(source, item_path + ["description"], "description must be a string")
+
         if "glyph" in item:
             if _validate_non_empty_string(report, source, item_path + ["glyph"], item["glyph"], field_name="glyph"):
                 if len(str(item["glyph"])) > 1:
@@ -784,6 +787,15 @@ def _validate_items(path, report, *, drawable_ids=None):
 
         if "stack_max" in item:
             _validate_int(report, source, item_path + ["stack_max"], item["stack_max"], minimum=1, field_name="stack_max")
+        if "inventory_slot_cost" in item:
+            _validate_int(
+                report,
+                source,
+                item_path + ["inventory_slot_cost"],
+                item["inventory_slot_cost"],
+                minimum=0,
+                field_name="inventory_slot_cost",
+            )
         stack_max_for_profile = item.get("stack_max", 1)
 
         if "tags" in item:
@@ -1987,4 +1999,11 @@ def validate_repo_content():
     _validate_npc_names(NPC_NAMES_PATH, report)
     _validate_render_semantics(RENDER_SEMANTICS_PATH, report)
 
+    return report
+
+
+def validate_items_content(path, *, drawable_ids=None):
+    """Validate one item-catalog candidate through the built-in item rules."""
+    report = ValidationReport()
+    _validate_items(Path(path), report, drawable_ids=drawable_ids)
     return report

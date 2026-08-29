@@ -1639,6 +1639,11 @@ def _item_armor_shape(item_def, tags):
 def _item_cosmetic_shape(item_def, tags):
     item_id = _item_id_text(item_def)
     slots = _appearance_slot_set(item_def)
+    drawable = str(item_def.get("appearance_drawable", "") or "").strip().lower()
+    if drawable:
+        return drawable
+    if item_id == "raw_animal_pelt" or "pelt" in item_id:
+        return "pelt"
     if "earpiece" in item_id:
         return "earpiece"
     if "lanyard" in item_id or "badge" in item_id:
@@ -1661,20 +1666,20 @@ def _item_cosmetic_shape(item_def, tags):
         return "boots"
     if "hat" in slots or item_id in {"cap", "baseball_cap", "bandana"}:
         return "bandana" if "bandana" in item_id else "cap"
-    if tags & {"jewelry"} or slots & {"necklace", "ring_left", "ring_right", "bracelet", "earrings"}:
-        if "watch" in item_id:
-            return "watch"
-        if "ring" in item_id:
-            return "ring"
-        if "earring" in item_id:
-            return "earrings"
-        if "bracelet" in item_id:
-            return "bracelet"
-        return "necklace"
     if "scarf" in item_id:
         return "scarf"
     if "gloves" in item_id:
         return "gloves"
+    if tags & {"jewelry"} or slots & {"necklace", "ring_left", "ring_right", "bracelet", "earrings"}:
+        if "watch" in item_id:
+            return "watch"
+        if "earring" in item_id:
+            return "earrings"
+        if "ring" in item_id:
+            return "ring"
+        if "bracelet" in item_id:
+            return "bracelet"
+        return "necklace"
     if "outer" in slots or item_id in {"jacket", "windbreaker", "coat", "cardigan", "blazer", "vest", "security_jacket", "patrol_rain_shell"}:
         if "vest" in item_id:
             return "vest"

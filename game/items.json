@@ -2554,6 +2554,18 @@
     "legal_status": "legal",
     "effects": []
   },
+  "sealed_packet": {
+    "name": "Sealed Packet",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "token",
+      "quest",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
   "parking_stub": {
     "name": "Parking Claim Ticket",
     "glyph": "=",

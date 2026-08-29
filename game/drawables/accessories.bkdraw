@@ -1,0 +1,235 @@
+bakerrrr-drawable 1
+
+drawable earrings context garment:
+    paint metal = fill
+    paint glint = edge
+    variant compact:
+        layer body:
+            circle left_stud metal:
+                center mid - 3.5, shoulder_y
+                radius 0.55
+            mirror left_stud as right_stud
+        surface garment:
+            left_stud
+            right_stud
+    variant detailed:
+        layer body:
+            circle left_stud metal:
+                center mid - 3.75, shoulder_y
+                radius 0.65
+                outline glint
+                width 0.2
+            mirror left_stud as right_stud
+            line left_drop metal width 0.3:
+                mid - 3.75, shoulder_y + 0.5
+                mid - 3.75, shoulder_y + 1.5
+            mirror left_drop as right_drop
+        surface garment:
+            left_stud
+            right_stud
+
+drawable earpiece context garment:
+    paint shell = fill
+    paint trim = edge
+    variant compact:
+        layer body:
+            circle bud shell:
+                center mid + 3.5, shoulder_y
+                radius 0.65
+            line wire trim width 0.4:
+                mid + 3.75, shoulder_y + 0.5
+                mid + 4, shoulder_y + 2
+        surface garment:
+            bud
+    variant detailed:
+        layer body:
+            circle bud shell:
+                center mid + 3.75, shoulder_y
+                radius 0.7
+                outline trim
+                width 0.2
+            line wire trim width 0.3:
+                mid + 4, shoulder_y + 0.5
+                mid + 4.25, shoulder_y + 1.5
+                mid + 3.75, shoulder_y + 2.5
+            circle mic shell:
+                center mid + 3.75, shoulder_y + 2.5
+                radius 0.3
+        surface garment:
+            bud
+            mic
+
+drawable ring context garment:
+    paint metal = fill
+    paint glint = edge
+    variant compact:
+        layer body:
+            circle band metal:
+                center body_right + 2, hip_y - 1
+                radius 0.55
+        surface garment:
+            band
+    variant detailed:
+        layer body:
+            circle band metal:
+                center body_right + 2, hip_y - 1
+                radius 0.7
+                outline glint
+                width 0.25
+            circle stone glint:
+                center body_right + 2, hip_y - 1.5
+                radius 0.25
+        surface garment:
+            band
+            stone
+
+drawable necklace context garment:
+    paint metal = fill
+    paint glint = edge
+    variant compact:
+        layer body:
+            line chain metal width 0.45:
+                mid - 2, shoulder_y + 0.5
+                mid, shoulder_y + 3
+                mid + 2, shoulder_y + 0.5
+            circle pendant metal:
+                center mid, shoulder_y + 3
+                radius 0.45
+        surface garment:
+            pendant
+    variant detailed:
+        layer body:
+            line chain metal width 0.3:
+                mid - 2.25, shoulder_y + 0.5
+                mid, shoulder_y + 3.25
+                mid + 2.25, shoulder_y + 0.5
+            circle pendant metal:
+                center mid, shoulder_y + 3.25
+                radius 0.6
+                outline glint
+                width 0.2
+        surface garment:
+            pendant
+
+drawable scarf context garment:
+    paint fabric = fill
+    paint trim = edge
+    variant compact:
+        layer body:
+            ellipse wrap fabric:
+                x mid - 3
+                y shoulder_y - 0.5
+                w 6
+                h 2.5
+            polygon tail fabric:
+                mid + 1, shoulder_y + 1
+                mid + 3, shoulder_y + 6
+                mid + 1, shoulder_y + 5
+        surface garment:
+            wrap
+            tail
+    variant detailed:
+        layer body:
+            ellipse wrap fabric:
+                x mid - 3.25
+                y shoulder_y - 0.75
+                w 6.5
+                h 2.75
+                outline trim
+                width 0.25
+            polygon tail fabric outline trim width 0.25:
+                mid + 1, shoulder_y + 1
+                mid + 3.25, shoulder_y + 6.5
+                mid + 1, shoulder_y + 5.5
+        layer detail:
+            line tail_fold trim width 0.25:
+                mid + 1.5, shoulder_y + 2
+                mid + 2.5, shoulder_y + 5.5
+        surface garment:
+            wrap
+            tail
+
+drawable bracelet context garment:
+    paint metal = fill
+    paint glint = edge
+    variant compact:
+        layer body:
+            circle band metal:
+                center body_right + 2, hip_y - 2
+                radius 0.75
+        surface garment:
+            band
+    variant detailed:
+        layer body:
+            circle band metal:
+                center body_right + 2, hip_y - 2
+                radius 0.9
+                outline glint
+                width 0.3
+            circle clasp glint:
+                center body_right + 2.5, hip_y - 2.5
+                radius 0.2
+        surface garment:
+            band
+            clasp
+
+drawable gloves context garment:
+    paint fabric = fill
+    paint trim = edge
+    variant compact:
+        layer body:
+            ellipse left_glove fabric:
+                x body_left - 3
+                y hip_y - 1
+                w 2
+                h 2.5
+            mirror left_glove as right_glove
+        surface garment:
+            left_glove
+            right_glove
+    variant detailed:
+        layer body:
+            polygon left_glove fabric outline trim width 0.25:
+                body_left - 2.75, hip_y - 1
+                body_left - 1, hip_y - 1
+                body_left - 1, hip_y + 1.5
+                body_left - 2.5, hip_y + 1.5
+                body_left - 3, hip_y + 0.5
+            mirror left_glove as right_glove
+        layer detail:
+            line left_cuff trim width 0.3:
+                body_left - 2.75, hip_y - 1
+                body_left - 1, hip_y - 1
+            mirror left_cuff as right_cuff
+        surface garment:
+            left_glove
+            right_glove
+
+drawable watch context garment:
+    paint metal = fill
+    paint glint = edge
+    paint shadow = shade
+    variant compact:
+        layer body:
+            rect face metal:
+                x body_right + 1
+                y hip_y - 3
+                w 1.5
+                h 1.5
+        surface garment:
+            face
+    variant detailed:
+        layer body:
+            rect face metal:
+                x body_right + 1
+                y hip_y - 3
+                w 1.75
+                h 1.75
+                outline glint
+                width 0.25
+            line strap shadow width 0.45:
+                body_right + 1.85, hip_y - 4
+                body_right + 1.85, hip_y - 3
+                body_right + 1.85, hip_y - 1.25
+        surface garment:
+            face

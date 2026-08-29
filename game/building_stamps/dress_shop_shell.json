@@ -1,0 +1,67 @@
+{
+  "format": "bakerrrr-building-stamp",
+  "version": 1,
+  "id": "dress_shop_shell",
+  "size": {
+    "width": 7,
+    "height": 7
+  },
+  "placement": {
+    "exterior_classes": [
+      "storefront"
+    ],
+    "clearance": 1,
+    "rotations": [
+      0,
+      90,
+      180,
+      270
+    ],
+    "reflect": false
+  },
+  "entry": {
+    "x": 3,
+    "y": 6,
+    "z": 0,
+    "side": "south"
+  },
+  "zone_legend": {
+    "c": "counter",
+    "e": "entrance",
+    "f": "fitting_room",
+    "s": "showroom"
+  },
+  "floors": [
+    {
+      "z": 0,
+      "shell": [
+        "##WWW##",
+        "#.....#",
+        "#.....#",
+        "#..#..#",
+        "#.....#",
+        "#..F..#",
+        "###D###"
+      ],
+      "zones": [
+        "       ",
+        " sssss ",
+        " sssss ",
+        " ss ff ",
+        " sssff ",
+        " ssccc ",
+        "   e   "
+      ]
+    }
+  ],
+  "anchors": [
+    {
+      "id": "sales_counter",
+      "kind": "service",
+      "x": 3,
+      "y": 5,
+      "z": 0,
+      "service": "trade"
+    }
+  ]
+}

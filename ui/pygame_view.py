@@ -112,6 +112,10 @@ _CONTROLLER_LOOK_REPEAT_DELAY = 0.28
 _CONTROLLER_LOOK_REPEAT_INTERVAL = 0.16
 _CONTROL_SEMANTIC_DEDUPE_SECONDS = 0.28
 _CONTROL_SEMANTIC_DEDUPE_KEYS = frozenset({9, 10, 13, 27, ord("b"), ord("r")})
+_LEGACY_GROUND_COSMETIC_ALIASES = {
+    "jumpsuit": "coverall",
+    "work_apron": "apron",
+}
 _INPUT_DEBUG_ENV = "BAKERRRR_INPUT_DEBUG"
 _INPUT_DEBUG_PATH_ENV = "BAKERRRR_INPUT_DEBUG_PATH"
 _INPUT_DEBUG_MAX_BYTES_ENV = "BAKERRRR_INPUT_DEBUG_MAX_BYTES"
@@ -2435,6 +2439,41 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_ground_cosmetic_drawable(self, overlay, drawable_id, frame):
+        """Draw optional laid-flat item geometry from an authored drawable.
+
+        Missing ground presentations are normal for legacy and external
+        content; the caller retains the established generic item fallback.
+        """
+
+        drawable_id = str(drawable_id or "").strip().lower()
+        definition = RUNTIME_DRAWABLES.catalog.get(drawable_id)
+        if definition is None or definition.presentation("ground") is None:
+            return False
+        context = DrawableRenderContext.ground()
+        variant = "detailed" if self.cell_px > 28 else "compact"
+        try:
+            resolved = RUNTIME_DRAWABLES.resolve(drawable_id, context, variant=variant)
+        except DrawableError as exc:
+            self._drawable_render_last_error = str(exc)
+            return False
+
+        self._drawable_render_last_error = None
+        paints = {
+            "fill": (frame[0], frame[1], frame[2], 184),
+            "edge": self._lightened_rgba(frame, 218, amount=0.34),
+            "shade": self._darkened_rgba(frame, 206, amount=0.52),
+            "outline": self._alpha_color("item_outline", 190),
+        }
+        raster = rasterize_drawable(
+            self.pygame,
+            resolved,
+            target_px=self.cell_px,
+            paints=paints,
+        )
+        overlay.blit(raster.overlay, (0, 0))
+        return True
+
     def _draw_item_overlay(self, x, y, color=None, attrs=0, *, kind="ground", effects=None):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
         cell_x = int(x) * self.cell_px
@@ -2486,6 +2525,8 @@ class PygameView:
                     return effect.removeprefix(prefix)
             return default
 
+        cosmetic_shape = ""
+        ground_drawable_rendered = False
         if kind == "ground":
             points = [
                 (mid_x, max(2, self.cell_px // 5)),
@@ -2831,7 +2872,32 @@ class PygameView:
                 self.pygame.draw.line(overlay, cloth, (bag.left + 2, bag.centery), (bag.right - 2, bag.centery), max(1, stroke_w))
         elif kind == "cosmetic":
             cosmetic_shape = _shape_variant_for("cosmetic")
-            if cosmetic_shape in {"trousers", "shorts"}:
+            ground_drawable_rendered = self._draw_ground_cosmetic_drawable(
+                overlay,
+                cosmetic_shape,
+                frame,
+            )
+            if not ground_drawable_rendered:
+                cosmetic_shape = _LEGACY_GROUND_COSMETIC_ALIASES.get(cosmetic_shape, cosmetic_shape)
+            if ground_drawable_rendered:
+                pass
+            elif cosmetic_shape == "pelt":
+                pelt = [
+                    (mid_x - max(3, self.cell_px // 5), max(3, self.cell_px // 4)),
+                    (mid_x, max(2, self.cell_px // 6)),
+                    (mid_x + max(3, self.cell_px // 5), max(3, self.cell_px // 4)),
+                    (self.cell_px - max(3, self.cell_px // 6), mid_y),
+                    (mid_x + max(3, self.cell_px // 7), self.cell_px - max(3, self.cell_px // 5)),
+                    (mid_x, self.cell_px - max(2, self.cell_px // 7)),
+                    (mid_x - max(3, self.cell_px // 7), self.cell_px - max(3, self.cell_px // 5)),
+                    (max(3, self.cell_px // 6), mid_y),
+                ]
+                self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in pelt], stroke_w + 1)
+                self.pygame.draw.polygon(overlay, fill, pelt)
+                self.pygame.draw.polygon(overlay, stroke, pelt, stroke_w)
+                for dx, dy in ((-1, -1), (1, 0), (0, 1)):
+                    self.pygame.draw.circle(overlay, dark, (mid_x + dx * max(2, self.cell_px // 8), mid_y + dy * max(2, self.cell_px // 8)), max(1, self.cell_px // 16))
+            elif cosmetic_shape in {"trousers", "shorts"}:
                 rise = max(3, self.cell_px // 4)
                 hem = self.cell_px - max(3, self.cell_px // 5)
                 leg_gap = max(1, self.cell_px // 18)
@@ -2917,7 +2983,16 @@ class PygameView:
                     self.pygame.draw.circle(overlay, metal, (mid_x + radius, mid_y), max(2, stroke_w + 1))
                 else:
                     self.pygame.draw.circle(overlay, highlight, center, max(1, stroke_w + 1))
-            elif cosmetic_shape in {"jacket", "coat", "blazer", "vest", "scarf", "gloves", "lanyard", "earpiece"}:
+            elif cosmetic_shape in {
+                "jacket",
+                "coat",
+                "blazer",
+                "vest",
+                "scarf",
+                "gloves",
+                "lanyard",
+                "earpiece",
+            }:
                 if cosmetic_shape == "earpiece":
                     self.pygame.draw.arc(overlay, outline, (mid_x - max(5, self.cell_px // 4), mid_y - max(5, self.cell_px // 4), max(10, self.cell_px // 2), max(10, self.cell_px // 2)), -0.9, 1.6, max(2, stroke_w + 1))
                     self.pygame.draw.arc(overlay, metal, (mid_x - max(5, self.cell_px // 4), mid_y - max(5, self.cell_px // 4), max(10, self.cell_px // 2), max(10, self.cell_px // 2)), -0.9, 1.6, max(1, stroke_w))
@@ -2966,7 +3041,7 @@ class PygameView:
                 self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in points], stroke_w + 1)
                 self.pygame.draw.polygon(overlay, fill, points)
                 self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
-                if cosmetic_shape in {"buttoned_top", "turtleneck", "sweater"}:
+                if cosmetic_shape in {"buttoned_top", "blouse", "overshirt", "turtleneck", "sweater"}:
                     self.pygame.draw.line(overlay, metal, (mid_x, max(3, self.cell_px // 4)), (mid_x, self.cell_px - max(4, self.cell_px // 4)), max(1, stroke_w))
                 if cosmetic_shape == "turtleneck":
                     self.pygame.draw.rect(overlay, cloth, (mid_x - max(3, self.cell_px // 8), max(2, self.cell_px // 5), max(6, self.cell_px // 4), max(3, self.cell_px // 8)), border_radius=max(1, self.cell_px // 28))
@@ -3606,6 +3681,8 @@ class PygameView:
             "armor": "metal",
             "drink": "glass",
         }.get(kind, "")
+        if kind == "cosmetic" and ground_drawable_rendered:
+            material_hint = ""
         if material_hint:
             finish_rect = self.pygame.Rect(
                 max(3, self.cell_px // 4),

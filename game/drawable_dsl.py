@@ -18,7 +18,7 @@ from typing import Iterable, Mapping
 
 DRAWABLE_FORMAT_VERSION = 1
 DRAWABLE_FILE_SUFFIX = ".bkdraw"
-DRAWABLE_CONTEXTS = frozenset({"garment"})
+DRAWABLE_CONTEXTS = frozenset({"garment", "ground"})
 DRAWABLE_VARIANTS = ("compact", "detailed")
 PAINT_ROLES = frozenset({"fill", "edge", "shade", "outline"})
 CONDITION_SOURCES = frozenset({"detail", "material", "pattern"})
@@ -34,6 +34,7 @@ GARMENT_SYMBOLS = frozenset({
     "hip_y",
     "foot_y",
 })
+GROUND_SYMBOLS = frozenset({"mid", "left", "right", "top", "bottom"})
 MAX_FILE_BYTES = 256 * 1024
 MAX_DRAWABLES_PER_FILE = 256
 MAX_SHAPES_PER_VARIANT = 256
@@ -195,6 +196,23 @@ class DrawableVariant:
 
 
 @dataclass(frozen=True)
+class DrawablePresentation:
+    context: str
+    paints: tuple[PaintAlias, ...]
+    lets: tuple[ValueBinding, ...]
+    variants: tuple[DrawableVariant, ...]
+    location: SourceLocation
+
+    def variant(self, requested: str) -> DrawableVariant:
+        return _variant_for_presentation(
+            self.variants,
+            requested,
+            context=self.context,
+            location=self.location,
+        )
+
+
+@dataclass(frozen=True)
 class DrawableDefinition:
     drawable_id: str
     context: str
@@ -202,27 +220,58 @@ class DrawableDefinition:
     paints: tuple[PaintAlias, ...]
     lets: tuple[ValueBinding, ...]
     variants: tuple[DrawableVariant, ...]
+    presentations: tuple[DrawablePresentation, ...]
     source: str
     location: SourceLocation
 
     def variant(self, requested: str) -> DrawableVariant:
-        requested = normalize_identifier(requested)
-        if requested not in DRAWABLE_VARIANTS:
-            raise DrawableError(
-                f"unknown requested variant {requested!r}; expected compact or detailed",
-                self.location,
+        return _variant_for_presentation(
+            self.variants,
+            requested,
+            context=self.context,
+            location=self.location,
+        )
+
+    def presentation(self, context: str) -> DrawablePresentation | None:
+        requested = normalize_identifier(context)
+        if requested == self.context:
+            return DrawablePresentation(
+                context=self.context,
+                paints=self.paints,
+                lets=self.lets,
+                variants=self.variants,
+                location=self.location,
             )
-        by_name = {variant.name: variant for variant in self.variants}
-        variant = by_name.get(requested)
-        if variant is not None:
-            return variant
-        compact = by_name.get("compact")
-        if compact is None:
-            raise DrawableError(
-                f"drawable {self.drawable_id!r} has no compact variant",
-                self.location,
-            )
-        return compact
+        return next(
+            (presentation for presentation in self.presentations if presentation.context == requested),
+            None,
+        )
+
+
+def _variant_for_presentation(
+    variants: tuple[DrawableVariant, ...],
+    requested: str,
+    *,
+    context: str,
+    location: SourceLocation,
+) -> DrawableVariant:
+    requested = normalize_identifier(requested)
+    if requested not in DRAWABLE_VARIANTS:
+        raise DrawableError(
+            f"unknown requested variant {requested!r}; expected compact or detailed",
+            location,
+        )
+    by_name = {variant.name: variant for variant in variants}
+    variant = by_name.get(requested)
+    if variant is not None:
+        return variant
+    compact = by_name.get("compact")
+    if compact is None:
+        raise DrawableError(
+            f"drawable presentation {context!r} has no compact variant",
+            location,
+        )
+    return compact
 
 
 @dataclass(frozen=True)
@@ -278,6 +327,42 @@ class DrawableRenderContext:
         }
         return cls(
             context="garment",
+            symbols=MappingProxyType(symbols),
+            conditions=MappingProxyType(conditions),
+        )
+
+    @classmethod
+    def ground(
+        cls,
+        *,
+        mid: float = 8.0,
+        left: float = 0.0,
+        right: float = 16.0,
+        top: float = 0.0,
+        bottom: float = 16.0,
+        material: str = "",
+        detail: str = "",
+        pattern: str = "",
+    ) -> "DrawableRenderContext":
+        symbols = {
+            "mid": float(mid),
+            "left": float(left),
+            "right": float(right),
+            "top": float(top),
+            "bottom": float(bottom),
+        }
+        for name, value in symbols.items():
+            if not math.isfinite(value):
+                raise DrawableError(f"ground context symbol {name!r} must be finite")
+        if symbols["right"] < symbols["left"] or symbols["bottom"] < symbols["top"]:
+            raise DrawableError("ground context bounds must not be inverted")
+        conditions = {
+            "material": condition_tokens(material),
+            "detail": condition_tokens(detail),
+            "pattern": condition_tokens(pattern),
+        }
+        return cls(
+            context="ground",
             symbols=MappingProxyType(symbols),
             conditions=MappingProxyType(conditions),
         )
@@ -521,6 +606,49 @@ class _DrawableParser:
         paints = []
         lets = []
         variants = []
+        presentations = []
+        while self.current() is not None and self.current().indent > line.indent:
+            child = self.current()
+            if child.indent != line.indent + 1:
+                raise DrawableError("unexpected indentation", child.location)
+            if child.text.startswith("paint "):
+                paints.append(self.parse_paint())
+            elif child.text.startswith("let "):
+                lets.append(self.parse_let())
+            elif child.text.startswith("variant "):
+                variants.append(self.parse_variant())
+            elif child.text.startswith("presentation "):
+                presentations.append(self.parse_presentation())
+            else:
+                raise DrawableError(
+                    "drawable blocks accept paint, let, variant, or presentation statements",
+                    child.location,
+                )
+        return DrawableDefinition(
+            drawable_id=drawable_id,
+            context=context,
+            version=version,
+            paints=tuple(paints),
+            lets=tuple(lets),
+            variants=tuple(variants),
+            presentations=tuple(presentations),
+            source=self.source,
+            location=line.location,
+        )
+
+    def parse_presentation(self) -> DrawablePresentation:
+        line = self.take()
+        match = re.fullmatch(r"presentation\s+([a-z][a-z0-9_]*):", line.text)
+        if match is None:
+            raise DrawableError("expected 'presentation <context>:'", line.location)
+        context = _validate_identifier(match.group(1), line.location, "presentation context")
+        if context not in DRAWABLE_CONTEXTS:
+            raise DrawableError(f"unknown drawable context {context!r}", line.location)
+        self.require_child(line)
+
+        paints = []
+        lets = []
+        variants = []
         while self.current() is not None and self.current().indent > line.indent:
             child = self.current()
             if child.indent != line.indent + 1:
@@ -533,17 +661,14 @@ class _DrawableParser:
                 variants.append(self.parse_variant())
             else:
                 raise DrawableError(
-                    "drawable blocks accept paint, let, or variant statements",
+                    "presentation blocks accept paint, let, or variant statements",
                     child.location,
                 )
-        return DrawableDefinition(
-            drawable_id=drawable_id,
+        return DrawablePresentation(
             context=context,
-            version=version,
             paints=tuple(paints),
             lets=tuple(lets),
             variants=tuple(variants),
-            source=self.source,
             location=line.location,
         )
 
@@ -990,6 +1115,91 @@ def _validate_nodes(
             )
 
 
+def _context_symbols(context: str, location: SourceLocation) -> set[str]:
+    if context == "garment":
+        return set(GARMENT_SYMBOLS)
+    if context == "ground":
+        return set(GROUND_SYMBOLS)
+    raise DrawableError(f"unknown context {context!r}", location)
+
+
+def _validate_presentation(
+    *,
+    context: str,
+    paints_authored: tuple[PaintAlias, ...],
+    lets: tuple[ValueBinding, ...],
+    variants: tuple[DrawableVariant, ...],
+    location: SourceLocation,
+) -> None:
+    base_symbols = _context_symbols(context, location)
+    paints = set(PAINT_ROLES)
+    aliases = set()
+    for alias in paints_authored:
+        if alias.name in paints or alias.name in aliases:
+            raise DrawableError(f"duplicate or reserved paint {alias.name!r}", alias.location)
+        aliases.add(alias.name)
+        paints.add(alias.name)
+    if len(lets) > MAX_LETS_PER_SCOPE:
+        raise DrawableError(
+            f"presentation exceeds {MAX_LETS_PER_SCOPE} let bindings",
+            location,
+        )
+    shared_symbols = _validate_bindings(lets, base_symbols)
+
+    variant_names = set()
+    for variant in variants:
+        if variant.name in variant_names:
+            raise DrawableError(f"duplicate variant {variant.name!r}", variant.location)
+        variant_names.add(variant.name)
+        if not variant.layers:
+            raise DrawableError(
+                f"variant {variant.name!r} requires at least one layer",
+                variant.location,
+            )
+        if len(variant.lets) > MAX_LETS_PER_SCOPE:
+            raise DrawableError(
+                f"variant exceeds {MAX_LETS_PER_SCOPE} let bindings",
+                variant.location,
+            )
+        symbols = _validate_bindings(variant.lets, shared_symbols)
+        layer_names = set()
+        all_shape_ids: set[str] = set()
+        available_sources: set[str] = set()
+        for layer in variant.layers:
+            if layer.name in layer_names:
+                raise DrawableError(f"duplicate layer {layer.name!r}", layer.location)
+            layer_names.add(layer.name)
+            _validate_nodes(
+                layer.nodes,
+                symbols=symbols,
+                paints=paints,
+                all_shape_ids=all_shape_ids,
+                available_sources=available_sources,
+            )
+        if len(all_shape_ids) > MAX_SHAPES_PER_VARIANT:
+            raise DrawableError(
+                f"variant exceeds {MAX_SHAPES_PER_VARIANT} shapes",
+                variant.location,
+            )
+        for collection, label in ((variant.groups, "group"), (variant.surfaces, "surface")):
+            names = set()
+            for record in collection:
+                if record.name in names:
+                    raise DrawableError(f"duplicate {label} {record.name!r}", record.location)
+                names.add(record.name)
+                for shape_id in record.shape_ids:
+                    if shape_id not in all_shape_ids:
+                        raise DrawableError(
+                            f"unknown shape id {shape_id!r} in {label} {record.name!r}",
+                            record.location,
+                        )
+    if "compact" not in variant_names:
+        raise DrawableError(
+            f"presentation {context!r} requires a compact variant",
+            location,
+        )
+
+
 def validate_document(document: DrawableDocument) -> None:
     drawable_ids = set()
     for drawable in document.drawables:
@@ -998,74 +1208,28 @@ def validate_document(document: DrawableDocument) -> None:
                 f"duplicate drawable id {drawable.drawable_id!r}", drawable.location
             )
         drawable_ids.add(drawable.drawable_id)
-        if drawable.context == "garment":
-            base_symbols = set(GARMENT_SYMBOLS)
-        else:
-            raise DrawableError(f"unknown context {drawable.context!r}", drawable.location)
-
-        paints = set(PAINT_ROLES)
-        aliases = set()
-        for alias in drawable.paints:
-            if alias.name in paints or alias.name in aliases:
-                raise DrawableError(f"duplicate or reserved paint {alias.name!r}", alias.location)
-            aliases.add(alias.name)
-            paints.add(alias.name)
-        if len(drawable.lets) > MAX_LETS_PER_SCOPE:
-            raise DrawableError(
-                f"drawable exceeds {MAX_LETS_PER_SCOPE} let bindings",
-                drawable.location,
+        _validate_presentation(
+            context=drawable.context,
+            paints_authored=drawable.paints,
+            lets=drawable.lets,
+            variants=drawable.variants,
+            location=drawable.location,
+        )
+        contexts = {drawable.context}
+        for presentation in drawable.presentations:
+            if presentation.context in contexts:
+                raise DrawableError(
+                    f"duplicate presentation context {presentation.context!r}",
+                    presentation.location,
+                )
+            contexts.add(presentation.context)
+            _validate_presentation(
+                context=presentation.context,
+                paints_authored=presentation.paints,
+                lets=presentation.lets,
+                variants=presentation.variants,
+                location=presentation.location,
             )
-        shared_symbols = _validate_bindings(drawable.lets, base_symbols)
-
-        variant_names = set()
-        for variant in drawable.variants:
-            if variant.name in variant_names:
-                raise DrawableError(f"duplicate variant {variant.name!r}", variant.location)
-            variant_names.add(variant.name)
-            if not variant.layers:
-                raise DrawableError(
-                    f"variant {variant.name!r} requires at least one layer",
-                    variant.location,
-                )
-            if len(variant.lets) > MAX_LETS_PER_SCOPE:
-                raise DrawableError(
-                    f"variant exceeds {MAX_LETS_PER_SCOPE} let bindings",
-                    variant.location,
-                )
-            symbols = _validate_bindings(variant.lets, shared_symbols)
-            layer_names = set()
-            all_shape_ids: set[str] = set()
-            available_sources: set[str] = set()
-            for layer in variant.layers:
-                if layer.name in layer_names:
-                    raise DrawableError(f"duplicate layer {layer.name!r}", layer.location)
-                layer_names.add(layer.name)
-                _validate_nodes(
-                    layer.nodes,
-                    symbols=symbols,
-                    paints=paints,
-                    all_shape_ids=all_shape_ids,
-                    available_sources=available_sources,
-                )
-            if len(all_shape_ids) > MAX_SHAPES_PER_VARIANT:
-                raise DrawableError(
-                    f"variant exceeds {MAX_SHAPES_PER_VARIANT} shapes",
-                    variant.location,
-                )
-            for collection, label in ((variant.groups, "group"), (variant.surfaces, "surface")):
-                names = set()
-                for record in collection:
-                    if record.name in names:
-                        raise DrawableError(f"duplicate {label} {record.name!r}", record.location)
-                    names.add(record.name)
-                    for shape_id in record.shape_ids:
-                        if shape_id not in all_shape_ids:
-                            raise DrawableError(
-                                f"unknown shape id {shape_id!r} in {label} {record.name!r}",
-                                record.location,
-                            )
-        if "compact" not in variant_names:
-            raise DrawableError("drawable requires a compact variant", drawable.location)
 
 
 def _evaluate_bindings(
@@ -1197,18 +1361,18 @@ def resolve_drawable(
     *,
     variant: str = "compact",
 ) -> ResolvedDrawable:
-    if context.context != drawable.context:
+    presentation = drawable.presentation(context.context)
+    if presentation is None:
         raise DrawableError(
-            f"drawable {drawable.drawable_id!r} requires context {drawable.context!r}, "
-            f"not {context.context!r}",
+            f"drawable {drawable.drawable_id!r} has no {context.context!r} presentation",
             drawable.location,
         )
     requested = normalize_identifier(variant) or "compact"
-    selected = drawable.variant(requested)
+    selected = presentation.variant(requested)
     symbols = {str(name): float(value) for name, value in context.symbols.items()}
-    _evaluate_bindings(drawable.lets, symbols)
+    _evaluate_bindings(presentation.lets, symbols)
     _evaluate_bindings(selected.lets, symbols)
-    aliases = {alias.name: alias.role for alias in drawable.paints}
+    aliases = {alias.name: alias.role for alias in presentation.paints}
     resolved: list[ResolvedShape] = []
     by_id: dict[str, ResolvedShape] = {}
     for layer in selected.layers:
@@ -1230,8 +1394,9 @@ def resolve_drawable(
         surface.name: tuple(shape_id for shape_id in surface.shape_ids if shape_id in present)
         for surface in selected.surfaces
     }
-    if "garment" not in surfaces:
-        surfaces["garment"] = tuple(
+    default_surface = "garment" if presentation.context == "garment" else "item"
+    if default_surface not in surfaces:
+        surfaces[default_surface] = tuple(
             shape.shape_id
             for shape in resolved
             if shape.kind in {"polygon", "rect", "ellipse", "circle"}
@@ -1239,7 +1404,7 @@ def resolve_drawable(
         )
     return ResolvedDrawable(
         drawable_id=drawable.drawable_id,
-        context=drawable.context,
+        context=presentation.context,
         requested_variant=requested,
         variant=selected.name,
         shapes=tuple(resolved),
@@ -1323,29 +1488,57 @@ def _serialize_nodes(nodes: Iterable[DrawableNode], indent: int) -> list[str]:
     return lines
 
 
+def _serialize_presentation_body(
+    lines: list[str],
+    *,
+    paints: tuple[PaintAlias, ...],
+    lets: tuple[ValueBinding, ...],
+    variants: tuple[DrawableVariant, ...],
+    indent: int,
+) -> None:
+    prefix = "    " * indent
+    for alias in paints:
+        lines.append(f"{prefix}paint {alias.name} = {alias.role}")
+    for binding in lets:
+        lines.append(f"{prefix}let {binding.name} = {serialize_expression(binding.expression)}")
+    for variant in variants:
+        lines.extend(("", f"{prefix}variant {variant.name}:"))
+        variant_prefix = "    " * (indent + 1)
+        for binding in variant.lets:
+            lines.append(
+                f"{variant_prefix}let {binding.name} = {serialize_expression(binding.expression)}"
+            )
+        for layer in variant.layers:
+            lines.append(f"{variant_prefix}layer {layer.name}:")
+            lines.extend(_serialize_nodes(layer.nodes, indent + 2))
+        for group in variant.groups:
+            lines.append(f"{variant_prefix}group {group.name}:")
+            lines.extend(f"{'    ' * (indent + 2)}{shape_id}" for shape_id in group.shape_ids)
+        for surface in variant.surfaces:
+            lines.append(f"{variant_prefix}surface {surface.name}:")
+            lines.extend(f"{'    ' * (indent + 2)}{shape_id}" for shape_id in surface.shape_ids)
+
+
 def serialize_document(document: DrawableDocument) -> str:
     lines = [f"bakerrrr-drawable {document.version}"]
     for drawable in document.drawables:
         lines.extend(("", f"drawable {drawable.drawable_id} context {drawable.context}:"))
-        for alias in drawable.paints:
-            lines.append(f"    paint {alias.name} = {alias.role}")
-        for binding in drawable.lets:
-            lines.append(f"    let {binding.name} = {serialize_expression(binding.expression)}")
-        for variant in drawable.variants:
-            lines.extend(("", f"    variant {variant.name}:"))
-            for binding in variant.lets:
-                lines.append(
-                    f"        let {binding.name} = {serialize_expression(binding.expression)}"
-                )
-            for layer in variant.layers:
-                lines.append(f"        layer {layer.name}:")
-                lines.extend(_serialize_nodes(layer.nodes, 3))
-            for group in variant.groups:
-                lines.append(f"        group {group.name}:")
-                lines.extend(f"            {shape_id}" for shape_id in group.shape_ids)
-            for surface in variant.surfaces:
-                lines.append(f"        surface {surface.name}:")
-                lines.extend(f"            {shape_id}" for shape_id in surface.shape_ids)
+        _serialize_presentation_body(
+            lines,
+            paints=drawable.paints,
+            lets=drawable.lets,
+            variants=drawable.variants,
+            indent=1,
+        )
+        for presentation in drawable.presentations:
+            lines.extend(("", f"    presentation {presentation.context}:"))
+            _serialize_presentation_body(
+                lines,
+                paints=presentation.paints,
+                lets=presentation.lets,
+                variants=presentation.variants,
+                indent=2,
+            )
     return "\n".join(lines).rstrip() + "\n"
 
 

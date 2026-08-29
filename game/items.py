@@ -295,7 +295,10 @@ def item_inventory_slot_cost(item_or_entry):
         return 0
     if item_key in HUNTING_SACK_REDUCED_SLOT_ITEM_IDS and bool(metadata.get("kill_bag_used")):
         return 0
-    return 0 if item_key in ZERO_SLOT_ITEM_IDS else 1
+    if item_key in ZERO_SLOT_ITEM_IDS:
+        return 0
+    item_def = ITEM_CATALOG.get(item_key, {})
+    return max(0, _int_or_default(item_def.get("inventory_slot_cost"), 1))
 
 
 def item_uses_inventory_slot(item_or_entry):
@@ -1418,8 +1421,10 @@ def _normalize_item_catalog_source(source):
         parsed[item_id] = {
             "id": item_id,
             "name": name,
+            "description": str(item.get("description", "") or "").strip(),
             "glyph": str(glyph)[:1] or "?",
             "stack_max": stack_max,
+            "inventory_slot_cost": max(0, _int_or_default(item.get("inventory_slot_cost"), 1)),
             "tags": tags,
             "category": category,
             "legal_status": legal_status,
