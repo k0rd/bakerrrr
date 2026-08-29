@@ -19,9 +19,9 @@ drawable tee context garment:
                 mid - waist, bottom_y
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                mid - shoulder - 2, top_y + 1
-                mid - shoulder - 1, top_y + 3
-                mid - shoulder + 1, top_y + 2
+                mid - shoulder - 1, top_y + 0.75
+                mid - shoulder - 0.75, top_y + 1.75
+                mid - shoulder + 0.75, top_y + 1.5
             mirror left_sleeve as right_sleeve
         surface garment:
             torso
@@ -39,9 +39,9 @@ drawable tee context garment:
                 mid - waist, bottom_y
             polygon left_sleeve fabric outline trim width 0.3:
                 mid - shoulder, top_y
-                mid - shoulder - 2, top_y + 1
-                mid - shoulder - 1.5, top_y + 3
-                mid - shoulder + 1, top_y + 2
+                mid - shoulder - 1, top_y + 0.75
+                mid - shoulder - 0.75, top_y + 1.75
+                mid - shoulder + 0.75, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer seam:
             line hem trim width 0.25:

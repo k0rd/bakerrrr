@@ -908,7 +908,8 @@ def _basewear_loose_metadata(state):
     return with_cosmetic_rarity_metadata(item_id, metadata)
 
 
-def _basewear_presentation_family(sim, eid):
+def basewear_presentation_family(sim, eid):
+    """Map the actor's chosen gender identity onto the shared clothing fit family."""
     identity = sim.ecs.get(CreatureIdentity).get(eid) if sim is not None else None
     gender_identity = _key(getattr(identity, "gender_identity", ""))
     if gender_identity == "woman":
@@ -953,7 +954,7 @@ def ensure_player_basewear(sim, eid, *, loadout=None, seed_token=""):
 
     legacy = AppearanceLoadout._clean_basewear(getattr(loadout, "basewear", None))
 
-    family = _basewear_presentation_family(sim, eid)
+    family = basewear_presentation_family(sim, eid)
     pools = STARTER_BASEWEAR_POOLS.get(family, STARTER_BASEWEAR_POOLS["mixed"])
     rng = random.Random(f"player-basewear:{getattr(sim, 'seed', 0)}:{eid}:{family}:{seed_token}")
     issued = dict(current)

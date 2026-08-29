@@ -9723,6 +9723,12 @@ class EventLogSystem(System):
         forfeited_labels = [str(label).strip() for label in list(event.data.get("forfeited_labels", ()) or ()) if str(label).strip()]
         held_reason_labels = [str(label).strip() for label in list(event.data.get("held_reason_labels", ()) or ()) if str(label).strip()]
         forfeited_reason_labels = [str(label).strip() for label in list(event.data.get("forfeited_reason_labels", ()) or ()) if str(label).strip()]
+        booking_basewear_issued = bool(event.data.get("booking_basewear_issued"))
+        booking_basewear_names = [
+            str(name).strip()
+            for name in tuple(event.data.get("booking_basewear_item_names", ()) or ())
+            if str(name).strip()
+        ]
         booking_jumpsuit_issued = bool(event.data.get("booking_jumpsuit_issued"))
         booking_jumpsuit_name = str(event.data.get("booking_jumpsuit_item_name", "") or "").strip() or "orange jumpsuit"
         booking_jumpsuit_phrase = booking_jumpsuit_name[:1].lower() + booking_jumpsuit_name[1:] if booking_jumpsuit_name else "orange jumpsuit"
@@ -9818,6 +9824,9 @@ class EventLogSystem(System):
             if forfeited_reason_labels:
                 summary += f" because {', '.join(forfeited_reason_labels[:3])}"
             summary += "."
+        if booking_basewear_issued:
+            issued_text = ", ".join(booking_basewear_names[:2]) or "plain white basewear"
+            summary += f" Issued plain white basewear for empty slots: {issued_text}."
         if booking_jumpsuit_issued:
             summary += f" Discharged in {booking_jumpsuit_phrase}"
             if evidence_worn_clothing_labels:

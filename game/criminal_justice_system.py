@@ -6,6 +6,7 @@ from game.components import (
     AnimalBehaviorContext,
     AnimalPhysicalProfile,
     AnimalSocialProfile,
+    AppearanceLoadout,
     ArmorLoadout,
     Collider,
     ContactLedger,
@@ -66,8 +67,12 @@ from game.appearance_loadout import (
     APPEARANCE_METADATA_KEY,
     APPEARANCE_SLOT_METADATA_KEY,
     APPEARANCE_WORN_METADATA_KEY,
+    BASEWEAR_SLOTS,
     COSMETIC_COLOR_KEYS,
+    STARTER_BASEWEAR_POOLS,
+    appearance_metadata_for_entry,
     appearance_loadout_for,
+    basewear_presentation_family,
     cosmetic_variant_metadata,
     mark_inventory_instance_worn,
 )
@@ -6020,6 +6025,178 @@ class CriminalJusticeSystem(System):
             slots.add(worn_slot)
         return bool(slots.intersection({"full_body", "top", "bottom"}))
 
+    def _justice_booking_basewear_metadata(self, item_id, slot, family, *, booking_prop=None):
+        item_id = str(item_id or "").strip().lower()
+        slot = str(slot or "").strip().lower()
+        metadata = cosmetic_variant_metadata(
+            item_id,
+            seed_token=(
+                f"booking-basewear:{getattr(self.sim, 'seed', 0)}:"
+                f"{getattr(self.sim, 'tick', 0)}:{self.player_eid}:{family}:{slot}"
+            ),
+            item_catalog=ITEM_CATALOG,
+            sim=self.sim,
+        )
+        metadata = dict(metadata or {})
+        profile = appearance_metadata_for_entry(
+            {"item_id": item_id, "metadata": metadata},
+            item_catalog=ITEM_CATALOG,
+        )
+        label = str(profile.get("label", "") or ITEM_CATALOG.get(item_id, {}).get("name", item_id)).strip() or item_id
+        accent = COSMETIC_COLOR_KEYS.get("white", "clothing_white")
+        nested = dict(metadata.get(APPEARANCE_METADATA_KEY) or {})
+        nested.update({
+            "type": item_id,
+            "label": label,
+            "slots": [slot],
+            "color": "white",
+            "color_word": "white",
+            "material": "cotton",
+            "style": "plain",
+            "detail": "",
+            "pattern": "",
+            "emblem": "",
+            "flora_motif": {},
+            "accent_color": accent,
+            "presentation": str(family or "mixed"),
+            "basewear": True,
+            "worn_slot": slot,
+        })
+        metadata.update({
+            "appearance_type": item_id,
+            "appearance_label": label,
+            "appearance_slots": [slot],
+            "color": "white",
+            "color_word": "white",
+            "material": "cotton",
+            "style": "plain",
+            "detail": "",
+            "pattern": "",
+            "emblem": "",
+            "flora_motif": {},
+            "accent_color": accent,
+            "presentation": str(family or "mixed"),
+            "basewear": True,
+            "display_name": f"Issued White {label}",
+            APPEARANCE_METADATA_KEY: nested,
+            APPEARANCE_WORN_METADATA_KEY: True,
+            APPEARANCE_SLOT_METADATA_KEY: slot,
+            "justice_issued": True,
+            "justice_issue_reason": "booking_missing_basewear",
+            "justice_basewear_family": str(family or "mixed"),
+            "justice_booking_tick": int(getattr(self.sim, "tick", 0) or 0),
+        })
+        if isinstance(booking_prop, dict):
+            metadata["justice_booking_property_id"] = booking_prop.get("id")
+            metadata["justice_booking_property_name"] = booking_prop.get("name")
+        return metadata
+
+    @staticmethod
+    def _worn_basewear_entry_for_slot(inventory, loadout, slot):
+        slot = str(slot or "").strip().lower()
+        instance_id = str(loadout.slots.get(slot) or "").strip()
+        entry = inventory.find(instance_id=instance_id) if instance_id else None
+
+        def _matches(candidate):
+            if not isinstance(candidate, dict):
+                return False
+            metadata = candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+            if not bool(metadata.get(APPEARANCE_WORN_METADATA_KEY)):
+                return False
+            worn_slot = str(metadata.get(APPEARANCE_SLOT_METADATA_KEY, "") or "").strip().lower()
+            profile = appearance_metadata_for_entry(candidate, item_catalog=ITEM_CATALOG)
+            return worn_slot == slot and slot in tuple(profile.get("slots", ()) or ())
+
+        if _matches(entry):
+            return entry
+        for candidate in tuple(inventory.items or ()):
+            if _matches(candidate):
+                loadout.slots[slot] = str(candidate.get("instance_id", "") or "").strip() or None
+                return candidate
+        loadout.slots[slot] = None
+        return None
+
+    def _issue_booking_basewear_if_missing(self, *, booking_prop=None):
+        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
+        if inventory is None:
+            return {"issued": False, "reason": "missing_inventory"}
+
+        loadout = self.sim.ecs.get(AppearanceLoadout).get(self.player_eid)
+        if loadout is None:
+            loadout = AppearanceLoadout()
+            self.sim.ecs.add(self.player_eid, loadout)
+        loadout.normalize()
+        family = basewear_presentation_family(self.sim, self.player_eid)
+        pools = STARTER_BASEWEAR_POOLS.get(family, STARTER_BASEWEAR_POOLS["mixed"])
+        missing_slots = [
+            slot
+            for slot in BASEWEAR_SLOTS
+            if self._worn_basewear_entry_for_slot(inventory, loadout, slot) is None
+        ]
+        issued = []
+        failed_slots = []
+        for slot in missing_slots:
+            pool = tuple(pools.get(slot) or STARTER_BASEWEAR_POOLS["mixed"].get(slot) or ())
+            if not pool:
+                failed_slots.append(slot)
+                continue
+            rng = random.Random(
+                f"justice-booking-basewear:{getattr(self.sim, 'seed', 0)}:"
+                f"{getattr(self.sim, 'tick', 0)}:{self.player_eid}:{family}:{slot}"
+            )
+            item_id = str(rng.choice(pool)).strip().lower()
+            item_def = ITEM_CATALOG.get(item_id, {})
+            metadata = self._justice_booking_basewear_metadata(
+                item_id,
+                slot,
+                family,
+                booking_prop=booking_prop,
+            )
+            added, instance_id = inventory.add_item(
+                item_id=item_id,
+                quantity=1,
+                stack_max=item_def.get("stack_max", 1),
+                instance_factory=self.sim.new_item_instance_id,
+                owner_eid=self.player_eid,
+                owner_tag="player",
+                metadata=metadata,
+            )
+            if not added or not instance_id:
+                failed_slots.append(slot)
+                continue
+            loadout.slots[slot] = str(instance_id)
+            item_name = item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG)
+            issued.append({
+                "slot": slot,
+                "item_id": item_id,
+                "instance_id": str(instance_id),
+                "item_name": item_name,
+            })
+            self.sim.emit(Event(
+                "appearance_item_equipped",
+                eid=self.player_eid,
+                item_id=item_id,
+                instance_id=str(instance_id),
+                item_name=item_name,
+                slot=slot,
+                reason="justice_booking_issue",
+            ))
+
+        # Booking has now made an explicit decision for every basewear slot;
+        # do not let the starter migration silently add a second set later.
+        loadout.basewear_initialized = True
+        return {
+            "issued": bool(issued),
+            "family": family,
+            "items": tuple(issued),
+            "item_ids": tuple(row["item_id"] for row in issued),
+            "instance_ids": tuple(row["instance_id"] for row in issued),
+            "item_names": tuple(row["item_name"] for row in issued),
+            "slots": tuple(row["slot"] for row in issued),
+            "failed_slots": tuple(failed_slots),
+            "reason": "missing_basewear" if issued else "basewear_present" if not missing_slots else "issue_failed",
+        }
+
     def _justice_release_jumpsuit_metadata(self, *, booking_prop=None):
         metadata = cosmetic_variant_metadata(
             self.JUSTICE_RELEASE_JUMPSUIT_ITEM_ID,
@@ -6309,6 +6486,14 @@ class CriminalJusticeSystem(System):
             if ignored_reasons:
                 line += f" because {ignored_reasons}"
             lines.append(line + ".")
+        if bool(confiscation.get("booking_basewear_issued")):
+            item_names = tuple(
+                str(name).strip()
+                for name in tuple(confiscation.get("booking_basewear_item_names", ()) or ())
+                if str(name).strip()
+            )
+            issued_text = self._label_list_text(item_names) or "plain white basewear"
+            lines.append(f"Booking issued plain white basewear for empty slots: {issued_text}.")
         if bool(confiscation.get("booking_jumpsuit_issued")):
             item_name = str(confiscation.get("booking_jumpsuit_item_name", "") or "").strip() or "orange jumpsuit"
             item_phrase = item_name[:1].lower() + item_name[1:] if item_name else "orange jumpsuit"
@@ -6428,6 +6613,16 @@ class CriminalJusticeSystem(System):
             else {}
         )
         confiscation = self._confiscate_player_inventory(booking_prop=booking_prop, inspection=inspection)
+        basewear_issue = self._issue_booking_basewear_if_missing(booking_prop=booking_prop)
+        if bool(basewear_issue.get("issued")):
+            confiscation["booking_basewear_issued"] = True
+            confiscation["booking_basewear_family"] = basewear_issue.get("family")
+            confiscation["booking_basewear_item_ids"] = basewear_issue.get("item_ids", ())
+            confiscation["booking_basewear_instance_ids"] = basewear_issue.get("instance_ids", ())
+            confiscation["booking_basewear_item_names"] = basewear_issue.get("item_names", ())
+            confiscation["booking_basewear_slots"] = basewear_issue.get("slots", ())
+        if tuple(basewear_issue.get("failed_slots", ()) or ()):
+            confiscation["booking_basewear_issue_failed_slots"] = basewear_issue.get("failed_slots", ())
         jumpsuit_issue = self._issue_booking_jumpsuit_if_needed(confiscation, booking_prop=booking_prop)
         if bool(jumpsuit_issue.get("issued")):
             confiscation["booking_jumpsuit_issued"] = True
@@ -6565,6 +6760,12 @@ class CriminalJusticeSystem(System):
             held_reason_labels=tuple(confiscation.get("held_reason_labels", ()) or ()),
             forfeited_reason_labels=tuple(confiscation.get("forfeited_reason_labels", ()) or ()),
             evidence_worn_clothing_labels=tuple(confiscation.get("evidence_worn_clothing_labels", ()) or ()),
+            booking_basewear_issued=bool(confiscation.get("booking_basewear_issued")),
+            booking_basewear_family=str(confiscation.get("booking_basewear_family", "") or ""),
+            booking_basewear_item_ids=tuple(confiscation.get("booking_basewear_item_ids", ()) or ()),
+            booking_basewear_item_names=tuple(confiscation.get("booking_basewear_item_names", ()) or ()),
+            booking_basewear_slots=tuple(confiscation.get("booking_basewear_slots", ()) or ()),
+            booking_basewear_issue_failed_slots=tuple(confiscation.get("booking_basewear_issue_failed_slots", ()) or ()),
             booking_jumpsuit_issued=bool(confiscation.get("booking_jumpsuit_issued")),
             booking_jumpsuit_item_id=str(confiscation.get("booking_jumpsuit_item_id", "") or ""),
             booking_jumpsuit_item_name=str(confiscation.get("booking_jumpsuit_item_name", "") or ""),
