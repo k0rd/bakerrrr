@@ -15,6 +15,7 @@ from game.drawable_dsl import (
 )
 from game.flora_genetics import GENETICS_SCHEMA_VERSION, normalize_flora_genetics, validate_flora_genetics
 from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_document
+from game.item_schema import ITEM_PROFILE_FIELDS, ITEM_PROFILE_KEYS, KNOWN_ITEM_FIELDS, TOOL_PROFILE_KEYS
 from game.lighting import LIGHT_COLOR_PROFILES
 from game.object_profile_runtime import object_profile_validation_errors
 from game.public_content import PUBLIC_STATUS_MODIFIERS
@@ -758,10 +759,17 @@ def _validate_wire_interface_profile(report, source, item_path, profile):
             report.error(source, profile_path + ["default_quality"], f"default_quality must be one of {list(WIRE_QUALITY_TIERS)}")
 
 
-def _validate_items(path, report, *, drawable_ids=None):
-    data, source = _load_object_document(path, report, "an object keyed by item id")
+def _validate_items(path, report, *, drawable_ids=None, data=None, source=None):
     if data is None:
-        return set()
+        data, source = _load_object_document(path, report, "an object keyed by item id")
+        if data is None:
+            return set()
+    else:
+        source = str(source or "game/items.json")
+        report.files_checked.add(source)
+        if not isinstance(data, dict):
+            report.error(source, [], "item catalog must be an object keyed by item id")
+            return set()
 
     item_ids = set()
     for item_id, item in data.items():
@@ -772,6 +780,36 @@ def _validate_items(path, report, *, drawable_ids=None):
 
         if not _expect_type(report, source, item_path, item, dict, "an object"):
             continue
+
+        for field_name in sorted(set(item) - KNOWN_ITEM_FIELDS):
+            report.error(
+                source,
+                item_path + [field_name],
+                "unknown item field; the runtime would discard it",
+            )
+        for profile_name in ITEM_PROFILE_FIELDS:
+            if profile_name not in item:
+                continue
+            profile = item.get(profile_name)
+            if profile_name == "tool_profiles":
+                if isinstance(profile, list):
+                    for index, row in enumerate(profile):
+                        if isinstance(row, dict):
+                            for field_name in sorted(set(row) - TOOL_PROFILE_KEYS):
+                                report.error(
+                                    source,
+                                    item_path + [profile_name, index, field_name],
+                                    "unknown tool-profile field",
+                                )
+                continue
+            allowed = ITEM_PROFILE_KEYS.get(profile_name)
+            if allowed is not None and isinstance(profile, dict):
+                for field_name in sorted(set(profile) - allowed):
+                    report.error(
+                        source,
+                        item_path + [profile_name, field_name],
+                        "unknown profile field; the runtime would discard it",
+                    )
 
         if "name" in item:
             _validate_non_empty_string(report, source, item_path + ["name"], item["name"], field_name="name")
@@ -2006,4 +2044,17 @@ def validate_items_content(path, *, drawable_ids=None):
     """Validate one item-catalog candidate through the built-in item rules."""
     report = ValidationReport()
     _validate_items(Path(path), report, drawable_ids=drawable_ids)
+    return report
+
+
+def validate_items_mapping(items, *, drawable_ids=None, source="game/items.json"):
+    """Validate an already-parsed item mapping through the built-in rules."""
+    report = ValidationReport()
+    _validate_items(
+        None,
+        report,
+        drawable_ids=drawable_ids,
+        data=items,
+        source=source,
+    )
     return report

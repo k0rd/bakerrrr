@@ -4639,6 +4639,46 @@ class PygameView:
                 hip_half = max(2, hip_half - max(0, px // 32))
         return shoulder_half, hip_half
 
+    @classmethod
+    def _actor_garment_geometry(cls, px, presentation="mixed", silhouette=""):
+        """Return the actor body's actual pixel anchors for fitted garments."""
+        px = max(1, int(px))
+        mid_x = px // 2
+        shoulder_half, hip_half = cls._actor_torso_half_widths(
+            px,
+            presentation,
+            silhouette,
+        )
+        if px <= 28:
+            q = lambda value: int(round(float(value) * px / 16.0))
+            shoulder_y = q(7)
+            hip_y = q(11)
+            foot_y = min(px - 1, q(15))
+            waist_half = max(1, min(shoulder_half, hip_half) - 1)
+        else:
+            head_r = max(2, px // 8)
+            head_y = max(head_r + 1, px // 4)
+            shoulder_y = head_y + head_r + max(1, px // 18)
+            hip_y = px - max(5, px // 4)
+            foot_y = px - max(2, px // 12)
+            if str(presentation or "mixed").strip().lower() == "femme":
+                waist_half = max(
+                    1,
+                    min(shoulder_half, hip_half) - max(1, px // 20),
+                )
+            else:
+                waist_half = min(shoulder_half, hip_half)
+        return {
+            "mid_x": mid_x,
+            "shoulder_half": shoulder_half,
+            "hip_half": hip_half,
+            "waist_half": waist_half,
+            "basewear_hip_half": max(1, hip_half - max(1, int(round(px / 16.0)))),
+            "shoulder_y": shoulder_y,
+            "hip_y": hip_y,
+            "foot_y": foot_y,
+        }
+
     def _actor_body_garment_mask(self, effects=()):
         """Return the body pixels that fitted basewear is allowed to cover.
 
@@ -4673,16 +4713,18 @@ class PygameView:
             self.pygame.draw.circle(mask, body, (mid_x, px // 2), max(2, (px // 2) - inset))
             return mask
 
-        shoulder_half, hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
+        geometry = self._actor_garment_geometry(px, presentation, silhouette)
+        shoulder_half = geometry["shoulder_half"]
+        hip_half = geometry["hip_half"]
         if px <= 28:
             def q(value):
                 return int(round(float(value) * px / 16.0))
 
-            shoulder_y = q(7)
+            shoulder_y = geometry["shoulder_y"]
             waist_y = q(9)
-            hip_y = q(11)
-            foot_y = min(px - 1, q(15))
-            waist_half = max(1, min(shoulder_half, hip_half) - 1)
+            hip_y = geometry["hip_y"]
+            foot_y = geometry["foot_y"]
+            waist_half = geometry["waist_half"]
             torso = [
                 (mid_x - shoulder_half, shoulder_y),
                 (mid_x + shoulder_half, shoulder_y),
@@ -4700,9 +4742,9 @@ class PygameView:
         stroke_w = max(1, px // 20)
         head_r = max(2, px // 8)
         head_y = max(head_r + 1, px // 4)
-        shoulder_y = head_y + head_r + max(1, px // 18)
-        hip_y = px - max(5, px // 4)
-        foot_y = px - max(2, px // 12)
+        shoulder_y = geometry["shoulder_y"]
+        hip_y = geometry["hip_y"]
+        foot_y = geometry["foot_y"]
         body_corner = max(1, px // 16)
         if presentation == "femme":
             waist_y = shoulder_y + max(2, (hip_y - shoulder_y) // 2)
@@ -7166,16 +7208,21 @@ class PygameView:
         motif_treatment = self._actor_outfit_effect_value(effects, "outfit_motif_treatment_", "")
         motif_shape = self._actor_outfit_effect_value(effects, "outfit_motif_shape_", "")
 
-        shoulder_half, hip_half = self._actor_torso_half_widths(16, presentation, silhouette)
-        waist_half = max(1, min(shoulder_half, hip_half) - 1)
+        geometry = self._actor_garment_geometry(
+            self.cell_px,
+            presentation,
+            silhouette,
+        )
+        logical_scale = 16.0 / max(1, self.cell_px)
         context = DrawableRenderContext.garment(
-            shoulder=shoulder_half,
-            hip=hip_half,
-            waist=waist_half,
-            basewear_hip=max(1, hip_half - 1),
-            shoulder_y=6,
-            hip_y=11,
-            foot_y=14,
+            mid=geometry["mid_x"] * logical_scale,
+            shoulder=geometry["shoulder_half"] * logical_scale,
+            hip=geometry["hip_half"] * logical_scale,
+            waist=geometry["waist_half"] * logical_scale,
+            basewear_hip=geometry["basewear_hip_half"] * logical_scale,
+            shoulder_y=geometry["shoulder_y"] * logical_scale,
+            hip_y=geometry["hip_y"] * logical_scale,
+            foot_y=geometry["foot_y"] * logical_scale,
             material=material,
             detail=detail,
             pattern=pattern,
@@ -7581,10 +7628,12 @@ class PygameView:
         slot = _suffix("outfit_slot_", "")
         presentation = _suffix("actor_presentation_", "mixed")
         silhouette = _suffix("actor_silhouette_", "")
-        shoulder_y = max(5, int(px * 0.39))
-        hip_y = px - max(5, px // 4)
-        foot_y = px - max(2, px // 12)
-        actor_shoulder_half, actor_hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
+        geometry = self._actor_garment_geometry(px, presentation, silhouette)
+        shoulder_y = geometry["shoulder_y"]
+        hip_y = geometry["hip_y"]
+        foot_y = geometry["foot_y"]
+        actor_shoulder_half = geometry["shoulder_half"]
+        actor_hip_half = geometry["hip_half"]
         body_left = mid_x - actor_hip_half
         body_right = mid_x + actor_hip_half
 

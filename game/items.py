@@ -7,6 +7,7 @@ from game.drone_runtime import PACKED_DRONE_ITEM_ID, normalize_drone_profile, no
 from game.json_metadata import split_object_document
 from game.item_compatibility import normalize_item_compatibility
 from game.object_profile_runtime import normalize_object_profile, object_profile_display_text
+from game.item_schema import ITEM_PROFILE_FIELDS
 from game.wire_runtime import (
     is_wire_interface_item,
     is_wire_item,
@@ -1466,6 +1467,12 @@ def _normalize_item_catalog_source(source):
             ),
             "fire_profile": _normalize_item_fire_profile(item_id, tags, item, category),
         }
+        missing_profile_fields = set(ITEM_PROFILE_FIELDS) - set(parsed[item_id])
+        if missing_profile_fields:
+            raise RuntimeError(
+                "item runtime is missing shared profile fields: "
+                + ", ".join(sorted(missing_profile_fields))
+            )
 
     for item_def in parsed.values():
         item_def["compatibility"] = normalize_item_compatibility(

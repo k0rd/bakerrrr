@@ -9,6 +9,7 @@ exact normalized value the game will consume.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -17,105 +18,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from game.content_validation import ValidationIssue, ValidationReport, validate_items_content
+from game.content_validation import ValidationIssue, ValidationReport, validate_items_mapping
+from game.item_schema import (
+    COMMON_ITEM_FIELDS as COMMON_FIELDS,
+    ITEM_PROFILE_FIELDS as PROFILE_FIELDS,
+    ITEM_PROFILE_KEYS as PROFILE_KEYS,
+    KNOWN_ITEM_FIELDS,
+    TOOL_PROFILE_KEYS,
+)
 from game.items import normalize_item_definitions
 from game.json_metadata import METADATA_KEY, SCHEMA_VERSION
 
 
 ITEM_ID_RE = re.compile(r"^[a-z0-9_]+$")
-
-COMMON_FIELDS = (
-    "name", "description", "glyph", "stack_max", "inventory_slot_cost",
-    "tags", "category", "legal_status", "effects", "weapon_id",
-    "appearance_family", "appearance_slots", "appearance_drawable",
+PYTHON_ITEM_LITERAL_RE = re.compile(
+    r"(?P<quote>['\"])[ \t]*(?P<item_id>[a-z0-9_]+)[ \t]*(?P=quote)"
 )
-PROFILE_FIELDS = (
-    "appearance_profile", "identification_profile", "tool_profiles", "armor",
-    "disguise", "container", "throw_profile", "trap_profile",
-    "substance_profile", "lead_profile", "drone_profile", "wire_profile",
-    "wire_interface_profile", "object_profile", "scratch_payout_table",
-    "condition_profile", "world_distribution", "fire_profile",
-)
-KNOWN_ITEM_FIELDS = frozenset(COMMON_FIELDS + PROFILE_FIELDS)
-
-PROFILE_KEYS: dict[str, frozenset[str]] = {
-    "appearance_profile": frozenset({
-        "label", "presentation", "materials", "styles", "details", "patterns",
-        "emblems", "emblem_chance", "basewear", "articleless", "personal_token",
-        "fashion_item", "starter_weights",
-    }),
-    "identification_profile": frozenset({
-        "family", "requires_identification", "auto_identify_on_use",
-        "unidentified_name", "appraisal_fields",
-    }),
-    "armor": frozenset({"slot", "damage_reduction"}),
-    "disguise": frozenset({"role_id", "strength"}),
-    "container": frozenset({
-        "bonus_slots", "slot", "blocks_armor", "accepted_item_ids",
-        "accepted_tags", "rejected_tags", "accepts_note",
-    }),
-    "throw_profile": frozenset({
-        "range", "trajectory", "projectile_glyph", "speed", "damage",
-        "noise_radius", "explosion_radius", "aoe_falloff", "cover_penetration",
-        "fire_intensity", "smoke_intensity", "cloud_radius", "cloud_duration",
-        "aerosol_status", "aerosol_duration", "aerosol_modifiers",
-        "aerosol_exposure_cooldown", "aerosol_label", "consume_on_throw", "shatter",
-    }),
-    "trap_profile": frozenset({
-        "payload_item_id", "trigger_kind", "armed_glyph", "armed_color",
-        "noise_radius", "homemade",
-    }),
-    "substance_profile": frozenset({
-        "substance_id", "intoxication_duration", "dependence_gain",
-        "dependence_decay", "withdrawal_threshold", "withdrawal_status",
-        "withdrawal_duration", "withdrawal_cooldown", "withdrawal_modifiers",
-    }),
-    "lead_profile": frozenset({
-        "lead_kind", "confidence", "discovery_mode", "consume_on_use",
-        "hidden_on_learn", "source_metadata_key", "property_services",
-        "property_archetypes",
-    }),
-    "drone_profile": frozenset({
-        "active_draw", "base_color", "base_glyph", "base_hp", "base_range",
-        "capabilities", "charge_max", "chassis_class", "compatible_chassis",
-        "disposable", "idle_overhead", "kind", "mark", "module_kind",
-        "power_output", "procedure_slot_limit", "sensor_kind",
-        "sensor_occlusion_depth", "sensor_power_cost", "sensor_range", "slot_cost",
-        "slot_limit", "standby_draw", "visible_overlay", "weight", "weight_limit",
-    }),
-    "wire_profile": frozenset({
-        "backup_family", "burnable", "buyer_tags", "capabilities",
-        "corruption_tags", "credential_scope", "dangerous", "data_family",
-        "durability_max", "freshness", "heat_risk", "kind", "legality",
-        "license_scope", "license_source", "noise", "program_family", "program_key",
-        "program_mode", "ram_cost", "reload_ticks", "restores_corruption", "runs_max",
-        "sensitivity", "source_context", "storage_points", "trace_cost",
-        "trace_strength",
-    }),
-    "wire_interface_profile": frozenset({
-        "buffer_size", "default_quality", "kind", "manufacturer", "noise_floor",
-        "panic_eject_delay", "program_slots", "range", "recovery_delay", "safe_yank",
-        "shock_risk", "signature_leakage", "style", "supported_target_classes",
-        "trace_resistance", "warning_rating",
-    }),
-    "object_profile": frozenset({
-        "family", "silhouette", "material", "primary_color", "accent_color",
-        "motif", "condition", "rarity", "placeable", "pickup_allowed",
-        "display_glyph", "display_color", "description",
-    }),
-    "condition_profile": frozenset({
-        "supports_quality", "supports_durability", "default_quality", "max_durability",
-    }),
-    "world_distribution": frozenset({
-        "weight", "store_archetypes", "loot_archetypes", "carrier_archetypes",
-    }),
-    "fire_profile": frozenset({"breakable", "flammability", "hp", "max_hp"}),
-}
-
-TOOL_PROFILE_KEYS = frozenset({
-    "contexts", "enable_contexts", "intrusion_bonus", "mechanics_bonus",
-    "perception_bonus", "score_bonus", "requirement_delta", "tool_wear_mult",
-})
 
 PROFILE_TEMPLATES: dict[str, Any] = {
     "appearance_profile": {
@@ -136,22 +54,37 @@ PROFILE_TEMPLATES: dict[str, Any] = {
     },
     "lead_profile": {"lead_kind": "location", "confidence": 0.5, "consume_on_use": False},
     "object_profile": {
-        "family": "misc", "silhouette": "compact", "material": "mixed",
-        "primary_color": "gray", "placeable": True, "pickup_allowed": True,
+        "family": "personal_home", "silhouette": "mug", "material": "ceramic",
+        "primary_color": "blue", "accent_color": "white", "motif": "none",
+        "condition": "plain", "rarity": "common", "placeable": True,
+        "pickup_allowed": True,
     },
     "substance_profile": {"substance_id": "substance", "intoxication_duration": 0},
     "throw_profile": {
         "range": 6, "trajectory": "lobbed", "projectile_glyph": "o",
-        "speed": 1.0, "damage": 0, "noise_radius": 2, "consume_on_throw": True,
+        "speed": 1.0, "damage": 1, "noise_radius": 2, "consume_on_throw": True,
     },
     "tool_profiles": [{"contexts": ["mechanics"], "mechanics_bonus": 0.25}],
     "trap_profile": {
         "payload_item_id": "", "trigger_kind": "step", "armed_glyph": "^",
         "armed_color": "warning", "noise_radius": 3, "homemade": True,
     },
-    "drone_profile": {"kind": "module", "module_kind": "utility", "slot_cost": 1},
-    "wire_profile": {"kind": "program", "ram_cost": 1, "trace_cost": 1},
-    "wire_interface_profile": {"kind": "deck", "program_slots": 2, "buffer_size": 2},
+    "drone_profile": {
+        "kind": "module", "module_kind": "utility", "slot_cost": 1,
+        "weight": 1, "standby_draw": 0, "active_draw": 1,
+        "capabilities": ["utility"], "visible_overlay": {},
+        "compatible_chassis": ["A", "B", "C", "D", "E"],
+    },
+    "wire_profile": {
+        "kind": "program", "program_key": "utility_program", "program_family": "utility",
+        "storage_points": 1, "ram_cost": 1, "reload_ticks": 1, "noise": 1,
+        "trace_cost": 1, "durability_max": 6, "runs_max": 0, "capabilities": [],
+    },
+    "wire_interface_profile": {
+        "kind": "deck", "manufacturer": "independent", "style": "plain",
+        "supported_target_classes": ["generic_wire"], "program_slots": 2,
+        "buffer_size": 2,
+    },
     "world_distribution": {"weight": 10, "store_archetypes": ["general"]},
     "fire_profile": {"breakable": True, "flammability": 0.75, "hp": 5},
 }
@@ -188,6 +121,8 @@ class ItemReferenceSet:
     drawable_ids: frozenset[str] = frozenset()
     weapon_ids: frozenset[str] = frozenset()
     external_item_references: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    fingerprint: str = ""
+    scan_errors: tuple[str, ...] = ()
 
     def references_to(self, item_id: str) -> tuple[str, ...]:
         return tuple(self.external_item_references.get(str(item_id), ()))
@@ -297,23 +232,68 @@ class ItemDocument:
                 ]
 
 
-def load_item_references(root: Path, *, drawable_ids: Iterable[str] = ()) -> ItemReferenceSet:
-    root = Path(root)
+def file_digest(path: Path) -> str:
+    """Return a stable digest for one on-disk authoring source."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def load_item_references(
+    root: Path,
+    *,
+    drawable_ids: Iterable[str] = (),
+    item_ids: Iterable[str] = (),
+) -> ItemReferenceSet:
+    """Scan declared content and conservative Python literals on explicit reload.
+
+    This is deliberately not a draw-time operation.  Its fingerprint lets the
+    editor reject a save if a dependency changed after the author began editing.
+    """
+    root = Path(root).resolve()
     weapon_ids: set[str] = set()
     external: dict[str, list[str]] = {}
+    errors: list[str] = []
+    digest = hashlib.sha256()
+    known_item_ids = {str(value).strip().lower() for value in item_ids if str(value).strip()}
+
+    def relative_label(path: Path) -> str:
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            return str(path)
+
+    def read_dependency(path: Path, *, required: bool) -> bytes | None:
+        label = relative_label(path)
+        digest.update(label.encode("utf-8", errors="replace"))
+        try:
+            payload = path.read_bytes()
+        except OSError as exc:
+            digest.update(f"!{type(exc).__name__}:{exc}".encode("utf-8", errors="replace"))
+            if required:
+                errors.append(f"{label}: could not scan dependency: {exc}")
+            return None
+        digest.update(payload)
+        return payload
+
+    def load_json_dependency(path: Path) -> Any:
+        payload = read_dependency(path, required=True)
+        if payload is None:
+            return None
+        try:
+            return json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            errors.append(f"{relative_label(path)}: invalid JSON while scanning references: {exc}")
+            return None
 
     def note(item_id: Any, label: str) -> None:
         key = str(item_id or "").strip().lower()
         if key:
             external.setdefault(key, []).append(label)
 
-    try:
-        weapons = json.loads((root / "game/weapons.json").read_text(encoding="utf-8"))
+    weapons = load_json_dependency(root / "game/weapons.json")
+    if isinstance(weapons, dict):
         for row in weapons.get("weapons", ()) if isinstance(weapons, dict) else ():
             if isinstance(row, dict) and str(row.get("id") or "").strip():
                 weapon_ids.add(str(row["id"]).strip())
-    except (OSError, json.JSONDecodeError):
-        pass
 
     for filename, fields in (
         ("loot_tables.json", ("item_id",)),
@@ -321,10 +301,7 @@ def load_item_references(root: Path, *, drawable_ids: Iterable[str] = ()) -> Ite
         ("mechanical_recipes.json", ("plan_item_id", "output_item_id")),
     ):
         path = root / "game" / filename
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+        data = load_json_dependency(path)
         if not isinstance(data, dict):
             continue
         for owner, value in data.items():
@@ -354,10 +331,44 @@ def load_item_references(root: Path, *, drawable_ids: Iterable[str] = ()) -> Ite
                                         f"game/{filename}: {owner}.component_choices[{choice_index}].options.{item_id}",
                                     )
 
+    ignored_parts = {".git", ".venv", "venv", "__pycache__", "build", "dist"}
+    for path in sorted(root.rglob("*.py")):
+        if any(part in ignored_parts for part in path.relative_to(root).parts):
+            continue
+        payload = read_dependency(path, required=False)
+        if payload is None:
+            errors.append(f"{relative_label(path)}: could not scan Python item references")
+            continue
+        try:
+            source_text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            errors.append(f"{relative_label(path)}: could not decode Python item references: {exc}")
+            continue
+        # Exact quoted identifiers are intentionally conservative: a candidate
+        # in a test, fallback catalog, or comment still blocks silent rewrites.
+        # This fast source scan only runs on explicit reload/save, never redraw.
+        for line_number, line in enumerate(source_text.splitlines(), start=1):
+            for match in PYTHON_ITEM_LITERAL_RE.finditer(line):
+                item_id = match.group("item_id").lower()
+                if item_id in known_item_ids:
+                    note(
+                        item_id,
+                        f"{relative_label(path)}:{line_number} (Python source literal candidate)",
+                    )
+
+    drawable_root = root / "game/drawables"
+    if drawable_root.is_dir():
+        for path in sorted(value for value in drawable_root.rglob("*") if value.is_file()):
+            read_dependency(path, required=False)
+
     return ItemReferenceSet(
         drawable_ids=frozenset(str(value) for value in drawable_ids),
         weapon_ids=frozenset(weapon_ids),
-        external_item_references={key: tuple(values) for key, values in external.items()},
+        external_item_references={
+            key: tuple(dict.fromkeys(sorted(values))) for key, values in external.items()
+        },
+        fingerprint=digest.hexdigest(),
+        scan_errors=tuple(dict.fromkeys(errors)),
     )
 
 
@@ -369,11 +380,18 @@ def _issue(severity: str, item_id: str, field_name: str, message: str) -> Valida
 def validate_item_document(
     document: ItemDocument,
     references: ItemReferenceSet | None = None,
+    *,
+    normalized_catalog: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[ValidationIssue]:
     references = references or ItemReferenceSet()
-    issues: list[ValidationIssue] = []
+    drawable_ids = set(references.drawable_ids) if references.drawable_ids else None
+    issues = list(validate_items_mapping(
+        document.items,
+        drawable_ids=drawable_ids,
+        source="game/items.json",
+    ).issues)
     item_ids = set(document.items)
-    normalized_catalog = document.normalized()
+    normalized_catalog = normalized_catalog or document.normalized()
     for item_id, item in document.items.items():
         runtime_item = normalized_catalog.get(item_id, {})
         if not ITEM_ID_RE.fullmatch(item_id):
@@ -540,7 +558,14 @@ def validate_item_document(
             for target in container["accepted_item_ids"]:
                 if isinstance(target, str) and target not in item_ids:
                     issues.append(_issue("error", item_id, "container.accepted_item_ids", f"unknown item id {target!r}"))
-    return issues
+    deduplicated: list[ValidationIssue] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for issue in issues:
+        key = (issue.severity, issue.source, issue.path, issue.message)
+        if key not in seen:
+            seen.add(key)
+            deduplicated.append(issue)
+    return deduplicated
 
 
 def validate_item_file(
@@ -549,13 +574,14 @@ def validate_item_file(
     references: ItemReferenceSet | None = None,
 ) -> ValidationReport:
     references = references or ItemReferenceSet()
-    drawable_ids = set(references.drawable_ids) if references.drawable_ids else None
-    report = validate_items_content(Path(path), drawable_ids=drawable_ids)
+    report = ValidationReport()
     try:
         document = ItemDocument.load(Path(path))
-    except ItemDocumentError:
+    except ItemDocumentError as exc:
+        report.error(str(Path(path)), "$", str(exc))
         return report
     report.issues.extend(validate_item_document(document, references))
+    report.files_checked.add(str(Path(path)))
     return report
 
 
@@ -591,10 +617,13 @@ def atomic_write_item_document(path: Path, document: ItemDocument) -> None:
         raise
 
 
-def profile_template(name: str) -> Any:
+def profile_template(name: str, *, trap_payload_item_id: str = "") -> Any:
     if name not in PROFILE_TEMPLATES:
         raise ItemDocumentError(f"no template for profile {name!r}")
-    return copy.deepcopy(PROFILE_TEMPLATES[name])
+    template = copy.deepcopy(PROFILE_TEMPLATES[name])
+    if name == "trap_profile" and trap_payload_item_id:
+        template["payload_item_id"] = str(trap_payload_item_id).strip().lower()
+    return template
 
 
 def format_item_issue(issue: ValidationIssue) -> str:
