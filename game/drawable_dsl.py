@@ -33,6 +33,17 @@ GARMENT_SYMBOLS = frozenset({
     "shoulder_y",
     "hip_y",
     "foot_y",
+    "left_foot_x",
+    "right_foot_x",
+    "left_hand_x",
+    "right_hand_x",
+    "hand_y",
+    "head_y",
+    "head_half",
+    "head_top_y",
+    "left_ear_x",
+    "right_ear_x",
+    "ear_y",
 })
 GROUND_SYMBOLS = frozenset({"mid", "left", "right", "top", "bottom"})
 MAX_FILE_BYTES = 256 * 1024
@@ -299,12 +310,25 @@ class DrawableRenderContext:
         hip_y: float,
         foot_y: float,
         mid: float = 8.0,
+        left_foot_x: float | None = None,
+        right_foot_x: float | None = None,
+        left_hand_x: float | None = None,
+        right_hand_x: float | None = None,
+        hand_y: float | None = None,
+        head_y: float | None = None,
+        head_half: float | None = None,
+        head_top_y: float | None = None,
+        left_ear_x: float | None = None,
+        right_ear_x: float | None = None,
+        ear_y: float | None = None,
         material: str = "",
         detail: str = "",
         pattern: str = "",
     ) -> "DrawableRenderContext":
         mid = float(mid)
         hip = float(hip)
+        resolved_head_half = float(head_half if head_half is not None else 2.0)
+        resolved_head_y = float(head_y if head_y is not None else float(shoulder_y) - 3.0)
         symbols = {
             "mid": mid,
             "shoulder": float(shoulder),
@@ -316,6 +340,19 @@ class DrawableRenderContext:
             "shoulder_y": float(shoulder_y),
             "hip_y": float(hip_y),
             "foot_y": float(foot_y),
+            "left_foot_x": float(left_foot_x if left_foot_x is not None else mid - 2.0),
+            "right_foot_x": float(right_foot_x if right_foot_x is not None else mid + 2.0),
+            "left_hand_x": float(left_hand_x if left_hand_x is not None else mid - hip - 2.0),
+            "right_hand_x": float(right_hand_x if right_hand_x is not None else mid + hip + 2.0),
+            "hand_y": float(hand_y if hand_y is not None else float(hip_y) - 1.0),
+            "head_y": resolved_head_y,
+            "head_half": resolved_head_half,
+            "head_top_y": float(
+                head_top_y if head_top_y is not None else resolved_head_y - resolved_head_half
+            ),
+            "left_ear_x": float(left_ear_x if left_ear_x is not None else mid - resolved_head_half),
+            "right_ear_x": float(right_ear_x if right_ear_x is not None else mid + resolved_head_half),
+            "ear_y": float(ear_y if ear_y is not None else resolved_head_y),
         }
         for name, value in symbols.items():
             if not math.isfinite(value):

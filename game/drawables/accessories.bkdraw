@@ -6,7 +6,7 @@ drawable earrings context garment:
     variant compact:
         layer body:
             circle left_stud metal:
-                center mid - 3.5, shoulder_y
+                center left_ear_x, ear_y
                 radius 0.55
             mirror left_stud as right_stud
         surface garment:
@@ -15,14 +15,14 @@ drawable earrings context garment:
     variant detailed:
         layer body:
             circle left_stud metal:
-                center mid - 3.75, shoulder_y
+                center left_ear_x, ear_y
                 radius 0.65
                 outline glint
                 width 0.2
             mirror left_stud as right_stud
             line left_drop metal width 0.3:
-                mid - 3.75, shoulder_y + 0.5
-                mid - 3.75, shoulder_y + 1.5
+                left_ear_x, ear_y + 0.5
+                left_ear_x, ear_y + 1.5
             mirror left_drop as right_drop
         surface garment:
             left_stud
@@ -34,26 +34,26 @@ drawable earpiece context garment:
     variant compact:
         layer body:
             circle bud shell:
-                center mid + 3.5, shoulder_y
+                center right_ear_x, ear_y
                 radius 0.65
             line wire trim width 0.4:
-                mid + 3.75, shoulder_y + 0.5
-                mid + 4, shoulder_y + 2
+                right_ear_x, ear_y + 0.5
+                right_ear_x + 0.25, ear_y + 2
         surface garment:
             bud
     variant detailed:
         layer body:
             circle bud shell:
-                center mid + 3.75, shoulder_y
+                center right_ear_x, ear_y
                 radius 0.7
                 outline trim
                 width 0.2
             line wire trim width 0.3:
-                mid + 4, shoulder_y + 0.5
-                mid + 4.25, shoulder_y + 1.5
-                mid + 3.75, shoulder_y + 2.5
+                right_ear_x, ear_y + 0.5
+                right_ear_x + 0.5, ear_y + 1.5
+                right_ear_x, ear_y + 2.5
             circle mic shell:
-                center mid + 3.75, shoulder_y + 2.5
+                center right_ear_x, ear_y + 2.5
                 radius 0.3
         surface garment:
             bud
@@ -65,19 +65,19 @@ drawable ring context garment:
     variant compact:
         layer body:
             circle band metal:
-                center body_right + 2, hip_y - 1
+                center right_hand_x, hand_y
                 radius 0.55
         surface garment:
             band
     variant detailed:
         layer body:
             circle band metal:
-                center body_right + 2, hip_y - 1
+                center right_hand_x, hand_y
                 radius 0.7
                 outline glint
                 width 0.25
             circle stone glint:
-                center body_right + 2, hip_y - 1.5
+                center right_hand_x, hand_y - 0.5
                 radius 0.25
         surface garment:
             band
@@ -155,19 +155,19 @@ drawable bracelet context garment:
     variant compact:
         layer body:
             circle band metal:
-                center body_right + 2, hip_y - 2
+                center right_hand_x, hand_y - 0.5
                 radius 0.75
         surface garment:
             band
     variant detailed:
         layer body:
             circle band metal:
-                center body_right + 2, hip_y - 2
+                center right_hand_x, hand_y - 0.5
                 radius 0.9
                 outline glint
                 width 0.3
             circle clasp glint:
-                center body_right + 2.5, hip_y - 2.5
+                center right_hand_x + 0.5, hand_y - 1
                 radius 0.2
         surface garment:
             band
@@ -179,8 +179,8 @@ drawable gloves context garment:
     variant compact:
         layer body:
             ellipse left_glove fabric:
-                x body_left - 3
-                y hip_y - 1
+                x left_hand_x - 1
+                y hand_y - 1
                 w 2
                 h 2.5
             mirror left_glove as right_glove
@@ -190,16 +190,16 @@ drawable gloves context garment:
     variant detailed:
         layer body:
             polygon left_glove fabric outline trim width 0.25:
-                body_left - 2.75, hip_y - 1
-                body_left - 1, hip_y - 1
-                body_left - 1, hip_y + 1.5
-                body_left - 2.5, hip_y + 1.5
-                body_left - 3, hip_y + 0.5
+                left_hand_x - 0.75, hand_y - 1
+                left_hand_x + 1, hand_y - 1
+                left_hand_x + 1, hand_y + 1.5
+                left_hand_x - 0.5, hand_y + 1.5
+                left_hand_x - 1, hand_y + 0.5
             mirror left_glove as right_glove
         layer detail:
             line left_cuff trim width 0.3:
-                body_left - 2.75, hip_y - 1
-                body_left - 1, hip_y - 1
+                left_hand_x - 0.75, hand_y - 1
+                left_hand_x + 1, hand_y - 1
             mirror left_cuff as right_cuff
         surface garment:
             left_glove
@@ -212,8 +212,8 @@ drawable watch context garment:
     variant compact:
         layer body:
             rect face metal:
-                x body_right + 1
-                y hip_y - 3
+                x right_hand_x - 0.75
+                y hand_y - 1.5
                 w 1.5
                 h 1.5
         surface garment:
@@ -221,15 +221,15 @@ drawable watch context garment:
     variant detailed:
         layer body:
             rect face metal:
-                x body_right + 1
-                y hip_y - 3
+                x right_hand_x - 0.875
+                y hand_y - 1.5
                 w 1.75
                 h 1.75
                 outline glint
                 width 0.25
             line strap shadow width 0.45:
-                body_right + 1.85, hip_y - 4
-                body_right + 1.85, hip_y - 3
-                body_right + 1.85, hip_y - 1.25
+                right_hand_x, hand_y - 2.5
+                right_hand_x, hand_y - 1.5
+                right_hand_x, hand_y + 0.25
         surface garment:
             face

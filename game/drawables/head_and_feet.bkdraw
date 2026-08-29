@@ -7,7 +7,7 @@ drawable boots context garment:
     variant compact:
         layer body:
             rect left_boot fabric:
-                x mid - 3.5
+                x left_foot_x - 1.25
                 y foot_y - 2
                 w 2.5
                 h 2
@@ -18,15 +18,15 @@ drawable boots context garment:
     variant detailed:
         layer body:
             polygon left_boot fabric outline trim width 0.3:
-                mid - 3.5, foot_y - 3
-                mid - 1.25, foot_y - 3
-                mid - 1, sole_y
-                mid - 4, sole_y
+                left_foot_x - 1, foot_y - 3
+                left_foot_x + 0.75, foot_y - 3
+                left_foot_x + 1, sole_y
+                left_foot_x - 2, sole_y
             mirror left_boot as right_boot
         layer detail:
             line left_sole trim width 0.4:
-                mid - 4, sole_y
-                mid - 1, sole_y
+                left_foot_x - 2, sole_y
+                left_foot_x + 1, sole_y
             mirror left_sole as right_sole
         surface garment:
             left_boot
@@ -38,7 +38,7 @@ drawable sneakers context garment:
     variant compact:
         layer body:
             ellipse left_shoe fabric:
-                x mid - 4
+                x left_foot_x - 1.5
                 y foot_y - 1.5
                 w 3
                 h 1.5
@@ -49,15 +49,15 @@ drawable sneakers context garment:
     variant detailed:
         layer body:
             polygon left_shoe fabric outline trim width 0.25:
-                mid - 3.5, foot_y - 1.75
-                mid - 1.5, foot_y - 1.75
-                mid - 1, foot_y
-                mid - 4, foot_y
+                left_foot_x - 1, foot_y - 1.75
+                left_foot_x + 1, foot_y - 1.75
+                left_foot_x + 1.5, foot_y
+                left_foot_x - 1.5, foot_y
             mirror left_shoe as right_shoe
         layer detail:
             line left_lace trim width 0.25:
-                mid - 3, foot_y - 1.25
-                mid - 1.75, foot_y - 1.25
+                left_foot_x - 0.5, foot_y - 1.25
+                left_foot_x + 0.75, foot_y - 1.25
             mirror left_lace as right_lace
         surface garment:
             left_shoe
@@ -69,15 +69,15 @@ drawable sandals context garment:
     variant compact:
         layer body:
             ellipse left_sole fabric:
-                x mid - 4
+                x left_foot_x - 1.5
                 y foot_y - 0.75
                 w 3
                 h 0.75
             mirror left_sole as right_sole
         layer straps:
             line left_strap trim width 0.55:
-                mid - 3.5, foot_y - 1.5
-                mid - 1.5, foot_y - 0.5
+                left_foot_x - 1, foot_y - 1.5
+                left_foot_x + 1, foot_y - 0.5
             mirror left_strap as right_strap
         surface garment:
             left_sole
@@ -85,7 +85,7 @@ drawable sandals context garment:
     variant detailed:
         layer body:
             ellipse left_sole fabric:
-                x mid - 4
+                x left_foot_x - 1.5
                 y foot_y - 0.75
                 w 3
                 h 0.75
@@ -94,11 +94,11 @@ drawable sandals context garment:
             mirror left_sole as right_sole
         layer straps:
             line left_strap_a trim width 0.35:
-                mid - 3.5, foot_y - 1.5
-                mid - 1.5, foot_y - 0.5
+                left_foot_x - 1, foot_y - 1.5
+                left_foot_x + 1, foot_y - 0.5
             line left_strap_b trim width 0.35:
-                mid - 1.5, foot_y - 1.5
-                mid - 3.5, foot_y - 0.5
+                left_foot_x + 1, foot_y - 1.5
+                left_foot_x - 1, foot_y - 0.5
             mirror left_strap_a as right_strap_a
             mirror left_strap_b as right_strap_b
         surface garment:
@@ -108,17 +108,19 @@ drawable sandals context garment:
 drawable cap context garment:
     paint fabric = fill
     paint trim = edge
+    let hat_half = head_half + 1
+    let crown_bottom = head_y + head_half - 1
     variant compact:
         layer body:
             ellipse crown fabric:
-                x mid - 3
-                y shoulder_y - 5
-                w 6
-                h 3
+                x mid - hat_half
+                y head_top_y
+                w hat_half + hat_half
+                h head_half + 1
             rect brim fabric:
                 x mid
-                y shoulder_y - 3
-                w 4
+                y crown_bottom
+                w hat_half + 1
                 h 0.75
         surface garment:
             crown
@@ -126,21 +128,21 @@ drawable cap context garment:
     variant detailed:
         layer body:
             ellipse crown fabric:
-                x mid - 3.25
-                y shoulder_y - 5.25
-                w 6.5
-                h 3.25
+                x mid - hat_half - 0.25
+                y head_top_y - 0.25
+                w hat_half + hat_half + 0.5
+                h head_half + 1.25
                 outline trim
                 width 0.25
             polygon brim fabric outline trim width 0.25:
-                mid - 0.25, shoulder_y - 3
-                mid + 4, shoulder_y - 3
-                mid + 3.25, shoulder_y - 2.25
-                mid, shoulder_y - 2.25
+                mid - 0.25, crown_bottom
+                mid + hat_half + 1, crown_bottom
+                mid + hat_half + 0.25, crown_bottom + 0.75
+                mid, crown_bottom + 0.75
         layer seam:
             line crown_seam trim width 0.2:
-                mid, shoulder_y - 5
-                mid, shoulder_y - 2.5
+                mid, head_top_y
+                mid, crown_bottom + 0.5
         surface garment:
             crown
             brim
@@ -148,35 +150,36 @@ drawable cap context garment:
 drawable bandana context garment:
     paint fabric = fill
     paint trim = edge
+    let wrap_half = head_half + 1
     variant compact:
         layer body:
             polygon wrap fabric:
-                mid - 3.5, shoulder_y - 4
-                mid + 3.5, shoulder_y - 4
-                mid + 3, shoulder_y - 2
-                mid - 3, shoulder_y - 2
+                mid - wrap_half, ear_y - 1
+                mid + wrap_half, ear_y - 1
+                mid + head_half, ear_y + 1
+                mid - head_half, ear_y + 1
             polygon tail fabric:
-                mid + 2.5, shoulder_y - 2.5
-                mid + 5, shoulder_y
-                mid + 3, shoulder_y + 0.5
+                right_ear_x - 0.5, ear_y + 0.5
+                right_ear_x + 2, shoulder_y
+                right_ear_x, shoulder_y + 0.5
         surface garment:
             wrap
             tail
     variant detailed:
         layer body:
             polygon wrap fabric outline trim width 0.25:
-                mid - 3.5, shoulder_y - 4.25
-                mid + 3.5, shoulder_y - 4.25
-                mid + 3, shoulder_y - 2
-                mid - 3, shoulder_y - 2
+                mid - wrap_half, ear_y - 1.25
+                mid + wrap_half, ear_y - 1.25
+                mid + head_half, ear_y + 1
+                mid - head_half, ear_y + 1
             polygon tail fabric outline trim width 0.25:
-                mid + 2.5, shoulder_y - 2.5
-                mid + 5, shoulder_y
-                mid + 3, shoulder_y + 0.5
+                right_ear_x - 0.5, ear_y + 0.5
+                right_ear_x + 2, shoulder_y
+                right_ear_x, shoulder_y + 0.5
         layer seam:
             line fold trim width 0.25:
-                mid - 3, shoulder_y - 2.5
-                mid + 3, shoulder_y - 2.5
+                mid - head_half, ear_y + 0.5
+                mid + head_half, ear_y + 0.5
         surface garment:
             wrap
             tail

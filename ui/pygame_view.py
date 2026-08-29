@@ -4655,6 +4655,17 @@ class PygameView:
             hip_y = q(11)
             foot_y = min(px - 1, q(15))
             waist_half = max(1, min(shoulder_half, hip_half) - 1)
+            head_y = q(3.5)
+            head_half = max(1, q(2))
+            head_top_y = q(2)
+            left_ear_x = q(6)
+            right_ear_x = q(10)
+            ear_y = q(4)
+            left_hand_x = q(6)
+            right_hand_x = q(10)
+            hand_y = hip_y
+            left_foot_x = q(6)
+            right_foot_x = q(10)
         else:
             head_r = max(2, px // 8)
             head_y = max(head_r + 1, px // 4)
@@ -4668,6 +4679,18 @@ class PygameView:
                 )
             else:
                 waist_half = min(shoulder_half, hip_half)
+            head_half = head_r
+            head_top_y = head_y - head_r
+            left_ear_x = mid_x - head_r
+            right_ear_x = mid_x + head_r
+            ear_y = head_y
+            arm_outset = max(2, px // 12)
+            left_hand_x = mid_x - shoulder_half - arm_outset
+            right_hand_x = mid_x + shoulder_half + arm_outset
+            hand_y = min(hip_y - 1, shoulder_y + max(3, px // 4))
+            stance_half = max(2, px // 7)
+            left_foot_x = mid_x - stance_half
+            right_foot_x = mid_x + stance_half
         return {
             "mid_x": mid_x,
             "shoulder_half": shoulder_half,
@@ -4677,6 +4700,17 @@ class PygameView:
             "shoulder_y": shoulder_y,
             "hip_y": hip_y,
             "foot_y": foot_y,
+            "left_foot_x": left_foot_x,
+            "right_foot_x": right_foot_x,
+            "left_hand_x": left_hand_x,
+            "right_hand_x": right_hand_x,
+            "hand_y": hand_y,
+            "head_y": head_y,
+            "head_half": head_half,
+            "head_top_y": head_top_y,
+            "left_ear_x": left_ear_x,
+            "right_ear_x": right_ear_x,
+            "ear_y": ear_y,
         }
 
     def _actor_body_garment_mask(self, effects=()):
@@ -7223,6 +7257,17 @@ class PygameView:
             shoulder_y=geometry["shoulder_y"] * logical_scale,
             hip_y=geometry["hip_y"] * logical_scale,
             foot_y=geometry["foot_y"] * logical_scale,
+            left_foot_x=geometry["left_foot_x"] * logical_scale,
+            right_foot_x=geometry["right_foot_x"] * logical_scale,
+            left_hand_x=geometry["left_hand_x"] * logical_scale,
+            right_hand_x=geometry["right_hand_x"] * logical_scale,
+            hand_y=geometry["hand_y"] * logical_scale,
+            head_y=geometry["head_y"] * logical_scale,
+            head_half=geometry["head_half"] * logical_scale,
+            head_top_y=geometry["head_top_y"] * logical_scale,
+            left_ear_x=geometry["left_ear_x"] * logical_scale,
+            right_ear_x=geometry["right_ear_x"] * logical_scale,
+            ear_y=geometry["ear_y"] * logical_scale,
             material=material,
             detail=detail,
             pattern=pattern,

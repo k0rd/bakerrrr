@@ -391,7 +391,8 @@ def validate_item_document(
         source="game/items.json",
     ).issues)
     item_ids = set(document.items)
-    normalized_catalog = normalized_catalog or document.normalized()
+    if normalized_catalog is None:
+        normalized_catalog = document.normalized()
     for item_id, item in document.items.items():
         runtime_item = normalized_catalog.get(item_id, {})
         if not ITEM_ID_RE.fullmatch(item_id):

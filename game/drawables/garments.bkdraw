@@ -148,6 +148,7 @@ drawable coverall context garment:
     let top_y = shoulder_y
     let waist_y = hip_y - 1
     let ankle_y = foot_y - 1
+    let sleeve_y = top_y + 3
     variant compact:
         layer body:
             polygon torso fabric:
@@ -161,6 +162,13 @@ drawable coverall context garment:
                 mid - 1, ankle_y
                 mid - 3, ankle_y
             mirror left_leg as right_leg
+            polygon left_sleeve fabric:
+                mid - shoulder, top_y
+                mid - shoulder - 1.5, top_y + 1
+                mid - shoulder - 1, sleeve_y
+                mid - shoulder + 0.75, sleeve_y - 0.5
+                mid - shoulder + 1, top_y + 1
+            mirror left_sleeve as right_sleeve
         layer detail:
             line zip shadow width 0.4:
                 mid, top_y
@@ -169,6 +177,8 @@ drawable coverall context garment:
             torso
             left_leg
             right_leg
+            left_sleeve
+            right_sleeve
     variant detailed:
         layer body:
             polygon torso fabric outline trim width 0.3:
@@ -182,6 +192,13 @@ drawable coverall context garment:
                 mid - 0.8, ankle_y
                 mid - 3, ankle_y
             mirror left_leg as right_leg
+            polygon left_sleeve fabric outline trim width 0.3:
+                mid - shoulder, top_y
+                mid - shoulder - 1.5, top_y + 1
+                mid - shoulder - 1, sleeve_y
+                mid - shoulder + 0.75, sleeve_y - 0.5
+                mid - shoulder + 1, top_y + 1
+            mirror left_sleeve as right_sleeve
         layer detail:
             line zip shadow width 0.25:
                 mid, top_y + 0.5
@@ -196,6 +213,8 @@ drawable coverall context garment:
             torso
             left_leg
             right_leg
+            left_sleeve
+            right_sleeve
 
 drawable jumpsuit context garment:
     paint fabric = fill
@@ -203,35 +222,56 @@ drawable jumpsuit context garment:
     let top_y = shoulder_y
     let waist_y = hip_y - 1
     let ankle_y = foot_y - 1
+    let sleeve_y = top_y + 3
     variant compact:
         layer body:
-            polygon body fabric:
+            polygon torso fabric:
                 mid - shoulder, top_y
                 mid + shoulder, top_y
                 mid + hip, waist_y
-                mid + 2.5, ankle_y
-                mid + 0.5, ankle_y
-                mid, waist_y + 1
+                mid - hip, waist_y
+            polygon left_leg fabric:
+                mid - hip, waist_y
+                mid, waist_y
                 mid - 0.5, ankle_y
                 mid - 2.5, ankle_y
-                mid - hip, waist_y
+            mirror left_leg as right_leg
+            polygon left_sleeve fabric:
+                mid - shoulder, top_y
+                mid - shoulder - 1.5, top_y + 1
+                mid - shoulder - 1, sleeve_y
+                mid - shoulder + 0.75, sleeve_y - 0.5
+                mid - shoulder + 1, top_y + 1
+            mirror left_sleeve as right_sleeve
         surface garment:
-            body
+            torso
+            left_leg
+            right_leg
+            left_sleeve
+            right_sleeve
     variant detailed:
         layer body:
-            polygon body fabric outline trim width 0.3:
+            polygon torso fabric outline trim width 0.3:
                 mid - shoulder, top_y
                 mid - 1, top_y
                 mid, top_y + 1
                 mid + 1, top_y
                 mid + shoulder, top_y
                 mid + hip, waist_y
-                mid + 2.5, ankle_y
-                mid + 0.5, ankle_y
-                mid, waist_y + 1
+                mid - hip, waist_y
+            polygon left_leg fabric outline trim width 0.3:
+                mid - hip, waist_y
+                mid, waist_y
                 mid - 0.5, ankle_y
                 mid - 2.5, ankle_y
-                mid - hip, waist_y
+            mirror left_leg as right_leg
+            polygon left_sleeve fabric outline trim width 0.3:
+                mid - shoulder, top_y
+                mid - shoulder - 1.5, top_y + 1
+                mid - shoulder - 1, sleeve_y
+                mid - shoulder + 0.75, sleeve_y - 0.5
+                mid - shoulder + 1, top_y + 1
+            mirror left_sleeve as right_sleeve
         layer detail:
             line front_seam trim width 0.25:
                 mid, top_y + 1
@@ -240,4 +280,8 @@ drawable jumpsuit context garment:
                 mid - hip, waist_y
                 mid + hip, waist_y
         surface garment:
-            body
+            torso
+            left_leg
+            right_leg
+            left_sleeve
+            right_sleeve
