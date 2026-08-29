@@ -4,20 +4,21 @@ drawable jacket context garment:
     paint fabric = fill
     paint trim = edge
     paint shadow = shade
-    let top_y = shoulder_y - 0.5
+    let top_y = shoulder_y
     let bottom_y = hip_y
     variant compact:
         layer body:
             rect body fabric:
-                x mid - shoulder - 1
+                x mid - shoulder - 0.5
                 y top_y
-                w shoulder + shoulder + 2
+                w shoulder + shoulder + 1
                 h bottom_y - top_y
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y - 1
-                body_left + 1, hip_y - 2
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             line opening shadow width 0.45:
@@ -30,17 +31,18 @@ drawable jacket context garment:
     variant detailed:
         layer body:
             rect body fabric:
-                x mid - shoulder - 1
+                x mid - shoulder - 0.5
                 y top_y
-                w shoulder + shoulder + 2
+                w shoulder + shoulder + 1
                 h bottom_y - top_y
                 outline trim
                 width 0.35
             polygon left_sleeve fabric outline trim width 0.3:
                 mid - shoulder, top_y
-                body_left - 2.25, top_y + 2
-                body_left - 1, hip_y - 1
-                body_left + 1, hip_y - 2
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             line opening shadow width 0.3:
@@ -83,20 +85,21 @@ drawable windbreaker context garment:
     paint fabric = fill
     paint trim = edge
     paint shadow = shade
-    let top_y = shoulder_y - 0.5
+    let top_y = shoulder_y - 0.25
     let bottom_y = hip_y
     variant compact:
         layer body:
             polygon body fabric:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
-                mid + hip + 1, bottom_y
-                mid - hip - 1, bottom_y
+                mid - shoulder - 0.75, top_y
+                mid + shoulder + 0.75, top_y
+                mid + hip + 0.75, bottom_y
+                mid - hip - 0.75, bottom_y
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                body_left - 2.5, top_y + 2
-                body_left - 1, hip_y - 1
-                body_left + 1, hip_y - 2
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             line zipper shadow width 0.4:
@@ -109,15 +112,16 @@ drawable windbreaker context garment:
     variant detailed:
         layer body:
             polygon body fabric outline trim width 0.3:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
-                mid + hip + 1, bottom_y
-                mid - hip - 1, bottom_y
+                mid - shoulder - 0.75, top_y
+                mid + shoulder + 0.75, top_y
+                mid + hip + 0.75, bottom_y
+                mid - hip - 0.75, bottom_y
             polygon left_sleeve fabric outline trim width 0.3:
                 mid - shoulder, top_y
-                body_left - 2.5, top_y + 2
-                body_left - 1, hip_y - 1
-                body_left + 1, hip_y - 2
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             line zipper shadow width 0.25:
@@ -176,20 +180,21 @@ drawable coat context garment:
     paint fabric = fill
     paint trim = edge
     paint shadow = shade
-    let top_y = shoulder_y - 0.5
+    let top_y = shoulder_y - 0.25
     let bottom_y = foot_y - 2
     variant compact:
         layer body:
             polygon body fabric:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
-                mid + hip + 1, bottom_y
-                mid - hip - 1, bottom_y
+                mid - shoulder - 0.5, top_y
+                mid + shoulder + 0.5, top_y
+                mid + hip + 0.5, bottom_y
+                mid - hip - 0.5, bottom_y
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y + 1
-                body_left + 1, hip_y
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             line opening shadow width 0.45:
@@ -202,15 +207,16 @@ drawable coat context garment:
     variant detailed:
         layer body:
             polygon body fabric outline trim width 0.35:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
-                mid + hip + 1.25, bottom_y
-                mid - hip - 1.25, bottom_y
+                mid - shoulder - 0.5, top_y
+                mid + shoulder + 0.5, top_y
+                mid + hip + 0.5, bottom_y
+                mid - hip - 0.5, bottom_y
             polygon left_sleeve fabric outline trim width 0.3:
                 mid - shoulder, top_y
-                body_left - 2.25, top_y + 2
-                body_left - 1, hip_y + 1
-                body_left + 1, hip_y
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             line opening shadow width 0.3:
@@ -271,9 +277,10 @@ drawable cardigan context garment:
             mirror left_front as right_front
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y
-                body_left + 1, hip_y - 1
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         surface garment:
             left_front
@@ -290,9 +297,10 @@ drawable cardigan context garment:
             mirror left_front as right_front
             polygon left_sleeve fabric outline trim width 0.25:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y
-                body_left + 1, hip_y - 1
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             line left_opening trim width 0.35:
@@ -340,20 +348,21 @@ drawable blazer context garment:
     paint fabric = fill
     paint trim = edge
     paint shadow = shade
-    let top_y = shoulder_y - 0.5
+    let top_y = shoulder_y
     let bottom_y = hip_y
     variant compact:
         layer body:
             polygon body fabric:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
+                mid - shoulder - 0.5, top_y
+                mid + shoulder + 0.5, top_y
                 mid + hip, bottom_y
                 mid - hip, bottom_y
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y
-                body_left + 1, hip_y - 1
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             polygon left_lapel trim:
@@ -368,15 +377,16 @@ drawable blazer context garment:
     variant detailed:
         layer body:
             polygon body fabric outline trim width 0.35:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
+                mid - shoulder - 0.5, top_y
+                mid + shoulder + 0.5, top_y
                 mid + hip, bottom_y
                 mid - hip, bottom_y
             polygon left_sleeve fabric outline trim width 0.3:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y
-                body_left + 1, hip_y - 1
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             polygon left_lapel trim:
@@ -546,15 +556,22 @@ drawable rain_shell context garment:
     paint fabric = fill
     paint trim = edge
     paint shadow = shade
-    let top_y = shoulder_y - 0.5
+    let top_y = shoulder_y - 0.25
     let bottom_y = hip_y + 1
     variant compact:
         layer body:
             polygon body fabric:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
-                mid + hip + 1, bottom_y
-                mid - hip - 1, bottom_y
+                mid - shoulder - 0.75, top_y
+                mid + shoulder + 0.75, top_y
+                mid + hip + 0.75, bottom_y
+                mid - hip - 0.75, bottom_y
+            polygon left_sleeve fabric:
+                mid - shoulder, top_y
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
+            mirror left_sleeve as right_sleeve
             ellipse hood fabric:
                 x mid - 2.5
                 y top_y - 2
@@ -566,14 +583,23 @@ drawable rain_shell context garment:
                 mid, bottom_y
         surface garment:
             body
+            left_sleeve
+            right_sleeve
             hood
     variant detailed:
         layer body:
             polygon body fabric outline trim width 0.3:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
-                mid + hip + 1, bottom_y
-                mid - hip - 1, bottom_y
+                mid - shoulder - 0.75, top_y
+                mid + shoulder + 0.75, top_y
+                mid + hip + 0.75, bottom_y
+                mid - hip - 0.75, bottom_y
+            polygon left_sleeve fabric outline trim width 0.3:
+                mid - shoulder, top_y
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
+            mirror left_sleeve as right_sleeve
             ellipse hood fabric:
                 x mid - 2.75
                 y top_y - 2.25
@@ -590,6 +616,8 @@ drawable rain_shell context garment:
                 mid + 0.6, bottom_y
         surface garment:
             body
+            left_sleeve
+            right_sleeve
             hood
 
     presentation ground:
@@ -631,20 +659,21 @@ drawable security_jacket context garment:
     paint fabric = fill
     paint trim = edge
     paint shadow = shade
-    let top_y = shoulder_y - 0.5
+    let top_y = shoulder_y
     let bottom_y = hip_y
     variant compact:
         layer body:
             rect body fabric:
-                x mid - shoulder - 1
+                x mid - shoulder - 0.5
                 y top_y
-                w shoulder + shoulder + 2
+                w shoulder + shoulder + 1
                 h bottom_y - top_y
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y
-                body_left + 1, hip_y - 1
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             rect authority_patch trim:
@@ -659,17 +688,18 @@ drawable security_jacket context garment:
     variant detailed:
         layer body:
             rect body fabric:
-                x mid - shoulder - 1
+                x mid - shoulder - 0.5
                 y top_y
-                w shoulder + shoulder + 2
+                w shoulder + shoulder + 1
                 h bottom_y - top_y
                 outline trim
                 width 0.35
             polygon left_sleeve fabric outline trim width 0.3:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y
-                body_left + 1, hip_y - 1
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             rect authority_patch trim:

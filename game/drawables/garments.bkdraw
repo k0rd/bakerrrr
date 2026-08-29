@@ -11,7 +11,7 @@ drawable trousers context garment:
                 mid - hip, waist_y
                 mid, waist_y
                 mid - 1, ankle_y
-                mid - 3, ankle_y
+                left_foot_x, ankle_y
             mirror left_leg as right_leg
         surface garment:
             left_leg
@@ -22,7 +22,7 @@ drawable trousers context garment:
                 mid - hip, waist_y
                 mid, waist_y
                 mid - 0.75, ankle_y
-                mid - 3, ankle_y
+                left_foot_x, ankle_y
             mirror left_leg as right_leg
         layer seam:
             line waist trim width 0.3:

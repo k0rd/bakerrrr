@@ -6,22 +6,22 @@ drawable tee context garment:
     paint fabric = fill
     paint trim = edge
     let top_y = shoulder_y
-    let bottom_y = hip_y - 1
+    let bottom_y = hip_y - 2
     variant compact:
         layer body:
             polygon torso fabric:
-                mid - shoulder, top_y
+                mid - shoulder + 0.25, top_y
                 mid - 1, top_y
                 mid, top_y + 1
                 mid + 1, top_y
-                mid + shoulder, top_y
+                mid + shoulder - 0.25, top_y
                 mid + waist, bottom_y
                 mid - waist, bottom_y
             polygon left_sleeve fabric:
-                mid - shoulder, top_y
-                mid - shoulder - 1, top_y + 0.75
-                mid - shoulder - 0.75, top_y + 1.75
-                mid - shoulder + 0.75, top_y + 1.5
+                mid - shoulder + 0.25, top_y
+                mid - shoulder - 0.25, top_y + 0.75
+                mid - shoulder, top_y + 1.5
+                mid - shoulder + 1, top_y + 1.25
             mirror left_sleeve as right_sleeve
         surface garment:
             torso
@@ -30,18 +30,18 @@ drawable tee context garment:
     variant detailed:
         layer body:
             polygon torso fabric outline trim width 0.3:
-                mid - shoulder, top_y
+                mid - shoulder + 0.25, top_y
                 mid - 1, top_y
                 mid, top_y + 1.25
                 mid + 1, top_y
-                mid + shoulder, top_y
+                mid + shoulder - 0.25, top_y
                 mid + waist, bottom_y
                 mid - waist, bottom_y
             polygon left_sleeve fabric outline trim width 0.3:
-                mid - shoulder, top_y
-                mid - shoulder - 1, top_y + 0.75
-                mid - shoulder - 0.75, top_y + 1.75
-                mid - shoulder + 0.75, top_y + 1.5
+                mid - shoulder + 0.25, top_y
+                mid - shoulder - 0.25, top_y + 0.75
+                mid - shoulder, top_y + 1.5
+                mid - shoulder + 1, top_y + 1.25
             mirror left_sleeve as right_sleeve
         layer seam:
             line hem trim width 0.25:
@@ -67,9 +67,10 @@ drawable buttoned_top context garment:
                 mid - waist, bottom_y
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                mid - shoulder - 2, top_y + 1
-                mid - shoulder - 1, top_y + 4
-                mid - shoulder + 1, top_y + 2
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.5
+                left_hand_x + 0.5, hand_y - 0.5
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             line placket shadow width 0.35:
@@ -88,9 +89,10 @@ drawable buttoned_top context garment:
                 mid - waist, bottom_y
             polygon left_sleeve fabric outline trim width 0.3:
                 mid - shoulder, top_y
-                mid - shoulder - 2.25, top_y + 1
-                mid - shoulder - 1, top_y + 4
-                mid - shoulder + 1, top_y + 2
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.5
+                left_hand_x + 0.5, hand_y - 0.5
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             polygon left_collar trim:
@@ -128,10 +130,10 @@ drawable blouse context garment:
                 mid + waist, bottom_y
                 mid - waist, bottom_y
             ellipse left_sleeve fabric:
-                x mid - shoulder - 2
-                y top_y
-                w 3
-                h 4
+                x mid - shoulder - 0.75
+                y top_y + 0.5
+                w 2
+                h 3
             mirror left_sleeve as right_sleeve
         surface garment:
             torso
@@ -148,10 +150,10 @@ drawable blouse context garment:
                 mid + waist, bottom_y
                 mid - waist, bottom_y
             ellipse left_sleeve fabric:
-                x mid - shoulder - 2.25
-                y top_y
-                w 3.5
-                h 4.5
+                x mid - shoulder - 1
+                y top_y + 0.25
+                w 2.25
+                h 3.5
                 outline trim
                 width 0.25
             mirror left_sleeve as right_sleeve
@@ -173,15 +175,16 @@ drawable sweater context garment:
     variant compact:
         layer body:
             polygon torso fabric:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
+                mid - shoulder - 0.5, top_y
+                mid + shoulder + 0.5, top_y
                 mid + hip, bottom_y
                 mid - hip, bottom_y
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y - 2
-                body_left + 1, hip_y - 2
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.5
+                left_hand_x + 0.5, hand_y - 0.5
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         surface garment:
             torso
@@ -190,15 +193,16 @@ drawable sweater context garment:
     variant detailed:
         layer body:
             polygon torso fabric outline trim width 0.35:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
+                mid - shoulder - 0.5, top_y
+                mid + shoulder + 0.5, top_y
                 mid + hip, bottom_y
                 mid - hip, bottom_y
             polygon left_sleeve fabric outline trim width 0.3:
                 mid - shoulder, top_y
-                body_left - 2.25, top_y + 2
-                body_left - 1, hip_y - 1.5
-                body_left + 1, hip_y - 1.5
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.5
+                left_hand_x + 0.5, hand_y - 0.5
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer knit:
             line hem trim width 0.4:
@@ -222,15 +226,16 @@ drawable overshirt context garment:
     variant compact:
         layer body:
             polygon torso fabric:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
+                mid - shoulder - 0.5, top_y
+                mid + shoulder + 0.5, top_y
                 mid + hip, bottom_y
                 mid - hip, bottom_y
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y
-                body_left + 1, hip_y - 1
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             line opening shadow width 0.45:
@@ -243,15 +248,16 @@ drawable overshirt context garment:
     variant detailed:
         layer body:
             polygon torso fabric outline trim width 0.35:
-                mid - shoulder - 1, top_y
-                mid + shoulder + 1, top_y
+                mid - shoulder - 0.5, top_y
+                mid + shoulder + 0.5, top_y
                 mid + hip, bottom_y
                 mid - hip, bottom_y
             polygon left_sleeve fabric outline trim width 0.3:
                 mid - shoulder, top_y
-                body_left - 2.25, top_y + 2
-                body_left - 1, hip_y
-                body_left + 1, hip_y - 1
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.25
+                left_hand_x + 0.5, hand_y - 0.25
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
             line opening shadow width 0.3:
@@ -282,15 +288,16 @@ drawable turtleneck context garment:
                 mid - waist, bottom_y
             polygon left_sleeve fabric:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y - 2
-                body_left + 1, hip_y - 2
+                mid - shoulder - 0.75, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.5
+                left_hand_x + 0.5, hand_y - 0.5
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
             rect collar fabric:
                 x mid - 1.5
-                y top_y - 1.5
+                y top_y - 1
                 w 3
-                h 2
+                h 1.5
         surface garment:
             torso
             left_sleeve
@@ -305,21 +312,22 @@ drawable turtleneck context garment:
                 mid - waist, bottom_y
             polygon left_sleeve fabric outline trim width 0.3:
                 mid - shoulder, top_y
-                body_left - 2, top_y + 2
-                body_left - 1, hip_y - 2
-                body_left + 1, hip_y - 2
+                mid - shoulder - 0.25, top_y + 1
+                left_hand_x - 0.25, hand_y - 0.5
+                left_hand_x + 0.5, hand_y - 0.5
+                mid - shoulder + 1, top_y + 1.5
             mirror left_sleeve as right_sleeve
             rect collar fabric:
                 x mid - 1.6
-                y top_y - 1.75
+                y top_y - 0.75
                 w 3.2
-                h 2.25
+                h 1.25
                 outline trim
                 width 0.3
         layer detail:
             line collar_fold trim width 0.25:
-                mid - 1.5, top_y - 0.5
-                mid + 1.5, top_y - 0.5
+                mid - 1.5, top_y
+                mid + 1.5, top_y
         surface garment:
             torso
             left_sleeve
