@@ -46,6 +46,11 @@ class Simulation:
         self.chunk_detail = {}
         self.realized_chunks = set()
         self.chunk_property_records = {}
+        # Record buckets are mutable runtime contents, not proof that the
+        # canonical building/property pass finished for a chunk.  A restored
+        # cross-boundary fixture can legitimately populate a bucket before the
+        # chunk itself has ever been generated.
+        self.chunk_property_generation_complete = set()
         self.chunk_ground_item_records = {}
         self.chunk_population_records = {}
         self.chunk_flora_records = {}
@@ -2172,7 +2177,6 @@ class Simulation:
             }
 
         interior_wall_cells = set()
-        interior_room_doors = set()
         for wall in (room_plan or {}).get("walls", ()):
             if not isinstance(wall, (list, tuple)) or len(wall) < 2:
                 continue
@@ -2191,7 +2195,6 @@ class Simulation:
                 dy = int(door[1])
             except (TypeError, ValueError):
                 continue
-            interior_room_doors.add((dx, dy, int(z)))
             aperture_map[(dx, dy, int(z))] = {
                 "kind": "door",
                 "ordinary": True,
@@ -2233,14 +2236,13 @@ class Simulation:
                 if aperture:
                     kind = aperture.get("kind", "door")
                     ordinary = bool(aperture.get("ordinary"))
-                    interior_room_door = (int(x), int(y), int(z)) in interior_room_doors
-                    if interior_room_door and kind == "door" and ordinary:
+                    if kind in {"door", "side_door", "service_door", "employee_door"}:
                         self.set_door_state(
                             x,
                             y,
                             z,
-                            kind="door",
-                            ordinary=True,
+                            kind=kind,
+                            ordinary=ordinary,
                         )
                         door_state = self.door_state_at(x, y, z) or {}
                         is_open = bool(door_state.get("open", False))
@@ -2257,8 +2259,8 @@ class Simulation:
                         tile_semantic = "feature_window"
                     else:
                         glyph = "+"
-                        walkable = ordinary and kind == "door"
-                        transparent = bool(walkable)
+                        walkable = False
+                        transparent = False
                         tile_color = "feature_door"
                         tile_semantic = "feature_door"
 

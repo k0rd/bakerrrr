@@ -11,7 +11,7 @@ from __future__ import annotations
 COMMON_ITEM_FIELDS = (
     "name", "description", "glyph", "stack_max", "inventory_slot_cost",
     "tags", "category", "legal_status", "effects", "weapon_id",
-    "appearance_family", "appearance_slots", "appearance_drawable",
+    "item_drawable", "appearance_family", "appearance_slots", "appearance_drawable",
 )
 
 ITEM_PROFILE_FIELDS = (

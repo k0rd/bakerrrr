@@ -926,6 +926,15 @@ class SiteServiceSystem(System):
         return self._find_walkable_near(dest_x, dest_y, z=dest_z, radius=4) is not None
 
     def _underground_property_for_destination(self, x, y, z):
+        structure = getattr(self.sim, "structure_cells", {}).get((int(x), int(y), int(z)))
+        structure_building_id = str((structure or {}).get("building_id", "") or "").strip()
+        if structure_building_id:
+            for candidate in tuple(getattr(self.sim, "properties", {}).values()):
+                if str(candidate.get("kind", "")).strip().lower() != "building":
+                    continue
+                if str(_property_metadata(candidate).get("building_id", "") or "").strip() == structure_building_id:
+                    return candidate
+
         prop = self.sim.property_at(x, y, z)
         if isinstance(prop, dict) and str(prop.get("kind", "")).strip().lower() == "building":
             return prop
@@ -1033,10 +1042,13 @@ class SiteServiceSystem(System):
                 candidate = (int(next_x), int(next_y), int(cell_z))
                 if candidate in seen:
                     continue
-                if not belongs(candidate[0], candidate[1], candidate[2]):
-                    continue
+                # Return fixtures are used from an adjacent walkable cell.  A
+                # closed hatch/door at the fixture coordinate is still a real
+                # egress and should not invalidate the whole underground route.
                 if candidate in normalized_returns:
                     return True
+                if not belongs(candidate[0], candidate[1], candidate[2]):
+                    continue
                 seen.add(candidate)
                 frontier.append(candidate)
         return False

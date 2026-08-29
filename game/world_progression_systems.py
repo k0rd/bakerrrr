@@ -624,15 +624,21 @@ class WorldStreamingSystem(System):
 
     def _ensure_chunk_properties(self, cx, cy):
         key = (int(cx), int(cy))
-        if restore_chunk_state(self.sim, key):
-            return
-        if key in self.sim.chunk_property_records:
+        restore_chunk_state(self.sim, key)
+        completed = getattr(self.sim, "chunk_property_generation_complete", None)
+        if not isinstance(completed, set):
+            completed = set(completed or ())
+            self.sim.chunk_property_generation_complete = completed
+        if key in completed:
             return
 
         chunk = self.sim.world.get_chunk(key[0], key[1])
         seed_chunk_organizations(self.sim, chunk)
         rng = random.Random(f"{self.sim.seed}:{key[0]}:{key[1]}:properties")
-        records = []
+        # A snapshot can contain a fixture whose authoritative/source chunk is
+        # elsewhere.  Preserve it, but do not mistake it for completion of this
+        # chunk's canonical building pass.
+        records = list(self.sim.chunk_property_records.get(key, ()) or ())
 
         chunk_size = int(max(8, self.sim.chunk_size))
         origin_x = key[0] * chunk_size
@@ -1407,6 +1413,7 @@ class WorldStreamingSystem(System):
             })
 
         self.sim.chunk_property_records[key] = records
+        completed.add(key)
         maybe_seed_bones_for_chunk(self.sim, chunk)
         maybe_seed_run_echo_for_chunk(self.sim, chunk)
 

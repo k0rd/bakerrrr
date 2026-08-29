@@ -1407,6 +1407,7 @@ def _normalize_item_catalog_source(source):
         if not appearance_slots:
             appearance_slots = _default_appearance_slots_for_family(appearance_family)
         appearance_drawable = str(item.get("appearance_drawable", "") or "").strip().lower()
+        item_drawable = str(item.get("item_drawable", "") or "").strip().lower()
         appearance_profile = _normalize_appearance_profile(item.get("appearance_profile"))
         identification_profile = _normalize_identification_profile(
             item_id,
@@ -1429,6 +1430,7 @@ def _normalize_item_catalog_source(source):
             "tags": tags,
             "category": category,
             "legal_status": legal_status,
+            "item_drawable": item_drawable,
             "appearance_family": appearance_family,
             "appearance_slots": appearance_slots,
             "appearance_drawable": appearance_drawable,

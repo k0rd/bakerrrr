@@ -1957,6 +1957,9 @@ def _item_shape_effects(item_def, render_kind, metadata=None):
     item_id = str(item_def.get("id", "") or "").strip().lower()
     tags = _item_tags(item_def)
     effects = []
+    drawable_id = str(item_def.get("item_drawable", "") or "").strip().lower()
+    if drawable_id:
+        effects.append(f"item_drawable_{drawable_id}")
     effect = _ITEM_SHAPE_EFFECTS.get(item_id)
     if effect and (render_kind == "tool" and effect.startswith("tool_shape_")):
         effects.append(effect)

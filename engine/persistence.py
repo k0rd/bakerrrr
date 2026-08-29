@@ -943,6 +943,7 @@ def restore_simulation(snapshot, *, progress_callback=None):
     state = snapshot.get("sim_state")
     if not isinstance(state, dict):
         raise ValueError("save snapshot missing simulation state")
+    has_property_generation_state = "chunk_property_generation_complete" in state
 
     tilemap = state.get("tilemap")
     resolution_version = int(state.get("simulation_resolution_version", 1) or 1)
@@ -988,6 +989,26 @@ def restore_simulation(snapshot, *, progress_callback=None):
         sim.tilemap.tiles = sim.tilemap.tiles_by_floor.get(0, {})
     if not hasattr(sim, "chunk_saved_states"):
         sim.chunk_saved_states = {}
+    if has_property_generation_state:
+        completed = getattr(sim, "chunk_property_generation_complete", ())
+        sim.chunk_property_generation_complete = {
+            key
+            for raw_key in tuple(completed or ())
+            if (key := _chunk_key(raw_key)) is not None
+        }
+    else:
+        # Legacy saves used record/snapshot presence as their completion
+        # marker.  Preserve those decisions verbatim: new generation is fixed,
+        # while old saves are neither repaired nor duplicated implicitly.
+        sim.chunk_property_generation_complete = {
+            key
+            for raw_key in tuple(getattr(sim, "chunk_property_records", {}).keys())
+            if (key := _chunk_key(raw_key)) is not None
+        } | {
+            key
+            for raw_key in tuple(getattr(sim, "chunk_saved_states", {}).keys())
+            if (key := _chunk_key(raw_key)) is not None
+        }
     if not hasattr(sim, "organization_index"):
         sim.organization_index = {}
     if not getattr(sim, "organization_index", None):

@@ -2439,16 +2439,28 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_ground_cosmetic_drawable(self, overlay, drawable_id, frame):
-        """Draw optional laid-flat item geometry from an authored drawable.
+    def _draw_ground_item_drawable(self, overlay, drawable_id, frame, *, strict=False):
+        """Draw laid-flat item geometry from an authored ground presentation.
 
-        Missing ground presentations are normal for legacy and external
-        content; the caller retains the established generic item fallback.
+        The caller retains the established procedural fallback. ``strict`` is
+        used for an explicit item_drawable reference so a bad migration stays
+        visible in diagnostics; clothing's historical shape bridge remains
+        permissive while its catalogue is migrated.
         """
 
         drawable_id = str(drawable_id or "").strip().lower()
+        if not drawable_id:
+            return False
         definition = RUNTIME_DRAWABLES.catalog.get(drawable_id)
-        if definition is None or definition.presentation("ground") is None:
+        if definition is None:
+            if strict:
+                self._drawable_render_last_error = f"unknown item drawable {drawable_id!r}"
+            return False
+        if definition.presentation("ground") is None:
+            if strict:
+                self._drawable_render_last_error = (
+                    f"item drawable {drawable_id!r} has no ground presentation"
+                )
             return False
         context = DrawableRenderContext.ground()
         variant = "detailed" if self.cell_px > 28 else "compact"
@@ -2526,8 +2538,15 @@ class PygameView:
             return default
 
         cosmetic_shape = ""
-        ground_drawable_rendered = False
-        if kind == "ground":
+        ground_drawable_rendered = self._draw_ground_item_drawable(
+            overlay,
+            _effect_suffix("item_drawable_"),
+            frame,
+            strict=True,
+        )
+        if ground_drawable_rendered:
+            pass
+        elif kind == "ground":
             points = [
                 (mid_x, max(2, self.cell_px // 5)),
                 (self.cell_px - max(3, self.cell_px // 5), mid_y),
@@ -2872,7 +2891,7 @@ class PygameView:
                 self.pygame.draw.line(overlay, cloth, (bag.left + 2, bag.centery), (bag.right - 2, bag.centery), max(1, stroke_w))
         elif kind == "cosmetic":
             cosmetic_shape = _shape_variant_for("cosmetic")
-            ground_drawable_rendered = self._draw_ground_cosmetic_drawable(
+            ground_drawable_rendered = self._draw_ground_item_drawable(
                 overlay,
                 cosmetic_shape,
                 frame,
@@ -3681,7 +3700,7 @@ class PygameView:
             "armor": "metal",
             "drink": "glass",
         }.get(kind, "")
-        if kind == "cosmetic" and ground_drawable_rendered:
+        if ground_drawable_rendered:
             material_hint = ""
         if material_hint:
             finish_rect = self.pygame.Rect(

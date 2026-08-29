@@ -759,7 +759,15 @@ def _validate_wire_interface_profile(report, source, item_path, profile):
             report.error(source, profile_path + ["default_quality"], f"default_quality must be one of {list(WIRE_QUALITY_TIERS)}")
 
 
-def _validate_items(path, report, *, drawable_ids=None, data=None, source=None):
+def _validate_items(
+    path,
+    report,
+    *,
+    drawable_ids=None,
+    ground_drawable_ids=None,
+    data=None,
+    source=None,
+):
     if data is None:
         data, source = _load_object_document(path, report, "an object keyed by item id")
         if data is None:
@@ -936,6 +944,37 @@ def _validate_items(path, report, *, drawable_ids=None, data=None, source=None):
                     source,
                     drawable_path,
                     f"unknown drawable id {drawable_id!r}",
+                )
+
+        if "item_drawable" in item:
+            drawable_id = item.get("item_drawable")
+            drawable_path = item_path + ["item_drawable"]
+            valid_drawable_id = _validate_non_empty_string(
+                report,
+                source,
+                drawable_path,
+                drawable_id,
+                field_name="item_drawable",
+            )
+            if valid_drawable_id and not DRAWABLE_IDENTIFIER_RE.fullmatch(str(drawable_id)):
+                report.error(
+                    source,
+                    drawable_path,
+                    "item_drawable must match [a-z][a-z0-9_]*",
+                )
+                valid_drawable_id = False
+            if valid_drawable_id and drawable_ids is not None and str(drawable_id) not in drawable_ids:
+                report.error(source, drawable_path, f"unknown drawable id {drawable_id!r}")
+                valid_drawable_id = False
+            if (
+                valid_drawable_id
+                and ground_drawable_ids is not None
+                and str(drawable_id) not in ground_drawable_ids
+            ):
+                report.error(
+                    source,
+                    drawable_path,
+                    f"drawable {drawable_id!r} has no ground presentation",
                 )
 
         if "legal_status" in item:
@@ -1996,8 +2035,13 @@ def _validate_drawables(path, report):
             else "$"
         )
         report.error(source, issue_path, exc.message)
-        return None
-    return set(catalog.definitions)
+        return None, None
+    ground_drawable_ids = {
+        drawable_id
+        for drawable_id, definition in catalog.definitions.items()
+        if definition.presentation("ground") is not None
+    }
+    return set(catalog.definitions), ground_drawable_ids
 
 
 def _validate_building_stamps(path, report):
@@ -2014,9 +2058,14 @@ def _validate_building_stamps(path, report):
 def validate_repo_content():
     report = ValidationReport()
 
-    drawable_ids = _validate_drawables(DRAWABLES_PATH, report)
+    drawable_ids, ground_drawable_ids = _validate_drawables(DRAWABLES_PATH, report)
     _validate_building_stamps(BUILDING_STAMPS_PATH, report)
-    item_ids = _validate_items(ITEMS_PATH, report, drawable_ids=drawable_ids)
+    item_ids = _validate_items(
+        ITEMS_PATH,
+        report,
+        drawable_ids=drawable_ids,
+        ground_drawable_ids=ground_drawable_ids,
+    )
     _validate_loot_tables(LOOT_TABLES_PATH, item_ids, report)
     _validate_weapons(WEAPONS_PATH, report)
     _validate_offense_profile(OFFENSE_PROFILE_PATH, report)
@@ -2040,20 +2089,32 @@ def validate_repo_content():
     return report
 
 
-def validate_items_content(path, *, drawable_ids=None):
+def validate_items_content(path, *, drawable_ids=None, ground_drawable_ids=None):
     """Validate one item-catalog candidate through the built-in item rules."""
     report = ValidationReport()
-    _validate_items(Path(path), report, drawable_ids=drawable_ids)
+    _validate_items(
+        Path(path),
+        report,
+        drawable_ids=drawable_ids,
+        ground_drawable_ids=ground_drawable_ids,
+    )
     return report
 
 
-def validate_items_mapping(items, *, drawable_ids=None, source="game/items.json"):
+def validate_items_mapping(
+    items,
+    *,
+    drawable_ids=None,
+    ground_drawable_ids=None,
+    source="game/items.json",
+):
     """Validate an already-parsed item mapping through the built-in rules."""
     report = ValidationReport()
     _validate_items(
         None,
         report,
         drawable_ids=drawable_ids,
+        ground_drawable_ids=ground_drawable_ids,
         data=items,
         source=source,
     )

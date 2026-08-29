@@ -119,6 +119,7 @@ def _duplicate_paths(node: Any, path: str = "$") -> list[str]:
 @dataclass(frozen=True)
 class ItemReferenceSet:
     drawable_ids: frozenset[str] = frozenset()
+    ground_drawable_ids: frozenset[str] = frozenset()
     weapon_ids: frozenset[str] = frozenset()
     external_item_references: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     fingerprint: str = ""
@@ -241,6 +242,7 @@ def load_item_references(
     root: Path,
     *,
     drawable_ids: Iterable[str] = (),
+    ground_drawable_ids: Iterable[str] = (),
     item_ids: Iterable[str] = (),
 ) -> ItemReferenceSet:
     """Scan declared content and conservative Python literals on explicit reload.
@@ -363,6 +365,7 @@ def load_item_references(
 
     return ItemReferenceSet(
         drawable_ids=frozenset(str(value) for value in drawable_ids),
+        ground_drawable_ids=frozenset(str(value) for value in ground_drawable_ids),
         weapon_ids=frozenset(weapon_ids),
         external_item_references={
             key: tuple(dict.fromkeys(sorted(values))) for key, values in external.items()
@@ -388,6 +391,11 @@ def validate_item_document(
     issues = list(validate_items_mapping(
         document.items,
         drawable_ids=drawable_ids,
+        ground_drawable_ids=(
+            set(references.ground_drawable_ids)
+            if references.ground_drawable_ids
+            else None
+        ),
         source="game/items.json",
     ).issues)
     item_ids = set(document.items)
@@ -408,7 +416,8 @@ def validate_item_document(
         if "description" in item and not isinstance(item["description"], str):
             issues.append(_issue("error", item_id, "description", "description must be a string"))
         for field_name in (
-            "category", "legal_status", "weapon_id", "appearance_family", "appearance_drawable",
+            "category", "legal_status", "weapon_id", "item_drawable",
+            "appearance_family", "appearance_drawable",
         ):
             if field_name in item and not isinstance(item[field_name], str):
                 issues.append(_issue("error", item_id, field_name, "must be a string"))
@@ -544,6 +553,19 @@ def validate_item_document(
         drawable_id = str(item.get("appearance_drawable") or "").strip()
         if drawable_id and references.drawable_ids and drawable_id not in references.drawable_ids:
             issues.append(_issue("error", item_id, "appearance_drawable", f"unknown drawable id {drawable_id!r}"))
+        item_drawable_id = str(item.get("item_drawable") or "").strip()
+        if (
+            item_drawable_id
+            and references.ground_drawable_ids
+            and (not references.drawable_ids or item_drawable_id in references.drawable_ids)
+            and item_drawable_id not in references.ground_drawable_ids
+        ):
+            issues.append(_issue(
+                "error",
+                item_id,
+                "item_drawable",
+                f"drawable {item_drawable_id!r} has no ground presentation",
+            ))
         weapon_id = str(item.get("weapon_id") or "").strip()
         if weapon_id and references.weapon_ids and weapon_id not in references.weapon_ids:
             issues.append(_issue("error", item_id, "weapon_id", f"unknown weapon id {weapon_id!r}"))

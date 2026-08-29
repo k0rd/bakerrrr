@@ -1,0 +1,78 @@
+bakerrrr-drawable 1
+
+# Ground-primary definitions are ordinary item art. They need no garment form.
+drawable drink_bottle context ground:
+    paint plastic = fill
+    paint rim = edge
+    paint water = shade
+    let bottle_left = mid - 2.75
+    let bottle_right = mid + 2.75
+
+    variant compact:
+        layer body:
+            polygon bottle plastic outline rim width 0.4:
+                mid - 1.1, top + 2.5
+                mid + 1.1, top + 2.5
+                mid + 1.25, top + 4
+                bottle_right, top + 5.25
+                bottle_right, bottom - 2.25
+                bottle_left, bottom - 2.25
+                bottle_left, top + 5.25
+                mid - 1.25, top + 4
+            rect water_fill water:
+                x bottle_left + 0.6
+                y top + 7.25
+                w bottle_right - bottle_left - 1.2
+                h bottom - top - 10.1
+            rect cap rim:
+                x mid - 1.25
+                y top + 1.75
+                w 2.5
+                h 1
+        layer label:
+            line label_band rim width 0.55:
+                bottle_left + 0.7, top + 8
+                bottle_right - 0.7, top + 8
+        surface item:
+            bottle
+            water_fill
+            cap
+
+    variant detailed:
+        layer body:
+            polygon bottle plastic outline rim width 0.3:
+                mid - 1.15, top + 2.4
+                mid + 1.15, top + 2.4
+                mid + 1.3, top + 4
+                bottle_right, top + 5.35
+                bottle_right, bottom - 2.15
+                bottle_left, bottom - 2.15
+                bottle_left, top + 5.35
+                mid - 1.3, top + 4
+            rect water_fill water:
+                x bottle_left + 0.55
+                y top + 7.15
+                w bottle_right - bottle_left - 1.1
+                h bottom - top - 9.9
+            rect cap rim:
+                x mid - 1.3
+                y top + 1.65
+                w 2.6
+                h 1.05
+        layer detail:
+            line left_glint rim width 0.25:
+                bottle_left + 0.7, top + 5.8
+                bottle_left + 0.7, bottom - 3
+            line label_top rim width 0.3:
+                bottle_left + 0.65, top + 7.5
+                bottle_right - 0.65, top + 7.5
+            line label_bottom rim width 0.3:
+                bottle_left + 0.65, top + 9.2
+                bottle_right - 0.65, top + 9.2
+            line cap_ridge water width 0.2:
+                mid - 0.8, top + 2.15
+                mid + 0.8, top + 2.15
+        surface item:
+            bottle
+            water_fill
+            cap
