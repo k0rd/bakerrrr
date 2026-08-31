@@ -1,0 +1,320 @@
+bakerrrr-drawable 1
+
+# Mechanical plans share paper construction but preserve the mechanism drawn on
+# them, so a dropped plan remains identifiable without opening inventory text.
+drawable tripline_alarm_plan context ground:
+    paint paper = fill
+    paint ink = edge
+    paint fold = shade
+
+    variant compact:
+        layer sheet:
+            rect plan_sheet paper:
+                x 2.5
+                y 2.5
+                w 11
+                h 11
+                outline ink
+                width 0.45
+            polygon folded_corner fold:
+                10.5, 2.5
+                13.5, 5.5
+                10.5, 5.5
+        layer diagram:
+            line left_post ink width 0.45:
+                4.5, 6
+                4.5, 11.5
+            line right_post ink width 0.45:
+                11.5, 6
+                11.5, 11.5
+            line trip_wire ink width 0.45:
+                4.5, 7.5
+                11.5, 7.5
+            rect alarm_symbol fold:
+                x 6.5
+                y 6.25
+                w 3
+                h 3
+        surface item:
+            plan_sheet
+            folded_corner
+
+    variant detailed:
+        layer sheet:
+            rect plan_sheet paper:
+                x 2.3
+                y 2.3
+                w 11.4
+                h 11.4
+                outline ink
+                width 0.3
+            polygon folded_corner fold outline ink width 0.2:
+                10.4, 2.3
+                13.7, 5.6
+                10.4, 5.6
+        layer diagram:
+            line left_post ink width 0.3:
+                4.25, 5.8
+                4.25, 11.75
+            line right_post ink width 0.3:
+                11.75, 5.8
+                11.75, 11.75
+            line trip_wire ink width 0.3:
+                4.25, 7.25
+                11.75, 7.25
+            rect alarm_symbol fold:
+                x 6.35
+                y 5.95
+                w 3.3
+                h 3.3
+                outline ink
+                width 0.2
+            circle sensor_dot ink:
+                center 8, 7.6
+                radius 0.45
+            line dimension_line fold width 0.2:
+                4.25, 12.4
+                11.75, 12.4
+        surface item:
+            plan_sheet
+            folded_corner
+
+drawable restraint_snare_plan context ground:
+    paint paper = fill
+    paint ink = edge
+    paint fold = shade
+
+    variant compact:
+        layer sheet:
+            rect plan_sheet paper:
+                x 2.5
+                y 2.5
+                w 11
+                h 11
+                outline ink
+                width 0.45
+            polygon folded_corner fold:
+                10.5, 2.5
+                13.5, 5.5
+                10.5, 5.5
+        layer diagram:
+            circle snare_ring fold:
+                center 7.5, 8
+                radius 3.5
+                outline ink
+                width 0.45
+            rect trigger_symbol ink:
+                x 6.25
+                y 6.75
+                w 2.5
+                h 2.5
+            line anchor_line ink width 0.4:
+                10.25, 10.25
+                12.5, 12
+        surface item:
+            plan_sheet
+            folded_corner
+
+    variant detailed:
+        layer sheet:
+            rect plan_sheet paper:
+                x 2.3
+                y 2.3
+                w 11.4
+                h 11.4
+                outline ink
+                width 0.3
+            polygon folded_corner fold outline ink width 0.2:
+                10.4, 2.3
+                13.7, 5.6
+                10.4, 5.6
+        layer diagram:
+            circle snare_ring fold:
+                center 7.4, 7.9
+                radius 3.65
+                outline ink
+                width 0.3
+            circle inner_coil paper:
+                center 7.4, 7.9
+                radius 2.35
+                outline ink
+                width 0.25
+            rect trigger_symbol ink:
+                x 6.15
+                y 6.65
+                w 2.5
+                h 2.5
+            line anchor_line ink width 0.3:
+                10.25, 10.35
+                12.5, 12.15
+            polygon anchor_symbol fold:
+                11.8, 11.4
+                13, 12.5
+                11.5, 13
+        surface item:
+            plan_sheet
+            folded_corner
+
+drawable remote_release_rig_plan context ground:
+    paint paper = fill
+    paint ink = edge
+    paint fold = shade
+
+    variant compact:
+        layer sheet:
+            rect plan_sheet paper:
+                x 2.5
+                y 2.5
+                w 11
+                h 11
+                outline ink
+                width 0.45
+            polygon folded_corner fold:
+                10.5, 2.5
+                13.5, 5.5
+                10.5, 5.5
+        layer diagram:
+            rect controller_symbol fold:
+                x 5
+                y 5.25
+                w 6
+                h 5.5
+                outline ink
+                width 0.4
+            circle release_symbol ink:
+                center 9.25, 8
+                radius 0.8
+            line left_lead ink width 0.4:
+                6, 5.25
+                4.5, 3.75
+            line right_lead ink width 0.4:
+                10, 5.25
+                11.5, 3.75
+        surface item:
+            plan_sheet
+            folded_corner
+
+    variant detailed:
+        layer sheet:
+            rect plan_sheet paper:
+                x 2.3
+                y 2.3
+                w 11.4
+                h 11.4
+                outline ink
+                width 0.3
+            polygon folded_corner fold outline ink width 0.2:
+                10.4, 2.3
+                13.7, 5.6
+                10.4, 5.6
+        layer diagram:
+            rect controller_symbol fold:
+                x 4.8
+                y 5
+                w 6.4
+                h 5.8
+                outline ink
+                width 0.3
+            rect switch_symbol paper:
+                x 5.6
+                y 6.25
+                w 2.2
+                h 3.25
+                outline ink
+                width 0.2
+            circle release_symbol ink:
+                center 9.65, 7.9
+                radius 0.75
+            line left_lead ink width 0.3:
+                5.9, 5
+                4.25, 3.4
+            line right_lead ink width 0.3:
+                10.1, 5
+                11.75, 3.4
+            line dimension_line fold width 0.2:
+                4.8, 11.7
+                11.2, 11.7
+        surface item:
+            plan_sheet
+            folded_corner
+
+drawable decoy_beacon_plan context ground:
+    paint paper = fill
+    paint ink = edge
+    paint fold = shade
+
+    variant compact:
+        layer sheet:
+            rect plan_sheet paper:
+                x 2.5
+                y 2.5
+                w 11
+                h 11
+                outline ink
+                width 0.45
+            polygon folded_corner fold:
+                10.5, 2.5
+                13.5, 5.5
+                10.5, 5.5
+        layer diagram:
+            polygon beacon_symbol fold outline ink width 0.4:
+                5.5, 10.75
+                10.5, 10.75
+                11.5, 12.25
+                4.5, 12.25
+            line beacon_mast ink width 0.45:
+                8, 10.75
+                8, 5
+            circle beacon_light ink:
+                center 8, 4.5
+                radius 0.75
+            line signal_left ink width 0.35:
+                6.75, 5.25
+                5.25, 6.5
+            line signal_right ink width 0.35:
+                9.25, 5.25
+                10.75, 6.5
+        surface item:
+            plan_sheet
+            folded_corner
+
+    variant detailed:
+        layer sheet:
+            rect plan_sheet paper:
+                x 2.3
+                y 2.3
+                w 11.4
+                h 11.4
+                outline ink
+                width 0.3
+            polygon folded_corner fold outline ink width 0.2:
+                10.4, 2.3
+                13.7, 5.6
+                10.4, 5.6
+        layer diagram:
+            polygon beacon_symbol fold outline ink width 0.3:
+                5.3, 10.6
+                10.7, 10.6
+                11.8, 12.4
+                4.2, 12.4
+            line beacon_mast ink width 0.3:
+                8, 10.6
+                8, 4.8
+            circle beacon_light ink:
+                center 8, 4.25
+                radius 0.7
+            line inner_left_signal ink width 0.25:
+                6.75, 5
+                5.45, 6.2
+            line inner_right_signal ink width 0.25:
+                9.25, 5
+                10.55, 6.2
+            line outer_left_signal ink width 0.2:
+                5.8, 4.1
+                4, 5.8
+            line outer_right_signal ink width 0.2:
+                10.2, 4.1
+                12, 5.8
+        surface item:
+            plan_sheet
+            folded_corner

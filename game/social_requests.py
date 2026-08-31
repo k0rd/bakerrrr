@@ -870,6 +870,73 @@ class NPCSocialRequestSystem(System):
                 return copy.deepcopy(row)
         return None
 
+    def player_item_favor_for_entry(
+        self,
+        player_eid: int,
+        npc_eid: int,
+        entry: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Describe an active promise this physical item can fulfill."""
+
+        row = self._active_row_between(player_eid, npc_eid)
+        if not isinstance(row, dict):
+            return None
+        if _token(row.get("status")) not in {"accepted", "in_progress"}:
+            return None
+        if _int(row.get("recipient_eid"), 0) != int(player_eid):
+            return None
+        if _int(row.get("requester_eid"), 0) != int(npc_eid):
+            return None
+        kind = _token(row.get("kind"))
+        item_id = str((entry or {}).get("item_id", "") or "").strip()
+        if not self._is_item_favor(kind) or item_id not in self._request_item_ids(kind, row.get("terms")):
+            return None
+        profile = self._item_favor_profile(kind)
+        return {
+            "request_id": str(row.get("id", "") or ""),
+            "request_kind": kind,
+            "player_line": str(
+                (profile or {}).get("fulfill_line", "I brought what you asked for.")
+                or "I brought what you asked for."
+            ),
+        }
+
+    def fulfill_player_item_favor_from_exchange(
+        self,
+        player_eid: int,
+        npc_eid: int,
+        request_id: str,
+        *,
+        item_id: str,
+        received_instance_id: str = "",
+    ) -> bool:
+        """Resolve a promise after the shared exchange seam moved the item."""
+
+        row = social_request_state(self.sim)["requests"].get(str(request_id or "").strip())
+        if not isinstance(row, dict):
+            return False
+        if _token(row.get("status")) not in {"accepted", "in_progress"}:
+            return False
+        if _int(row.get("recipient_eid"), 0) != int(player_eid):
+            return False
+        if _int(row.get("requester_eid"), 0) != int(npc_eid):
+            return False
+        kind = _token(row.get("kind"))
+        item_id = str(item_id or "").strip()
+        if not self._is_item_favor(kind) or item_id not in self._request_item_ids(kind, row.get("terms")):
+            return False
+        if not self._actors_adjacent(player_eid, npc_eid):
+            return False
+        row.setdefault("terms", {})["item_id"] = item_id
+        row.setdefault("terms", {})["received_item_instance_id"] = str(received_instance_id or "").strip()
+        resolve_social_request(
+            self.sim,
+            row["id"],
+            fulfilled=True,
+            reason="performed_through_item_exchange",
+        )
+        return True
+
     def _request_need_level(self, actor: int, kind: str) -> float:
         profile = self._item_favor_profile(kind)
         if profile is None:
@@ -1114,18 +1181,7 @@ class NPCSocialRequestSystem(System):
             return None
         if self._active_between(npc, player) or not self._request_cooldown_ready(npc, player):
             return None
-        needs = self.sim.ecs.get(NPCNeeds).get(npc)
-        if needs is None:
-            return None
-        social = _float(getattr(needs, "social", 100.0), 100.0)
         candidates = self._item_favor_candidates(npc)
-        if social < 54.0:
-            candidates.append((
-                0.62 + max(0.0, (54.0 - social) / 100.0),
-                "check_in_later",
-                {"delay_ticks": 16},
-                "They keep letting the conversation end and then finding one more thing to say.",
-            ))
         if not candidates:
             return None
         score, kind, terms, cue = max(candidates, key=lambda item: item[0])
@@ -1196,17 +1252,6 @@ class NPCSocialRequestSystem(System):
                 "player_line": str(profile.get("ask_line", "Could you spare something?") or "Could you spare something?"),
                 "favor_kind": kind,
             })
-        needs = self.sim.ecs.get(NPCNeeds).get(player_eid)
-        if needs is None:
-            return rows
-        if _float(getattr(needs, "social", 100.0), 100.0) < 60.0:
-            rows.append({
-                "id": "favor_request_check_in",
-                "label": "Ask them to check in on you later",
-                "prompt_text": "Ask them to check in on you later",
-                "player_line": "Could you come find me again later? I could use the company.",
-                "favor_kind": "check_in_later",
-            })
         return rows
 
     def player_dialogue_rows(
@@ -1265,27 +1310,18 @@ class NPCSocialRequestSystem(System):
                 return rows
             if status in {"accepted", "in_progress"} and recipient == player:
                 if self._actors_adjacent(player, npc):
-                    if kind == "check_in_later" or self._available_request_item(player, kind, active.get("terms")) is not None:
-                        profile = self._item_favor_profile(kind)
+                    if kind == "check_in_later":
                         rows.append({
                             "id": "favor_fulfill",
-                            "label": (
-                                "Give them what they asked for"
-                                if profile is not None
-                                else "Keep your promise now"
-                            ),
-                            "player_line": (
-                                str(profile.get("fulfill_line", "I brought what you asked for.") or "I brought what you asked for.")
-                                if profile is not None
-                                else "I said I'd come back. How are you holding up?"
-                            ),
+                            "label": "Keep your promise now",
+                            "player_line": "I said I'd come back. How are you holding up?",
                             "request_id": request_id,
                         })
                     elif _int(active.get("renegotiation_count"), 0) < 1:
                         rows.append({
                             "id": "favor_renegotiate",
                             "label": "Admit you need more time",
-                            "player_line": "I haven't found the water yet. Can you give me more time?",
+                            "player_line": "I haven't found what you need yet. Can you give me more time?",
                             "request_id": request_id,
                         })
                 rows.append({
@@ -1397,7 +1433,6 @@ class NPCSocialRequestSystem(System):
         if _int(row.get("renegotiation_count"), 0) >= 1:
             return False, "already_renegotiated"
         requester = _int(row.get("requester_eid"), 0)
-        needs = self.sim.ecs.get(NPCNeeds).get(requester)
         if self._is_item_favor(_token(row.get("kind"))) and self._request_need_level(
             requester,
             _token(row.get("kind")),

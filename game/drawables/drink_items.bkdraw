@@ -1,0 +1,1342 @@
+bakerrrr-drawable 1
+
+# Ground-primary art for the historical drink render category. That category
+# also contains small oral and inhaled consumables, so each definition follows
+# the actual item rather than inheriting the old bottle-shaped fallback.
+drawable caff_shot context ground:
+    paint vial = fill
+    paint cap = edge
+    paint liquid = shade
+
+    variant compact:
+        layer dose:
+            rect vial_body vial:
+                x 5.5
+                y 5
+                w 5
+                h 8
+                outline cap
+                width 0.45
+            rect dose_fill liquid:
+                x 6.25
+                y 8
+                w 3.5
+                h 4.25
+            rect vial_cap cap:
+                x 5
+                y 3.5
+                w 6
+                h 2
+        surface item:
+            vial_body
+            dose_fill
+            vial_cap
+
+    variant detailed:
+        layer dose:
+            rect vial_body vial:
+                x 5.35
+                y 5
+                w 5.3
+                h 8.25
+                outline cap
+                width 0.3
+            rect dose_fill liquid:
+                x 6
+                y 8.1
+                w 4
+                h 4.45
+            rect vial_cap cap:
+                x 4.85
+                y 3.25
+                w 6.3
+                h 2
+                outline liquid
+                width 0.2
+        layer details:
+            line cap_ridge liquid width 0.25:
+                5.35, 4.15
+                10.65, 4.15
+            line charge_mark cap width 0.3:
+                8.6, 6.2
+                7.45, 8.15
+                8.55, 8.15
+                7.4, 10.25
+        surface item:
+            vial_body
+            dose_fill
+            vial_cap
+
+drawable spark_brew context ground:
+    paint cup = fill
+    paint trim = edge
+    paint brew = shade
+
+    variant compact:
+        layer cup:
+            polygon brew_cup cup outline trim width 0.45:
+                4, 5.25
+                12, 5.25
+                10.75, 13.25
+                5.25, 13.25
+            rect cup_lid trim:
+                x 3.5
+                y 4
+                w 9
+                h 2
+            line straw trim width 0.55:
+                9.75, 4.1
+                11.25, 1.5
+        layer mark:
+            line spark_mark brew width 0.55:
+                8.5, 6.75
+                6.75, 9
+                8.25, 9
+                7.25, 11.25
+        surface item:
+            brew_cup
+            cup_lid
+
+    variant detailed:
+        layer cup:
+            polygon brew_cup cup outline trim width 0.3:
+                3.9, 5.2
+                12.1, 5.2
+                10.8, 13.4
+                5.2, 13.4
+            rect cup_lid trim:
+                x 3.35
+                y 3.85
+                w 9.3
+                h 2
+                outline brew
+                width 0.2
+            line straw trim width 0.4:
+                9.8, 4.15
+                11.35, 1.35
+        layer details:
+            line cup_band brew width 0.35:
+                4.65, 11.4
+                11.35, 11.4
+            line spark_mark brew width 0.4:
+                8.55, 6.55
+                6.65, 8.9
+                8.25, 8.9
+                7.2, 11.2
+                9.7, 8.3
+        surface item:
+            brew_cup
+            cup_lid
+
+drawable focus_inhaler context ground:
+    paint casing = fill
+    paint trim = edge
+    paint dose = shade
+
+    variant compact:
+        layer inhaler:
+            rect canister casing:
+                x 4.25
+                y 3
+                w 6.5
+                h 8.5
+                outline trim
+                width 0.45
+            polygon mouthpiece casing outline trim width 0.4:
+                7.5, 10
+                13.5, 10
+                13.5, 12.75
+                9, 12.75
+            rect dose_window dose:
+                x 5.5
+                y 5.25
+                w 4
+                h 3
+        surface item:
+            canister
+            mouthpiece
+            dose_window
+
+    variant detailed:
+        layer inhaler:
+            rect canister casing:
+                x 4.1
+                y 2.8
+                w 6.7
+                h 8.7
+                outline trim
+                width 0.3
+            polygon mouthpiece casing outline trim width 0.3:
+                7.25, 9.9
+                13.7, 9.9
+                13.7, 12.9
+                8.8, 12.9
+            rect dose_window dose:
+                x 5.35
+                y 5
+                w 4.2
+                h 3.2
+                outline trim
+                width 0.2
+        layer details:
+            line canister_ridge trim width 0.25:
+                4.8, 4
+                10.1, 4
+            line focus_mark trim width 0.3:
+                6.25, 6.6
+                8.65, 6.6
+            circle focus_dot trim:
+                center 7.45, 6.6
+                radius 0.4
+        surface item:
+            canister
+            mouthpiece
+            dose_window
+
+drawable black_market_stim context ground:
+    paint bag = fill
+    paint seal = edge
+    paint crystal = shade
+
+    variant compact:
+        layer packet:
+            polygon zip_bag bag outline seal width 0.45:
+                3, 3.5
+                13, 3.5
+                12.25, 13
+                3.75, 13
+            line zip_seal seal width 0.55:
+                3.2, 5
+                12.8, 5
+        layer contents:
+            polygon crystal_left crystal:
+                5, 9.25
+                6.5, 6.75
+                7.5, 9.5
+                6, 11
+            polygon crystal_right crystal:
+                8, 10.5
+                10, 7.25
+                11, 10.25
+                9.5, 11.75
+        surface item:
+            zip_bag
+            crystal_left
+            crystal_right
+
+    variant detailed:
+        layer packet:
+            polygon zip_bag bag outline seal width 0.3:
+                2.8, 3.25
+                13.2, 3.25
+                12.35, 13.25
+                3.65, 13.25
+            line zip_seal seal width 0.35:
+                3, 4.8
+                13, 4.8
+            line bag_glint seal width 0.2:
+                4, 5.65
+                3.7, 11.8
+        layer contents:
+            polygon crystal_left crystal outline seal width 0.2:
+                4.7, 9.25
+                6.35, 6.55
+                7.45, 9.55
+                5.9, 11.2
+            polygon crystal_right crystal outline seal width 0.2:
+                7.7, 10.6
+                9.9, 7.1
+                11.2, 10.2
+                9.45, 12
+            polygon crystal_chip crystal:
+                7.1, 7.2
+                8.1, 5.8
+                8.7, 7.4
+        surface item:
+            zip_bag
+            crystal_left
+            crystal_right
+            crystal_chip
+
+drawable synth_focus_tabs context ground:
+    paint backing = fill
+    paint foil = edge
+    paint tablet = shade
+
+    variant compact:
+        layer blister:
+            rect blister_card backing:
+                x 3
+                y 3.5
+                w 10
+                h 9
+                outline foil
+                width 0.45
+            circle tablet_one tablet:
+                center 5.5, 6
+                radius 1.15
+            circle tablet_two tablet:
+                center 10.5, 6
+                radius 1.15
+            circle tablet_three tablet:
+                center 5.5, 10
+                radius 1.15
+            circle tablet_four tablet:
+                center 10.5, 10
+                radius 1.15
+        surface item:
+            blister_card
+            tablet_one
+            tablet_two
+            tablet_three
+            tablet_four
+
+    variant detailed:
+        layer blister:
+            rect blister_card backing:
+                x 2.8
+                y 3.25
+                w 10.4
+                h 9.5
+                outline foil
+                width 0.3
+            circle tablet_one tablet:
+                center 5.2, 5.7
+                radius 1.1
+            circle tablet_two tablet:
+                center 8, 5.7
+                radius 1.1
+            circle tablet_three tablet:
+                center 10.8, 5.7
+                radius 1.1
+            circle tablet_four tablet:
+                center 5.2, 10.3
+                radius 1.1
+            circle tablet_five tablet:
+                center 8, 10.3
+                radius 1.1
+            circle tablet_six tablet:
+                center 10.8, 10.3
+                radius 1.1
+        layer foil:
+            line foil_fold foil width 0.2:
+                3.5, 8
+                12.5, 8
+        surface item:
+            blister_card
+            tablet_one
+            tablet_two
+            tablet_three
+            tablet_four
+            tablet_five
+            tablet_six
+
+drawable smoke_tab context ground:
+    paint paper = fill
+    paint ember = edge
+    paint herb = shade
+
+    variant compact:
+        layer roll:
+            polygon joint paper outline herb width 0.4:
+                2.25, 11
+                10.75, 3
+                13, 5.25
+                4.5, 13.25
+            polygon ember_tip ember:
+                10.75, 3
+                13, 5.25
+                13.75, 4.25
+                11.75, 2.25
+        layer smoke:
+            line smoke ember width 0.35:
+                12.5, 2.6
+                11.8, 1.7
+                12.4, 0.8
+        surface item:
+            joint
+            ember_tip
+
+    variant detailed:
+        layer roll:
+            polygon joint paper outline herb width 0.3:
+                2, 11.1
+                10.65, 2.8
+                13.2, 5.3
+                4.45, 13.5
+            polygon ember_tip ember outline herb width 0.2:
+                10.65, 2.8
+                13.2, 5.3
+                13.95, 4.25
+                11.7, 2
+        layer details:
+            line paper_seam herb width 0.25:
+                4.2, 10.8
+                11.5, 4
+            line smoke_one ember width 0.25:
+                12.6, 2.55
+                11.85, 1.65
+                12.45, 0.7
+            line smoke_two ember width 0.2:
+                13.35, 2.9
+                14, 2
+                13.65, 1.2
+        surface item:
+            joint
+            ember_tip
+
+drawable diluted_focus_inhaler context ground:
+    paint casing = fill
+    paint trim = edge
+    paint dose = shade
+
+    variant compact:
+        layer inhaler:
+            rect canister casing:
+                x 4.5
+                y 3.25
+                w 6
+                h 8
+                outline trim
+                width 0.45
+            polygon mouthpiece casing outline trim width 0.4:
+                7.75, 9.75
+                13.25, 9.75
+                13.25, 12.5
+                8.75, 12.5
+            ellipse dilute_mark dose:
+                x 6
+                y 5.25
+                w 3
+                h 4
+        surface item:
+            canister
+            mouthpiece
+            dilute_mark
+
+    variant detailed:
+        layer inhaler:
+            rect canister casing:
+                x 4.35
+                y 3.05
+                w 6.2
+                h 8.2
+                outline trim
+                width 0.3
+            polygon mouthpiece casing outline trim width 0.3:
+                7.55, 9.65
+                13.45, 9.65
+                13.45, 12.7
+                8.6, 12.7
+            ellipse dilute_mark dose:
+                x 5.8
+                y 5
+                w 3.4
+                h 4.4
+                outline trim
+                width 0.2
+        layer details:
+            line dilute_line trim width 0.25:
+                7.5, 5.7
+                6.6, 7.2
+                7.5, 8.5
+                8.4, 7.2
+                7.5, 5.7
+        surface item:
+            canister
+            mouthpiece
+            dilute_mark
+
+drawable improvised_herbal_blend context ground:
+    paint pouch = fill
+    paint tie = edge
+    paint herb = shade
+
+    variant compact:
+        layer sachet:
+            polygon herb_pouch pouch outline tie width 0.45:
+                4.5, 7
+                6.75, 5.5
+                9.25, 5.5
+                11.5, 7
+                12.25, 13
+                3.75, 13
+            circle pouch_knot tie:
+                center 8, 5
+                radius 1
+        layer mark:
+            line leaf_mark herb width 0.55:
+                8, 8
+                8, 11.5
+                6.25, 9.25
+                8, 10
+                9.75, 8.75
+                8, 10
+        surface item:
+            herb_pouch
+            pouch_knot
+
+    variant detailed:
+        layer sachet:
+            polygon herb_pouch pouch outline tie width 0.3:
+                4.25, 7
+                6.65, 5.35
+                9.35, 5.35
+                11.75, 7
+                12.5, 13.25
+                3.5, 13.25
+            circle pouch_knot tie:
+                center 8, 4.8
+                radius 0.9
+            line left_tie tie width 0.3:
+                7.4, 4.5
+                5.4, 2.8
+            line right_tie tie width 0.3:
+                8.6, 4.5
+                10.6, 2.8
+        layer mark:
+            line leaf_stem herb width 0.35:
+                8, 7.7
+                8, 11.8
+            ellipse left_leaf herb:
+                x 5.7
+                y 8.1
+                w 2.6
+                h 1.5
+            ellipse right_leaf herb:
+                x 7.8
+                y 9.25
+                w 2.7
+                h 1.6
+        surface item:
+            herb_pouch
+            pouch_knot
+
+drawable experimental_herbal_concoction context ground:
+    paint glass = fill
+    paint stopper = edge
+    paint mixture = shade
+
+    variant compact:
+        layer flask:
+            ellipse flask_body glass:
+                x 3.5
+                y 6
+                w 9
+                h 7.5
+                outline stopper
+                width 0.45
+            rect flask_neck glass:
+                x 6.25
+                y 3
+                w 3.5
+                h 4.5
+                outline stopper
+                width 0.4
+            rect cork stopper:
+                x 5.75
+                y 2.25
+                w 4.5
+                h 1.75
+            ellipse mixture_pool mixture:
+                x 4.25
+                y 8.25
+                w 7.5
+                h 4.5
+        surface item:
+            flask_body
+            flask_neck
+            cork
+            mixture_pool
+
+    variant detailed:
+        layer flask:
+            ellipse flask_body glass:
+                x 3.25
+                y 5.75
+                w 9.5
+                h 7.75
+                outline stopper
+                width 0.3
+            rect flask_neck glass:
+                x 6.15
+                y 2.85
+                w 3.7
+                h 4.5
+                outline stopper
+                width 0.25
+            rect cork stopper:
+                x 5.65
+                y 2
+                w 4.7
+                h 1.8
+            ellipse mixture_pool mixture:
+                x 4
+                y 8
+                w 8
+                h 4.8
+        layer details:
+            circle bubble_small stopper:
+                center 6.2, 9.25
+                radius 0.45
+            circle bubble_large stopper:
+                center 9.4, 10.4
+                radius 0.65
+            line glass_glint stopper width 0.2:
+                5, 6.9
+                4.4, 9.1
+        surface item:
+            flask_body
+            flask_neck
+            cork
+            mixture_pool
+
+drawable weak_toxic_concoction context ground:
+    paint glass = fill
+    paint stopper = edge
+    paint toxin = shade
+
+    variant compact:
+        layer flask:
+            polygon toxic_flask glass outline stopper width 0.45:
+                6.5, 3
+                9.5, 3
+                9.5, 6
+                13, 12.75
+                3, 12.75
+                6.5, 6
+            polygon toxin_fill toxin:
+                4.5, 11.5
+                6.25, 8.25
+                9.75, 8.25
+                11.5, 11.5
+            rect cork stopper:
+                x 6
+                y 2
+                w 4
+                h 1.75
+        layer warning:
+            circle warning_bubble stopper:
+                center 8, 10
+                radius 0.75
+        surface item:
+            toxic_flask
+            toxin_fill
+            cork
+
+    variant detailed:
+        layer flask:
+            polygon toxic_flask glass outline stopper width 0.3:
+                6.35, 2.85
+                9.65, 2.85
+                9.65, 5.9
+                13.25, 13
+                2.75, 13
+                6.35, 5.9
+            polygon toxin_fill toxin:
+                4.2, 11.8
+                6.1, 8.1
+                9.9, 8.1
+                11.8, 11.8
+            rect cork stopper:
+                x 5.85
+                y 1.85
+                w 4.3
+                h 1.8
+        layer details:
+            circle warning_bubble stopper:
+                center 8, 10.1
+                radius 0.75
+            circle toxin_bubble_left stopper:
+                center 6.2, 9.1
+                radius 0.35
+            circle toxin_bubble_right stopper:
+                center 9.8, 11
+                radius 0.45
+            line warning_slash toxin width 0.25:
+                7.55, 9.65
+                8.45, 10.55
+        surface item:
+            toxic_flask
+            toxin_fill
+            cork
+
+drawable spoiled_herbal_slurry context ground:
+    paint jar = fill
+    paint lid = edge
+    paint slurry = shade
+
+    variant compact:
+        layer container:
+            rect slurry_jar jar:
+                x 3.5
+                y 5
+                w 9
+                h 8
+                outline lid
+                width 0.45
+            rect jar_lid lid:
+                x 3
+                y 3.5
+                w 10
+                h 2.25
+            rect slurry_fill slurry:
+                x 4.25
+                y 7.5
+                w 7.5
+                h 4.75
+        layer chunks:
+            circle slurry_chunk_left lid:
+                center 6, 9
+                radius 0.65
+            circle slurry_chunk_right lid:
+                center 9.75, 10.5
+                radius 0.75
+        surface item:
+            slurry_jar
+            jar_lid
+            slurry_fill
+
+    variant detailed:
+        layer container:
+            rect slurry_jar jar:
+                x 3.3
+                y 4.8
+                w 9.4
+                h 8.4
+                outline lid
+                width 0.3
+            rect jar_lid lid:
+                x 2.8
+                y 3.25
+                w 10.4
+                h 2.3
+                outline slurry
+                width 0.2
+            rect slurry_fill slurry:
+                x 4
+                y 7.3
+                w 8
+                h 5.15
+        layer chunks:
+            circle slurry_chunk_left lid:
+                center 5.7, 8.85
+                radius 0.65
+            circle slurry_chunk_mid lid:
+                center 8, 10.5
+                radius 0.55
+            circle slurry_chunk_right lid:
+                center 10.35, 9.3
+                radius 0.75
+            line spoil_line lid width 0.25:
+                4.4, 7.8
+                6.2, 7.4
+                8, 8
+                10, 7.45
+                11.6, 7.8
+        surface item:
+            slurry_jar
+            jar_lid
+            slurry_fill
+
+drawable field_restraint_jab context ground:
+    paint barrel = fill
+    paint hardware = edge
+    paint dose = shade
+
+    variant compact:
+        layer syringe:
+            rect syringe_barrel barrel:
+                x 4
+                y 6
+                w 7.5
+                h 4
+                outline hardware
+                width 0.4
+            rect restraint_dose dose:
+                x 7.25
+                y 6.75
+                w 3.5
+                h 2.5
+            line plunger hardware width 0.55:
+                1.5, 8
+                4, 8
+            line plunger_grip hardware width 0.55:
+                1.75, 6.5
+                1.75, 9.5
+            line needle hardware width 0.4:
+                11.5, 8
+                14.5, 8
+        surface item:
+            syringe_barrel
+            restraint_dose
+
+    variant detailed:
+        layer syringe:
+            rect syringe_barrel barrel:
+                x 3.85
+                y 5.8
+                w 7.8
+                h 4.4
+                outline hardware
+                width 0.3
+            rect restraint_dose dose:
+                x 7
+                y 6.5
+                w 3.9
+                h 3
+            line plunger hardware width 0.4:
+                1.3, 8
+                3.85, 8
+            line plunger_grip hardware width 0.4:
+                1.55, 6.3
+                1.55, 9.7
+            line needle hardware width 0.3:
+                11.65, 8
+                14.7, 8
+        layer markings:
+            line measure_one hardware width 0.2:
+                5.2, 6
+                5.2, 7
+            line measure_two hardware width 0.2:
+                6.1, 6
+                6.1, 7
+            line restraint_band hardware width 0.3:
+                8.8, 6.1
+                8.8, 9.9
+        surface item:
+            syringe_barrel
+            restraint_dose
+
+drawable cocaine_bindle context ground:
+    paint paper = fill
+    paint fold = edge
+    paint powder = shade
+
+    variant compact:
+        layer packet:
+            polygon bindle paper outline fold width 0.45:
+                8, 2.5
+                13.5, 8
+                8, 13.5
+                2.5, 8
+            polygon powder_window powder:
+                8, 5
+                11, 8
+                8, 10.25
+                5, 8
+        layer folds:
+            line left_fold fold width 0.4:
+                2.8, 8
+                8, 9.5
+                13.2, 8
+        surface item:
+            bindle
+            powder_window
+
+    variant detailed:
+        layer packet:
+            polygon bindle paper outline fold width 0.3:
+                8, 2.25
+                13.75, 8
+                8, 13.75
+                2.25, 8
+            polygon powder_window powder outline fold width 0.2:
+                8, 4.7
+                11.25, 8
+                8, 10.45
+                4.75, 8
+        layer folds:
+            line lower_fold fold width 0.3:
+                2.6, 8
+                8, 9.65
+                13.4, 8
+            line upper_fold fold width 0.25:
+                8, 2.6
+                8, 4.7
+            line packet_mark paper width 0.25:
+                6.6, 7.6
+                9.4, 7.6
+        surface item:
+            bindle
+            powder_window
+
+drawable mdma_capsule context ground:
+    paint shell = fill
+    paint seam = edge
+    paint contents = shade
+
+    variant compact:
+        layer capsule:
+            polygon capsule_body shell outline seam width 0.45:
+                4, 5.5
+                10, 5.5
+                12.5, 8
+                10, 10.5
+                4, 10.5
+                1.5, 8
+            polygon capsule_half contents:
+                7, 5.5
+                10, 5.5
+                12.5, 8
+                10, 10.5
+                7, 10.5
+        layer seam:
+            line capsule_seam seam width 0.45:
+                7, 5.75
+                7, 10.25
+        surface item:
+            capsule_body
+            capsule_half
+
+    variant detailed:
+        layer capsule:
+            polygon capsule_body shell outline seam width 0.3:
+                3.8, 5.3
+                10.1, 5.3
+                12.8, 8
+                10.1, 10.7
+                3.8, 10.7
+                1.2, 8
+            polygon capsule_half contents:
+                7, 5.3
+                10.1, 5.3
+                12.8, 8
+                10.1, 10.7
+                7, 10.7
+        layer details:
+            line capsule_seam seam width 0.3:
+                7, 5.5
+                7, 10.5
+            circle pressed_dot_left seam:
+                center 4.4, 8
+                radius 0.45
+            circle pressed_dot_right shell:
+                center 9.5, 8
+                radius 0.4
+        surface item:
+            capsule_body
+            capsule_half
+
+drawable lsd_blotter context ground:
+    paint paper = fill
+    paint perforation = edge
+    paint ink = shade
+
+    variant compact:
+        layer sheet:
+            rect blotter_sheet paper:
+                x 3
+                y 3
+                w 10
+                h 10
+                outline perforation
+                width 0.45
+        layer grid:
+            line vertical_left perforation width 0.35:
+                6.35, 3.25
+                6.35, 12.75
+            line vertical_right perforation width 0.35:
+                9.65, 3.25
+                9.65, 12.75
+            line horizontal_top perforation width 0.35:
+                3.25, 6.35
+                12.75, 6.35
+            line horizontal_bottom perforation width 0.35:
+                3.25, 9.65
+                12.75, 9.65
+            circle center_ink ink:
+                center 8, 8
+                radius 1.15
+        surface item:
+            blotter_sheet
+
+    variant detailed:
+        layer sheet:
+            rect blotter_sheet paper:
+                x 2.8
+                y 2.8
+                w 10.4
+                h 10.4
+                outline perforation
+                width 0.3
+        layer grid:
+            line vertical_left perforation width 0.25:
+                6.25, 3
+                6.25, 13
+            line vertical_right perforation width 0.25:
+                9.75, 3
+                9.75, 13
+            line horizontal_top perforation width 0.25:
+                3, 6.25
+                13, 6.25
+            line horizontal_bottom perforation width 0.25:
+                3, 9.75
+                13, 9.75
+            circle ink_top_left ink:
+                center 4.6, 4.6
+                radius 0.55
+            circle ink_center ink:
+                center 8, 8
+                radius 0.8
+            circle ink_bottom_right ink:
+                center 11.4, 11.4
+                radius 0.55
+        surface item:
+            blotter_sheet
+
+drawable canteen_coffee context ground:
+    paint mug = fill
+    paint rim = edge
+    paint coffee = shade
+
+    variant compact:
+        layer handle:
+            ellipse mug_handle mug:
+                x 9.5
+                y 6
+                w 4.5
+                h 5
+                outline rim
+                width 0.6
+        layer cup:
+            rect mug_body mug:
+                x 3.25
+                y 5
+                w 8
+                h 8
+                outline rim
+                width 0.45
+            ellipse coffee_surface coffee:
+                x 3.25
+                y 4
+                w 8
+                h 2.5
+                outline rim
+                width 0.4
+        layer steam:
+            line coffee_steam rim width 0.35:
+                6.25, 3.75
+                5.75, 2.75
+                6.35, 1.65
+        surface item:
+            mug_handle
+            mug_body
+            coffee_surface
+
+    variant detailed:
+        layer handle:
+            ellipse mug_handle mug:
+                x 9.35
+                y 5.8
+                w 4.8
+                h 5.4
+                outline rim
+                width 0.45
+        layer cup:
+            rect mug_body mug:
+                x 3.1
+                y 4.9
+                w 8.2
+                h 8.2
+                outline rim
+                width 0.3
+            ellipse coffee_surface coffee:
+                x 3.1
+                y 3.9
+                w 8.2
+                h 2.5
+                outline rim
+                width 0.3
+        layer details:
+            line mug_band coffee width 0.3:
+                3.7, 10.8
+                10.7, 10.8
+            line steam_left rim width 0.25:
+                5.6, 3.65
+                5.1, 2.65
+                5.7, 1.45
+            line steam_right rim width 0.25:
+                8.2, 3.65
+                8.8, 2.7
+                8.25, 1.55
+        surface item:
+            mug_handle
+            mug_body
+            coffee_surface
+
+drawable mint_strip context ground:
+    paint sleeve = fill
+    paint seam = edge
+    paint strip = shade
+
+    variant compact:
+        layer packet:
+            rect mint_sleeve sleeve:
+                x 3
+                y 6
+                w 10
+                h 5
+                outline seam
+                width 0.45
+            polygon loose_strip strip outline seam width 0.35:
+                7, 6
+                9, 2.75
+                11, 3.75
+                10, 6
+        layer mark:
+            ellipse mint_mark strip:
+                x 5
+                y 7.25
+                w 4
+                h 2.25
+        surface item:
+            mint_sleeve
+            loose_strip
+
+    variant detailed:
+        layer packet:
+            rect mint_sleeve sleeve:
+                x 2.8
+                y 5.8
+                w 10.4
+                h 5.3
+                outline seam
+                width 0.3
+            polygon loose_strip strip outline seam width 0.25:
+                6.85, 5.8
+                8.9, 2.5
+                11.15, 3.55
+                10, 5.8
+        layer mark:
+            ellipse mint_leaf strip:
+                x 4.7
+                y 7.1
+                w 4.2
+                h 2.45
+            line leaf_vein seam width 0.2:
+                5.4, 9
+                8.3, 7.6
+            line sleeve_seam seam width 0.2:
+                3.5, 10.25
+                12.5, 10.25
+        surface item:
+            mint_sleeve
+            loose_strip
+
+drawable sealed_juice context ground:
+    paint carton = fill
+    paint seam = edge
+    paint juice = shade
+
+    variant compact:
+        layer carton:
+            polygon juice_carton carton outline seam width 0.45:
+                4, 5
+                6, 2.75
+                10, 2.75
+                12, 5
+                12, 13.5
+                4, 13.5
+            polygon carton_top juice:
+                4, 5
+                6, 2.75
+                10, 2.75
+                12, 5
+            line juice_straw seam width 0.55:
+                9.75, 4
+                11.75, 1.5
+        layer label:
+            circle fruit_mark juice:
+                center 8, 8.5
+                radius 1.5
+        surface item:
+            juice_carton
+            carton_top
+
+    variant detailed:
+        layer carton:
+            polygon juice_carton carton outline seam width 0.3:
+                3.8, 4.9
+                5.9, 2.55
+                10.1, 2.55
+                12.2, 4.9
+                12.2, 13.65
+                3.8, 13.65
+            polygon carton_top juice:
+                3.8, 4.9
+                5.9, 2.55
+                10.1, 2.55
+                12.2, 4.9
+            line juice_straw seam width 0.4:
+                9.8, 3.95
+                11.9, 1.3
+        layer details:
+            circle fruit_mark juice:
+                center 8, 8.4
+                radius 1.55
+            line fruit_leaf seam width 0.25:
+                8, 6.9
+                9.2, 5.9
+            line side_seam seam width 0.2:
+                11.25, 5.6
+                11.25, 12.8
+        surface item:
+            juice_carton
+            carton_top
+
+drawable cheap_whiskey context ground:
+    paint glass = fill
+    paint cap = edge
+    paint liquor = shade
+
+    variant compact:
+        layer bottle:
+            polygon whiskey_bottle glass outline cap width 0.45:
+                6.25, 2.5
+                9.75, 2.5
+                9.75, 5
+                12.25, 6.5
+                12.25, 13.5
+                3.75, 13.5
+                3.75, 6.5
+                6.25, 5
+            rect whiskey_fill liquor:
+                x 4.5
+                y 8
+                w 7
+                h 4.75
+            rect bottle_cap cap:
+                x 6
+                y 1.5
+                w 4
+                h 1.5
+        layer label:
+            rect whiskey_label glass:
+                x 5.25
+                y 7
+                w 5.5
+                h 3.5
+                outline cap
+                width 0.35
+        surface item:
+            whiskey_bottle
+            whiskey_fill
+            bottle_cap
+            whiskey_label
+
+    variant detailed:
+        layer bottle:
+            polygon whiskey_bottle glass outline cap width 0.3:
+                6.15, 2.35
+                9.85, 2.35
+                9.85, 4.9
+                12.4, 6.4
+                12.4, 13.65
+                3.6, 13.65
+                3.6, 6.4
+                6.15, 4.9
+            rect whiskey_fill liquor:
+                x 4.3
+                y 7.8
+                w 7.4
+                h 5.1
+            rect bottle_cap cap:
+                x 5.85
+                y 1.3
+                w 4.3
+                h 1.6
+        layer label:
+            rect whiskey_label glass:
+                x 5
+                y 6.8
+                w 6
+                h 3.8
+                outline cap
+                width 0.25
+            line label_rule cap width 0.25:
+                6, 8.7
+                10, 8.7
+            line bottle_glint cap width 0.2:
+                4.5, 6.7
+                4.5, 12.1
+        surface item:
+            whiskey_bottle
+            whiskey_fill
+            bottle_cap
+            whiskey_label
+
+drawable electrolyte_drink context ground:
+    paint bottle = fill
+    paint trim = edge
+    paint drink = shade
+
+    variant compact:
+        layer bottle:
+            polygon sport_bottle bottle outline trim width 0.45:
+                6, 3.5
+                10, 3.5
+                10.5, 5
+                12.5, 6.25
+                11.5, 13.5
+                4.5, 13.5
+                3.5, 6.25
+                5.5, 5
+            rect sport_cap trim:
+                x 6.25
+                y 2
+                w 3.5
+                h 2
+            polygon drink_fill drink:
+                4.5, 8
+                11.5, 8
+                10.75, 12.75
+                5.25, 12.75
+        layer grip:
+            line grip_band trim width 0.55:
+                4.25, 7
+                11.75, 7
+        surface item:
+            sport_bottle
+            sport_cap
+            drink_fill
+
+    variant detailed:
+        layer bottle:
+            polygon sport_bottle bottle outline trim width 0.3:
+                5.9, 3.35
+                10.1, 3.35
+                10.6, 4.9
+                12.7, 6.15
+                11.65, 13.65
+                4.35, 13.65
+                3.3, 6.15
+                5.4, 4.9
+            rect sport_cap trim:
+                x 6.1
+                y 1.8
+                w 3.8
+                h 2.05
+                outline drink
+                width 0.2
+            polygon drink_fill drink:
+                4.3, 8.2
+                11.7, 8.2
+                10.9, 12.9
+                5.1, 12.9
+        layer details:
+            line upper_grip trim width 0.35:
+                4.15, 6.8
+                11.85, 6.8
+            line lower_grip trim width 0.3:
+                4.55, 9.5
+                11.45, 9.5
+            line bolt_mark bottle width 0.3:
+                8.4, 8.7
+                7.2, 10.4
+                8.3, 10.4
+                7.5, 12.1
+        surface item:
+            sport_bottle
+            sport_cap
+            drink_fill

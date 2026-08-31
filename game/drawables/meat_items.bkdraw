@@ -1,0 +1,272 @@
+bakerrrr-drawable 1
+
+# Hunting and butchered-meat states need distinct physical reads: loose raw
+# cuts, a field bag, cooked food, and a retail tray are not interchangeable.
+drawable raw_game_meat context ground:
+    paint tissue = fill
+    paint fat = edge
+    paint bone = shade
+
+    variant compact:
+        layer cut:
+            polygon raw_cut tissue outline bone width 0.45:
+                2.5, 8
+                4.5, 4.5
+                9.5, 3.5
+                13.5, 6.5
+                12.5, 11.5
+                8.5, 13
+                4, 11.5
+            circle bone_end bone:
+                center 9.75, 7.25
+                radius 1.5
+        layer marbling:
+            line fat_line fat width 0.5:
+                4.25, 8.5
+                6.5, 6.5
+                8.25, 8.75
+        surface item:
+            raw_cut
+            bone_end
+
+    variant detailed:
+        layer cut:
+            polygon raw_cut tissue outline bone width 0.3:
+                2.25, 8
+                4.3, 4.25
+                9.6, 3.25
+                13.75, 6.4
+                12.7, 11.7
+                8.5, 13.25
+                3.8, 11.7
+            circle bone_end bone:
+                center 9.85, 7.15
+                radius 1.55
+            circle bone_core fat:
+                center 9.85, 7.15
+                radius 0.65
+        layer marbling:
+            line upper_fat fat width 0.35:
+                3.8, 8.2
+                6.2, 6
+                8.25, 8.3
+            line lower_fat fat width 0.3:
+                5, 10.5
+                7.25, 9.2
+                9, 10.75
+                11.8, 9.7
+        surface item:
+            raw_cut
+            bone_end
+
+drawable bagged_game_meat context ground:
+    paint bag = fill
+    paint tie = edge
+    paint meat = shade
+
+    variant compact:
+        layer bag:
+            polygon field_bag bag outline tie width 0.45:
+                4.5, 5.5
+                6.75, 4
+                9.25, 4
+                11.5, 5.5
+                13, 13.25
+                3, 13.25
+            circle bag_knot tie:
+                center 8, 3.75
+                radius 0.9
+        layer contents:
+            polygon meat_left meat:
+                4.5, 9
+                6.25, 6.75
+                8, 8.5
+                6.5, 11.25
+            polygon meat_right meat:
+                8, 10
+                10, 6.75
+                11.75, 9.5
+                10.25, 12
+        surface item:
+            field_bag
+            bag_knot
+            meat_left
+            meat_right
+
+    variant detailed:
+        layer bag:
+            polygon field_bag bag outline tie width 0.3:
+                4.3, 5.4
+                6.65, 3.8
+                9.35, 3.8
+                11.7, 5.4
+                13.25, 13.4
+                2.75, 13.4
+            circle bag_knot tie:
+                center 8, 3.55
+                radius 0.85
+            line left_tie tie width 0.3:
+                7.4, 3.25
+                5.8, 1.9
+            line right_tie tie width 0.3:
+                8.6, 3.25
+                10.2, 1.9
+        layer contents:
+            polygon meat_left meat outline tie width 0.2:
+                4.2, 9
+                6.2, 6.45
+                8.05, 8.4
+                6.4, 11.5
+            polygon meat_right meat outline tie width 0.2:
+                7.75, 10.15
+                10.05, 6.5
+                12, 9.45
+                10.25, 12.2
+            line bag_glint tie width 0.2:
+                3.8, 6.1
+                3.25, 11.9
+        surface item:
+            field_bag
+            bag_knot
+            meat_left
+            meat_right
+
+drawable cooked_game_meat context ground:
+    paint roast = fill
+    paint crust = edge
+    paint center = shade
+
+    variant compact:
+        layer steak:
+            polygon cooked_cut roast outline crust width 0.45:
+                2.5, 8
+                4.25, 4.75
+                8.5, 3.5
+                12.75, 5.75
+                13.5, 9.5
+                10.5, 12.75
+                5.25, 12.25
+            ellipse cooked_center center:
+                x 5
+                y 6
+                w 6
+                h 4.5
+        layer sear:
+            line sear_one crust width 0.55:
+                5.5, 5.5
+                9.5, 10.75
+            line sear_two crust width 0.55:
+                8, 4.5
+                11.5, 9
+        surface item:
+            cooked_cut
+            cooked_center
+
+    variant detailed:
+        layer steak:
+            polygon cooked_cut roast outline crust width 0.3:
+                2.25, 8
+                4.1, 4.55
+                8.6, 3.25
+                12.95, 5.6
+                13.7, 9.6
+                10.55, 13
+                5.1, 12.45
+            ellipse cooked_center center:
+                x 4.8
+                y 5.8
+                w 6.4
+                h 4.8
+                outline crust
+                width 0.2
+        layer sear:
+            line sear_one crust width 0.35:
+                4.85, 5.45
+                9.2, 11.2
+            line sear_two crust width 0.35:
+                7, 4.45
+                11.25, 10
+            line sear_three crust width 0.3:
+                9.4, 4.5
+                12.3, 8.3
+        surface item:
+            cooked_cut
+            cooked_center
+
+drawable packaged_game_meat context ground:
+    paint tray = fill
+    paint film = edge
+    paint meat = shade
+
+    variant compact:
+        layer package:
+            rect butcher_tray tray:
+                x 2.5
+                y 4
+                w 11
+                h 9
+                outline film
+                width 0.45
+            ellipse left_cut meat:
+                x 3.75
+                y 5.5
+                w 4
+                h 5.5
+            ellipse right_cut meat:
+                x 8.25
+                y 5.5
+                w 4
+                h 5.5
+            rect package_label film:
+                x 9
+                y 4.75
+                w 3.5
+                h 2.25
+        surface item:
+            butcher_tray
+            left_cut
+            right_cut
+            package_label
+
+    variant detailed:
+        layer package:
+            rect butcher_tray tray:
+                x 2.25
+                y 3.75
+                w 11.5
+                h 9.5
+                outline film
+                width 0.3
+            ellipse left_cut meat:
+                x 3.5
+                y 5.2
+                w 4.2
+                h 5.8
+                outline film
+                width 0.2
+            ellipse right_cut meat:
+                x 8.1
+                y 5.2
+                w 4.2
+                h 5.8
+                outline film
+                width 0.2
+            rect package_label film:
+                x 8.85
+                y 4.45
+                w 3.8
+                h 2.4
+                outline meat
+                width 0.2
+        layer film:
+            line film_glint film width 0.2:
+                3, 4.5
+                12.75, 11.8
+            line label_rule meat width 0.2:
+                9.4, 5.65
+                12.1, 5.65
+        surface item:
+            butcher_tray
+            left_cut
+            right_cut
+            package_label

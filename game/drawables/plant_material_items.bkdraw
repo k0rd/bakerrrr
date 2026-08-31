@@ -1,0 +1,478 @@
+bakerrrr-drawable 1
+
+# Harvested botanical materials retain their physical identity on the ground;
+# ingredients should be distinguishable before the player opens a text panel.
+drawable fresh_blossoms context ground:
+    paint petals = fill
+    paint stems = edge
+    paint centers = shade
+
+    variant compact:
+        layer stems:
+            line left_stem stems width 0.45:
+                7, 13.5
+                4.75, 6.5
+            line center_stem stems width 0.45:
+                8, 13.5
+                8, 5
+            line right_stem stems width 0.45:
+                9, 13.5
+                11.25, 6.5
+        layer flowers:
+            circle left_bloom petals:
+                center 4.75, 5.25
+                radius 1.7
+            circle center_bloom petals:
+                center 8, 3.5
+                radius 1.7
+            circle right_bloom petals:
+                center 11.25, 5.25
+                radius 1.7
+            circle left_center centers:
+                center 4.75, 5.25
+                radius 0.55
+            circle center_center centers:
+                center 8, 3.5
+                radius 0.55
+            circle right_center centers:
+                center 11.25, 5.25
+                radius 0.55
+        surface item:
+            left_bloom
+            center_bloom
+            right_bloom
+
+    variant detailed:
+        layer stems:
+            line left_stem stems width 0.3:
+                7, 13.65
+                4.6, 6.35
+            line center_stem stems width 0.3:
+                8, 13.65
+                8, 4.8
+            line right_stem stems width 0.3:
+                9, 13.65
+                11.4, 6.35
+            line bouquet_tie centers width 0.45:
+                6.4, 10.5
+                9.6, 10.5
+        layer flowers:
+            circle left_bloom petals:
+                center 4.6, 5.1
+                radius 1.75
+            circle center_bloom petals:
+                center 8, 3.35
+                radius 1.75
+            circle right_bloom petals:
+                center 11.4, 5.1
+                radius 1.75
+            circle left_center centers:
+                center 4.6, 5.1
+                radius 0.5
+            circle center_center centers:
+                center 8, 3.35
+                radius 0.5
+            circle right_center centers:
+                center 11.4, 5.1
+                radius 0.5
+            ellipse left_leaf centers:
+                x 5.4
+                y 7.8
+                w 2.4
+                h 1.4
+            ellipse right_leaf centers:
+                x 8.2
+                y 8.2
+                w 2.4
+                h 1.4
+        surface item:
+            left_bloom
+            center_bloom
+            right_bloom
+
+drawable mushroom_caps context ground:
+    paint caps = fill
+    paint gills = edge
+    paint stems = shade
+
+    variant compact:
+        layer stalks:
+            rect left_stalk stems:
+                x 4.25
+                y 8
+                w 2
+                h 5
+            rect center_stalk stems:
+                x 7
+                y 6
+                w 2.25
+                h 7
+            rect right_stalk stems:
+                x 10
+                y 8.5
+                w 1.75
+                h 4.5
+        layer caps:
+            ellipse left_cap caps:
+                x 2.5
+                y 5.75
+                w 5.5
+                h 3.5
+                outline gills
+                width 0.4
+            ellipse center_cap caps:
+                x 5
+                y 3.25
+                w 6.25
+                h 4
+                outline gills
+                width 0.4
+            ellipse right_cap caps:
+                x 8.5
+                y 6.25
+                w 5
+                h 3.25
+                outline gills
+                width 0.4
+        surface item:
+            left_stalk
+            center_stalk
+            right_stalk
+            left_cap
+            center_cap
+            right_cap
+
+    variant detailed:
+        layer stalks:
+            polygon left_stalk stems:
+                4.2, 7.8
+                6.3, 7.8
+                6.7, 13.2
+                3.9, 13.2
+            polygon center_stalk stems:
+                6.85, 5.8
+                9.25, 5.8
+                9.65, 13.2
+                6.55, 13.2
+            polygon right_stalk stems:
+                9.9, 8.25
+                11.85, 8.25
+                12.15, 13.2
+                9.55, 13.2
+        layer caps:
+            ellipse left_cap caps:
+                x 2.25
+                y 5.5
+                w 5.8
+                h 3.6
+                outline gills
+                width 0.3
+            ellipse center_cap caps:
+                x 4.75
+                y 3
+                w 6.6
+                h 4.1
+                outline gills
+                width 0.3
+            ellipse right_cap caps:
+                x 8.25
+                y 6
+                w 5.25
+                h 3.35
+                outline gills
+                width 0.3
+        layer gills:
+            line center_gill gills width 0.25:
+                5.75, 5.55
+                10.4, 5.55
+            circle cap_spot caps:
+                center 8.2, 4.15
+                radius 0.45
+        surface item:
+            left_stalk
+            center_stalk
+            right_stalk
+            left_cap
+            center_cap
+            right_cap
+
+drawable leaf_clippings context ground:
+    paint leaves = fill
+    paint veins = edge
+    paint cuts = shade
+
+    variant compact:
+        layer leaves:
+            ellipse leaf_left leaves:
+                x 2.5
+                y 5
+                w 6
+                h 3.5
+                outline veins
+                width 0.4
+            ellipse leaf_right leaves:
+                x 7.5
+                y 4
+                w 6
+                h 3.5
+                outline veins
+                width 0.4
+            ellipse leaf_lower leaves:
+                x 5
+                y 8.5
+                w 6
+                h 3.75
+                outline veins
+                width 0.4
+        layer veins:
+            line left_vein veins width 0.35:
+                3.25, 7.5
+                7.75, 5.75
+            line right_vein veins width 0.35:
+                8.25, 6.5
+                12.75, 4.75
+            line lower_vein veins width 0.35:
+                5.8, 11.25
+                10.2, 9.25
+        surface item:
+            leaf_left
+            leaf_right
+            leaf_lower
+
+    variant detailed:
+        layer leaves:
+            ellipse leaf_left leaves:
+                x 2.25
+                y 4.8
+                w 6.2
+                h 3.6
+                outline veins
+                width 0.3
+            ellipse leaf_right leaves:
+                x 7.55
+                y 3.8
+                w 6.2
+                h 3.6
+                outline veins
+                width 0.3
+            ellipse leaf_lower leaves:
+                x 4.85
+                y 8.3
+                w 6.3
+                h 3.9
+                outline veins
+                width 0.3
+            ellipse leaf_chip cuts:
+                x 8.8
+                y 7.1
+                w 3.2
+                h 2
+        layer veins:
+            line left_vein veins width 0.25:
+                3, 7.35
+                7.8, 5.55
+            line right_vein veins width 0.25:
+                8.25, 6.35
+                13, 4.55
+            line lower_vein veins width 0.25:
+                5.55, 11.2
+                10.5, 9.15
+        surface item:
+            leaf_left
+            leaf_right
+            leaf_lower
+            leaf_chip
+
+drawable moss_scrapings context ground:
+    paint moss = fill
+    paint tips = edge
+    paint earth = shade
+
+    variant compact:
+        layer clump:
+            polygon moss_clump moss outline earth width 0.45:
+                2.5, 11.75
+                3.5, 7.5
+                5.5, 8.25
+                6.5, 4.5
+                8.5, 7
+                10.5, 5.25
+                11.5, 8.5
+                13.5, 9.5
+                12.5, 13
+                4, 13
+            circle moss_tip_left tips:
+                center 5.25, 9.25
+                radius 0.8
+            circle moss_tip_right tips:
+                center 10, 10.25
+                radius 0.9
+        surface item:
+            moss_clump
+
+    variant detailed:
+        layer clump:
+            polygon moss_clump moss outline earth width 0.3:
+                2.25, 11.9
+                3.3, 7.25
+                5.4, 8
+                6.35, 4.25
+                8.5, 6.75
+                10.55, 5
+                11.7, 8.25
+                13.75, 9.35
+                12.7, 13.2
+                3.8, 13.2
+            circle moss_tip_left tips:
+                center 5.1, 9.15
+                radius 0.75
+            circle moss_tip_center tips:
+                center 7.8, 8.6
+                radius 0.65
+            circle moss_tip_right tips:
+                center 10.2, 10.15
+                radius 0.85
+        layer texture:
+            line earth_line earth width 0.25:
+                3.5, 11.7
+                6.5, 12.4
+                9.5, 11.8
+                12.4, 12.3
+        surface item:
+            moss_clump
+
+drawable vine_cuttings context ground:
+    paint vines = fill
+    paint leaves = edge
+    paint cuts = shade
+
+    variant compact:
+        layer vine:
+            line curling_vine vines width 0.65:
+                2.5, 11.5
+                5, 12.5
+                8, 10
+                6.5, 7
+                9, 4
+                12.5, 5
+                13, 8
+            ellipse left_leaf leaves:
+                x 3.25
+                y 7.75
+                w 4
+                h 2.5
+            ellipse right_leaf leaves:
+                x 8.5
+                y 7.25
+                w 4
+                h 2.5
+            circle cut_end cuts:
+                center 2.5, 11.5
+                radius 0.65
+        surface item:
+            curling_vine
+            left_leaf
+            right_leaf
+
+    variant detailed:
+        layer vine:
+            line curling_vine vines width 0.45:
+                2.25, 11.65
+                4.9, 12.7
+                8.1, 10.05
+                6.45, 6.9
+                8.95, 3.75
+                12.7, 4.85
+                13.2, 8.1
+                11.5, 10.25
+            ellipse left_leaf leaves:
+                x 3.05
+                y 7.6
+                w 4.2
+                h 2.6
+                outline cuts
+                width 0.2
+            ellipse right_leaf leaves:
+                x 8.4
+                y 7.1
+                w 4.2
+                h 2.6
+                outline cuts
+                width 0.2
+            ellipse upper_leaf leaves:
+                x 8.2
+                y 4.15
+                w 3.4
+                h 2
+            circle cut_end cuts:
+                center 2.25, 11.65
+                radius 0.6
+        surface item:
+            curling_vine
+            left_leaf
+            right_leaf
+            upper_leaf
+
+drawable seed_packet context ground:
+    paint packet = fill
+    paint seam = edge
+    paint seeds = shade
+
+    variant compact:
+        layer envelope:
+            polygon seed_envelope packet outline seam width 0.45:
+                3, 4
+                13, 4
+                12.25, 13
+                3.75, 13
+            line packet_fold seam width 0.4:
+                3.25, 5
+                8, 8.25
+                12.75, 5
+        layer mark:
+            circle seed_one seeds:
+                center 6.5, 10.25
+                radius 0.65
+            circle seed_two seeds:
+                center 8.25, 9.75
+                radius 0.65
+            circle seed_three seeds:
+                center 9.75, 10.75
+                radius 0.65
+        surface item:
+            seed_envelope
+
+    variant detailed:
+        layer envelope:
+            polygon seed_envelope packet outline seam width 0.3:
+                2.8, 3.75
+                13.2, 3.75
+                12.4, 13.25
+                3.6, 13.25
+            line packet_fold seam width 0.3:
+                3.05, 4.8
+                8, 8.2
+                12.95, 4.8
+        layer mark:
+            circle seed_one seeds:
+                center 5.75, 10.3
+                radius 0.55
+            circle seed_two seeds:
+                center 7.25, 9.55
+                radius 0.55
+            circle seed_three seeds:
+                center 8.75, 10.35
+                radius 0.55
+            circle seed_four seeds:
+                center 10.25, 9.6
+                radius 0.55
+            line sprout_stem seam width 0.25:
+                8, 8.1
+                8, 6.4
+            ellipse sprout_leaf seam:
+                x 8
+                y 5.5
+                w 2
+                h 1.2
+        surface item:
+            seed_envelope

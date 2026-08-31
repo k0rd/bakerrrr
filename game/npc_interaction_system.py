@@ -108,6 +108,12 @@ from game.social_fact_dialogue import (
     specific_witness_matter_exists as _specific_witness_matter_exists,
 )
 from game.social_requests import PLAYER_FAVOR_TOPIC_IDS
+from game.npc_item_exchange import (
+    ITEM_OFFER_PENDING_KEY,
+    is_item_offer_topic,
+    item_offer_dialogue_rows,
+    resolve_item_offer_dialogue_choice,
+)
 from engine.events import Event
 from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.items import (
@@ -629,6 +635,7 @@ class NPCInteractionSystem(System):
         "places": "Ask where something is...",
         "job": "Ask a question about their job...",
         "personal": "Ask a personal question...",
+        "item_offers": "Offer them something...",
     }
     DIALOGUE_MENU_JOB_TOPICS = frozenset({
         "job",
@@ -1079,6 +1086,7 @@ class NPCInteractionSystem(System):
                 "backup_cursor_mark": None,
                 "backup_cursor_pending_topic": "",
                 "social_fact_incident_draft": None,
+                ITEM_OFFER_PENDING_KEY: None,
                 "dialogue_menu_stack": [],
                 "dialogue_available_topic_ids": [],
                 "dialogue_available_topics": [],
@@ -1874,6 +1882,8 @@ class NPCInteractionSystem(System):
             return ""
         if bool(row.get("dialogue_menu_pinned")):
             return ""
+        if str(row.get("item_offer_action", "") or "").strip().lower() == "select":
+            return "item_offers"
         topic_id = str(row.get("id", "") or "").strip().lower()
         action = str(row.get("social_fact_action", "") or "").strip().lower()
         if action in self.DIALOGUE_MENU_INCIDENT_ACTIONS:
@@ -1911,6 +1921,7 @@ class NPCInteractionSystem(System):
             "places": "Back to place questions.",
             "job": "Back to job questions.",
             "personal": "Back to personal questions.",
+            "item_offers": "Back to things you could offer.",
         }
         return {
             "id": self.DIALOGUE_MENU_BACK_ID,
@@ -2001,6 +2012,39 @@ class NPCInteractionSystem(System):
                 child_rows,
             ))
             emitted.add(group)
+
+        name_row = next(
+            (
+                row for row in grouped
+                if str(row.get("id", "") or "").strip().lower() == "name"
+            ),
+            None,
+        )
+        if name_row is not None:
+            grouped.remove(name_row)
+            grouped.insert(0, name_row)
+
+        incident_row = next(
+            (
+                row for row in grouped
+                if str(row.get("dialogue_menu_target", "") or "").strip().lower() == "incidents"
+            ),
+            None,
+        )
+        if incident_row is not None:
+            grouped.remove(incident_row)
+            orientation_indices = [
+                index
+                for index, row in enumerate(grouped)
+                if (
+                    str(row.get("id", "") or "").strip().lower() == "name"
+                    or str(row.get("dialogue_menu_target", "") or "").strip().lower() == "job"
+                )
+            ]
+            if orientation_indices:
+                grouped.insert(max(orientation_indices) + 1, incident_row)
+            else:
+                grouped.append(incident_row)
         return grouped
 
     def _refresh_dialogue_menu_navigation(self, context):
@@ -13502,7 +13546,15 @@ class NPCInteractionSystem(System):
             if request_system is not None and context.get("npc_eid") is not None
             else []
         )
-        available = list(favor_rows) + list(_social_fact_dialogue_rows(
+        item_offer_rows = item_offer_dialogue_rows(
+            self.sim,
+            self.player_eid,
+            context.get("npc_eid"),
+            context,
+        ) if context.get("npc_eid") is not None else []
+        if any(bool(row.get("item_offer_pending")) for row in item_offer_rows):
+            return list(item_offer_rows)
+        available = list(favor_rows) + list(item_offer_rows) + list(_social_fact_dialogue_rows(
             self.sim,
             self.player_eid,
             context.get("npc_eid"),
@@ -13884,6 +13936,7 @@ class NPCInteractionSystem(System):
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
             "social_fact_incident_draft": None,
+            ITEM_OFFER_PENDING_KEY: None,
             "dialogue_menu_stack": [],
             "dialogue_available_topic_ids": [
                 str(row.get("id", "") or "").strip().lower()
@@ -13911,6 +13964,7 @@ class NPCInteractionSystem(System):
             "machine_action": None,
             "backup_cursor_pending_topic": "",
             "social_fact_incident_draft": None,
+            ITEM_OFFER_PENDING_KEY: None,
             "dialogue_menu_stack": [],
             "dialogue_available_topic_ids": [],
             "dialogue_available_topics": [],
@@ -13942,6 +13996,7 @@ class NPCInteractionSystem(System):
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
             "social_fact_incident_draft": None,
+            ITEM_OFFER_PENDING_KEY: None,
             "dialogue_menu_stack": [],
             "dialogue_available_topic_ids": [],
             "dialogue_available_topics": [],
@@ -16446,6 +16501,15 @@ class NPCInteractionSystem(System):
                     selected_row,
                     context,
                 )
+        elif is_item_offer_topic(topic_id) and selected_row_matches:
+            response = resolve_item_offer_dialogue_choice(
+                self.sim,
+                self.player_eid,
+                npc_eid,
+                topic_id,
+                selected_row,
+                context,
+            )
         elif _is_social_fact_dialogue_topic(topic_id) and selected_row_matches:
             social_fact_action = str(selected_row.get("social_fact_action", "") or "").strip().lower()
             if social_fact_action not in {"prepare_incident_distortion", "cancel_incident_distortion"}:

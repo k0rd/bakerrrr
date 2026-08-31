@@ -1,0 +1,451 @@
+bakerrrr-drawable 1
+
+# Handheld and placeable electronics. Their shapes communicate operation before
+# legality tint or inventory copy: smart phone, burner, radio, media, control,
+# and beacon all need different reads.
+drawable phone context ground:
+    paint casing = fill
+    paint trim = edge
+    paint screen = shade
+
+    variant compact:
+        layer handset:
+            rect phone_body casing:
+                x 4.5
+                y 1.75
+                w 7
+                h 12.5
+                outline trim
+                width 0.45
+            rect phone_screen screen:
+                x 5.25
+                y 3.25
+                w 5.5
+                h 8
+            circle home_key trim:
+                center 8, 12.75
+                radius 0.6
+        surface item:
+            phone_body
+            phone_screen
+
+    variant detailed:
+        layer handset:
+            rect phone_body casing:
+                x 4.35
+                y 1.55
+                w 7.3
+                h 12.8
+                outline trim
+                width 0.3
+            rect phone_screen screen:
+                x 5.05
+                y 3
+                w 5.9
+                h 8.2
+                outline trim
+                width 0.2
+            circle home_key trim:
+                center 8, 12.7
+                radius 0.55
+        layer details:
+            line speaker trim width 0.25:
+                6.75, 2.3
+                9.25, 2.3
+            line screen_glint trim width 0.2:
+                5.6, 3.6
+                9.6, 3.6
+        surface item:
+            phone_body
+            phone_screen
+
+drawable burner_phone context ground:
+    paint casing = fill
+    paint trim = edge
+    paint screen = shade
+
+    variant compact:
+        layer flip_phone:
+            rect upper_shell casing:
+                x 4
+                y 2
+                w 8
+                h 5.5
+                outline trim
+                width 0.45
+            rect burner_screen screen:
+                x 5
+                y 3
+                w 6
+                h 3.25
+            polygon keypad_shell casing outline trim width 0.45:
+                4.5, 7.5
+                11.5, 7.5
+                12.25, 13.75
+                3.75, 13.75
+            circle keypad_left trim:
+                center 6, 10
+                radius 0.65
+            circle keypad_right trim:
+                center 10, 10
+                radius 0.65
+            circle keypad_lower trim:
+                center 8, 12
+                radius 0.65
+        surface item:
+            upper_shell
+            burner_screen
+            keypad_shell
+
+    variant detailed:
+        layer flip_phone:
+            rect upper_shell casing:
+                x 3.85
+                y 1.8
+                w 8.3
+                h 5.7
+                outline trim
+                width 0.3
+            rect burner_screen screen:
+                x 4.8
+                y 2.8
+                w 6.4
+                h 3.35
+                outline trim
+                width 0.2
+            polygon keypad_shell casing outline trim width 0.3:
+                4.35, 7.4
+                11.65, 7.4
+                12.45, 13.9
+                3.55, 13.9
+        layer keypad:
+            line hinge trim width 0.4:
+                4.35, 7.45
+                11.65, 7.45
+            circle key_one trim:
+                center 5.6, 9.6
+                radius 0.45
+            circle key_two trim:
+                center 8, 9.6
+                radius 0.45
+            circle key_three trim:
+                center 10.4, 9.6
+                radius 0.45
+            circle key_four trim:
+                center 5.6, 12
+                radius 0.45
+            circle key_five trim:
+                center 8, 12
+                radius 0.45
+            circle key_six trim:
+                center 10.4, 12
+                radius 0.45
+        surface item:
+            upper_shell
+            burner_screen
+            keypad_shell
+
+drawable two_way_radio context ground:
+    paint casing = fill
+    paint hardware = edge
+    paint speaker = shade
+
+    variant compact:
+        layer radio:
+            rect radio_body casing:
+                x 3.75
+                y 4
+                w 8.5
+                h 9.75
+                outline hardware
+                width 0.45
+            rect speaker_panel speaker:
+                x 5
+                y 6
+                w 6
+                h 4.5
+            line antenna hardware width 0.65:
+                5, 4
+                4, 1
+            circle tuning_knob hardware:
+                center 10.5, 3.5
+                radius 0.8
+        layer speaker:
+            line speaker_one hardware width 0.35:
+                5.75, 7
+                10.25, 7
+            line speaker_two hardware width 0.35:
+                5.75, 8.25
+                10.25, 8.25
+            line speaker_three hardware width 0.35:
+                5.75, 9.5
+                10.25, 9.5
+        surface item:
+            radio_body
+            speaker_panel
+
+    variant detailed:
+        layer radio:
+            rect radio_body casing:
+                x 3.55
+                y 3.8
+                w 8.9
+                h 10.1
+                outline hardware
+                width 0.3
+            rect speaker_panel speaker:
+                x 4.8
+                y 5.75
+                w 6.4
+                h 4.8
+                outline hardware
+                width 0.2
+            line antenna hardware width 0.45:
+                4.9, 3.9
+                3.8, 0.8
+            circle tuning_knob hardware:
+                center 10.65, 3.25
+                radius 0.75
+        layer details:
+            line speaker_one hardware width 0.25:
+                5.45, 6.75
+                10.55, 6.75
+            line speaker_two hardware width 0.25:
+                5.45, 8
+                10.55, 8
+            line speaker_three hardware width 0.25:
+                5.45, 9.25
+                10.55, 9.25
+            circle channel_light hardware:
+                center 5.4, 12.1
+                radius 0.45
+            line push_to_talk hardware width 0.35:
+                3.55, 7
+                2.65, 7
+                2.65, 9.5
+                3.55, 9.5
+        surface item:
+            radio_body
+            speaker_panel
+
+drawable blank_procedure_flash context ground:
+    paint shell = fill
+    paint contacts = edge
+    paint blank = shade
+
+    variant compact:
+        layer media:
+            rect flash_body shell:
+                x 2.5
+                y 5
+                w 10
+                h 7
+                outline contacts
+                width 0.45
+            rect contact_tab contacts:
+                x 12.5
+                y 6.25
+                w 2
+                h 4.5
+            circle blank_mark blank:
+                center 7, 8.5
+                radius 1.75
+        surface item:
+            flash_body
+            contact_tab
+
+    variant detailed:
+        layer media:
+            rect flash_body shell:
+                x 2.3
+                y 4.8
+                w 10.3
+                h 7.4
+                outline contacts
+                width 0.3
+            rect contact_tab contacts:
+                x 12.6
+                y 6
+                w 2.1
+                h 4.9
+                outline blank
+                width 0.2
+            circle blank_mark blank:
+                center 6.7, 8.5
+                radius 1.7
+        layer circuitry:
+            line circuit_top contacts width 0.25:
+                8.7, 6.2
+                10.7, 6.2
+                10.7, 8
+                12.5, 8
+            line circuit_bottom contacts width 0.25:
+                8.7, 10.7
+                10.7, 10.7
+                10.7, 9
+                12.5, 9
+            line blank_slash shell width 0.25:
+                5.6, 9.6
+                7.8, 7.4
+        surface item:
+            flash_body
+            contact_tab
+
+drawable remote_release_rig context ground:
+    paint housing = fill
+    paint hardware = edge
+    paint control = shade
+
+    variant compact:
+        layer controller:
+            rect release_box housing:
+                x 2.5
+                y 4
+                w 11
+                h 9.5
+                outline hardware
+                width 0.45
+            rect guarded_switch control:
+                x 4
+                y 6
+                w 4
+                h 5
+                outline hardware
+                width 0.35
+            circle release_button hardware:
+                center 10.75, 8.5
+                radius 1.25
+            line lead_left hardware width 0.55:
+                5, 4
+                4, 1.75
+            line lead_right hardware width 0.55:
+                11, 4
+                12, 1.75
+        surface item:
+            release_box
+            guarded_switch
+            release_button
+
+    variant detailed:
+        layer controller:
+            rect release_box housing:
+                x 2.3
+                y 3.8
+                w 11.4
+                h 9.8
+                outline hardware
+                width 0.3
+            rect guarded_switch control:
+                x 3.8
+                y 5.75
+                w 4.3
+                h 5.3
+                outline hardware
+                width 0.25
+            circle release_button hardware:
+                center 10.8, 8.4
+                radius 1.3
+            line lead_left hardware width 0.4:
+                4.9, 3.9
+                3.8, 1.55
+            line lead_right hardware width 0.4:
+                11.1, 3.9
+                12.2, 1.55
+        layer details:
+            line switch_slot hardware width 0.3:
+                5.95, 6.5
+                5.95, 10.3
+            line status_bar control width 0.4:
+                9.5, 11.5
+                12.1, 11.5
+            circle terminal_left control:
+                center 3.8, 1.5
+                radius 0.55
+            circle terminal_right control:
+                center 12.2, 1.5
+                radius 0.55
+        surface item:
+            release_box
+            guarded_switch
+            release_button
+
+drawable decoy_beacon context ground:
+    paint housing = fill
+    paint signal = edge
+    paint core = shade
+
+    variant compact:
+        layer beacon:
+            polygon beacon_base housing outline signal width 0.45:
+                4, 11
+                12, 11
+                13.5, 13.5
+                2.5, 13.5
+            rect beacon_core housing:
+                x 5
+                y 6
+                w 6
+                h 5.5
+                outline signal
+                width 0.4
+            line beacon_mast signal width 0.55:
+                8, 6
+                8, 2.25
+            circle beacon_light core:
+                center 8, 2
+                radius 1
+        layer signal:
+            line signal_left signal width 0.4:
+                6.5, 3
+                4.75, 4.5
+            line signal_right signal width 0.4:
+                9.5, 3
+                11.25, 4.5
+        surface item:
+            beacon_base
+            beacon_core
+            beacon_light
+
+    variant detailed:
+        layer beacon:
+            polygon beacon_base housing outline signal width 0.3:
+                3.8, 10.9
+                12.2, 10.9
+                13.7, 13.7
+                2.3, 13.7
+            rect beacon_core housing:
+                x 4.8
+                y 5.8
+                w 6.4
+                h 5.6
+                outline signal
+                width 0.3
+            line beacon_mast signal width 0.4:
+                8, 5.8
+                8, 2.1
+            circle beacon_light core:
+                center 8, 1.85
+                radius 0.95
+        layer details:
+            line signal_inner_left signal width 0.3:
+                6.45, 2.8
+                5.1, 4.1
+            line signal_inner_right signal width 0.3:
+                9.55, 2.8
+                10.9, 4.1
+            line signal_outer_left signal width 0.25:
+                5.25, 1.9
+                3.4, 3.8
+            line signal_outer_right signal width 0.25:
+                10.75, 1.9
+                12.6, 3.8
+            circle status_light signal:
+                center 8, 8.6
+                radius 0.65
+            line base_seam core width 0.25:
+                4, 12.3
+                12, 12.3
+        surface item:
+            beacon_base
+            beacon_core
+            beacon_light

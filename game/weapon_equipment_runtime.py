@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 
+from engine.events import Event
 from game.components import Inventory, WeaponLoadout
 from game.items import ITEM_CATALOG
 from game.system_support.item_runtime import _default_weapon_reserve_ammo, _weapon_uses_ammo
@@ -159,6 +160,76 @@ def equip_linked_weapon_item(
         "instance_id": instance_id,
         "reserve_ammo": reserve_ammo,
         "weapon_instance": dict(instance),
+    }
+
+
+def equip_existing_weapon_item(
+    sim,
+    eid,
+    instance_id,
+    *,
+    rng=None,
+    reason="received_for_support",
+):
+    """Link and equip a weapon item the actor already physically owns."""
+
+    inventory = sim.ecs.get(Inventory).get(eid) if sim is not None else None
+    entry = inventory.find(instance_id=instance_id) if inventory is not None else None
+    if not isinstance(entry, dict):
+        return {"ok": False, "reason": "missing_weapon_item"}
+
+    item_id = str(entry.get("item_id", "") or "").strip()
+    weapon_id = weapon_id_for_item_id(item_id)
+    weapon = weapon_by_id(weapon_id)
+    if not item_id or not weapon_id or weapon is None:
+        return {"ok": False, "reason": "not_weapon_item"}
+
+    loadout = _ensure_weapon_loadout(sim, eid)
+    metadata = dict(entry.get("metadata") or {})
+    stored_instance = metadata.get("weapon_instance")
+    if isinstance(stored_instance, dict):
+        weapon_instance = dict(stored_instance)
+    else:
+        rng = rng or random.Random(
+            f"{getattr(sim, 'seed', 0)}:received-weapon:{eid}:{instance_id}:{weapon_id}"
+        )
+        weapon_instance = roll_weapon_instance(rng, weapon_id, named_chance=0.0)
+    weapon_instance["inventory_instance_id"] = str(instance_id)
+
+    reserve_ammo = _metadata_reserve_ammo(metadata)
+    if reserve_ammo is None:
+        reserve_ammo = _default_weapon_reserve_ammo(weapon) if _weapon_uses_ammo(weapon) else 0
+    reserve_ammo = max(0, int(reserve_ammo))
+    metadata["weapon_instance"] = dict(weapon_instance)
+    metadata["reserve_ammo"] = reserve_ammo
+    metadata["last_equipped_reason"] = str(reason or "received_for_support")
+    inventory.update_item_metadata(instance_id, metadata=metadata, replace=True)
+
+    previous = loadout.current_weapon()
+    loadout.add_weapon(weapon_id, instance=weapon_instance)
+    loadout.set_reserve_ammo_value(
+        weapon_id,
+        reserve_ammo,
+        instance_id=instance_id,
+    )
+    loadout.equip(weapon_id)
+    sim.emit(Event(
+        "weapon_equipped",
+        eid=eid,
+        previous_weapon_id=previous,
+        weapon_id=weapon_id,
+        source_item_id=item_id,
+        source_instance_id=str(instance_id),
+        reason=str(reason or "received_for_support"),
+    ))
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "weapon_id": weapon_id,
+        "instance_id": str(instance_id),
+        "previous_weapon_id": previous,
+        "reserve_ammo": reserve_ammo,
+        "weapon_instance": dict(weapon_instance),
     }
 
 
