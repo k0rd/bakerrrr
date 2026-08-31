@@ -1406,7 +1406,9 @@ def _spawn_business_echo_staff_actor(sim, chunk_key, record, rng, *, target_prop
     pos = Position(anchor[0], anchor[1], anchor[2])
     for component in (
         pos,
-        Render("w", color="npc", semantic_id="human", priority=2),
+        # Former staff are ordinary people in the current world.  Their prior
+        # role belongs in Occupation and echo metadata, not in a raw map glyph.
+        Render("@"),
         CreatureIdentity(
             taxonomy_class="hominid",
             species="homo sapiens",

@@ -2228,7 +2228,7 @@ class AppearanceManager:
                 effects=defaults.effects,
                 visible=defaults.visible,
                 overlays=defaults.overlays,
-            )
+        )
         state_overlays = _entity_state_overlays(vitality)
         badge_overlays = _actor_badge_overlay(
             self.sim,
@@ -2240,7 +2240,18 @@ class AppearanceManager:
             vitality=vitality,
         )
         owned = _owner_appearance(render, fallback_glyph=defaults.glyph)
+        legacy_business_echo_staff = (
+            taxonomy == "hominid"
+            and str(getattr(render, "glyph", "") or "")[:1] == "w"
+            and str(getattr(render, "color", "") or "").strip().lower() == "npc"
+            and str(getattr(render, "semantic_id", "") or "").strip().lower() == "human"
+        )
         owned_color = owned.color
+        if legacy_business_echo_staff:
+            # Business echoes before the authored-human renderer used this
+            # exact triplet.  Normalize it at presentation time so existing
+            # saves heal without mutating unrelated or stateful actor glyphs.
+            owned_color = None
         if (
             player_controlled
             and str(owned_color or "").strip().lower() == "player"
@@ -2256,12 +2267,17 @@ class AppearanceManager:
             owned_color = None
         uses_legacy_hominid_placeholder = (
             taxonomy == "hominid"
-            and not getattr(render, "semantic_id", None)
-            and getattr(render, "color", None) is None
+            and (
+                legacy_business_echo_staff
+                or (
+                    not getattr(render, "semantic_id", None)
+                    and getattr(render, "color", None) is None
+                )
+            )
         )
         glyph = defaults.glyph if uses_legacy_hominid_placeholder else (owned.glyph or defaults.glyph)
 
-        semantic_id = owned.semantic_id or defaults.semantic_id
+        semantic_id = defaults.semantic_id if uses_legacy_hominid_placeholder else (owned.semantic_id or defaults.semantic_id)
         if not semantic_id:
             semantic_id = self.catalog.semantic_id_for(
                 glyph,
