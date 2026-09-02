@@ -58,7 +58,6 @@ from game.purposeful_observation import (
     is_purposeful_observation,
 )
 from game.service_runtime import (
-    CASINO_GAME_SERVICE_IDS,
     TRANSIT_SERVICE_IDS,
     _building_site_service_seed_token,
     _casino_game_title,
@@ -85,6 +84,14 @@ from game.service_runtime import (
     _transit_token_amount_label,
     _vehicle_sale_stats_text,
     _site_service_seed_token,
+)
+from game.service_category_registry import (
+    CIVIC_RECORDS_LOCATOR_ARCHETYPES as SHARED_CIVIC_RECORDS_LOCATOR_ARCHETYPES,
+    DRONE_PARTS_LOCATOR_ARCHETYPES as SHARED_DRONE_PARTS_LOCATOR_ARCHETYPES,
+    JUSTICE_LOCATOR_ARCHETYPES as SHARED_JUSTICE_LOCATOR_ARCHETYPES,
+    OUTFITTER_LOCATOR_ARCHETYPES as SHARED_OUTFITTER_LOCATOR_ARCHETYPES,
+    SERVICE_LOCATOR_TOPICS as SHARED_SERVICE_LOCATOR_TOPICS,
+    WIRE_GEAR_LOCATOR_ARCHETYPES as SHARED_WIRE_GEAR_LOCATOR_ARCHETYPES,
 )
 from game.system_support.opportunity_knowledge_runtime import (
     rehydrate_entity_knowledge as _rehydrate_entity_knowledge,
@@ -756,267 +763,14 @@ class NPCInteractionSystem(System):
     }
     SOCIAL_KNOWLEDGE_TOPIC_IDS = frozenset({"street_talk", *SOCIAL_KNOWLEDGE_TOPICS.keys()})
     SOCIAL_KNOWLEDGE_SHARE_COOLDOWN_TICKS = 180
-    OUTFITTER_LOCATOR_ARCHETYPES = ("outfitter", "surplus_store")
-    DRONE_PARTS_LOCATOR_ARCHETYPES = ("electronics_shop", "comms_shop", "drone_shop")
-    WIRE_GEAR_LOCATOR_ARCHETYPES = ("wire_shop", "electronics_shop", "comms_shop")
-    CIVIC_RECORDS_LOCATOR_ARCHETYPES = ("courthouse", "civic_office", "city_hall")
-    JUSTICE_LOCATOR_ARCHETYPES = ("jail", "courthouse", "prison")
+    # One neutral registry is canonical for dialogue and the shadow survey.
+    OUTFITTER_LOCATOR_ARCHETYPES = SHARED_OUTFITTER_LOCATOR_ARCHETYPES
+    DRONE_PARTS_LOCATOR_ARCHETYPES = SHARED_DRONE_PARTS_LOCATOR_ARCHETYPES
+    WIRE_GEAR_LOCATOR_ARCHETYPES = SHARED_WIRE_GEAR_LOCATOR_ARCHETYPES
+    CIVIC_RECORDS_LOCATOR_ARCHETYPES = SHARED_CIVIC_RECORDS_LOCATOR_ARCHETYPES
+    JUSTICE_LOCATOR_ARCHETYPES = SHARED_JUSTICE_LOCATOR_ARCHETYPES
     JUSTICE_LOCATOR_ROLE_TOKENS = ("guard", "corrections", "deputy", "bailiff", "sergeant")
-    SERVICE_LOCATOR_TOPICS = {
-        "service_fuel": {
-            "services": ("fuel",),
-            "service_label": "fuel",
-            "offer_label": "fuel",
-            "lead_kind": "service_fuel",
-        },
-        "service_repair": {
-            "services": ("repair",),
-            "service_label": "repair shop",
-            "offer_label": "vehicle repair",
-            "lead_kind": "service_repair",
-        },
-        "service_contractor": {
-            "services": ("building_repair", "business_remodel"),
-            "service_label": "contractor",
-            "offer_label": "building repair or remodel",
-            "lead_kind": "service_contractor",
-        },
-        "service_banking": {
-            "services": ("banking",),
-            "service_label": "bank or broker",
-            "offer_label": "banking or brokerage",
-            "lead_kind": "service_banking",
-        },
-        "service_business_desk": {
-            "services": ("business_management",),
-            "service_label": "business desk",
-            "offer_label": "business operations",
-            "lead_kind": "service_business_desk",
-            "local_summary": "In this chunk, {names_text} can handle business operations: owned-business policy and staff wages.",
-            "near_summary": "Nearest business desk I know is {distance_phrase} at {names_text}.",
-        },
-        "service_insurance": {
-            "services": ("insurance",),
-            "service_label": "insurer",
-            "offer_label": "coverage or claims",
-            "lead_kind": "service_insurance",
-        },
-        "service_rest": {
-            "services": ("rest", "shelter"),
-            "service_label": "lodging",
-            "offer_label": "lodging",
-            "lead_kind": "service_rest",
-        },
-        "service_transit": {
-            "services": tuple(TRANSIT_SERVICE_IDS),
-            "service_label": "transit stop",
-            "offer_label": "transit",
-            "lead_kind": "service_transit",
-            "local_summary": "In this chunk, {names_text} can put you onto the transit network.",
-            "near_summary": "Nearest transit stop I know is {distance_phrase} at {names_text}.",
-        },
-        "service_rail": {
-            "services": ("rail_transit",),
-            "service_label": "rail station",
-            "offer_label": "rail travel",
-            "lead_kind": "service_rail",
-            "local_summary": "In this chunk, {names_text} can put you on a rail line.",
-            "near_summary": "Nearest rail station I know is {distance_phrase} at {names_text}.",
-        },
-        "service_bus": {
-            "services": ("bus_transit",),
-            "service_label": "bus stop",
-            "offer_label": "bus travel",
-            "lead_kind": "service_bus",
-            "local_summary": "In this chunk, {names_text} posts bus routes.",
-            "near_summary": "Nearest bus stop I know is {distance_phrase} at {names_text}.",
-        },
-        "service_shuttle": {
-            "services": ("shuttle_transit",),
-            "service_label": "shuttle stop",
-            "offer_label": "shuttle travel",
-            "lead_kind": "service_shuttle",
-            "local_summary": "In this chunk, {names_text} posts shuttle transfers.",
-            "near_summary": "Nearest shuttle stop I know is {distance_phrase} at {names_text}.",
-        },
-        "service_ferry": {
-            "services": ("ferry_transit",),
-            "service_label": "ferry landing",
-            "offer_label": "ferry travel",
-            "lead_kind": "service_ferry",
-            "local_summary": "In this chunk, {names_text} posts ferry departures.",
-            "near_summary": "Nearest ferry landing I know is {distance_phrase} at {names_text}.",
-        },
-        "service_coach": {
-            "services": ("coach_transit",),
-            "service_label": "coach stop",
-            "offer_label": "regional coach travel",
-            "lead_kind": "service_coach",
-            "local_summary": "In this chunk, {names_text} posts coach departures.",
-            "near_summary": "Nearest coach stop I know is {distance_phrase} at {names_text}.",
-        },
-        "service_intel": {
-            "services": ("intel",),
-            "service_label": "intel",
-            "offer_label": "intel",
-            "lead_kind": "service_intel",
-        },
-        "service_work": {
-            "services": ("courier_jobs", "agency_jobs", "bounty_jobs"),
-            "service_label": "posted work",
-            "offer_label": "posted work",
-            "lead_kind": "service_work",
-            "local_summary": "In this chunk, {names_text} has work posted.",
-            "near_summary": "Nearest work board I know is {distance_phrase} at {names_text}.",
-        },
-        "service_courier": {
-            "services": ("courier_jobs",),
-            "service_label": "courier board",
-            "offer_label": "courier jobs",
-            "lead_kind": "service_courier",
-            "local_summary": "In this chunk, {names_text} posts courier runs.",
-            "near_summary": "Nearest courier board I know is {distance_phrase} at {names_text}.",
-        },
-        "service_agency": {
-            "services": ("agency_jobs",),
-            "service_label": "agency work",
-            "offer_label": "agency jobs",
-            "lead_kind": "service_agency",
-            "local_summary": "In this chunk, {names_text} posts agency work.",
-            "near_summary": "Nearest agency work I know is {distance_phrase} at {names_text}.",
-        },
-        "service_bounty": {
-            "services": ("bounty_jobs",),
-            "service_label": "bounty board",
-            "offer_label": "bounty jobs",
-            "lead_kind": "service_bounty",
-            "local_summary": "In this chunk, {names_text} posts bounty work.",
-            "near_summary": "Nearest bounty board I know is {distance_phrase} at {names_text}.",
-        },
-        "service_trade": {
-            "services": (),
-            "service_label": "shopping spot",
-            "offer_label": "shopping",
-            "lead_kind": "service_trade",
-            "storefront": True,
-        },
-        "service_discreet_trade": {
-            "services": (),
-            "service_label": "discreet seller",
-            "offer_label": "quiet trade",
-            "lead_kind": "service_trade",
-            "archetypes": ("backroom_market",),
-            "covert": True,
-            "hidden_lead": True,
-            "local_summary": "If you need quiet trade, {names_text} is the kind of door people mention in this chunk.",
-            "near_summary": "Nearest discreet seller I know is {distance_phrase} at {names_text}.",
-        },
-        "service_street_doctor": {
-            "services": (),
-            "service_label": "quiet doctor",
-            "offer_label": "off-book medical help",
-            "lead_kind": "service_medical",
-            "archetypes": ("backroom_clinic",),
-            "covert": True,
-            "hidden_lead": True,
-            "local_summary": "If you need help without paperwork, {names_text} is the kind of door people use in this chunk.",
-            "near_summary": "Nearest quiet doctor I know is {distance_phrase} at {names_text}.",
-        },
-        "service_herbal": {
-            "services": ("herbal_care", "herbal_prepare", "herbal_recipe_sales"),
-            "service_label": "herbal care",
-            "offer_label": "herbal care",
-            "lead_kind": "service_herbal",
-            "local_summary": "In this chunk, {names_text} can handle herbal care.",
-            "near_summary": "Nearest herbal care I know is {distance_phrase} at {names_text}.",
-        },
-        "service_butcher": {
-            "services": ("butcher_prepare",),
-            "service_label": "butcher",
-            "offer_label": "meat prep",
-            "lead_kind": "service_butcher",
-            "local_summary": "In this chunk, {names_text} can prepare game meat.",
-            "near_summary": "Nearest butcher I know is {distance_phrase} at {names_text}.",
-        },
-        "service_appearance": {
-            "services": ("appearance_style",),
-            "service_label": "styling",
-            "offer_label": "hair, makeup, or tattoo work",
-            "lead_kind": "service_appearance",
-            "local_summary": "In this chunk, {names_text} can handle styling.",
-            "near_summary": "Nearest styling service I know is {distance_phrase} at {names_text}.",
-        },
-        "service_outfitter": {
-            "services": (),
-            "service_label": "outfitter",
-            "offer_label": "gear and clothing",
-            "lead_kind": "service_outfitter",
-            "archetypes": OUTFITTER_LOCATOR_ARCHETYPES,
-        },
-        "service_drone_parts": {
-            "services": (),
-            "service_label": "drone parts counter",
-            "offer_label": "drone parts and electronics",
-            "lead_kind": "service_drone_parts",
-            "archetypes": DRONE_PARTS_LOCATOR_ARCHETYPES,
-            "local_summary": "In this chunk, {names_text} sells drone parts, radios, or electronics.",
-            "near_summary": "Nearest drone or electronics counter I know is {distance_phrase} at {names_text}.",
-        },
-        "service_wire_gear": {
-            "services": (),
-            "service_label": "Wire gear counter",
-            "offer_label": "Wire decks and software",
-            "lead_kind": "service_wire_gear",
-            "archetypes": WIRE_GEAR_LOCATOR_ARCHETYPES,
-            "local_summary": "In this chunk, {names_text} sells Wire decks, interfaces, or software.",
-            "near_summary": "Nearest Wire gear counter I know is {distance_phrase} at {names_text}.",
-        },
-        "service_records": {
-            "services": ("civic_records",),
-            "service_label": "civic records office",
-            "offer_label": "public records",
-            "lead_kind": "service_records",
-            "archetypes": CIVIC_RECORDS_LOCATOR_ARCHETYPES,
-            "local_summary": "In this chunk, {names_text} keeps the public civic ledgers.",
-            "near_summary": "Nearest civic records counter I know is {distance_phrase} at {names_text}.",
-        },
-        "service_justice": {
-            "services": (),
-            "service_label": "justice site",
-            "offer_label": "booking or court business",
-            "lead_kind": "service_justice",
-            "archetypes": JUSTICE_LOCATOR_ARCHETYPES,
-            "local_summary": "In this chunk, {names_text} handles booking and court business.",
-            "near_summary": "Nearest justice site I know is {distance_phrase} at {names_text}.",
-        },
-        "service_vehicle_sales": {
-            "services": ("vehicle_sales_new", "vehicle_sales_used"),
-            "service_label": "vehicle seller",
-            "offer_label": "vehicle sales",
-            "lead_kind": "service_vehicle_sales",
-            "local_summary": "In this chunk, {names_text} has vehicles for sale.",
-            "near_summary": "Nearest vehicle seller I know is {distance_phrase} at {names_text}.",
-        },
-        "service_used_cars": {
-            "services": ("vehicle_sales_used",),
-            "service_label": "used-car spot",
-            "offer_label": "used vehicles",
-            "lead_kind": "service_used_cars",
-        },
-        "service_vehicle_fetch": {
-            "services": ("vehicle_fetch",),
-            "service_label": "vehicle retrieval service",
-            "offer_label": "vehicle retrieval",
-            "lead_kind": "service_vehicle_fetch",
-        },
-        "service_gaming": {
-            "services": tuple(CASINO_GAME_SERVICE_IDS),
-            "service_label": "gaming spot",
-            "offer_label": "gaming",
-            "lead_kind": "service_gaming",
-            "archetypes": ("casino", "gaming_hall"),
-        },
-    }
+    SERVICE_LOCATOR_TOPICS = SHARED_SERVICE_LOCATOR_TOPICS
 
     def __init__(self, sim, player_eid, repeat_cooldown=18):
         super().__init__(sim)
@@ -5501,46 +5255,58 @@ class NPCInteractionSystem(System):
         radius = int(self.SERVICE_LOCATOR_SEARCH_RADIUS if radius is None else radius)
         pos = self.sim.ecs.get(Position).get(self.player_eid)
         rows = []
-        for prop in self.sim.properties.values():
-            prop_services = tuple(_property_services(prop) or ())
-            archetype = str(_property_metadata(prop).get("archetype", "") or "").strip().lower()
-            if not self._service_locator_matches(
-                spec,
-                services=prop_services,
-                archetype=archetype,
-                storefront=_property_is_storefront(prop),
-            ):
-                continue
-            covert_score = 0.0
-            if bool(spec.get("covert")):
-                covert_score = self._covert_service_locator_prop_score(prop, context, spec)
-                if covert_score < 0.0:
-                    continue
-            chunk_coord = self.sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
-            chunk_distance = _manhattan(origin[0], origin[1], int(chunk_coord[0]), int(chunk_coord[1]))
-            if chunk_distance > max(0, int(radius)):
-                continue
-            tile_distance = 999
-            if pos and int(prop.get("z", 0)) == pos.z:
-                tile_distance = _manhattan(pos.x, pos.y, int(prop.get("x", 0)), int(prop.get("y", 0)))
-            access = _evaluate_property_access(
-                self.sim,
-                self.player_eid,
-                prop,
-                x=getattr(pos, "x", None),
-                y=getattr(pos, "y", None),
-                z=getattr(pos, "z", None),
-            )
-            rows.append({
-                "prop": prop,
-                "name": str(prop.get("name", prop.get("id", "site"))).strip() or "site",
-                "chunk_coord": (int(chunk_coord[0]), int(chunk_coord[1])),
-                "chunk_distance": int(chunk_distance),
-                "tile_distance": int(tile_distance),
-                "accessible": bool(access.can_use_services),
-                "role_priority": 0 if _property_infrastructure_role(prop) == "service_terminal" else 1,
-                "covert_score": float(covert_score),
-            })
+        topic_id = next(
+            (
+                candidate_id
+                for candidate_id, candidate_spec in self.SERVICE_LOCATOR_TOPICS.items()
+                if candidate_spec is spec or candidate_spec == spec
+            ),
+            "",
+        )
+        if not topic_id:
+            return ()
+        from game.local_service_demand import local_service_provider_candidates
+        seen_property_ids = set()
+        for chunk_distance in range(0, max(0, int(radius)) + 1):
+            for cy in range(int(origin[1]) - chunk_distance, int(origin[1]) + chunk_distance + 1):
+                for cx in range(int(origin[0]) - chunk_distance, int(origin[0]) + chunk_distance + 1):
+                    if abs(cx - int(origin[0])) + abs(cy - int(origin[1])) != chunk_distance:
+                        continue
+                    chunk_coord = (int(cx), int(cy))
+                    for provider in local_service_provider_candidates(self.sim, chunk_coord, topic_id, available_only=False):
+                        property_id = str(provider.get("property_id", "") or "").strip()
+                        if not property_id or property_id in seen_property_ids:
+                            continue
+                        prop = self.sim.properties.get(property_id)
+                        if not isinstance(prop, dict):
+                            continue
+                        seen_property_ids.add(property_id)
+                        covert_score = 0.0
+                        if bool(spec.get("covert")):
+                            covert_score = self._covert_service_locator_prop_score(prop, context, spec)
+                            if covert_score < 0.0:
+                                continue
+                        tile_distance = 999
+                        if pos and int(prop.get("z", 0)) == pos.z:
+                            tile_distance = _manhattan(pos.x, pos.y, int(prop.get("x", 0)), int(prop.get("y", 0)))
+                        access = _evaluate_property_access(
+                            self.sim,
+                            self.player_eid,
+                            prop,
+                            x=getattr(pos, "x", None),
+                            y=getattr(pos, "y", None),
+                            z=getattr(pos, "z", None),
+                        )
+                        rows.append({
+                            "prop": prop,
+                            "name": str(prop.get("name", property_id)).strip() or "site",
+                            "chunk_coord": chunk_coord,
+                            "chunk_distance": int(chunk_distance),
+                            "tile_distance": int(tile_distance),
+                            "accessible": bool(access.can_use_services),
+                            "role_priority": 0 if _property_infrastructure_role(prop) == "service_terminal" else 1,
+                            "covert_score": float(covert_score),
+                        })
         rows.sort(
             key=lambda row: (
                 int(row["chunk_distance"]),
@@ -5552,6 +5318,42 @@ class NPCInteractionSystem(System):
             )
         )
         return tuple(rows)
+
+    def _service_locator_personal_context(self, context, topic_id, summary):
+        """Add grounded personal motive only when this NPC would disclose it."""
+
+        npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
+        if npc_eid is None:
+            return str(summary or "").strip()
+        bond = context.get("bond") if isinstance(context.get("bond"), dict) else {}
+        trust = float(bond.get("trust", 0.0) or 0.0)
+        closeness = float(bond.get("closeness", 0.0) or 0.0)
+        socially_close = (trust + closeness) >= 0.82 or max(trust, closeness) >= 0.58
+        if not socially_close:
+            return str(summary or "").strip()
+        from game.chunk_service_survey import actor_service_score_vector
+        from game.neighborhood_consumers import actor_consumer_pressure_read
+        scores, _service_context, _profile = actor_service_score_vector(
+            self.sim,
+            npc_eid,
+            tick=int(getattr(self.sim, "tick", 0) or 0),
+        )
+        personal_score = float(scores.get(str(topic_id or ""), 0.0) or 0.0)
+        consumer = actor_consumer_pressure_read(self.sim, npc_eid)
+        failures = consumer.get("failures", {}) if isinstance(consumer.get("failures"), dict) else {}
+        failure = failures.get(str(topic_id or ""), {}) if isinstance(failures.get(str(topic_id or "")), dict) else {}
+        failure_count = int(failure.get("count", 0) or 0)
+        personal = ""
+        if failure_count >= 2 and personal_score >= 0.35:
+            personal = "I've been looking too, and I keep coming up empty."
+        elif personal_score >= 0.7:
+            personal = "I keep an eye out for places like that myself."
+        elif personal_score <= -0.35:
+            personal = "I don't really use places like that myself."
+        summary = str(summary or "").strip()
+        if not personal:
+            return summary
+        return f"{summary} {personal}".strip()
 
     def _service_locator_preview_names(self, services, chunk_coord, *, limit=3):
         spec = services if isinstance(services, dict) else {"services": tuple(services or ())}
@@ -14600,7 +14402,11 @@ class NPCInteractionSystem(System):
                     confidence=max(0.56, float(context.get("lead_confidence", 0.6)) - 0.02),
                     hidden=True if bool(spec.get("hidden_lead")) else None,
                 )
-            summary = str(locator.get("summary", "")).strip()
+            summary = self._service_locator_personal_context(
+                context,
+                topic_id,
+                str(locator.get("summary", "")).strip(),
+            )
             service_label = str(locator.get("service_label", "service")).strip() or "service"
             bank_id = "service_locator" if summary else "service_locator_none"
             return {

@@ -1,0 +1,1097 @@
+bakerrrr-drawable 1
+
+# Clinical and field medical supplies. Packaging, delivery mechanism, and the
+# visible state of the object carry identity instead of one generic medicine vial.
+drawable calm_patch context ground:
+    paint adhesive = fill
+    paint print = edge
+    paint reservoir = shade
+
+    variant compact:
+        layer patch:
+            rect patch_body adhesive:
+                x 2.5
+                y 4
+                w 11
+                h 8
+                outline print
+                width 0.45
+            circle calm_reservoir reservoir:
+                center 8, 8
+                radius 2.25
+                outline print
+                width 0.35
+            line calm_ring print width 0.45:
+                5, 8
+                11, 8
+        surface item:
+            patch_body
+
+    variant detailed:
+        layer patch:
+            rect patch_body adhesive:
+                x 2.25
+                y 3.75
+                w 11.5
+                h 8.5
+                outline print
+                width 0.3
+            circle calm_reservoir reservoir:
+                center 8, 8
+                radius 2.4
+                outline print
+                width 0.25
+            circle calm_center print:
+                center 8, 8
+                radius 0.65
+            line calm_wave_left print width 0.25:
+                3.5, 8
+                5, 7.25
+            line calm_wave_right print width 0.25:
+                11, 8.75
+                12.5, 8
+            polygon peel_corner reservoir:
+                11.75, 10.25
+                13.75, 10.25
+                13.75, 12.25
+        surface item:
+            patch_body
+
+drawable shiver_patch context ground:
+    paint adhesive = fill
+    paint warning = edge
+    paint dose = shade
+
+    variant compact:
+        layer patch:
+            polygon patch_body adhesive outline warning width 0.45:
+                3, 3
+                13, 3
+                13, 11
+                11, 13
+                3, 13
+            rect dose_window dose:
+                x 5
+                y 5
+                w 6
+                h 5
+                outline warning
+                width 0.35
+            line warning_slash warning width 0.75:
+                5.5, 10
+                10.5, 5
+        surface item:
+            patch_body
+
+    variant detailed:
+        layer patch:
+            polygon patch_body adhesive outline warning width 0.3:
+                2.75, 2.75
+                13.25, 2.75
+                13.25, 10.75
+                10.75, 13.25
+                2.75, 13.25
+            rect dose_window dose:
+                x 4.75
+                y 4.75
+                w 6.5
+                h 5.5
+                outline warning
+                width 0.25
+            line warning_slash warning width 0.55:
+                5.25, 10
+                10.75, 5
+            line dose_seam warning width 0.2:
+                4.75, 7.5
+                11.25, 7.5
+            polygon peel_corner dose:
+                10.75, 10.75
+                13.25, 10.75
+                10.75, 13.25
+        surface item:
+            patch_body
+
+drawable med_gel context ground:
+    paint tube = fill
+    paint trim = edge
+    paint gel = shade
+
+    variant compact:
+        layer tube:
+            polygon gel_tube tube outline trim width 0.45:
+                4, 2.5
+                12, 2.5
+                11, 12
+                5, 12
+            rect tube_cap trim:
+                x 5
+                y 12
+                w 6
+                h 2
+            line medical_cross gel width 1:
+                8, 5
+                8, 9.5
+            line cross_arm gel width 1:
+                6, 7.25
+                10, 7.25
+        surface item:
+            gel_tube
+            tube_cap
+
+    variant detailed:
+        layer tube:
+            polygon gel_tube tube outline trim width 0.3:
+                3.8, 2.25
+                12.2, 2.25
+                11.15, 12.1
+                4.85, 12.1
+            line crimp_seal trim width 0.35:
+                4.2, 3.1
+                11.8, 3.1
+            rect tube_cap trim:
+                x 4.85
+                y 12.05
+                w 6.3
+                h 2.1
+                outline gel
+                width 0.2
+            line medical_cross gel width 0.65:
+                8, 5
+                8, 9.6
+            line cross_arm gel width 0.65:
+                5.9, 7.3
+                10.1, 7.3
+        surface item:
+            gel_tube
+            tube_cap
+
+drawable counterfeit_med_gel context ground:
+    paint tube = fill
+    paint ink = edge
+    paint residue = shade
+
+    variant compact:
+        layer tube:
+            polygon bent_tube tube outline ink width 0.45:
+                4, 3
+                11.5, 2
+                12.5, 11
+                5, 12.5
+            polygon loose_cap residue outline ink width 0.35:
+                5, 12.5
+                11.5, 11.25
+                12, 13.5
+                5.5, 14.5
+            line crooked_cross ink width 0.8:
+                7.75, 5
+                8.5, 9.5
+            line crooked_arm ink width 0.8:
+                6, 7.75
+                10.25, 7
+        surface item:
+            bent_tube
+            loose_cap
+
+    variant detailed:
+        layer tube:
+            polygon bent_tube tube outline ink width 0.3:
+                3.7, 3
+                11.75, 1.85
+                12.7, 10.9
+                4.8, 12.6
+            line bad_crimp ink width 0.3:
+                4.1, 3.6
+                7, 2.9
+                11.4, 3
+            polygon loose_cap residue outline ink width 0.25:
+                4.8, 12.6
+                11.55, 11.15
+                12.05, 13.55
+                5.3, 14.6
+            line crooked_cross ink width 0.55:
+                7.7, 4.8
+                8.45, 9.65
+            line crooked_arm ink width 0.55:
+                5.8, 7.8
+                10.35, 7
+            circle leaked_gel residue:
+                center 13.25, 13.75
+                radius 0.65
+        surface item:
+            bent_tube
+            loose_cap
+
+drawable hydration_salts context ground:
+    paint packet = fill
+    paint print = edge
+    paint crystals = shade
+
+    variant compact:
+        layer sachet:
+            polygon salt_packet packet outline print width 0.45:
+                3, 2.5
+                13, 2.5
+                13, 13.5
+                3, 13.5
+                3, 5
+                4, 4
+            line water_wave print width 0.65:
+                4.5, 7
+                6.25, 6
+                8, 7
+                9.75, 6
+                11.5, 7
+            circle crystal_one crystals:
+                center 6, 10
+                radius 0.65
+            circle crystal_two crystals:
+                center 8.25, 11
+                radius 0.65
+            circle crystal_three crystals:
+                center 10.5, 9.75
+                radius 0.65
+        surface item:
+            salt_packet
+
+    variant detailed:
+        layer sachet:
+            polygon salt_packet packet outline print width 0.3:
+                2.75, 2.25
+                13.25, 2.25
+                13.25, 13.75
+                2.75, 13.75
+                2.75, 4.75
+                3.9, 3.65
+            line crimp_top crystals width 0.3:
+                4.5, 3.2
+                11.75, 3.2
+            line water_wave print width 0.4:
+                4.2, 6.8
+                6.1, 5.8
+                8, 6.8
+                9.9, 5.8
+                11.8, 6.8
+            circle crystal_one crystals:
+                center 5.5, 9.7
+                radius 0.5
+            circle crystal_two crystals:
+                center 7.5, 11.2
+                radius 0.5
+            circle crystal_three crystals:
+                center 9.3, 9.5
+                radius 0.5
+            circle crystal_four crystals:
+                center 11, 11
+                radius 0.5
+        surface item:
+            salt_packet
+
+drawable micro_medkit context ground:
+    paint case = fill
+    paint hardware = edge
+    paint inset = shade
+
+    variant compact:
+        layer kit:
+            rect kit_case case:
+                x 2
+                y 5
+                w 12
+                h 8.5
+                outline hardware
+                width 0.45
+            line carry_handle hardware width 1:
+                5.5, 5
+                5.5, 3
+                10.5, 3
+                10.5, 5
+            rect kit_label inset:
+                x 5.5
+                y 7
+                w 5
+                h 4.5
+            line medical_cross hardware width 0.8:
+                8, 7.75
+                8, 10.75
+            line cross_arm hardware width 0.8:
+                6.5, 9.25
+                9.5, 9.25
+        surface item:
+            kit_case
+
+    variant detailed:
+        layer kit:
+            rect kit_case case:
+                x 1.75
+                y 4.8
+                w 12.5
+                h 8.8
+                outline hardware
+                width 0.3
+            line carry_handle hardware width 0.65:
+                5.3, 4.8
+                5.3, 2.8
+                10.7, 2.8
+                10.7, 4.8
+            line case_seam inset width 0.3:
+                2.2, 7
+                13.8, 7
+            rect kit_label inset:
+                x 5.35
+                y 7.65
+                w 5.3
+                h 4.25
+                outline hardware
+                width 0.2
+            line medical_cross hardware width 0.55:
+                8, 8.2
+                8, 11.35
+            line cross_arm hardware width 0.55:
+                6.4, 9.75
+                9.6, 9.75
+            circle latch_left hardware:
+                center 3.6, 9.8
+                radius 0.45
+            circle latch_right hardware:
+                center 12.4, 9.8
+                radius 0.45
+        surface item:
+            kit_case
+
+drawable trauma_foam context ground:
+    paint can = fill
+    paint hardware = edge
+    paint foam = shade
+
+    variant compact:
+        layer canister:
+            rect foam_can can:
+                x 4.5
+                y 4
+                w 7
+                h 10
+                outline hardware
+                width 0.45
+            rect spray_head hardware:
+                x 5.5
+                y 2.5
+                w 5
+                h 2
+            line nozzle hardware width 0.75:
+                8, 2.5
+                11.75, 2.5
+            circle foam_mark foam:
+                center 8, 9
+                radius 2.1
+            line foam_curl hardware width 0.55:
+                6.75, 9
+                8, 7.75
+                9.25, 9
+                8, 10.25
+        surface item:
+            foam_can
+            spray_head
+
+    variant detailed:
+        layer canister:
+            rect foam_can can:
+                x 4.3
+                y 3.8
+                w 7.4
+                h 10.35
+                outline hardware
+                width 0.3
+            rect spray_head hardware:
+                x 5.25
+                y 2.25
+                w 5.5
+                h 1.8
+                outline foam
+                width 0.2
+            line nozzle hardware width 0.5:
+                8, 2.25
+                12.1, 2.25
+            line can_rim foam width 0.25:
+                4.7, 5.1
+                11.3, 5.1
+            circle foam_mark foam:
+                center 8, 9.2
+                radius 2.25
+                outline hardware
+                width 0.2
+            line foam_curl hardware width 0.35:
+                6.6, 9.2
+                8, 7.8
+                9.4, 9.2
+                8, 10.6
+                7.1, 9.7
+        surface item:
+            foam_can
+            spray_head
+
+drawable trauma_autoinjector context ground:
+    paint casing = fill
+    paint hardware = edge
+    paint dose = shade
+
+    variant compact:
+        layer injector:
+            polygon injector_body casing outline hardware width 0.45:
+                5, 2
+                10, 2
+                11.5, 4
+                11.5, 12
+                9.5, 14
+                5.5, 14
+                4.5, 12
+                4.5, 4
+            rect dose_window dose:
+                x 6
+                y 6
+                w 4
+                h 3.5
+                outline hardware
+                width 0.35
+            line safety_band hardware width 1:
+                4.75, 11
+                11.25, 11
+        surface item:
+            injector_body
+
+    variant detailed:
+        layer injector:
+            polygon injector_body casing outline hardware width 0.3:
+                4.8, 1.75
+                10.2, 1.75
+                11.7, 3.8
+                11.7, 12.15
+                9.65, 14.25
+                5.35, 14.25
+                4.3, 12.15
+                4.3, 3.8
+            rect dose_window dose:
+                x 5.75
+                y 5.5
+                w 4.5
+                h 4
+                outline hardware
+                width 0.25
+            line dose_scale_one hardware width 0.2:
+                6.5, 6.5
+                9.5, 6.5
+            line dose_scale_two hardware width 0.2:
+                6.5, 8.25
+                8.75, 8.25
+            line safety_band hardware width 0.65:
+                4.55, 10.9
+                11.45, 10.9
+            circle activation_button hardware:
+                center 7.5, 3.2
+                radius 0.55
+        surface item:
+            injector_body
+
+drawable sedative_ampoule context ground:
+    paint barrel = fill
+    paint hardware = edge
+    paint dose = shade
+
+    variant compact:
+        layer syringe:
+            rect syringe_barrel barrel:
+                x 4
+                y 6
+                w 7
+                h 4
+                outline hardware
+                width 0.45
+            line plunger hardware width 1:
+                1.5, 8
+                4, 8
+            line plunger_cross hardware width 0.75:
+                1.5, 6.25
+                1.5, 9.75
+            line needle hardware width 0.55:
+                11, 8
+                14.5, 8
+            rect dose_fill dose:
+                x 6
+                y 6.75
+                w 4.25
+                h 2.5
+        surface item:
+            syringe_barrel
+
+    variant detailed:
+        layer syringe:
+            rect syringe_barrel barrel:
+                x 3.75
+                y 5.75
+                w 7.5
+                h 4.5
+                outline hardware
+                width 0.3
+            line plunger hardware width 0.65:
+                1.25, 8
+                3.75, 8
+            line plunger_cross hardware width 0.5:
+                1.25, 5.9
+                1.25, 10.1
+            line needle hardware width 0.35:
+                11.25, 8
+                14.75, 8
+            rect dose_fill dose:
+                x 5.8
+                y 6.5
+                w 4.7
+                h 3
+            line barrel_tick_one hardware width 0.2:
+                5, 5.75
+                5, 7
+            line barrel_tick_two hardware width 0.2:
+                7, 5.75
+                7, 6.75
+            line barrel_tick_three hardware width 0.2:
+                9, 5.75
+                9, 6.75
+        surface item:
+            syringe_barrel
+
+drawable burner_serum context ground:
+    paint glass = fill
+    paint stopper = edge
+    paint serum = shade
+
+    variant compact:
+        layer vial:
+            rect vial_body glass:
+                x 4.5
+                y 5
+                w 7
+                h 8.5
+                outline stopper
+                width 0.45
+            rect rubber_stop stopper:
+                x 5.5
+                y 2.5
+                w 5
+                h 2.5
+            polygon serum_fill serum:
+                5.25, 9
+                10.75, 9
+                10.75, 12.75
+                5.25, 12.75
+            line dissociation_mark stopper width 0.65:
+                6, 6.5
+                8, 8.25
+                10, 6.5
+        surface item:
+            vial_body
+            rubber_stop
+
+    variant detailed:
+        layer vial:
+            rect vial_body glass:
+                x 4.3
+                y 4.75
+                w 7.4
+                h 8.9
+                outline stopper
+                width 0.3
+            rect rubber_stop stopper:
+                x 5.25
+                y 2.25
+                w 5.5
+                h 2.75
+                outline serum
+                width 0.2
+            line glass_neck stopper width 0.25:
+                5.25, 5.5
+                10.75, 5.5
+            polygon serum_fill serum:
+                5, 9.15
+                11, 9.15
+                11, 12.9
+                5, 12.9
+            line dissociation_mark stopper width 0.4:
+                5.75, 6.5
+                8, 8.45
+                10.25, 6.5
+            line vial_glint stopper width 0.2:
+                5.3, 6.3
+                5.3, 8.2
+        surface item:
+            vial_body
+            rubber_stop
+
+drawable bandage_roll context ground:
+    paint cloth = fill
+    paint edgework = edge
+    paint hollow = shade
+
+    variant compact:
+        layer roll:
+            circle bandage_coil cloth:
+                center 6, 8
+                radius 4
+                outline edgework
+                width 0.45
+            circle coil_hole hollow:
+                center 6, 8
+                radius 1.4
+                outline edgework
+                width 0.3
+            polygon loose_tail cloth outline edgework width 0.35:
+                9, 9
+                14, 10
+                13, 13
+                8.5, 11.5
+        surface item:
+            bandage_coil
+            loose_tail
+
+    variant detailed:
+        layer roll:
+            circle bandage_coil cloth:
+                center 5.75, 7.75
+                radius 4.15
+                outline edgework
+                width 0.3
+            circle coil_hole hollow:
+                center 5.75, 7.75
+                radius 1.45
+                outline edgework
+                width 0.2
+            circle coil_ring edgework:
+                center 5.75, 7.75
+                radius 2.7
+                outline hollow
+                width 0.2
+            polygon loose_tail cloth outline edgework width 0.25:
+                8.8, 8.8
+                14.25, 9.85
+                13.15, 13.15
+                8.35, 11.55
+            line tail_fold hollow width 0.25:
+                9.3, 10.1
+                13.4, 11
+        surface item:
+            bandage_coil
+            loose_tail
+
+drawable field_dressing context ground:
+    paint pad = fill
+    paint binding = edge
+    paint fold = shade
+
+    variant compact:
+        layer dressing:
+            rect dressing_pad pad:
+                x 3
+                y 4
+                w 10
+                h 8
+                outline binding
+                width 0.45
+            line binding_vertical binding width 1:
+                8, 3
+                8, 13
+            line binding_horizontal binding width 1:
+                2, 8
+                14, 8
+            polygon folded_corner fold:
+                10, 9
+                13, 9
+                13, 12
+        surface item:
+            dressing_pad
+
+    variant detailed:
+        layer dressing:
+            rect dressing_pad pad:
+                x 2.75
+                y 3.75
+                w 10.5
+                h 8.5
+                outline binding
+                width 0.3
+            line pad_seam fold width 0.25:
+                3.5, 5
+                12.5, 5
+                12.5, 11
+                3.5, 11
+                3.5, 5
+            line binding_vertical binding width 0.65:
+                8, 2.75
+                8, 13.25
+            line binding_horizontal binding width 0.65:
+                1.75, 8
+                14.25, 8
+            polygon folded_corner fold:
+                10.1, 9
+                13.25, 9
+                13.25, 12.25
+        surface item:
+            dressing_pad
+
+drawable pain_blocker context ground:
+    paint blister = fill
+    paint foil = edge
+    paint tablets = shade
+
+    variant compact:
+        layer medication:
+            rect blister_card blister:
+                x 3
+                y 2.5
+                w 10
+                h 11
+                outline foil
+                width 0.45
+            circle tablet_one tablets:
+                center 6, 5.5
+                radius 1.25
+                outline foil
+                width 0.3
+            circle tablet_two tablets:
+                center 10, 5.5
+                radius 1.25
+                outline foil
+                width 0.3
+            circle tablet_three tablets:
+                center 6, 10.25
+                radius 1.25
+                outline foil
+                width 0.3
+            circle empty_blister foil:
+                center 10, 10.25
+                radius 1.25
+        surface item:
+            blister_card
+
+    variant detailed:
+        layer medication:
+            rect blister_card blister:
+                x 2.75
+                y 2.25
+                w 10.5
+                h 11.5
+                outline foil
+                width 0.3
+            line foil_grid_vertical foil width 0.2:
+                8, 2.75
+                8, 13.25
+            line foil_grid_horizontal foil width 0.2:
+                3.25, 7.9
+                12.75, 7.9
+            circle tablet_one tablets:
+                center 5.5, 5.1
+                radius 1.35
+                outline foil
+                width 0.2
+            circle tablet_two tablets:
+                center 10.5, 5.1
+                radius 1.35
+                outline foil
+                width 0.2
+            circle tablet_three tablets:
+                center 5.5, 10.7
+                radius 1.35
+                outline foil
+                width 0.2
+            circle empty_blister foil:
+                center 10.5, 10.7
+                radius 1.35
+            line torn_foil tablets width 0.25:
+                9.7, 9.9
+                11.3, 11.5
+        surface item:
+            blister_card
+
+drawable water_purifier_tabs context ground:
+    paint tube = fill
+    paint print = edge
+    paint tablets = shade
+
+    variant compact:
+        layer purifier:
+            rect tablet_tube tube:
+                x 5
+                y 3.5
+                w 6
+                h 10.5
+                outline print
+                width 0.45
+            rect tube_cap print:
+                x 4.5
+                y 2
+                w 7
+                h 2
+            polygon water_drop tablets:
+                8, 5.5
+                10, 8.25
+                8, 10.5
+                6, 8.25
+            circle tablet_mark print:
+                center 8, 12.25
+                radius 0.75
+        surface item:
+            tablet_tube
+            tube_cap
+
+    variant detailed:
+        layer purifier:
+            rect tablet_tube tube:
+                x 4.8
+                y 3.25
+                w 6.4
+                h 10.9
+                outline print
+                width 0.3
+            rect tube_cap print:
+                x 4.25
+                y 1.75
+                w 7.5
+                h 1.8
+                outline tablets
+                width 0.2
+            line cap_ridges tablets width 0.2:
+                5.25, 2.1
+                10.75, 2.1
+            polygon water_drop tablets outline print width 0.2:
+                8, 5.1
+                10.1, 8
+                8, 10.4
+                5.9, 8
+            circle tablet_mark print:
+                center 8, 12.35
+                radius 0.7
+            line tablet_split tablets width 0.2:
+                7.55, 12.8
+                8.45, 11.9
+        surface item:
+            tablet_tube
+            tube_cap
+
+drawable glucose_gel context ground:
+    paint pouch = fill
+    paint print = edge
+    paint gel = shade
+
+    variant compact:
+        layer pouch:
+            polygon gel_pouch pouch outline print width 0.45:
+                4, 2.5
+                12, 3.5
+                13, 12
+                10.5, 14
+                3, 12.5
+            line energy_bolt gel width 1:
+                9, 5
+                6.5, 8.5
+                8.5, 8.5
+                6.75, 12
+            line tear_notch print width 0.65:
+                4, 4.25
+                6, 3
+        surface item:
+            gel_pouch
+
+    variant detailed:
+        layer pouch:
+            polygon gel_pouch pouch outline print width 0.3:
+                3.75, 2.25
+                12.2, 3.3
+                13.25, 12.1
+                10.55, 14.25
+                2.75, 12.7
+            line crimp_edge gel width 0.25:
+                3.5, 11.6
+                10.5, 13.1
+                12.4, 11.6
+            line energy_bolt gel width 0.7:
+                9.1, 4.9
+                6.35, 8.55
+                8.45, 8.55
+                6.55, 12.15
+            line tear_notch print width 0.4:
+                3.9, 4.15
+                6.1, 2.65
+            circle gel_glint print:
+                center 10.7, 9.75
+                radius 0.45
+        surface item:
+            gel_pouch
+
+drawable antiseptic_wipes context ground:
+    paint packet = fill
+    paint print = edge
+    paint wipe = shade
+
+    variant compact:
+        layer packet:
+            rect wipe_packet packet:
+                x 2.5
+                y 5
+                w 10
+                h 8.5
+                outline print
+                width 0.45
+            polygon emerging_wipe wipe outline print width 0.35:
+                7, 5
+                8.5, 1.5
+                12.5, 3
+                10.5, 6
+            line clean_spark print width 0.55:
+                5.5, 8
+                9.5, 11.5
+            line clean_cross print width 0.55:
+                9.5, 8
+                5.5, 11.5
+        surface item:
+            wipe_packet
+            emerging_wipe
+
+    variant detailed:
+        layer packet:
+            rect wipe_packet packet:
+                x 2.25
+                y 4.8
+                w 10.5
+                h 8.9
+                outline print
+                width 0.3
+            line packet_seam wipe width 0.25:
+                3, 6.25
+                12, 6.25
+            polygon emerging_wipe wipe outline print width 0.25:
+                6.8, 4.8
+                8.35, 1.25
+                12.8, 2.8
+                10.55, 6.1
+            line wipe_fold print width 0.2:
+                8.35, 1.25
+                9.2, 4.5
+                12.8, 2.8
+            line clean_spark print width 0.4:
+                5.25, 8
+                9.75, 11.75
+            line clean_cross print width 0.4:
+                9.75, 8
+                5.25, 11.75
+        surface item:
+            wipe_packet
+            emerging_wipe
+
+drawable suture_kit context ground:
+    paint pouch = fill
+    paint tools = edge
+    paint lining = shade
+
+    variant compact:
+        layer kit:
+            rect open_pouch pouch:
+                x 2
+                y 5
+                w 12
+                h 8.5
+                outline tools
+                width 0.45
+            line pouch_fold lining width 0.65:
+                8, 5
+                8, 13.5
+        layer sutures:
+            line curved_needle tools width 0.65:
+                4, 9.5
+                5.5, 7
+                7, 9.5
+            line suture_thread tools width 0.45:
+                7, 9.5
+                9.5, 7
+                12, 8
+                10.5, 11.5
+        surface item:
+            open_pouch
+
+    variant detailed:
+        layer kit:
+            rect open_pouch pouch:
+                x 1.75
+                y 4.75
+                w 12.5
+                h 9
+                outline tools
+                width 0.3
+            line pouch_fold lining width 0.4:
+                8, 5
+                8, 13.5
+            line stitched_edge tools width 0.2:
+                2.5, 12.5
+                13.5, 12.5
+        layer sutures:
+            line curved_needle tools width 0.45:
+                3.75, 9.75
+                5.4, 6.75
+                7.1, 9.75
+            circle thread_spool lining:
+                center 10.75, 8.25
+                radius 1.35
+                outline tools
+                width 0.2
+            line suture_thread tools width 0.3:
+                7.1, 9.75
+                9.25, 7.5
+                12, 9.25
+                10.5, 11.75
+        surface item:
+            open_pouch
+
+drawable emergency_blanket context ground:
+    paint foil = fill
+    paint seam = edge
+    paint reflection = shade
+
+    variant compact:
+        layer blanket:
+            polygon folded_blanket foil outline seam width 0.45:
+                3, 3
+                13, 4
+                12, 13
+                2, 12
+            line fold_one reflection width 0.65:
+                3.5, 6
+                12.5, 7
+            line fold_two reflection width 0.65:
+                3, 9
+                12, 10
+            line diagonal_crease seam width 0.45:
+                5, 3.5
+                9.5, 12.5
+        surface item:
+            folded_blanket
+
+    variant detailed:
+        layer blanket:
+            polygon folded_blanket foil outline seam width 0.3:
+                2.75, 2.75
+                13.25, 3.8
+                12.15, 13.25
+                1.75, 12.2
+            line fold_one reflection width 0.4:
+                3.2, 5.8
+                12.8, 6.8
+            line fold_two reflection width 0.4:
+                2.8, 8.9
+                12.45, 9.9
+            line fold_three reflection width 0.35:
+                2.35, 11
+                10.5, 12
+            line diagonal_crease seam width 0.3:
+                4.8, 3.15
+                9.5, 12.95
+            polygon reflective_corner reflection:
+                10.5, 3.5
+                13.25, 3.8
+                12.8, 6.8
+        surface item:
+            folded_blanket

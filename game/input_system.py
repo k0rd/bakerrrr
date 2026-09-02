@@ -100,6 +100,7 @@ from game.mechanical_device_runtime import (
     mechanical_recipe_for_plan,
 )
 import game.report_debug_ui as _report_debug_ui
+import game.chunk_service_survey_ui as _chunk_service_survey_ui
 from game.action_bindings import (
     ACTION_MENU_KEY,
     ACTION_SPECS_BY_ID,
@@ -934,6 +935,9 @@ class InputSystem(System):
 
     def _debug_state(self):
         return _report_debug_ui.ensure_debug_ui_state(self.sim)
+
+    def _service_survey_state(self):
+        return _chunk_service_survey_ui.ensure_service_survey_ui_state(self.sim)
 
     def _auto_walk_state(self):
         state = getattr(self.sim, "auto_walk_ui", None)
@@ -4461,6 +4465,7 @@ class InputSystem(System):
         report_state=None,
         log_state=None,
         debug_state=None,
+        service_survey_state=None,
         inventory_state=None,
         trade_state=None,
         drone_sheet_state=None,
@@ -4477,6 +4482,7 @@ class InputSystem(System):
             or (report_state and report_state.get("open"))
             or (log_state and log_state.get("open"))
             or (debug_state and debug_state.get("open"))
+            or (service_survey_state and service_survey_state.get("open"))
             or (inventory_state and inventory_state.get("open"))
             or (trade_state and trade_state.get("open"))
             or (drone_sheet_state and drone_sheet_state.get("open"))
@@ -4582,6 +4588,7 @@ class InputSystem(System):
         report_state=None,
         log_state=None,
         debug_state=None,
+        service_survey_state=None,
         inventory_state=None,
         trade_state=None,
         drone_sheet_state=None,
@@ -4598,6 +4605,7 @@ class InputSystem(System):
             or (report_state and report_state.get("open"))
             or (log_state and log_state.get("open"))
             or (debug_state and debug_state.get("open"))
+            or (service_survey_state and service_survey_state.get("open"))
             or (inventory_state and inventory_state.get("open"))
             or (trade_state and trade_state.get("open"))
             or (drone_sheet_state and drone_sheet_state.get("open"))
@@ -4658,6 +4666,7 @@ class InputSystem(System):
         report_state=None,
         log_state=None,
         debug_state=None,
+        service_survey_state=None,
         inventory_state=None,
         trade_state=None,
         drone_sheet_state=None,
@@ -4674,6 +4683,7 @@ class InputSystem(System):
             or (report_state and report_state.get("open"))
             or (log_state and log_state.get("open"))
             or (debug_state and debug_state.get("open"))
+            or (service_survey_state and service_survey_state.get("open"))
             or (inventory_state and inventory_state.get("open"))
             or (trade_state and trade_state.get("open"))
             or (drone_sheet_state and drone_sheet_state.get("open"))
@@ -5068,6 +5078,21 @@ class InputSystem(System):
 
     def _close_debug_ui(self):
         _report_debug_ui.close_debug_ui(self._debug_state())
+
+    def _refresh_service_survey_ui(self, reset_scroll=False, tab=None):
+        if not debug_mode_enabled(self.sim):
+            debug_disabled_hint(self.sim)
+            return False
+        _chunk_service_survey_ui.refresh_service_survey_ui(
+            self.sim,
+            self.player_eid,
+            reset_scroll=reset_scroll,
+            tab=tab,
+        )
+        return True
+
+    def _close_service_survey_ui(self):
+        _chunk_service_survey_ui.close_service_survey_ui(self._service_survey_state())
 
     def _log_display_lines(self):
         state = self._log_state()
@@ -5750,6 +5775,14 @@ class InputSystem(System):
 
     def _handle_debug_input(self, key):
         return _report_debug_ui.handle_debug_input(
+            self,
+            key,
+            line_text_fn=_line_text,
+            wrap_display_lines_fn=_wrap_display_lines,
+        )
+
+    def _handle_service_survey_input(self, key):
+        return _chunk_service_survey_ui.handle_service_survey_input(
             self,
             key,
             line_text_fn=_line_text,
@@ -8165,7 +8198,7 @@ class InputSystem(System):
         state["last_repeat_at"] = float(now)
         return key
 
-    def _should_collapse_input_burst(self, *, look_state=None, help_state=None, dialog_state=None, character_state=None, report_state=None, log_state=None, debug_state=None, inventory_state=None, trade_state=None, drone_sheet_state=None, wire_kit_state=None, wire_connection_state=None, wire_scene_state=None):
+    def _should_collapse_input_burst(self, *, look_state=None, help_state=None, dialog_state=None, character_state=None, report_state=None, log_state=None, debug_state=None, service_survey_state=None, inventory_state=None, trade_state=None, drone_sheet_state=None, wire_kit_state=None, wire_connection_state=None, wire_scene_state=None):
         if help_state and help_state.get("open"):
             return False
         if dialog_state and dialog_state.get("open"):
@@ -8177,6 +8210,8 @@ class InputSystem(System):
         if log_state and log_state.get("open"):
             return False
         if debug_state and debug_state.get("open"):
+            return False
+        if service_survey_state and service_survey_state.get("open"):
             return False
         if inventory_state and inventory_state.get("open"):
             return False
@@ -8317,6 +8352,7 @@ class InputSystem(System):
         report_state = self._report_state()
         log_state = self._log_state()
         debug_state = self._debug_state()
+        service_survey_state = self._service_survey_state()
         action_menu_state = self._action_menu_state()
         drone_command_state = self._drone_command_state()
         drone_sheet_state = self._drone_sheet_state()
@@ -8338,6 +8374,7 @@ class InputSystem(System):
                 report_state=report_state,
                 log_state=log_state,
                 debug_state=debug_state,
+                service_survey_state=service_survey_state,
                 inventory_state=state,
                 trade_state=trade_state,
                 drone_sheet_state=drone_sheet_state,
@@ -8391,6 +8428,7 @@ class InputSystem(System):
                 report_state=report_state,
                 log_state=log_state,
                 debug_state=debug_state,
+                service_survey_state=service_survey_state,
                 inventory_state=state,
                 trade_state=trade_state,
                 drone_sheet_state=drone_sheet_state,
@@ -8406,6 +8444,7 @@ class InputSystem(System):
                 report_state=report_state,
                 log_state=log_state,
                 debug_state=debug_state,
+                service_survey_state=service_survey_state,
                 inventory_state=state,
                 trade_state=trade_state,
                 drone_sheet_state=drone_sheet_state,
@@ -8421,6 +8460,7 @@ class InputSystem(System):
                 report_state=report_state,
                 log_state=log_state,
                 debug_state=debug_state,
+                service_survey_state=service_survey_state,
                 inventory_state=state,
                 trade_state=trade_state,
                 drone_sheet_state=drone_sheet_state,
@@ -8529,6 +8569,10 @@ class InputSystem(System):
 
         if log_state.get("open"):
             self._handle_log_input(key)
+            return
+
+        if service_survey_state.get("open"):
+            self._handle_service_survey_input(key)
             return
 
         if debug_state.get("open"):

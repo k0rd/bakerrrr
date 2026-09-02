@@ -1,0 +1,849 @@
+bakerrrr-drawable 1
+
+# Herbal medicines keep their physical preparation visible: wrapped poultices,
+# droppers, tonics, field flasks, and draught bottles. Diluted batches retain the
+# family silhouette but expose loose wrapping or visibly low liquid levels.
+drawable herbal_poultice context ground:
+    paint cloth = fill
+    paint binding = edge
+    paint herbs = shade
+
+    variant compact:
+        layer bundle:
+            polygon wrapped_bundle cloth outline binding width 0.45:
+                3, 6
+                6, 3.5
+                12.5, 5
+                13, 11.5
+                9.5, 13.5
+                3, 11.5
+            polygon leaf herbs outline binding width 0.3:
+                5, 6
+                7.5, 2
+                9, 6
+                7, 8.5
+            line leaf_vein binding width 0.4:
+                7.5, 3
+                7, 7.5
+            line bundle_tie binding width 0.75:
+                8, 5
+                8, 13
+        surface item:
+            wrapped_bundle
+            leaf
+
+    variant detailed:
+        layer bundle:
+            polygon wrapped_bundle cloth outline binding width 0.3:
+                2.75, 5.8
+                5.8, 3.25
+                12.75, 4.8
+                13.25, 11.7
+                9.55, 13.75
+                2.75, 11.7
+            polygon leaf herbs outline binding width 0.2:
+                4.8, 5.8
+                7.45, 1.75
+                9.15, 5.9
+                6.9, 8.65
+            line leaf_vein binding width 0.25:
+                7.45, 2.75
+                6.95, 7.85
+            line side_vein_one binding width 0.2:
+                7.25, 4.4
+                5.9, 4.9
+            line side_vein_two binding width 0.2:
+                7.1, 5.9
+                8.2, 5.4
+            line bundle_tie binding width 0.5:
+                8, 4.8
+                8, 13.2
+            circle tie_knot binding:
+                center 8, 9
+                radius 0.55
+        surface item:
+            wrapped_bundle
+            leaf
+
+drawable hydrating_tonic context ground:
+    paint bottle = fill
+    paint glass = edge
+    paint tonic = shade
+
+    variant compact:
+        layer bottle:
+            polygon tonic_bottle bottle outline glass width 0.45:
+                6, 2.5
+                10, 2.5
+                10, 5
+                12.5, 7
+                11.5, 14
+                4.5, 14
+                3.5, 7
+                6, 5
+            rect cork glass:
+                x 6
+                y 1
+                w 4
+                h 2
+            polygon water_drop tonic:
+                8, 6
+                10.5, 9.5
+                8, 12
+                5.5, 9.5
+        surface item:
+            tonic_bottle
+            cork
+
+    variant detailed:
+        layer bottle:
+            polygon tonic_bottle bottle outline glass width 0.3:
+                5.8, 2.35
+                10.2, 2.35
+                10.2, 4.85
+                12.7, 6.85
+                11.65, 14.2
+                4.35, 14.2
+                3.3, 6.85
+                5.8, 4.85
+            rect cork glass:
+                x 5.8
+                y 0.8
+                w 4.4
+                h 1.9
+                outline tonic
+                width 0.2
+            polygon water_drop tonic outline glass width 0.2:
+                8, 5.75
+                10.55, 9.35
+                8, 12.15
+                5.45, 9.35
+            line leaf_curl glass width 0.25:
+                7.2, 11.2
+                6.1, 9.5
+                7, 8.4
+            line bottle_glint glass width 0.2:
+                4.55, 6.9
+                4.9, 9.4
+        surface item:
+            tonic_bottle
+            cork
+
+drawable calming_tincture context ground:
+    paint bottle = fill
+    paint dropper = edge
+    paint tincture = shade
+
+    variant compact:
+        layer tincture:
+            rect tincture_bottle bottle:
+                x 4.5
+                y 5
+                w 7
+                h 9
+                outline dropper
+                width 0.45
+            polygon rubber_bulb dropper:
+                6, 1.5
+                10, 1.5
+                11, 3.5
+                10, 5
+                6, 5
+                5, 3.5
+            line dropper_stem dropper width 0.65:
+                8, 4
+                8, 8
+            line calm_crescent tincture width 1:
+                9.75, 9
+                8.5, 11.5
+                6.25, 10.5
+        surface item:
+            tincture_bottle
+            rubber_bulb
+
+    variant detailed:
+        layer tincture:
+            rect tincture_bottle bottle:
+                x 4.3
+                y 4.8
+                w 7.4
+                h 9.35
+                outline dropper
+                width 0.3
+            polygon rubber_bulb dropper outline tincture width 0.2:
+                5.8, 1.25
+                10.2, 1.25
+                11.2, 3.4
+                10.15, 4.95
+                5.85, 4.95
+                4.8, 3.4
+            line dropper_stem dropper width 0.4:
+                8, 4
+                8, 8.25
+            line liquid_line tincture width 0.35:
+                4.8, 9
+                11.2, 9
+            line calm_crescent tincture width 0.7:
+                9.9, 9.1
+                8.55, 11.8
+                6.15, 10.65
+            circle tincture_drop dropper:
+                center 8, 8.1
+                radius 0.45
+        surface item:
+            tincture_bottle
+            rubber_bulb
+
+drawable strong_herbal_poultice context ground:
+    paint cloth = fill
+    paint binding = edge
+    paint herbs = shade
+
+    variant compact:
+        layer bundle:
+            polygon thick_bundle cloth outline binding width 0.45:
+                2, 6
+                5, 3
+                12.5, 4
+                14, 9
+                11.5, 14
+                3.5, 13
+            polygon leaf_one herbs outline binding width 0.3:
+                4, 6
+                6.5, 1.5
+                8, 6
+                6, 8
+            polygon leaf_two herbs outline binding width 0.3:
+                8, 5
+                11.5, 2.5
+                11.5, 7.5
+                8.5, 9
+            line cross_tie_one binding width 0.8:
+                4, 4.5
+                11.5, 13
+            line cross_tie_two binding width 0.8:
+                12.5, 4.5
+                3.5, 12.5
+        surface item:
+            thick_bundle
+            leaf_one
+            leaf_two
+
+    variant detailed:
+        layer bundle:
+            polygon thick_bundle cloth outline binding width 0.3:
+                1.75, 5.8
+                4.8, 2.75
+                12.7, 3.8
+                14.25, 9.1
+                11.65, 14.25
+                3.3, 13.15
+            polygon leaf_one herbs outline binding width 0.2:
+                3.8, 5.8
+                6.45, 1.25
+                8.15, 5.9
+                5.9, 8.25
+            polygon leaf_two herbs outline binding width 0.2:
+                7.8, 4.9
+                11.7, 2.2
+                11.65, 7.65
+                8.35, 9.15
+            line leaf_vein_one binding width 0.2:
+                6.45, 2.3
+                5.95, 7.3
+            line leaf_vein_two binding width 0.2:
+                10.9, 3
+                8.8, 8.35
+            line cross_tie_one binding width 0.55:
+                3.8, 4.3
+                11.8, 13.4
+            line cross_tie_two binding width 0.55:
+                12.75, 4.25
+                3.25, 12.7
+            circle tie_knot binding:
+                center 7.8, 8.5
+                radius 0.65
+        surface item:
+            thick_bundle
+            leaf_one
+            leaf_two
+
+drawable field_restorative context ground:
+    paint flask = fill
+    paint hardware = edge
+    paint restorative = shade
+
+    variant compact:
+        layer flask:
+            polygon field_flask flask outline hardware width 0.45:
+                5, 2
+                11, 2
+                12.5, 5
+                12.5, 13.5
+                3.5, 13.5
+                3.5, 5
+            rect flask_cap hardware:
+                x 6
+                y 1
+                w 4
+                h 2
+            line leaf_cross restorative width 0.9:
+                8, 6
+                8, 11.5
+            line cross_leaf restorative width 0.9:
+                5.5, 8.75
+                10.5, 8.75
+            polygon leaf_tip restorative:
+                8, 6
+                10, 4.5
+                9.75, 7
+        surface item:
+            field_flask
+            flask_cap
+
+    variant detailed:
+        layer flask:
+            polygon field_flask flask outline hardware width 0.3:
+                4.8, 1.8
+                11.2, 1.8
+                12.7, 4.85
+                12.7, 13.7
+                3.3, 13.7
+                3.3, 4.85
+            rect flask_cap hardware:
+                x 5.8
+                y 0.8
+                w 4.4
+                h 1.4
+                outline restorative
+                width 0.2
+            line flask_seam restorative width 0.25:
+                4, 5.4
+                12, 5.4
+            line leaf_cross restorative width 0.6:
+                8, 6.15
+                8, 11.75
+            line cross_leaf restorative width 0.6:
+                5.35, 8.95
+                10.65, 8.95
+            polygon leaf_tip restorative outline hardware width 0.15:
+                8, 6.2
+                10.2, 4.55
+                9.8, 7.3
+            polygon second_leaf restorative outline hardware width 0.15:
+                8, 7.2
+                5.7, 5.4
+                6.2, 8
+        surface item:
+            field_flask
+            flask_cap
+
+drawable steadying_draught context ground:
+    paint bottle = fill
+    paint stopper = edge
+    paint draught = shade
+
+    variant compact:
+        layer bottle:
+            polygon draught_bottle bottle outline stopper width 0.45:
+                6, 2.5
+                10, 2.5
+                10, 5
+                12, 7
+                11.5, 14
+                4.5, 14
+                4, 7
+                6, 5
+            rect bottle_stop stopper:
+                x 5.5
+                y 1
+                w 5
+                h 2
+            line steady_bar_one draught width 0.8:
+                5.5, 8
+                10.5, 8
+            line steady_bar_two draught width 0.8:
+                6.25, 10.5
+                9.75, 10.5
+            line center_weight stopper width 0.55:
+                8, 7
+                8, 12
+        surface item:
+            draught_bottle
+            bottle_stop
+
+    variant detailed:
+        layer bottle:
+            polygon draught_bottle bottle outline stopper width 0.3:
+                5.8, 2.3
+                10.2, 2.3
+                10.2, 4.8
+                12.2, 6.85
+                11.7, 14.2
+                4.3, 14.2
+                3.8, 6.85
+                5.8, 4.8
+            rect bottle_stop stopper:
+                x 5.5
+                y 0.8
+                w 5
+                h 1.9
+                outline draught
+                width 0.2
+            line steady_bar_one draught width 0.55:
+                5.3, 7.7
+                10.7, 7.7
+            line steady_bar_two draught width 0.55:
+                5.9, 10.3
+                10.1, 10.3
+            line center_weight stopper width 0.35:
+                8, 6.6
+                8, 12.2
+            circle balance_point stopper:
+                center 8, 12.1
+                radius 0.55
+            line bottle_glint stopper width 0.2:
+                4.7, 6.8
+                5, 9
+        surface item:
+            draught_bottle
+            bottle_stop
+
+drawable diluted_herbal_poultice context ground:
+    paint cloth = fill
+    paint binding = edge
+    paint wet_herbs = shade
+
+    variant compact:
+        layer bundle:
+            polygon loose_bundle cloth outline binding width 0.45:
+                3, 7
+                6, 4.5
+                12.5, 6
+                12, 12.5
+                7, 14
+                2.5, 11
+            polygon sparse_leaf wet_herbs outline binding width 0.3:
+                5, 7
+                7, 3
+                8.5, 7
+                6.5, 9
+            line loose_tie binding width 0.65:
+                8.5, 6
+                7, 13.5
+            circle dilution_drop wet_herbs:
+                center 11.75, 13.25
+                radius 0.75
+        surface item:
+            loose_bundle
+            sparse_leaf
+
+    variant detailed:
+        layer bundle:
+            polygon loose_bundle cloth outline binding width 0.3:
+                2.75, 6.8
+                5.8, 4.2
+                12.75, 5.8
+                12.2, 12.7
+                6.9, 14.25
+                2.2, 11.1
+            polygon sparse_leaf wet_herbs outline binding width 0.2:
+                4.8, 6.8
+                7, 2.75
+                8.65, 6.95
+                6.4, 9.25
+            line leaf_vein binding width 0.2:
+                7, 3.6
+                6.45, 8.45
+            line loose_tie binding width 0.4:
+                8.6, 5.8
+                6.9, 13.75
+            line sagging_fold wet_herbs width 0.3:
+                3.5, 10
+                7.5, 11.5
+                11.5, 9.8
+            circle dilution_drop wet_herbs:
+                center 12.1, 13.35
+                radius 0.7
+                outline binding
+                width 0.15
+        surface item:
+            loose_bundle
+            sparse_leaf
+
+drawable diluted_hydrating_tonic context ground:
+    paint bottle = fill
+    paint glass = edge
+    paint thin_tonic = shade
+
+    variant compact:
+        layer bottle:
+            polygon tonic_bottle bottle outline glass width 0.45:
+                6, 2.5
+                10, 2.5
+                10, 5
+                12.5, 7
+                11.5, 14
+                4.5, 14
+                3.5, 7
+                6, 5
+            rect cork glass:
+                x 6
+                y 1
+                w 4
+                h 2
+            polygon low_fill thin_tonic:
+                4.5, 11
+                11.5, 11
+                11, 13.5
+                5, 13.5
+            polygon small_drop glass:
+                8, 6.5
+                9.5, 8.5
+                8, 10
+                6.5, 8.5
+        surface item:
+            tonic_bottle
+            cork
+
+    variant detailed:
+        layer bottle:
+            polygon tonic_bottle bottle outline glass width 0.3:
+                5.8, 2.35
+                10.2, 2.35
+                10.2, 4.85
+                12.7, 6.85
+                11.65, 14.2
+                4.35, 14.2
+                3.3, 6.85
+                5.8, 4.85
+            rect cork glass:
+                x 5.8
+                y 0.8
+                w 4.4
+                h 1.9
+                outline thin_tonic
+                width 0.2
+            polygon low_fill thin_tonic outline glass width 0.15:
+                4.3, 10.9
+                11.7, 10.9
+                11.15, 13.55
+                4.85, 13.55
+            line liquid_slosh glass width 0.25:
+                4.6, 11
+                7.25, 10.5
+                11.4, 11
+            polygon small_drop glass:
+                8, 6.2
+                9.55, 8.4
+                8, 10
+                6.45, 8.4
+            line bottle_glint glass width 0.2:
+                4.55, 6.9
+                4.9, 9
+        surface item:
+            tonic_bottle
+            cork
+
+drawable diluted_calming_tincture context ground:
+    paint bottle = fill
+    paint dropper = edge
+    paint thin_tincture = shade
+
+    variant compact:
+        layer tincture:
+            rect tincture_bottle bottle:
+                x 4.5
+                y 5
+                w 7
+                h 9
+                outline dropper
+                width 0.45
+            polygon rubber_bulb dropper:
+                6, 1.5
+                10, 1.5
+                11, 3.5
+                10, 5
+                6, 5
+                5, 3.5
+            line dropper_stem dropper width 0.65:
+                8, 4
+                8, 9
+            rect low_fill thin_tincture:
+                x 5.25
+                y 11.5
+                w 5.5
+                h 1.75
+            line thin_crescent dropper width 0.55:
+                9.5, 8.5
+                8.5, 10
+                7, 9.5
+        surface item:
+            tincture_bottle
+            rubber_bulb
+
+    variant detailed:
+        layer tincture:
+            rect tincture_bottle bottle:
+                x 4.3
+                y 4.8
+                w 7.4
+                h 9.35
+                outline dropper
+                width 0.3
+            polygon rubber_bulb dropper outline thin_tincture width 0.2:
+                5.8, 1.25
+                10.2, 1.25
+                11.2, 3.4
+                10.15, 4.95
+                5.85, 4.95
+                4.8, 3.4
+            line dropper_stem dropper width 0.4:
+                8, 4
+                8, 9.2
+            rect low_fill thin_tincture:
+                x 5
+                y 11.35
+                w 6
+                h 2.05
+            line liquid_line dropper width 0.25:
+                5, 11.35
+                11, 11.35
+            line thin_crescent dropper width 0.35:
+                9.6, 8.35
+                8.55, 10.15
+                6.9, 9.55
+            circle last_drop thin_tincture:
+                center 8, 9.1
+                radius 0.4
+        surface item:
+            tincture_bottle
+            rubber_bulb
+
+drawable diluted_strong_herbal_poultice context ground:
+    paint cloth = fill
+    paint binding = edge
+    paint wet_herbs = shade
+
+    variant compact:
+        layer bundle:
+            polygon thick_bundle cloth outline binding width 0.45:
+                2, 6
+                5, 3
+                12.5, 4
+                14, 9
+                11.5, 14
+                3.5, 13
+            polygon leaf_one wet_herbs outline binding width 0.3:
+                4, 6
+                6.5, 1.5
+                8, 6
+                6, 8
+            polygon wilted_leaf wet_herbs outline binding width 0.3:
+                8, 6
+                12, 5
+                10.5, 9
+                8, 9.5
+            line loose_cross_tie binding width 0.6:
+                4, 4.5
+                11.5, 13
+            circle dilution_drop wet_herbs:
+                center 13, 13.5
+                radius 0.75
+        surface item:
+            thick_bundle
+            leaf_one
+            wilted_leaf
+
+    variant detailed:
+        layer bundle:
+            polygon thick_bundle cloth outline binding width 0.3:
+                1.75, 5.8
+                4.8, 2.75
+                12.7, 3.8
+                14.25, 9.1
+                11.65, 14.25
+                3.3, 13.15
+            polygon leaf_one wet_herbs outline binding width 0.2:
+                3.8, 5.8
+                6.45, 1.25
+                8.15, 5.9
+                5.9, 8.25
+            polygon wilted_leaf wet_herbs outline binding width 0.2:
+                7.8, 5.8
+                12.25, 4.7
+                10.55, 9.25
+                7.9, 9.75
+            line leaf_vein_one binding width 0.2:
+                6.45, 2.3
+                5.95, 7.3
+            line wilted_vein binding width 0.2:
+                11.4, 5.2
+                8.5, 9.1
+            line loose_cross_tie binding width 0.4:
+                3.8, 4.3
+                11.8, 13.4
+            line trailing_tie binding width 0.25:
+                7.8, 8.5
+                4.5, 14.5
+            circle dilution_drop wet_herbs:
+                center 13.1, 13.55
+                radius 0.7
+                outline binding
+                width 0.15
+        surface item:
+            thick_bundle
+            leaf_one
+            wilted_leaf
+
+drawable diluted_field_restorative context ground:
+    paint flask = fill
+    paint hardware = edge
+    paint thin_restorative = shade
+
+    variant compact:
+        layer flask:
+            polygon field_flask flask outline hardware width 0.45:
+                5, 2
+                11, 2
+                12.5, 5
+                12.5, 13.5
+                3.5, 13.5
+                3.5, 5
+            rect flask_cap hardware:
+                x 6
+                y 1
+                w 4
+                h 2
+            polygon low_fill thin_restorative:
+                4.25, 10.5
+                11.75, 10.5
+                11.75, 13
+                4.25, 13
+            line faded_cross hardware width 0.6:
+                8, 6
+                8, 11.5
+            line faded_arm hardware width 0.6:
+                5.75, 8.75
+                10.25, 8.75
+        surface item:
+            field_flask
+            flask_cap
+
+    variant detailed:
+        layer flask:
+            polygon field_flask flask outline hardware width 0.3:
+                4.8, 1.8
+                11.2, 1.8
+                12.7, 4.85
+                12.7, 13.7
+                3.3, 13.7
+                3.3, 4.85
+            rect flask_cap hardware:
+                x 5.8
+                y 0.8
+                w 4.4
+                h 1.4
+                outline thin_restorative
+                width 0.2
+            polygon low_fill thin_restorative:
+                4, 10.5
+                12, 10.5
+                12, 13.2
+                4, 13.2
+            line liquid_slosh hardware width 0.25:
+                4, 10.5
+                7, 10
+                12, 10.5
+            line faded_cross hardware width 0.4:
+                8, 5.9
+                8, 11.5
+            line faded_arm hardware width 0.4:
+                5.5, 8.7
+                10.5, 8.7
+            polygon small_leaf thin_restorative:
+                8, 6.4
+                9.6, 5.2
+                9.2, 7.2
+        surface item:
+            field_flask
+            flask_cap
+
+drawable diluted_steadying_draught context ground:
+    paint bottle = fill
+    paint stopper = edge
+    paint thin_draught = shade
+
+    variant compact:
+        layer bottle:
+            polygon draught_bottle bottle outline stopper width 0.45:
+                6, 2.5
+                10, 2.5
+                10, 5
+                12, 7
+                11.5, 14
+                4.5, 14
+                4, 7
+                6, 5
+            rect bottle_stop stopper:
+                x 5.5
+                y 1
+                w 5
+                h 2
+            polygon low_fill thin_draught:
+                4.75, 11
+                11.25, 11
+                11, 13.5
+                5, 13.5
+            line broken_bar_left stopper width 0.65:
+                5.5, 8
+                7.25, 8
+            line broken_bar_right stopper width 0.65:
+                8.75, 8
+                10.5, 8
+        surface item:
+            draught_bottle
+            bottle_stop
+
+    variant detailed:
+        layer bottle:
+            polygon draught_bottle bottle outline stopper width 0.3:
+                5.8, 2.3
+                10.2, 2.3
+                10.2, 4.8
+                12.2, 6.85
+                11.7, 14.2
+                4.3, 14.2
+                3.8, 6.85
+                5.8, 4.8
+            rect bottle_stop stopper:
+                x 5.5
+                y 0.8
+                w 5
+                h 1.9
+                outline thin_draught
+                width 0.2
+            polygon low_fill thin_draught:
+                4.55, 10.85
+                11.45, 10.85
+                11.15, 13.6
+                4.85, 13.6
+            line liquid_slosh stopper width 0.25:
+                4.7, 10.9
+                7, 10.4
+                11.3, 10.9
+            line broken_bar_left stopper width 0.4:
+                5.25, 7.7
+                7.15, 7.7
+            line broken_bar_right stopper width 0.4:
+                8.85, 7.7
+                10.75, 7.7
+            line weak_center stopper width 0.25:
+                8, 6.8
+                8, 9.3
+            circle last_drop thin_draught:
+                center 8, 9.7
+                radius 0.45
+        surface item:
+            draught_bottle
+            bottle_stop

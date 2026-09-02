@@ -15,6 +15,7 @@ from engine.events import Event
 from engine.systems import System
 from game.appearance_loadout import apply_tattoo_service, appearance_loadout_for
 from game.components import Occupation, OrganizationProfile
+from game.local_service_demand import record_local_service_supply
 from game.organizations import (
     assign_actor_organization,
     ensure_organization_diplomacy_state,
@@ -489,6 +490,7 @@ def apply_gang_house_game_to_property(sim, gang_org_eid, prop, *, exposure="fron
     metadata["site_services"] = normalized_services
     metadata["site_services_extend_defaults"] = True
     mark_derived_fact_changed(sim, "transit_nodes")
+    record_local_service_supply(sim, prop)
     metadata["gang_house_game"] = {
         "organization_eid": int(gang_org_eid),
         "favored_game": game_id,

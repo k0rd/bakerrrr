@@ -45,6 +45,7 @@ from game.components import (
 from game.flora_runtime import load_flora_catalog
 from game.human_identity import normalize_gender_identity
 from game.items import ITEM_CATALOG, item_display_name
+from game.neighborhood_housing import housing_capacity_for_property, set_actor_home
 from game.organizations import (
     assign_actor_organization,
     ensure_organization,
@@ -713,15 +714,20 @@ def _relationship_partner(sim, eid):
 
 
 def _set_home_property(sim, eid, property_id, *, housed=True):
-    settlement = sim.ecs.get(NPCSettlement).get(eid)
-    if settlement is None:
-        settlement = NPCSettlement(phase="settled", housing_status="housed" if housed else "unhoused")
-        sim.ecs.add(eid, settlement)
-    settlement.home_property_id = _clean_text(property_id)
-    settlement.housing_status = "housed" if housed and _clean_text(property_id) else "unhoused"
-    if _clean_text(property_id):
-        settlement.phase = "settled"
-    return settlement
+    property_id = _clean_text(property_id)
+    prop = _property_from_id(sim, property_id)
+    if housed and isinstance(prop, dict):
+        status = "housing" if housing_capacity_for_property(prop) > 0 else "worksite"
+    else:
+        status = "unhoused"
+    return set_actor_home(
+        sim,
+        eid,
+        property_id,
+        housing_status=status,
+        phase="settled" if property_id else None,
+        reason="cult_home_assignment",
+    )
 
 
 def _complete_official_host_reward_swap(sim, cult, official_eid, row):
@@ -780,8 +786,13 @@ def _complete_official_host_reward_swap(sim, cult, official_eid, row):
             continue
         if actor_is_cult_member(sim, resident_eid, cult.get("cult_id")):
             continue
-        settlement.home_property_id = ""
-        settlement.housing_status = "unhoused"
+        set_actor_home(
+            sim,
+            resident_eid,
+            "",
+            housing_status="unhoused",
+            reason="cult_host_reward_displacement",
+        )
         displaced.append(int(resident_eid))
     row["host_reward_resolved_tick"] = tick
     row["host_reward_kind"] = "home_swap"
@@ -2059,11 +2070,14 @@ def _absorb_cult_service_site(sim, cult, official_eid, target_eid, prop, candida
             site_property_id=prop_id,
             active=True,
         )
-    settlement = sim.ecs.get(NPCSettlement).get(official_eid)
-    if settlement is None:
-        settlement = NPCSettlement(phase="settled", housing_status="housed")
-        sim.ecs.add(official_eid, settlement)
-    settlement.home_property_id = prop_id
+    settlement = set_actor_home(
+        sim,
+        official_eid,
+        prop_id,
+        housing_status="worksite",
+        phase="settled",
+        reason="cult_service_site_absorbed",
+    )
     settlement.work_property_id = prop_id
     target = _property_center(prop)
     ai = sim.ecs.get(AI).get(official_eid)
@@ -2108,13 +2122,17 @@ def _official_ready_for_outreach(sim, cult, official_eid, row):
         row["coverage_arrived_tick"] = tick
         row["hosted_property_id"] = _clean_text(host_prop.get("id"))
         row["hosted_property_name"] = _property_name(host_prop, "host site")
-        settlement = sim.ecs.get(NPCSettlement).get(official_eid)
-        if settlement is None:
-            settlement = NPCSettlement(phase="settled", housing_status="housed")
-            sim.ecs.add(official_eid, settlement)
-        settlement.home_property_id = _clean_text(host_prop.get("id"))
+        host_property_id = _clean_text(host_prop.get("id"))
+        settlement = set_actor_home(
+            sim,
+            official_eid,
+            host_property_id,
+            housing_status="housing" if housing_capacity_for_property(host_prop) > 0 else "worksite",
+            phase="settled",
+            reason="cult_official_arrival",
+        )
         if not _clean_text(getattr(settlement, "work_property_id", "")):
-            settlement.work_property_id = _clean_text(host_prop.get("id"))
+            settlement.work_property_id = host_property_id
         sim.emit(Event(
             "cult_official_arrived",
             cult_id=cult.get("cult_id"),

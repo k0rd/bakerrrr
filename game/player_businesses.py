@@ -19,6 +19,12 @@ from engine.systems import System
 from game.components import AI, CreatureIdentity, NPCMemory, NPCSettlement, NPCSocial, NPCRoutine, NPCWill, Occupation, OrganizationAffiliations, PlayerAssets, Position
 from game.dialogue_runtime import _queue_npc_initiated_dialogue
 from game.economy import chunk_economy_profile, pick_career_for_workplace, workplace_archetype_weight
+from game.local_service_demand import (
+    neighborhood_service_market_read,
+    record_local_service_dissatisfaction,
+    record_local_service_supply,
+    refresh_property_market_supply,
+)
 from game.organizations import (
     ensure_property_organization,
     property_org_members,
@@ -951,14 +957,22 @@ def player_business_state(prop, create=False):
     if not property_supports_player_business(prop):
         return None
     metadata = _property_metadata(prop)
-    state = metadata.get("player_business")
+    # ``business_economy`` is the actor-neutral canonical runtime.  Keep the
+    # historical key as an alias so the established player-facing APIs and old
+    # saves continue to reference the exact same mutable state.
+    state = metadata.get("business_economy")
+    legacy_state = metadata.get("player_business")
+    if not isinstance(state, dict) and isinstance(legacy_state, dict):
+        state = legacy_state
+        metadata["business_economy"] = state
     created_new = False
     if not isinstance(state, dict):
         if not create:
             return None
         state = {}
-        metadata["player_business"] = state
+        metadata["business_economy"] = state
         created_new = True
+    metadata["player_business"] = state
 
     state["account_balance"] = max(0, _int_or(state.get("account_balance"), default=0))
     raw_last_cycle = state.get("last_cycle_hour")
@@ -1486,6 +1500,99 @@ def player_business_remodel_options(prop):
     return tuple(rows)
 
 
+def player_business_local_adaptation_read(sim, prop, *, radius=0):
+    """Score legal remodels from cached local culture and current crew fit.
+
+    This is a read seam, not an autonomous conversion policy.  NPC and player
+    business controllers can consult it when a business is genuinely
+    struggling, then apply their own capital, temperament, and timing rules.
+    """
+
+    if sim is None or not isinstance(prop, dict):
+        return ()
+    try:
+        chunk = tuple(int(value) for value in sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))[:2])
+    except (TypeError, ValueError, AttributeError):
+        return ()
+    market = {
+        str(row.get("topic_id", "")): dict(row)
+        for row in neighborhood_service_market_read(sim, chunk)
+        if isinstance(row, dict) and str(row.get("topic_id", "")).strip()
+    }
+    state = player_business_state(prop, create=False)
+    state = state if isinstance(state, dict) else {}
+    roles = dict(state.get("staff_roles", {})) if isinstance(state.get("staff_roles"), dict) else {}
+    staffing = {
+        "manager_count": sum(1 for role in roles.values() if _normalized_role(role) == "manager"),
+        "staff_count": sum(1 for role in roles.values() if _normalized_role(role) == "staff"),
+    }
+    staffing["staff_total"] = staffing["manager_count"] + staffing["staff_count"]
+    source_metadata = _property_metadata(prop)
+    service_seed_token = _text(source_metadata.get("site_service_seed_token")) or _text(prop.get("id")) or _text(prop.get("name"))
+    rows = []
+    for quote in player_business_remodel_options(prop):
+        target = str(quote.get("target_archetype", "") or "").strip().lower()
+        target_metadata = dict(source_metadata)
+        target_metadata["archetype"] = target
+        target_metadata["is_storefront"] = True
+        target_metadata["site_services"] = list(_default_site_services_for_archetype(target, seed_token=service_seed_token))
+        target_metadata["finance_services"] = list(_FINANCE_SERVICE_FALLBACKS.get(target, ()) or ())
+        target_prop = dict(prop)
+        target_prop["metadata"] = target_metadata
+        required_staff = _required_staff_for(target_prop)
+        role_fit = player_business_staffing_fit(sim, target_prop)
+        operating = player_business_operating_quality(
+            sim,
+            target_prop,
+            required_staff=required_staff,
+            staffing=staffing,
+            role_fit=role_fit,
+        )
+        from game.service_category_registry import service_categories_for_property
+        offered_services = set(service_categories_for_property(target_prop))
+        market_rows = tuple(
+            market[service]
+            for service in sorted(offered_services)
+            if service in market
+        )
+        # Aggregate/specialized categories can intentionally overlap.  A bus
+        # depot must not receive both generic-transit and bus demand as if two
+        # independent customers appeared.  Each market group contributes its
+        # strongest applicable signal.
+        pressure_by_group = {}
+        for market_row in market_rows:
+            group = str(market_row.get("market_group", market_row.get("topic_id", "")) or "").strip().lower()
+            pressure_by_group[group] = max(
+                float(pressure_by_group.get(group, 0.0) or 0.0),
+                float(market_row.get("opportunity_pressure", 0.0) or 0.0),
+            )
+        market_pressure = max(pressure_by_group.values(), default=0.0)
+        manager_fit = float(operating.get("manager_fit_score", 0.0) or 0.0)
+        service_reliability = float(operating.get("service_reliability", 0.0) or 0.0)
+        management_read_confidence = 0.15 + (0.85 * max(0.0, min(1.0, manager_fit / 10.0)))
+        crew_delivery_factor = 0.35 + (0.65 * max(0.0, min(1.0, service_reliability)))
+        rows.append({
+            **dict(quote),
+            "chunk": chunk,
+            "offered_services": tuple(sorted(offered_services)),
+            "market_group_pressure": dict(sorted(pressure_by_group.items())),
+            "market_rows": market_rows,
+            "market_pressure": round(market_pressure, 4),
+            "management_read_confidence": round(management_read_confidence, 3),
+            "projected_service_reliability": round(service_reliability, 3),
+            "projected_manager_fit": round(manager_fit, 2),
+            "projected_staff_fit": round(float(operating.get("staff_fit_score", 0.0) or 0.0), 2),
+            "adaptation_signal": round(market_pressure * management_read_confidence * crew_delivery_factor, 4),
+        })
+    rows.sort(key=lambda row: (
+        -float(row.get("adaptation_signal", 0.0) or 0.0),
+        -float(row.get("market_pressure", 0.0) or 0.0),
+        int(row.get("cost", 0) or 0),
+        str(row.get("target_archetype", "")),
+    ))
+    return tuple(rows)
+
+
 def player_business_apply_remodel(sim, prop, target_archetype):
     quote = player_business_remodel_quote(prop, target_archetype)
     if not isinstance(quote, dict) or not isinstance(prop, dict):
@@ -1501,6 +1608,7 @@ def player_business_apply_remodel(sim, prop, target_archetype):
     metadata["finance_services"] = list(finance_defaults)
     metadata.pop("access_controller_hours", None)
     mark_derived_fact_changed(sim, "transit_nodes")
+    record_local_service_supply(sim, prop)
 
     state = player_business_state(prop, create=True)
     if isinstance(state, dict):
@@ -1892,12 +2000,34 @@ def _business_health(sim, prop):
     archetype_factor = max(0.62, min(1.32, 0.8 + ((archetype_weight - 1.0) * 0.28)))
     liquidity_factor = max(0.68, min(1.3, (stock_mult / price_mult) ** 0.5))
     demand_factor = max(0.72, min(1.28, ((stock_mult * 0.55) + ((2.0 - price_mult) * 0.45))))
-    health = max(0.58, min(1.34, (archetype_factor * 0.4) + (liquidity_factor * 0.3) + (demand_factor * 0.3)))
+    base_health = (archetype_factor * 0.4) + (liquidity_factor * 0.3) + (demand_factor * 0.3)
+    from game.service_category_registry import service_categories_for_property
+    chunk = tuple(int(value) for value in sim.chunk_coords(_int_or(prop.get("x"), default=0), _int_or(prop.get("y"), default=0))[:2])
+    market = {row["topic_id"]: row for row in neighborhood_service_market_read(sim, chunk)}
+    pressure_by_group = {}
+    for topic_id in service_categories_for_property(prop):
+        row = market.get(topic_id)
+        if not isinstance(row, dict):
+            continue
+        group = str(row.get("market_group", topic_id) or topic_id)
+        pressure_by_group[group] = max(
+            float(pressure_by_group.get(group, 0.0) or 0.0),
+            float(row.get("opportunity_pressure", 0.0) or 0.0),
+        )
+    market_pressure = max(pressure_by_group.values(), default=0.0)
+    authoritative_factor = max(0.72, min(1.28, 0.78 + (0.22 * market_pressure)))
+    health = max(0.58, min(1.34, base_health * authoritative_factor))
     note = str(profile.get("pressure_note", "")).strip() or str(profile.get("store_note", "")).strip()
+    if market_pressure >= 1.25:
+        note = "strong local appetite"
+    elif market_pressure <= 0.2:
+        note = "thin local appetite"
     return {
         "health": float(health),
         "note": note,
         "profile": profile,
+        "market_pressure": round(market_pressure, 4),
+        "market_group_pressure": dict(sorted(pressure_by_group.items())),
     }
 
 
@@ -3978,6 +4108,13 @@ class PlayerBusinessSystem(System):
                 ceiling = gross_revenue - 1 if gross_revenue > 1 else gross_revenue
                 slippage = max(0, min(ceiling, slippage))
             realized_revenue = max(0, gross_revenue - slippage)
+            record_local_service_dissatisfaction(
+                self.sim,
+                prop,
+                reliability=operating.get("service_reliability", 0.0),
+                customer_weight=min(2.0, max(0.5, float(gross_revenue) / float(max(1, self._base_revenue_for(prop))))),
+                tick=getattr(self.sim, "tick", 0),
+            )
             self._emit_work_practice(prop, state, hour_counter)
 
         payroll_rows = self._payroll_rows_for(prop, state) if open_now else []
@@ -4078,6 +4215,7 @@ class PlayerBusinessSystem(System):
         last_summary.update(_player_business_owner_signal(last_summary))
         state["last_summary"] = last_summary
         _touch_player_business_runtime(prop, sim=self.sim)
+        refresh_property_market_supply(self.sim, prop)
         self._queue_owner_warning(prop, state, dict(state.get("last_summary", {})), previous_summary=previous_summary)
 
     def update(self):
@@ -4133,6 +4271,7 @@ __all__ = [
     "player_business_markup_mode",
     "player_business_markup_mode_label",
     "player_business_markup_profile",
+    "player_business_local_adaptation_read",
     "player_business_next_customer_policy",
     "player_business_next_hours_mode",
     "player_business_next_markup_mode",

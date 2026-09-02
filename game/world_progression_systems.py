@@ -96,6 +96,7 @@ from game.items import (
     prepare_item_stack_metadata,
 )
 from game.large_span_places import register_large_span_child_properties
+from game.local_service_demand import initialize_local_service_supply_for_records
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
     _opportunity_requirements,
@@ -630,6 +631,11 @@ class WorldStreamingSystem(System):
             completed = set(completed or ())
             self.sim.chunk_property_generation_complete = completed
         if key in completed:
+            initialize_local_service_supply_for_records(
+                self.sim,
+                key,
+                self.sim.chunk_property_records.get(key, ()),
+            )
             return
 
         chunk = self.sim.world.get_chunk(key[0], key[1])
@@ -1413,6 +1419,7 @@ class WorldStreamingSystem(System):
             })
 
         self.sim.chunk_property_records[key] = records
+        initialize_local_service_supply_for_records(self.sim, key, records)
         completed.add(key)
         maybe_seed_bones_for_chunk(self.sim, chunk)
         maybe_seed_run_echo_for_chunk(self.sim, chunk)

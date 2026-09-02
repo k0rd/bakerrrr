@@ -920,16 +920,23 @@ class PropertyActionRuntime:
             return False
 
         price = int(context.get("price", 0) or 0)
-        old_owner = context.get("owner_eid")
-        assets.credits -= price
-        self.sim.assign_property_owner(prop["id"], owner_eid=eid, owner_tag="player")
-
-        self.sim.emit(Event(
-            "property_owner_changed",
-            property_id=prop["id"],
-            old_owner_eid=old_owner,
+        from game.property_ownership import transfer_property_ownership
+        transfer = transfer_property_ownership(
+            self.sim,
+            prop["id"],
             new_owner_eid=eid,
-        ))
+            new_owner_tag="player",
+            price=price,
+            reason="property_purchase",
+        )
+        if not isinstance(transfer, dict):
+            self.sim.emit(Event(
+                "property_purchase_blocked",
+                eid=eid,
+                reason="transfer_failed",
+                property_id=prop["id"],
+            ))
+            return False
         self.sim.emit(Event(
             "property_purchased",
             eid=eid,

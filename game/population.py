@@ -54,6 +54,7 @@ from game.appearance_loadout import (
 from game.civic_records import seed_professional_civic_licenses
 from game.drone_distribution import drone_distribution_metadata
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot, world_distributed_item_pool
+from game.local_service_demand import initialize_local_service_demand_for_actors, record_local_service_supply
 from game.human_identity import seed_human_identity_profile
 from game.item_semantics import inventory_has_camera_phone
 from game.npc_names import generate_human_personal_name, human_descriptor
@@ -4943,7 +4944,7 @@ def _spawn_hidden_storefront(
     }
     if rng is not None:
         metadata.update(_hidden_storefront_profile_metadata(archetype, rng))
-    return sim.register_property(
+    property_id = sim.register_property(
         name=name,
         kind="asset",
         x=x,
@@ -4953,6 +4954,8 @@ def _spawn_hidden_storefront(
         owner_tag="npc",
         metadata=metadata,
     )
+    record_local_service_supply(sim, sim.properties.get(property_id))
+    return property_id
 
 
 def _spawn_hidden_contact_lead_item(sim, hidden_storefront, room_tiles, rng, *, lead_item_id=""):
@@ -5574,7 +5577,9 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
     _ground_records, population_records = ensure_chunk_population_state(sim)
     key = (int(chunk.get("cx", 0)), int(chunk.get("cy", 0)))
     if key in population_records:
-        return list(population_records[key])
+        existing = list(population_records[key])
+        initialize_local_service_demand_for_actors(sim, existing)
+        return existing
 
     rng = random.Random(f"{sim.seed}:{key[0]}:{key[1]}:chunk_population")
     reserved_property_ids = {
@@ -5804,5 +5809,6 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
     baselines = getattr(sim, "chunk_population_baselines", None)
     if isinstance(baselines, dict):
         baselines[key] = max(int(baselines.get(key, 0) or 0), int(baseline_population))
+    initialize_local_service_demand_for_actors(sim, spawned[:baseline_population])
     sim.property_registry_dirty = True
     return list(spawned)

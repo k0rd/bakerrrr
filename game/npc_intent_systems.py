@@ -94,6 +94,11 @@ from game.npc_relationships import (
     should_block_solo_vehicle_for_partner as _should_block_solo_vehicle_for_partner,
 )
 from game.named_scars_runtime import maybe_record_named_scar_from_damage
+from game.neighborhood_consumers import (
+    advance_actor_service_transit,
+    actor_service_pursuit_candidate,
+    resolve_actor_service_pursuit,
+)
 from game.cultivation_runtime import (
     find_npc_flora_harvest_target,
     npc_harvest_flora_at_actor,
@@ -2388,6 +2393,7 @@ class NPCWillSystem(System):
         "rendezvousing_crew",
         "seeking_criminal_affiliation",
         "soliciting_player",
+        "seeking_bank",
         "seeking_poker_table",
         "seeking_civic_license",
         "war_advancing",
@@ -3380,6 +3386,18 @@ class NPCWillSystem(System):
                     will.last_tick = self.sim.tick
                     continue
 
+            if ai.state == "seeking_bank" and ai.target:
+                survival_critical = {
+                    str(value or "").strip().lower()
+                    for value in tuple(getattr(needs, "critical", ()) or ())
+                }.intersection({"energy", "hunger", "safety", "thirst"})
+                if not survival_critical:
+                    will.intent = "seeking_bank"
+                    will.target = ai.target
+                    will.target_eid = None
+                    will.last_tick = self.sim.tick
+                    continue
+
             if ai.state == "investigating" and ai.target:
                 will.intent = "investigating"
                 will.target = ai.target
@@ -3652,6 +3670,22 @@ class NPCWillSystem(System):
             best_target = None
             best_target_eid = None
             best_shopping_target = None
+            best_service_pursuit = None
+
+            business_plan_id = str(getattr(ai, "service_business_plan_id", "") or "").strip()
+            active_service_property_id = str(getattr(ai, "service_property_id", "") or "").strip()
+            if active_service_property_id and str(getattr(ai, "state", "") or "").strip().lower() == "seeking_service" and ai.target:
+                best_intent = "seeking_service"
+                best_score = 48.0 if business_plan_id else 40.0
+                best_target = ai.target
+                best_service_pursuit = {
+                    "topic_id": str(getattr(ai, "service_topic_id", "service_contractor") or "service_contractor"),
+                    "property_id": active_service_property_id,
+                    "target": ai.target,
+                    "travel_mode": str(getattr(ai, "service_travel_mode", "contractor_plan" if business_plan_id else "local") or "local"),
+                    "destination_chunk": getattr(ai, "service_destination_chunk", None),
+                    "preserve": True,
+                }
 
             if memory:
                 property_threat = _strongest_memory_entry(
@@ -4322,6 +4356,19 @@ class NPCWillSystem(System):
                         best_target_eid = None
                         best_shopping_target = shopping_target
 
+            if not work_active and best_score < 60.0:
+                service_pursuit = actor_service_pursuit_candidate(self.sim, eid, pos)
+                if isinstance(service_pursuit, dict):
+                    service_score = 18.0 + (float(service_pursuit.get("score", 0.0) or 0.0) * 30.0)
+                    if ai.state == "seeking_service" and ai.target == service_pursuit.get("target"):
+                        service_score += 4.0
+                    if service_score > best_score:
+                        best_intent = "seeking_service"
+                        best_score = service_score
+                        best_target = service_pursuit.get("target")
+                        best_target_eid = None
+                        best_service_pursuit = service_pursuit
+
             street_buy_tip_data = street_buy_tip.get("data", {}) if isinstance(street_buy_tip, dict) else {}
             street_buy_tip_strength = float(street_buy_tip.get("strength", 0.0) or 0.0) if isinstance(street_buy_tip, dict) else 0.0
             if street_buy_tip is not None:
@@ -4774,6 +4821,21 @@ class NPCWillSystem(System):
                 for attr in ("shopping_property_id", "shopping_item_id", "shopping_motive", "shopping_quirk_id", "shopping_impulse"):
                     if hasattr(ai, attr):
                         delattr(ai, attr)
+            if best_intent == "seeking_service" and isinstance(best_service_pursuit, dict):
+                ai.service_topic_id = str(best_service_pursuit.get("topic_id", "") or "").strip().lower()
+                ai.service_property_id = str(best_service_pursuit.get("property_id", "") or "").strip()
+                ai.service_travel_mode = str(best_service_pursuit.get("travel_mode", "local") or "local").strip().lower()
+                ai.service_destination_chunk = best_service_pursuit.get("destination_chunk")
+                if ai.service_travel_mode == "transit" and not bool(best_service_pursuit.get("preserve")):
+                    ai.service_transit_service = str(best_service_pursuit.get("transit_service", "") or "")
+                    ai.service_transit_origin_property_id = str(best_service_pursuit.get("transit_origin_property_id", "") or "")
+                    ai.service_transit_destination_target = best_service_pursuit.get("transit_destination_target")
+                    ai.service_destination_target = best_service_pursuit.get("service_destination_target")
+                    ai.service_transit_phase = "origin"
+            elif str(getattr(ai, "state", "") or "").strip().lower() != "seeking_service":
+                for attr in ("service_topic_id", "service_property_id", "service_travel_mode", "service_destination_chunk", "service_business_plan_id", "service_transit_service", "service_transit_origin_property_id", "service_transit_destination_target", "service_destination_target", "service_transit_phase"):
+                    if hasattr(ai, attr):
+                        delattr(ai, attr)
             if live_timeskip_active and best_intent == "idle":
                 _schedule_will_rethink(
                     self.sim,
@@ -4843,6 +4905,7 @@ class NPCInvestigateSystem(System):
         "shopping",
         "resting",
         "patrolling",
+        "seeking_service",
     }
     COMMUTE_VEHICLE_RADIUS = 5
     COMMUTE_OWNED_VEHICLE_RADIUS = 14
@@ -4883,8 +4946,10 @@ class NPCInvestigateSystem(System):
         "seeking_medical_aid": 2,
         "seeking_safe_spot": 2,
         "seeking_shelter": 2,
+        "seeking_bank": 2,
         "seeking_poker_table": 2,
         "seeking_civic_license": 2,
+        "seeking_service": 2,
         "patrolling": 3,
         "working": 3,
         "lounging": 4,
@@ -4928,8 +4993,10 @@ class NPCInvestigateSystem(System):
         "seeking_medical_aid",
         "seeking_safe_spot",
         "seeking_shelter",
+        "seeking_bank",
         "seeking_poker_table",
         "seeking_civic_license",
+        "seeking_service",
         "patrolling",
         "working",
         "lounging",
@@ -4968,8 +5035,10 @@ class NPCInvestigateSystem(System):
         "seeking_medical_aid",
         "seeking_safe_spot",
         "seeking_shelter",
+        "seeking_bank",
         "seeking_poker_table",
         "seeking_civic_license",
+        "seeking_service",
         "patrolling",
         "working",
         "lounging",
@@ -7059,6 +7128,7 @@ class NPCInvestigateSystem(System):
                 "socializing",
                 "shopping",
                 "resting",
+                "seeking_service",
             }
             commute_target = None
             if vertical_segment is None:
@@ -7109,6 +7179,54 @@ class NPCInvestigateSystem(System):
                 continue
 
             if pos.x == tx and pos.y == ty:
+                if ai.state == "seeking_service":
+                    if advance_actor_service_transit(self.sim, eid, ai, pos):
+                        if throttle:
+                            throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
+                        else:
+                            self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                        continue
+                    business_plan_id = str(getattr(ai, "service_business_plan_id", "") or "").strip()
+                    if business_plan_id:
+                        from game.neighborhood_businesses import complete_business_contractor_visit
+                        complete_business_contractor_visit(self.sim, eid, business_plan_id)
+                    else:
+                        resolve_actor_service_pursuit(
+                            self.sim,
+                            eid,
+                            property_id=getattr(ai, "service_property_id", ""),
+                            topic_id=getattr(ai, "service_topic_id", ""),
+                            pos=pos,
+                        )
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
+                    for attr in ("service_topic_id", "service_property_id", "service_travel_mode", "service_destination_chunk", "service_business_plan_id", "service_transit_service", "service_transit_origin_property_id", "service_transit_destination_target", "service_destination_target", "service_transit_phase"):
+                        if hasattr(ai, attr):
+                            delattr(ai, attr)
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                    continue
+                if ai.state == "seeking_bank":
+                    self.sim.emit(Event(
+                        "npc_banking_arrived",
+                        npc_eid=eid,
+                        property_id=getattr(ai, "banking_property_id", None),
+                        x=tx,
+                        y=ty,
+                        z=tz,
+                    ))
+                    if str(getattr(ai, "state", "") or "") == "seeking_bank":
+                        ai.state = "idle"
+                        ai.target = None
+                        ai.target_eid = None
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                    continue
                 if ai.state == "seeking_poker_table":
                     self.sim.emit(Event(
                         "npc_holdem_seat_arrived",
@@ -7978,6 +8096,7 @@ class NPCInvestigateSystem(System):
                 "socializing",
                 "shopping",
                 "resting",
+                "seeking_service",
             }
             path_tx, path_ty, path_tz = tx, ty, tz
             if not quirk_target_override:

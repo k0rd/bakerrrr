@@ -99,6 +99,7 @@ from game.organizations import (
 )
 from game.population import human_max_hp_for_role, seed_chunk_items, seed_npc_finance, spawn_chunk_npcs
 from game.player_businesses import PlayerBusinessSystem
+from game.neighborhood_businesses import NeighborhoodBusinessSystem
 from game.run_echoes import maybe_seed_run_echo_for_chunk, prime_run_echoes_runtime
 from game.systems_incidents import IncidentKnowledgeSystem
 from game.social_fact_consequences import SocialFactConsequenceSystem
@@ -161,6 +162,7 @@ from game.situation_read import SituationReadSystem
 from game.npc_boundary_system import NPCBoundaryEnforcementSystem
 from game.npc_interaction_system import NPCInteractionSystem
 from game.npc_income_system import NPCIncomeSystem
+from game.chunk_service_survey import ChunkServiceSurveySystem
 from game.objective_progress import ObjectiveProgressSystem
 from game.criminal_justice_system import CriminalJusticeSystem
 from game.trade_system import TradeSystem
@@ -764,6 +766,8 @@ def _register_runtime_systems(sim, view, player, *, audio_progress_callback=None
     rumor_system = RumorSystem(sim)
     business_reputation_system = BusinessReputationSystem(sim)
     npc_needs_system = NPCNeedsSystem(sim)
+    chunk_service_survey_system = ChunkServiceSurveySystem(sim)
+    neighborhood_business_system = NeighborhoodBusinessSystem(sim)
     npc_settlement_system = NPCSettlementSystem(sim)
     status_effect_system = StatusEffectSystem(sim)
     sleep_pressure_system = SleepPressureSystem(sim, player)
@@ -878,6 +882,8 @@ def _register_runtime_systems(sim, view, player, *, audio_progress_callback=None
     _live_timeskip_stride(criminal_drive_system, 60)
     _live_timeskip_stride(npc_will_system, 12)
     _live_timeskip_stride(holdem_cash_system, 4)
+    _live_timeskip_stride(chunk_service_survey_system, 30)
+    _live_timeskip_stride(neighborhood_business_system, 30)
     _live_timeskip_stride(business_pulse_scene_system, 0)
     _live_timeskip_stride(business_scene_work_system, 5)
     _live_timeskip_stride(npc_weapon_system, 1)
@@ -955,6 +961,10 @@ def _register_runtime_systems(sim, view, player, *, audio_progress_callback=None
     sim.register_system(rumor_system)
     sim.register_system(business_reputation_system)
     sim.register_system(npc_needs_system)
+    # Current-context survey evidence feeds the bounded authoritative market;
+    # business reviews and settlement consequences remain separately paced.
+    sim.register_system(chunk_service_survey_system)
+    sim.register_system(neighborhood_business_system)
     sim.register_system(npc_settlement_system)
     sim.register_system(status_effect_system)
     sim.register_system(sleep_pressure_system)
@@ -3202,6 +3212,9 @@ def _run_loaded_game(view, character_name, *, debug_mode=False, startup_progress
     if isinstance(getattr(sim, "log_ui", None), dict):
         sim.log_ui["open"] = False
         sim.log_ui["scroll"] = 0
+    if isinstance(getattr(sim, "service_survey_ui", None), dict):
+        sim.service_survey_ui["open"] = False
+        sim.service_survey_ui["scroll"] = 0
     sim.turn_advance_requested = False
 
     player = getattr(sim, "player_eid", None)

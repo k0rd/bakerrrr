@@ -2806,9 +2806,15 @@ class TradeSystem(System):
             return False
 
         payout = int(self._vehicle_trade_in_quote(vehicle_prop))
-        old_owner_eid = vehicle_prop.get("owner_eid")
-        old_owner_tag = vehicle_prop.get("owner_tag")
-        self.sim.assign_property_owner(vehicle_id, owner_eid=None, owner_tag="public")
+        from game.property_ownership import transfer_property_ownership
+        transfer_property_ownership(
+            self.sim,
+            vehicle_id,
+            new_owner_eid=None,
+            new_owner_tag="public",
+            reason="vehicle_trade_in",
+            issue_credential=False,
+        )
         vehicle_meta = _property_metadata(vehicle_prop)
         vehicle_meta["vehicle_owner_tag"] = "public"
         current_display_color = str(vehicle_meta.get("display_color", "")).strip()
@@ -2824,15 +2830,6 @@ class TradeSystem(System):
             self.sim.track_vehicle_exit(eid, vehicle_id=vehicle_id)
 
         assets.credits = int(max(0, int(assets.credits) + payout))
-
-        self.sim.emit(Event(
-            "property_owner_changed",
-            property_id=vehicle_id,
-            old_owner_eid=old_owner_eid,
-            old_owner_tag=old_owner_tag,
-            new_owner_eid=None,
-            new_owner_tag="public",
-        ))
 
         vehicle_name = _vehicle_label(vehicle_prop)
         self.sim.emit(Event(

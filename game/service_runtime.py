@@ -13,7 +13,7 @@ from engine.buildings import layout_chunk_building, world_building_id
 from engine.derived_facts import cached_derived_fact
 from engine.sites import layout_chunk_site
 from game.components import AI, NPCNeeds, Occupation, PlayerAssets, Position
-from game.color_words import casino_color_word
+from game.color_words import casino_color_word, casino_presentation_color_word
 from game.flora_runtime import load_flora_catalog
 from game.organizations import occupation_targets_property, property_org_members
 from game.population import work_shift_active
@@ -2100,7 +2100,7 @@ def _casino_color_words_from_hint(raw):
     if not isinstance(raw, (list, tuple, set)):
         return ()
     for value in raw:
-        color = _casino_color_word(value)
+        color = casino_presentation_color_word(value)
         if color and color not in values:
             values.append(color)
     return tuple(values)
@@ -4059,8 +4059,9 @@ def _casino_craps_resolve(session):
 def _casino_three_bright_color_words(context=None):
     colors = []
     if isinstance(context, dict):
-        for color in _casino_color_words_from_hint(context.get("accent_colors")):
-            if color not in colors:
+        for raw_color in tuple(context.get("accent_colors", ()) or ()):
+            color = _casino_color_word(raw_color)
+            if color and color not in colors:
                 colors.append(color)
     for color in CASINO_THREE_BRIGHT_DEFAULT_COLORS:
         if color not in colors:
@@ -6495,6 +6496,7 @@ def _site_service_label(service):
         "business_remodel": "business refit",
         "butcher_prepare": "butcher prep",
         "civic_records": "civic records",
+        "justice_cashier": "justice cashier",
         "fauna_registry": "fauna registry",
         "campfire_cook": "campfire cooking",
         "campfire_herb_cache": "campfire herb cache",
@@ -6551,6 +6553,7 @@ def _service_menu_option_label(option_id):
         "bodyguard_contract": "Hire bodyguards",
         "butcher_prepare": "Prepare meat",
         "civic_records": "Inspect civic records",
+        "justice_cashier": "Use justice cashier",
         "fauna_registry": "Review fauna registry",
         "campfire_cook": "Cook meat",
         "campfire_herb_cache": "Open herb cache",

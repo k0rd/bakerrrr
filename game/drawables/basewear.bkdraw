@@ -388,15 +388,15 @@ drawable bra context garment:
 drawable bralette context garment:
     paint fabric = fill
     paint trim = edge
-    let top_y = shoulder_y + 1
-    let band_y = shoulder_y + 4
+    let top_y = shoulder_y -1
+    let band_y = shoulder_y +1
 
     variant compact:
         layer body:
             polygon left_panel fabric:
-                mid - 3, band_y
+                mid - 2, band_y
                 mid - 2, top_y
-                mid, band_y
+                mid-3, band_y
             mirror left_panel as right_panel
             rect band fabric:
                 x mid - 3
@@ -861,19 +861,19 @@ drawable thong context garment:
 drawable high_waist_panties context garment:
     paint fabric = fill
     paint trim = edge
-    let high_y = hip_y - 3
-    let waist_y = hip_y - 1
-    let bottom_y = hip_y + 2
+    let high_y = hip_y - 1
+    let waist_y = hip_y 
+    let bottom_y = hip_y + 1
 
     variant compact:
         layer body:
             polygon panel fabric:
                 mid - waist, high_y
                 mid + waist, high_y
-                mid + basewear_hip, waist_y
+                mid + basewear_hip -0.3, waist_y
                 mid + 1, bottom_y
                 mid - 1, bottom_y
-                mid - basewear_hip, waist_y
+                mid - basewear_hip +0.3, waist_y
         surface garment:
             panel
 
@@ -907,3 +907,5 @@ drawable high_waist_panties context garment:
                     mid + 6, 3
             surface item:
                 folded
+
+

@@ -7893,6 +7893,7 @@ class CriminalJusticeSystem(System):
         interaction_mode = str(event.data.get("interaction_mode", "") or "").strip().lower()
         if interaction_mode == "service":
             return
+        cashier_interaction = interaction_mode == "justice_cashier"
         prop = self.sim.properties.get(event.data.get("property_id"))
         if not self._booking_property_allowed(prop):
             return
@@ -7913,15 +7914,15 @@ class CriminalJusticeSystem(System):
         debt_balance = int(self._player_justice_debt_balance())
         active_score = int(justice_snapshot.get("active_score", 0) or 0)
         incident_count = int(justice_snapshot.get("incident_count", 0) or 0)
-        if held_count <= 0 and debt_balance <= 0 and active_score <= 0 and incident_count <= 0:
+        if held_count <= 0 and debt_balance <= 0 and active_score <= 0 and incident_count <= 0 and not cashier_interaction:
             return
 
         event.data["handled"] = True
-        prop_name = str(prop.get("name", "Justice Desk") or "Justice Desk").strip() or "Justice Desk"
+        prop_name = str(prop.get("name", "Justice Cashier") or "Justice Cashier").strip() or "Justice Cashier"
         current_property_id = str(prop.get("id", "") or "").strip()
         held_property_id = str(held.get("property_id", "") or "").strip()
         held_property_name = str(held.get("property_name", "") or "").strip()
-        title = f"Justice Desk: {prop_name}"
+        title = f"Justice Cashier: {prop_name}"
         payment_lines = []
         if debt_balance > 0:
             payment = self._pay_player_justice_debt_at_desk(prop)

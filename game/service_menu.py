@@ -74,11 +74,15 @@ from game.player_businesses import (
     player_business_summary,
     player_owned_businesses_for_actor,
 )
-from game.property_access import evaluate_property_access as _evaluate_property_access
+from game.property_access import (
+    JUSTICE_CASHIER_SERVICE_ID,
+    evaluate_property_access as _evaluate_property_access,
+)
 from game.property_runtime import (
     finance_services_for_property as _finance_services_for_property,
     property_covering as _property_covering,
     property_infrastructure_role as _property_infrastructure_role,
+    property_is_public as _property_is_public,
     property_is_storefront as _property_is_storefront,
     property_metadata as _property_metadata,
     resolve_property_record as _resolve_property_record,
@@ -939,6 +943,7 @@ class ServiceMenuSystem(System):
             floor_page="games",
             service=service,
             session=None,
+            art={"service": service, "table_context": dict(table_context)},
             return_to=str(return_to or ("floor" if host_style == "floor" else "service_menu")).strip().lower(),
             return_option_id=str(service or "").strip().lower(),
             selected_id=selected_id,
@@ -1453,7 +1458,11 @@ class ServiceMenuSystem(System):
             cards = " ".join(str(card) for card in list(hero.get("cards", ()) or ())) or "--"
             body_lines.append(f"Your seat {int(hero.get('index', 0)) + 1}: {cards} | stack {_credit_amount_label(hero.get('stack', 0))}.")
         else:
-            body_lines.append("Walk up to an open gold chair and interact to take that exact seat.")
+            body_lines.append(
+                f"Walk up to an open gold chair and choose a stack from "
+                f"{_credit_amount_label(snapshot.get('min_buy_in', snapshot.get('buy_in', 0)))} to "
+                f"{_credit_amount_label(snapshot.get('max_buy_in', snapshot.get('buy_in', 0)))}."
+            )
         if isinstance(acting, dict):
             body_lines.append(f"Action: {acting.get('name', 'Player')} at seat {int(acting.get('index', 0)) + 1}.")
 
@@ -1484,10 +1493,11 @@ class ServiceMenuSystem(System):
                     if int(seat.get("z", 0)) == int(player_pos.z) and distance <= 2:
                         nearby.append((distance, int(seat.get("index", 0))))
             for _distance, seat_index in sorted(nearby):
-                rows.append({
-                    "id": f"cash:join:{seat_index}",
-                    "label": f"Take seat {seat_index + 1} · {_credit_amount_label(snapshot.get('buy_in', 0))} buy-in",
-                })
+                for amount in list(snapshot.get("buy_in_options", ()) or (snapshot.get("buy_in", 0),)):
+                    rows.append({
+                        "id": f"cash:join:{seat_index}:{int(amount)}",
+                        "label": f"Take seat {seat_index + 1} · {_credit_amount_label(amount)} buy-in",
+                    })
 
         rail_lines = [
             "Cash table",
@@ -2453,14 +2463,31 @@ class ServiceMenuSystem(System):
             command = option_id.partition(":")[2]
             notice = ""
             if command.startswith("join:"):
+                command_parts = command.split(":")
                 try:
-                    seat_index = int(command.rsplit(":", 1)[-1])
+                    seat_index = int(command_parts[1])
                 except (TypeError, ValueError):
                     seat_index = -1
-                result = holdem_cash_join(self.sim, table, self.player_eid, seat_index=seat_index, actor_kind="player")
+                try:
+                    buy_in = int(command_parts[2]) if len(command_parts) >= 3 else None
+                except (TypeError, ValueError):
+                    buy_in = None
+                result = holdem_cash_join(
+                    self.sim,
+                    table,
+                    self.player_eid,
+                    seat_index=seat_index,
+                    actor_kind="player",
+                    buy_in=buy_in,
+                )
                 if not result.get("ok"):
                     if result.get("reason") == "insufficient_funds":
                         notice = f"You need {_credit_amount_label(result.get('need', table.get('buy_in', 0)))} to buy in."
+                    elif result.get("reason") == "invalid_buy_in":
+                        notice = (
+                            f"This table takes {_credit_amount_label(result.get('minimum', 0))} to "
+                            f"{_credit_amount_label(result.get('maximum', 0))}."
+                        )
                     else:
                         notice = "That chair is no longer open."
             elif command == "leave_after":
@@ -4110,7 +4137,12 @@ class ServiceMenuSystem(System):
         )
         cult_assoc = cult_property_association(self.sim, prop)
         cult_contact_ok = bool(cult_assoc.get("always_contact"))
-        if not access.can_use_services and not dispatch_ok and not owner_business_ok and not cult_contact_ok:
+        advertised_site_services = tuple(_site_services_for_property(prop) or ())
+        justice_cashier_ok = bool(
+            _property_is_public(prop)
+            and JUSTICE_CASHIER_SERVICE_ID in advertised_site_services
+        )
+        if not access.can_use_services and not dispatch_ok and not owner_business_ok and not cult_contact_ok and not justice_cashier_ok:
             return [], None
 
         options = []
@@ -4137,7 +4169,9 @@ class ServiceMenuSystem(System):
         if access.can_use_services and self._player_can_redeem_meal_voucher(prop):
             options.append({"id": "redeem_meal_voucher", "label": "Redeem meal voucher"})
 
-        for site_service in _site_services_for_property(prop) if access.can_use_services else ():
+        for site_service in advertised_site_services:
+            if not access.can_use_services and site_service != JUSTICE_CASHIER_SERVICE_ID:
+                continue
             if site_service == HOLDEM_CASH_SERVICE_ID and not isinstance(
                 holdem_cash_table_for_property(self.sim, prop, ensure=False),
                 dict,
@@ -6832,6 +6866,19 @@ class ServiceMenuSystem(System):
                 return
             title, lines = self._redeem_meal_voucher_lines(prop, result, before_hunger, before_thirst)
             self._present_service_result(title, lines, property_id=property_id)
+            return
+        if option_id == JUSTICE_CASHIER_SERVICE_ID:
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            self._close_service_menu()
+            self.sim.emit(Event(
+                "property_interact",
+                eid=self.player_eid,
+                property_id=property_id,
+                interaction_mode=JUSTICE_CASHIER_SERVICE_ID,
+            ))
             return
         if option_id == "building_repair":
             if isinstance(prop, dict):

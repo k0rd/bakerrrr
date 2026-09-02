@@ -29,6 +29,8 @@ def ensure_financial_income_fields(profile):
         return profile.ensure_income_fields()
     if not hasattr(profile, "last_income_hour"):
         profile.last_income_hour = None
+    if not hasattr(profile, "next_bank_check_tick"):
+        profile.next_bank_check_tick = 0
     return profile
 
 
@@ -168,7 +170,7 @@ def grant_npc_wallet_credits(
     hour=None,
     emit_event=True,
 ):
-    """Top up an NPC's carried credstick cash without exceeding their wallet buffer."""
+    """Pay real carried credits; ``wallet_buffer`` is a banking target, not a wage cap."""
     if sim is None:
         return None
     try:
@@ -189,29 +191,46 @@ def grant_npc_wallet_credits(
 
     wallet_before = inventory_liquid_credits(inventory)
     wallet_buffer = max(0, _int_or(getattr(profile, "wallet_buffer", 0), default=0))
-    wallet_room = max(0, wallet_buffer - wallet_before)
-    wallet_granted = min(amount, wallet_room)
+    wallet_granted = int(amount)
     instance_id = None
     if wallet_granted > 0:
-        item_def = ITEM_CATALOG.get(CREDSTICK_ITEM_ID, {})
-        metadata = {
-            "ambient_spawn": False,
-            "stored_credits": int(wallet_granted),
-            "source": "npc_wage",
-            "income_source": _text(source).lower() or "ambient_job",
-            "property_id": _text(property_id) or None,
-        }
-        added, instance_id = inventory.add_item(
-            item_id=CREDSTICK_ITEM_ID,
-            quantity=1,
-            stack_max=max(1, int(item_def.get("stack_max", 1) or 1)),
-            instance_factory=sim.new_item_instance_id,
-            owner_eid=actor_eid,
-            owner_tag="npc",
-            metadata=metadata,
+        existing = next(
+            (entry for entry in tuple(getattr(inventory, "items", ()) or ()) if is_credstick_item(entry.get("item_id"))),
+            None,
         )
-        if not added:
-            wallet_granted = 0
+        if existing is not None:
+            metadata = dict(existing.get("metadata") or {})
+            metadata["stored_credits"] = int(
+                credstick_total_credits(
+                    quantity=existing.get("quantity", 1),
+                    metadata=metadata,
+                )
+                + wallet_granted
+            )
+            metadata["income_source"] = _text(source).lower() or "ambient_job"
+            metadata["property_id"] = _text(property_id) or None
+            existing["metadata"] = metadata
+            instance_id = existing.get("instance_id")
+        else:
+            item_def = ITEM_CATALOG.get(CREDSTICK_ITEM_ID, {})
+            metadata = {
+                "ambient_spawn": False,
+                "stored_credits": int(wallet_granted),
+                "source": "npc_wage",
+                "income_source": _text(source).lower() or "ambient_job",
+                "property_id": _text(property_id) or None,
+            }
+            added, instance_id = inventory.add_item(
+                item_id=CREDSTICK_ITEM_ID,
+                quantity=1,
+                stack_max=max(1, int(item_def.get("stack_max", 1) or 1)),
+                instance_factory=sim.new_item_instance_id,
+                owner_eid=actor_eid,
+                owner_tag="npc",
+                metadata=metadata,
+            )
+            if not added:
+                wallet_granted = 0
 
     if wage_paid > 0:
         profile.last_income_hour = None if hour in {None, ""} else int(hour)

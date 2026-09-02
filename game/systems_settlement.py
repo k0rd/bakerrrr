@@ -12,6 +12,18 @@ from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
 from game.location_presentation_runtime import _location_building_category
+from game.neighborhood_housing import (
+    housing_candidate_property_ids,
+    housing_daily_cost_for_property,
+    housing_property_read,
+    neighborhood_housing_read,
+    set_actor_home,
+)
+from game.neighborhood_businesses import neighborhood_business_property_ids
+from game.neighborhood_consumers import actor_consumer_pressure_read
+from game.chunk_service_survey import actor_service_score_vector
+from game.local_service_demand import local_service_provider_candidates
+from game.service_runtime import TRANSIT_SERVICE_IDS, _transit_destinations
 from game.system_support.settlement_runtime import (
     _home_property,
     _property_chunk_key,
@@ -92,7 +104,7 @@ _NEWCOMER_DRIFTER_TIMEOUT_TICKS = 2400
 _NPC_LIFE_REVIEW_TICKS = 1800
 _NPC_LIFE_MOVE_COOLDOWN_TICKS = 7200
 _NPC_LIFE_REMOTE_SEARCH_RADIUS = 8
-_NPC_LIFE_REMOTE_CANDIDATE_LIMIT = 4
+_NPC_LIFE_REMOTE_CANDIDATE_LIMIT = 12
 _NPC_LIFE_LOCAL_IMPROVEMENT_DELTA = 1.35
 _NPC_LIFE_LOCAL_JOB_SWITCH_DELTA = 0.8
 _NPC_LIFE_REMOTE_MOVE_DELTA = 3.4
@@ -522,6 +534,19 @@ def _ensure_newcomer_component(
             newcomer.last_move_tick = current_tick - _NPC_LIFE_MOVE_COOLDOWN_TICKS
         if not hasattr(newcomer, "life_goal"):
             newcomer.life_goal = "settling_in"
+
+    preserved_housing_tick = int(getattr(newcomer, "last_housing_tick", current_tick) or current_tick)
+    status_key = str(getattr(newcomer, "housing_status", "unhoused") or "unhoused").strip().lower()
+    set_actor_home(
+        sim,
+        eid,
+        "" if status_key in {"unhoused", "drifting"} else str(getattr(newcomer, "home_property_id", "") or "").strip(),
+        housing_status=status_key,
+        phase=getattr(newcomer, "phase", None),
+        reason="newcomer_component",
+        update_routine=False,
+    )
+    newcomer.last_housing_tick = preserved_housing_tick
 
     occupation = sim.ecs.get(Occupation).get(eid)
     if occupation is None:
@@ -1288,9 +1313,40 @@ class NPCSettlementSystem(System):
             commute = _anchor_distance(_property_focus_position(home_prop), _property_focus_position(work_prop))
             if commute < 999999:
                 score -= min(2.8, float(commute) / 10.0)
+        affordability = self._housing_affordability_pressure(eid, home_prop, target_chunk=target_chunk)
+        score -= affordability * 2.1
+        service_scores, _service_context, _profile = actor_service_score_vector(
+            self.sim,
+            eid,
+            tick=int(getattr(self.sim, "tick", 0) or 0),
+        )
+        desired = sorted(service_scores.items(), key=lambda item: (-float(item[1]), item[0]))[:3]
+        for topic_id, desire in desired:
+            if float(desire) < 0.55:
+                continue
+            if local_service_provider_candidates(self.sim, target_chunk, topic_id):
+                score += 0.18 + (0.22 * float(desire))
         if str(getattr(newcomer, "housing_status", "") or "").strip().lower() in {"lodging", "shelter"}:
             score -= 0.22
         return float(score)
+
+    def _housing_affordability_pressure(self, eid, home_prop, *, target_chunk=None):
+        if not isinstance(home_prop, dict):
+            return 0.0
+        daily_cost = max(0.0, float(housing_daily_cost_for_property(home_prop)))
+        if daily_cost <= 0.0:
+            cached = housing_property_read(self.sim, home_prop.get("id"))
+            daily_cost = max(0.0, float(cached.get("daily_cost", 0.0) or 0.0))
+        if target_chunk is None:
+            target_chunk = _property_chunk_key(self.sim, home_prop)
+        market = neighborhood_housing_read(self.sim, target_chunk) if target_chunk is not None else {}
+        daily_cost *= max(0.5, float(market.get("rent_index", 1.0) or 1.0))
+        occupation = self.sim.ecs.get(Occupation).get(eid)
+        work_prop = _workplace_property(self.sim, occupation=occupation)
+        hourly = self._workplace_hourly_wage(eid, work_prop, occupation=occupation) if work_prop is not None else 0
+        expected_daily = max(1.0, float(hourly) * 8.0)
+        share = daily_cost / expected_daily
+        return max(0.0, min(2.0, (share - 0.35) / 0.65))
 
     def _remote_move_cost(self, eid, newcomer, current_chunk, target_chunk):
         if current_chunk == target_chunk:
@@ -1400,6 +1456,10 @@ class NPCSettlementSystem(System):
         kind = str(kind or "").strip().lower()
         if kind not in {"home", "work"}:
             return tuple(self._cached_property_ids_in_chunk(key) or ())
+        if kind == "home":
+            return housing_candidate_property_ids(self.sim, key)
+        if kind == "work":
+            return neighborhood_business_property_ids(self.sim, key)
         source_ids = tuple(self._cached_property_ids_in_chunk(key) or ())
         signature = (self._chunk_cache_signature(key), source_ids)
         tick = int(getattr(self.sim, "tick", 0) or 0)
@@ -1431,6 +1491,16 @@ class NPCSettlementSystem(System):
         return tuple(filtered)
 
     def _home_available_slots(self, prop, *, moving_eids=()):
+        cached = housing_property_read(self.sim, (prop or {}).get("id"))
+        if cached:
+            capacity = max(0, int(cached.get("capacity", 0) or 0))
+            residents = {
+                int(raw_eid)
+                for raw_eid in (cached.get("residents", {}) or {}).keys()
+                if str(raw_eid).lstrip("-").isdigit()
+            }
+            residents.difference_update({int(value) for value in tuple(moving_eids or ())})
+            return max(0, capacity - len(residents))
         capacity = _newcomer_home_capacity(prop)
         if capacity <= 0:
             return 0
@@ -1539,27 +1609,69 @@ class NPCSettlementSystem(System):
                 continue
             seen.add(chunk)
             candidates.append(chunk)
-        coarse = []
-        for qy in range(current_chunk[1] - _NPC_LIFE_REMOTE_SEARCH_RADIUS, current_chunk[1] + _NPC_LIFE_REMOTE_SEARCH_RADIUS + 1):
-            for qx in range(current_chunk[0] - _NPC_LIFE_REMOTE_SEARCH_RADIUS, current_chunk[0] + _NPC_LIFE_REMOTE_SEARCH_RADIUS + 1):
-                chunk = (int(qx), int(qy))
-                if chunk in seen:
-                    continue
-                snapshot = _opportunity_snapshot_for_chunk(self.sim, chunk, current_tick=int(getattr(self.sim, "tick", 0) or 0))
-                area_type = str((snapshot or {}).get("area_type", "city") or "city").strip().lower()
-                if area_type != "city":
-                    continue
-                coarse_score = float((snapshot or {}).get("score", 0.0) or 0.0)
-                coarse.append((float(coarse_score), chunk))
-        coarse.sort(key=lambda row: (row[0], -abs(row[1][0] - current_chunk[0]), -abs(row[1][1] - current_chunk[1])), reverse=True)
-        for _score, chunk in coarse:
-            if chunk in seen:
+        memory = self.sim.ecs.get(NPCMemory).get(eid)
+        for entry in tuple(getattr(memory, "entries", ()) or ()):
+            data = entry.get("data") if isinstance(entry, dict) and isinstance(entry.get("data"), dict) else {}
+            chunk = data.get("chunk")
+            if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+                if "x" in data and "y" in data:
+                    try:
+                        chunk = self.sim.chunk_coords(int(data["x"]), int(data["y"]))
+                    except (TypeError, ValueError):
+                        chunk = None
+            if isinstance(chunk, (tuple, list)) and len(chunk) >= 2:
+                chunk = (int(chunk[0]), int(chunk[1]))
+                if chunk not in seen:
+                    seen.add(chunk)
+                    candidates.append(chunk)
+        knowledge = _npc_opportunity_knowledge(self.sim, eid, create=False)
+        for rows in tuple((getattr(knowledge, "leads_by_kind", {}) or {}).values()):
+            for lead in tuple(rows or ()):
+                chunk = lead.get("chunk") if isinstance(lead, dict) else None
+                if isinstance(chunk, (tuple, list)) and len(chunk) >= 2:
+                    chunk = (int(chunk[0]), int(chunk[1]))
+                    if chunk not in seen:
+                        seen.add(chunk)
+                        candidates.append(chunk)
+        for provider in local_service_provider_candidates(self.sim, current_chunk, "service_transit")[:2]:
+            origin_prop = self.sim.properties.get(str(provider.get("property_id", "") or ""))
+            if not isinstance(origin_prop, dict):
                 continue
-            seen.add(chunk)
-            candidates.append(chunk)
-            if len(candidates) >= (1 + _NPC_LIFE_REMOTE_CANDIDATE_LIMIT):
+            offered = set(_site_services_for_property(origin_prop) or ())
+            for service in tuple(service for service in TRANSIT_SERVICE_IDS if service in offered):
+                for destination in _transit_destinations(self.sim, origin_prop, service, limit=8):
+                    chunk = tuple(destination.get("chunk", ()) or ())
+                    if len(chunk) >= 2:
+                        chunk = (int(chunk[0]), int(chunk[1]))
+                        if chunk not in seen:
+                            seen.add(chunk)
+                            candidates.append(chunk)
+        # Two-hop adjacency is bounded (twelve chunks) and replaces the old
+        # 17x17 speculative opportunity scan.
+        for radius in (1, 2):
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    if abs(dx) + abs(dy) != radius:
+                        continue
+                    chunk = (current_chunk[0] + dx, current_chunk[1] + dy)
+                    if chunk not in seen:
+                        seen.add(chunk)
+                        candidates.append(chunk)
+        coarse = []
+        for chunk in candidates[1:]:
+            snapshot = _opportunity_snapshot_for_chunk(self.sim, chunk, current_tick=int(getattr(self.sim, "tick", 0) or 0))
+            area_type = str((snapshot or {}).get("area_type", "city") or "city").strip().lower()
+            if area_type != "city":
+                continue
+            coarse.append((float((snapshot or {}).get("score", 0.0) or 0.0), chunk))
+        coarse.sort(key=lambda row: (row[0], -abs(row[1][0] - current_chunk[0]), -abs(row[1][1] - current_chunk[1])), reverse=True)
+        result = [current_chunk]
+        for _score, chunk in coarse:
+            if chunk not in result:
+                result.append(chunk)
+            if len(result) >= (1 + _NPC_LIFE_REMOTE_CANDIDATE_LIMIT):
                 break
-        return candidates
+        return result
 
     def _clear_life_review_plan(self, newcomer):
         newcomer.life_review_stage = ""
@@ -1764,6 +1876,7 @@ class NPCSettlementSystem(System):
         chunk = self._settlement_chunk(pos, routine=routine, occupation=occupation)
         if newcomer is None:
             home_kind = _newcomer_home_kind(home_prop) or ("housing" if home_prop is not None else "unhoused")
+            seeded_last_housing_tick = int(getattr(self.sim, "tick", 0)) - _NEWCOMER_HOME_RETRY_TICKS
             newcomer = NPCSettlement(
                 arrived_tick=int(getattr(self.sim, "tick", 0)),
                 origin=self._settlement_label(chunk),
@@ -1772,7 +1885,7 @@ class NPCSettlementSystem(System):
                 employment_status="employed" if work_prop is not None else "unemployed",
                 home_property_id=str((home_prop or {}).get("id", "") or "").strip(),
                 work_property_id=str((work_prop or {}).get("id", "") or "").strip(),
-                last_housing_tick=int(getattr(self.sim, "tick", 0)) - _NEWCOMER_HOME_RETRY_TICKS,
+                last_housing_tick=seeded_last_housing_tick,
                 last_job_tick=int(getattr(self.sim, "tick", 0)) - _NEWCOMER_JOB_RETRY_TICKS,
                 last_social_tick=int(getattr(self.sim, "tick", 0)) - _NEWCOMER_SOCIAL_RETRY_TICKS,
                 last_life_tick=int(getattr(self.sim, "tick", 0)) - _NPC_LIFE_REVIEW_TICKS,
@@ -1781,6 +1894,16 @@ class NPCSettlementSystem(System):
                 life_goal="holding_steady",
             )
             self.sim.ecs.add(eid, newcomer)
+            set_actor_home(
+                self.sim,
+                eid,
+                str((home_prop or {}).get("id", "") or "").strip(),
+                housing_status=home_kind,
+                phase=newcomer.phase,
+                reason="settlement_backfill",
+                update_routine=False,
+            )
+            newcomer.last_housing_tick = seeded_last_housing_tick
         else:
             if not hasattr(newcomer, "last_life_tick"):
                 newcomer.last_life_tick = int(getattr(self.sim, "tick", 0)) - _NPC_LIFE_REVIEW_TICKS
@@ -2149,6 +2272,8 @@ class NPCSettlementSystem(System):
             or self._memory_pressure(eid, target_chunk=current_chunk, memory=memory) >= 1.1
             or self._memory_pressure(eid, target_prop=current_home, memory=memory) >= 1.1
             or self._memory_pressure(eid, target_prop=current_work, memory=memory) >= 1.1
+            or self._housing_affordability_pressure(eid, current_home, target_chunk=current_chunk) > 0.0
+            or float(actor_consumer_pressure_read(self.sim, eid).get("relocation_pressure", 0.0) or 0.0) >= 0.4
         )
         if not remote_trigger:
             newcomer.life_goal = "holding_steady"
@@ -2401,9 +2526,15 @@ class NPCSettlementSystem(System):
         if anchor is None:
             return False
         routine.home = anchor
-        newcomer.home_property_id = str(prop.get("id", "") or "").strip()
-        newcomer.housing_status = home_kind
-        newcomer.phase = "settling" if home_kind == "housing" else "lodged"
+        set_actor_home(
+            self.sim,
+            eid,
+            str(prop.get("id", "") or "").strip(),
+            housing_status=home_kind,
+            phase="settling" if home_kind == "housing" else "lodged",
+            reason="settlement_assignment",
+            update_routine=False,
+        )
 
         occupation = self.sim.ecs.get(Occupation).get(eid)
         if occupation and not isinstance(getattr(occupation, "workplace", None), dict):
@@ -2517,11 +2648,23 @@ class NPCSettlementSystem(System):
         work_prop = _workplace_property(self.sim, occupation=occupation, routine=routine)
 
         if home_prop:
-            newcomer.home_property_id = str(home_prop.get("id", "") or "").strip()
-            newcomer.housing_status = _newcomer_home_kind(home_prop) or "housing"
+            set_actor_home(
+                self.sim,
+                eid,
+                str(home_prop.get("id", "") or "").strip(),
+                housing_status=_newcomer_home_kind(home_prop) or "housing",
+                reason="settlement_status_refresh",
+                update_routine=False,
+            )
         else:
-            newcomer.home_property_id = ""
-            newcomer.housing_status = "drifting" if newcomer.drift_preferred else "unhoused"
+            set_actor_home(
+                self.sim,
+                eid,
+                "",
+                housing_status="drifting" if newcomer.drift_preferred else "unhoused",
+                reason="settlement_status_refresh",
+                update_routine=False,
+            )
             if occupation and not isinstance(getattr(occupation, "workplace", None), dict):
                 occupation.career = "drifter" if newcomer.drift_preferred else "unemployed"
 

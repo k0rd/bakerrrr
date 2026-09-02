@@ -3368,6 +3368,7 @@ class FinancialProfile:
             self.last_income_hour = None if last_income_hour in {None, ""} else int(last_income_hour)
         except (TypeError, ValueError):
             self.last_income_hour = None
+        self.next_bank_check_tick = 0
 
         # policy keys: money, item, medical
         self.policies = {}
@@ -3384,6 +3385,13 @@ class FinancialProfile:
                 self.last_income_hour = int(self.last_income_hour)
             except (TypeError, ValueError):
                 self.last_income_hour = None
+        if not hasattr(self, "next_bank_check_tick"):
+            self.next_bank_check_tick = 0
+        else:
+            try:
+                self.next_bank_check_tick = max(0, int(self.next_bank_check_tick))
+            except (TypeError, ValueError):
+                self.next_bank_check_tick = 0
         return self
 
     def _ensure_debts(self):

@@ -11,7 +11,7 @@ from .world import World, normalize_building_levels
 from .eventlog import EventLog
 from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
-from game.components import AI, CreatureIdentity, DroneState, PlayerAssets, Position, VehicleState
+from game.components import AI, CreatureIdentity, DroneState, NPCSettlement, PlayerAssets, Position, VehicleState
 from game.items import prepare_ground_item_stack_metadata
 from game.property_access import COMMON_AREA_ROOM_KINDS
 from game.system_support.actor_attention_runtime import actor_attention_state, warmth_protected_chunks
@@ -467,12 +467,25 @@ class Simulation:
         self.chunk_entity_index = {}
         self.entity_chunk_membership = {}
         positions = self.ecs.get(Position)
+        settlements = self.ecs.get(NPCSettlement)
         for eid, pos in positions.items():
             try:
                 key = self.chunk_coords(int(pos.x), int(pos.y))
             except (TypeError, ValueError):
                 continue
             self._track_chunk_entity(eid, key)
+            settlement = settlements.get(eid)
+            if settlement is not None:
+                from game.neighborhood_housing import set_actor_home
+                set_actor_home(
+                    self,
+                    eid,
+                    str(getattr(settlement, "home_property_id", "") or ""),
+                    housing_status=str(getattr(settlement, "housing_status", "") or ""),
+                    phase=getattr(settlement, "phase", None),
+                    reason="spatial_index_restore",
+                    update_routine=False,
+                )
 
     def _entity_identity_record_from_components(self, eid, component_map=None):
         try:
@@ -1481,6 +1494,8 @@ class Simulation:
         self.next_property_order = 0
         for property_id, prop in self.properties.items():
             self._index_property_record(str(property_id), prop)
+            from game.local_service_demand import record_local_service_supply
+            record_local_service_supply(self, prop)
 
         self.ground_item_index = {}
         self.ground_item_order = {}
@@ -3469,6 +3484,12 @@ class Simulation:
         if isinstance(reputation_stats, dict):
             reputation_stats["_revision"] = int(reputation_stats.get("_revision", 0) or 0) + 1
 
+        # Property creation is the one complete-data call site shared by
+        # genesis, runtime construction, and restored records.  Each cache
+        # replaces this single contribution; no registry scan is required.
+        from game.local_service_demand import record_local_service_supply
+        record_local_service_supply(self, self.properties[property_id])
+
         return property_id
 
     def assign_property_owner(self, property_id, owner_eid=None, owner_tag=None):
@@ -3495,6 +3516,9 @@ class Simulation:
         reputation_stats = getattr(self, "business_reputation_stats", None)
         if isinstance(reputation_stats, dict):
             reputation_stats["_revision"] = int(reputation_stats.get("_revision", 0) or 0) + 1
+
+        from game.local_service_demand import forget_local_service_supply
+        forget_local_service_supply(self, property_id)
 
         stores = getattr(self, "stores", None)
         if isinstance(stores, dict):

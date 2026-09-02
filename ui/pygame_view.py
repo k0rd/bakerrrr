@@ -8,7 +8,7 @@ from pathlib import Path
 
 from game.appearance_palette import pygame_palette_entries
 from game.action_bindings import CONTROLLER_DEADZONE, CONTROLLER_REPEAT_DELAY, CONTROLLER_REPEAT_INTERVAL
-from game.color_words import casino_color_word, color_contrast_ratio, color_word_rgb, readable_color_word_for_text, render_key_for_color_word
+from game.color_words import casino_color_word, casino_presentation_color_word, color_contrast_ratio, color_word_rgb, render_key_for_color_word
 from game.drawable_catalog import RUNTIME_DRAWABLES
 from game.drawable_dsl import DrawableError, DrawableRenderContext, condition_tokens
 from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_semantic_catalog
@@ -121,9 +121,6 @@ _INPUT_DEBUG_PATH_ENV = "BAKERRRR_INPUT_DEBUG_PATH"
 _INPUT_DEBUG_MAX_BYTES_ENV = "BAKERRRR_INPUT_DEBUG_MAX_BYTES"
 _INPUT_DEBUG_DEFAULT_PATH = Path("saves") / "debug" / "input_debug.log"
 _INPUT_DEBUG_DEFAULT_MAX_BYTES = 5 * 1024 * 1024
-_PYGAME_TEXT_CONTRAST_ENV = "BAKERRRR_PYGAME_TEXT_CONTRAST_MIN"
-_PYGAME_TEXT_CONTRAST_MIN = 3.8
-_PYGAME_TEXT_BACKGROUND = (0, 0, 0)
 _PYGAME_AUDIO_RATE_ENV = "BAKERRRR_AUDIO_RATE"
 _PYGAME_AUDIO_BUFFER_ENV = "BAKERRRR_AUDIO_BUFFER"
 _PYGAME_AUDIO_DEFAULT_RATE = 22_050
@@ -283,7 +280,6 @@ class PygameView:
         self._queued_draw_calls = []
         self._draw_sequence = 0
         self._active_surface_light_tint = None
-        self._text_contrast_min = _env_float(_PYGAME_TEXT_CONTRAST_ENV, _PYGAME_TEXT_CONTRAST_MIN, minimum=1.0, maximum=7.0)
         self._semantic_catalog = None
         self._load_render_semantics()
 
@@ -9957,23 +9953,13 @@ class PygameView:
         key = color.strip().lower()
         if not key.startswith("clothing_"):
             return color
-        if color_contrast_ratio(self._color_value(key), _PYGAME_TEXT_BACKGROUND) >= float(self._text_contrast_min):
+        # Clothing colors are identity-bearing presentation data. Keep even very
+        # dark colors exact in dialogue; only literal black ink disappears
+        # completely against the modal background.
+        if self._color_value(key) != (0, 0, 0):
             return color
-        word = key.removeprefix("clothing_")
-        readable_word = readable_color_word_for_text(
-            word,
-            background=_PYGAME_TEXT_BACKGROUND,
-            minimum_contrast=float(self._text_contrast_min),
-            include_reserved=True,
-            include_imported=True,
-            default=word,
-        )
-        if not readable_word or readable_word == word:
-            return color
-        render_key = render_key_for_color_word(readable_word, domain="clothing", default="")
-        if render_key and render_key in self.palette:
-            return render_key
-        return color
+        charcoal_key = render_key_for_color_word("charcoal", domain="clothing", default="")
+        return charcoal_key if charcoal_key in self.palette else color
 
     def _has_attr(self, attrs, flag_name):
         flag = attr_for_name(flag_name)
@@ -10940,6 +10926,89 @@ class PygameView:
         self._flush_queued_draws()
         self._draw_segments_now(x, y, segments, max_width=max_width, attrs=attrs)
 
+    @staticmethod
+    def _blend_casino_rgb(left, right, right_weight):
+        weight = max(0.0, min(1.0, float(right_weight)))
+        return tuple(
+            max(0, min(255, int(round((int(left[index]) * (1.0 - weight)) + (int(right[index]) * weight)))))
+            for index in range(3)
+        )
+
+    def _casino_table_art_palette(self, context):
+        palette = {
+            "felt": (14, 42, 36),
+            "felt_alt": (19, 55, 47),
+            "rail": (87, 55, 30),
+            "trim": self._color_value("casino_gold"),
+            "cursor": self._color_value("casino_cursor"),
+            "muted": (133, 145, 139),
+            "card_back": (56, 83, 126),
+            "card_back_edge": (180, 205, 238),
+            "cup_shadow": (92, 58, 36),
+            "cup": (126, 77, 44),
+            "bloom_back": (68, 86, 78),
+            "bloom_inner": (38, 63, 54),
+            "bloom_edge": (156, 196, 164),
+            "cabinet": (38, 30, 54),
+            "cabinet_alt": (52, 37, 67),
+            "cabinet_border": (183, 90, 190),
+            "cabinet_line": (94, 228, 181),
+            "cabinet_title": (239, 176, 226),
+        }
+        if not isinstance(context, dict):
+            return palette
+        sponsor_kind = str(context.get("sponsor_kind", "") or "").strip().lower()
+        access_style = str(context.get("access_style", "") or "").strip().lower()
+        if sponsor_kind != "gang" and not access_style.startswith("gang"):
+            return palette
+
+        theme_colors = []
+        for raw_word in tuple(context.get("accent_colors", ()) or ()):
+            word = casino_presentation_color_word(raw_word)
+            if not word or any(existing_word == word for existing_word, _rgb in theme_colors):
+                continue
+            rgb_word = "total_black" if word == "black" else word
+            rgb = color_word_rgb(rgb_word)
+            if rgb is not None:
+                theme_colors.append((word, tuple(int(channel) for channel in rgb[:3])))
+        if not theme_colors:
+            return palette
+
+        primary = theme_colors[0][1]
+        secondary = theme_colors[1][1] if len(theme_colors) >= 2 else primary
+        tertiary = theme_colors[2][1] if len(theme_colors) >= 3 else secondary
+        felt = self._blend_casino_rgb((5, 7, 10), primary, 0.40)
+        felt_alt = self._blend_casino_rgb((8, 10, 14), primary, 0.55)
+        rail = self._blend_casino_rgb((22, 18, 20), secondary, 0.52)
+        trim = max((rgb for _word, rgb in theme_colors), key=lambda rgb: color_contrast_ratio(rgb, felt))
+        if color_contrast_ratio(trim, felt) < 2.2:
+            trim = self._blend_casino_rgb(trim, (224, 224, 218), 0.48)
+        cursor = secondary
+        if color_contrast_ratio(cursor, felt_alt) < 1.8:
+            cursor = self._blend_casino_rgb(cursor, (232, 230, 220), 0.42)
+
+        palette.update({
+            "felt": felt,
+            "felt_alt": felt_alt,
+            "rail": rail,
+            "trim": trim,
+            "cursor": cursor,
+            "muted": self._blend_casino_rgb(felt_alt, (196, 200, 196), 0.48),
+            "card_back": self._blend_casino_rgb((12, 14, 20), secondary, 0.62),
+            "card_back_edge": trim,
+            "cup_shadow": self._blend_casino_rgb((18, 15, 17), tertiary, 0.34),
+            "cup": self._blend_casino_rgb((24, 20, 22), tertiary, 0.58),
+            "bloom_back": self._blend_casino_rgb((12, 14, 20), secondary, 0.62),
+            "bloom_inner": self._blend_casino_rgb((12, 14, 20), primary, 0.46),
+            "bloom_edge": trim,
+            "cabinet": self._blend_casino_rgb((12, 14, 20), primary, 0.62),
+            "cabinet_alt": self._blend_casino_rgb((12, 14, 20), secondary, 0.52),
+            "cabinet_border": trim,
+            "cabinet_line": cursor,
+            "cabinet_title": trim,
+        })
+        return palette
+
     def draw_casino_table_art(self, x, y, width, height, state):
         self._flush_queued_draws()
         if not isinstance(state, dict):
@@ -10959,7 +11028,22 @@ class PygameView:
         height = max(1, min(height, self.height_cells - y))
         art = state.get("art") if isinstance(state.get("art"), dict) else None
         session = state.get("session") if isinstance(state.get("session"), dict) else None
-        payload = art or session or {}
+        payload = {}
+        if session:
+            payload.update(session)
+        if art:
+            payload.update(art)
+        table_context = {}
+        for source in (session, art):
+            if not isinstance(source, dict):
+                continue
+            raw_context = source.get("table_context")
+            if not isinstance(raw_context, dict):
+                raw_context = source.get("table_context_summary")
+            if isinstance(raw_context, dict):
+                table_context.update(raw_context)
+        if table_context:
+            payload["table_context"] = table_context
         service = str(state.get("service") or payload.get("service") or "").strip().lower()
         if not service:
             return 0
@@ -10973,12 +11057,20 @@ class PygameView:
         if rect.w <= 0 or rect.h <= 0:
             return 0
 
-        felt = (14, 42, 36)
-        felt_alt = (19, 55, 47)
-        rail = (87, 55, 30)
-        gold = self._color_value("casino_gold")
-        cursor = self._color_value("casino_cursor")
-        muted = (133, 145, 139)
+        art_palette = self._casino_table_art_palette(table_context)
+        felt = art_palette["felt"]
+        felt_alt = art_palette["felt_alt"]
+        rail = art_palette["rail"]
+        gold = art_palette["trim"]
+        cursor = art_palette["cursor"]
+        muted = art_palette["muted"]
+        card_back = art_palette["card_back"]
+        card_back_edge = art_palette["card_back_edge"]
+        cup_shadow = art_palette["cup_shadow"]
+        cup_color = art_palette["cup"]
+        bloom_back = art_palette["bloom_back"]
+        bloom_inner = art_palette["bloom_inner"]
+        bloom_edge = art_palette["bloom_edge"]
         red = (216, 42, 64)
         black = (23, 29, 34)
         white = (232, 229, 214)
@@ -11026,9 +11118,9 @@ class PygameView:
             if hidden or str(card or "").strip() == "??":
                 inset = max(3, self.cell_px // 5)
                 back = card_rect.inflate(-inset, -inset)
-                self.pygame.draw.rect(self.surface, (56, 83, 126), back, border_radius=max(1, self.cell_px // 8))
-                self.pygame.draw.line(self.surface, (180, 205, 238), back.topleft, back.bottomright, 1)
-                self.pygame.draw.line(self.surface, (180, 205, 238), back.topright, back.bottomleft, 1)
+                self.pygame.draw.rect(self.surface, card_back, back, border_radius=max(1, self.cell_px // 8))
+                self.pygame.draw.line(self.surface, card_back_edge, back.topleft, back.bottomright, 1)
+                self.pygame.draw.line(self.surface, card_back_edge, back.topright, back.bottomleft, 1)
                 return
             rank, suit, color = _card_parts(card)
             _text(rank, card_rect.left + 3, card_rect.top + 1, color, self._ui_bold_font)
@@ -11136,15 +11228,15 @@ class PygameView:
 
         def _draw_bloom_card(card_rect, card, *, hidden=False):
             card_rect = self.pygame.Rect(card_rect)
-            base = (245, 240, 222) if not hidden else (68, 86, 78)
+            base = (245, 240, 222) if not hidden else bloom_back
             self.pygame.draw.rect(self.surface, base, card_rect, border_radius=max(2, self.cell_px // 6))
             self.pygame.draw.rect(self.surface, (83, 76, 58), card_rect, 1, border_radius=max(2, self.cell_px // 6))
             if hidden:
                 inset = max(3, self.cell_px // 5)
                 inner = card_rect.inflate(-inset, -inset)
-                self.pygame.draw.rect(self.surface, (38, 63, 54), inner, border_radius=max(1, self.cell_px // 8))
-                self.pygame.draw.line(self.surface, (156, 196, 164), inner.midtop, inner.midbottom, 1)
-                self.pygame.draw.line(self.surface, (156, 196, 164), inner.midleft, inner.midright, 1)
+                self.pygame.draw.rect(self.surface, bloom_inner, inner, border_radius=max(1, self.cell_px // 8))
+                self.pygame.draw.line(self.surface, bloom_edge, inner.midtop, inner.midbottom, 1)
+                self.pygame.draw.line(self.surface, bloom_edge, inner.midleft, inner.midright, 1)
                 return
             bloom = _bloom_card_rgb(card)
             stem = (54, 113, 70)
@@ -11561,8 +11653,8 @@ class PygameView:
             while len(dice) < 3:
                 dice.append(len(dice) + 2)
             cup = self.pygame.Rect(rect.left + rect.w // 2 - rect.w // 7, rect.top + self.cell_px, max(self.cell_px * 5, rect.w // 4), max(self.cell_px * 2, rect.h // 3))
-            self.pygame.draw.ellipse(self.surface, (92, 58, 36), cup.inflate(0, max(4, self.cell_px // 2)))
-            self.pygame.draw.rect(self.surface, (126, 77, 44), cup, border_radius=max(3, self.cell_px // 5))
+            self.pygame.draw.ellipse(self.surface, cup_shadow, cup.inflate(0, max(4, self.cell_px // 2)))
+            self.pygame.draw.rect(self.surface, cup_color, cup, border_radius=max(3, self.cell_px // 5))
             self.pygame.draw.arc(self.surface, gold, cup.inflate(-4, -4), 0, math.pi, max(2, self.cell_px // 8))
             size = max(self.cell_px * 2, min(rect.h - cup.h - self.cell_px, rect.w // 8))
             gap = max(5, self.cell_px // 3)
@@ -11669,12 +11761,12 @@ class PygameView:
                 frame.w,
                 max(4, frame.h - title_h - status_h),
             )
-            cabinet = (38, 30, 54)
-            cabinet_alt = (52, 37, 67)
+            cabinet = art_palette["cabinet"]
+            cabinet_alt = art_palette["cabinet_alt"]
             self.pygame.draw.rect(self.surface, cabinet, frame, border_radius=max(3, self.cell_px // 5))
-            self.pygame.draw.rect(self.surface, (183, 90, 190), frame, max(1, self.cell_px // 10), border_radius=max(3, self.cell_px // 5))
-            self.pygame.draw.line(self.surface, (94, 228, 181), (frame.left + 4, grid_rect.top - 2), (frame.right - 5, grid_rect.top - 2), 1)
-            _center_text("CHEEKY STAR ASTER", self.pygame.Rect(frame.left + 4, frame.top, frame.w - 8, title_h), (239, 176, 226), self._ui_bold_font)
+            self.pygame.draw.rect(self.surface, art_palette["cabinet_border"], frame, max(1, self.cell_px // 10), border_radius=max(3, self.cell_px // 5))
+            self.pygame.draw.line(self.surface, art_palette["cabinet_line"], (frame.left + 4, grid_rect.top - 2), (frame.right - 5, grid_rect.top - 2), 1)
+            _center_text("CHEEKY STAR ASTER", self.pygame.Rect(frame.left + 4, frame.top, frame.w - 8, title_h), art_palette["cabinet_title"], self._ui_bold_font)
 
             gap = max(1, self.cell_px // 10)
             cell_w = max(3, (grid_rect.w - gap * 4) // 5)

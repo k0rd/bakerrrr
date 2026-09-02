@@ -2228,7 +2228,7 @@ class AppearanceManager:
                 effects=defaults.effects,
                 visible=defaults.visible,
                 overlays=defaults.overlays,
-        )
+            )
         state_overlays = _entity_state_overlays(vitality)
         badge_overlays = _actor_badge_overlay(
             self.sim,

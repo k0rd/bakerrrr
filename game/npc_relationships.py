@@ -23,6 +23,7 @@ from game.components import (
     Vitality,
 )
 from game.human_identity import is_human_identity, normalize_gender_identity
+from game.neighborhood_housing import set_actor_home
 from game.property_runtime import property_focus_position
 from game.system_support.actor_attention_runtime import (
     mark_actor_urgent as _mark_actor_urgent,
@@ -449,14 +450,15 @@ def try_relationship_cohabitation(sim, left_eid, right_eid, row=None):
             routine = NPCRoutine()
             sim.ecs.add(eid, routine)
         routine.home = tuple(int(v) for v in focus[:3])
-        settlement = sim.ecs.get(NPCSettlement).get(eid)
-        if settlement is None:
-            settlement = NPCSettlement()
-            sim.ecs.add(eid, settlement)
-        settlement.home_property_id = str(chosen.get("id", "") or "").strip()
-        settlement.housing_status = home_kind
-        settlement.phase = "settling" if home_kind == "housing" else "lodged"
-        settlement.last_housing_tick = int(getattr(sim, "tick", 0) or 0)
+        set_actor_home(
+            sim,
+            eid,
+            str(chosen.get("id", "") or "").strip(),
+            housing_status=home_kind,
+            phase="settling" if home_kind == "housing" else "lodged",
+            reason="relationship_cohabitation",
+            update_routine=False,
+        )
     if isinstance(row, dict):
         row["shared_home_property_id"] = str(chosen.get("id", "") or "").strip()
         row["cohabitation_tick"] = int(getattr(sim, "tick", 0) or 0)

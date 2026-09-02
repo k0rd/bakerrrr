@@ -76,6 +76,7 @@
   },
   "calm_patch": {
     "name": "Calm Patch",
+    "item_drawable": "calm_patch",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
@@ -146,6 +147,7 @@
   },
   "med_gel": {
     "name": "Med Gel",
+    "item_drawable": "med_gel",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
@@ -169,6 +171,7 @@
   },
   "herbal_poultice": {
     "name": "Herbal Poultice",
+    "item_drawable": "herbal_poultice",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
@@ -193,6 +196,7 @@
   },
   "hydrating_tonic": {
     "name": "Hydrating Tonic",
+    "item_drawable": "hydrating_tonic",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
@@ -218,6 +222,7 @@
   },
   "calming_tincture": {
     "name": "Calming Tincture",
+    "item_drawable": "calming_tincture",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
@@ -248,6 +253,7 @@
   },
   "strong_herbal_poultice": {
     "name": "Strong Herbal Poultice",
+    "item_drawable": "strong_herbal_poultice",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -272,6 +278,7 @@
   },
   "field_restorative": {
     "name": "Field Restorative",
+    "item_drawable": "field_restorative",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -301,6 +308,7 @@
   },
   "steadying_draught": {
     "name": "Steadying Draught",
+    "item_drawable": "steadying_draught",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -331,6 +339,7 @@
   },
   "diluted_herbal_poultice": {
     "name": "Diluted Herbal Poultice",
+    "item_drawable": "diluted_herbal_poultice",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -360,6 +369,7 @@
   },
   "diluted_hydrating_tonic": {
     "name": "Diluted Hydrating Tonic",
+    "item_drawable": "diluted_hydrating_tonic",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -391,6 +401,7 @@
   },
   "diluted_calming_tincture": {
     "name": "Diluted Calming Tincture",
+    "item_drawable": "diluted_calming_tincture",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -427,6 +438,7 @@
   },
   "diluted_strong_herbal_poultice": {
     "name": "Diluted Strong Herbal Poultice",
+    "item_drawable": "diluted_strong_herbal_poultice",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -457,6 +469,7 @@
   },
   "diluted_field_restorative": {
     "name": "Diluted Field Restorative",
+    "item_drawable": "diluted_field_restorative",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -492,6 +505,7 @@
   },
   "diluted_steadying_draught": {
     "name": "Diluted Steadying Draught",
+    "item_drawable": "diluted_steadying_draught",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -968,6 +982,7 @@
   },
   "hydration_salts": {
     "name": "Hydration Salts",
+    "item_drawable": "hydration_salts",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
@@ -1010,6 +1025,7 @@
   },
   "micro_medkit": {
     "name": "Micro Medkit",
+    "item_drawable": "micro_medkit",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -1033,6 +1049,7 @@
   },
   "trauma_foam": {
     "name": "Trauma Foam",
+    "item_drawable": "trauma_foam",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -1067,6 +1084,7 @@
   },
   "trauma_autoinjector": {
     "name": "Trauma Autoinjector",
+    "item_drawable": "trauma_autoinjector",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -1143,6 +1161,7 @@
   },
   "shiver_patch": {
     "name": "Fentanyl Patch",
+    "item_drawable": "shiver_patch",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -1202,6 +1221,7 @@
   },
   "counterfeit_med_gel": {
     "name": "Counterfeit Med Gel",
+    "item_drawable": "counterfeit_med_gel",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
@@ -1232,6 +1252,7 @@
   },
   "sedative_ampoule": {
     "name": "Heroin Syringe",
+    "item_drawable": "sedative_ampoule",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -1290,6 +1311,7 @@
   },
   "burner_serum": {
     "name": "Ketamine Vial",
+    "item_drawable": "burner_serum",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -1881,6 +1903,7 @@
   },
   "credstick_chip": {
     "name": "Credstick Chip",
+    "item_drawable": "credstick_chip",
     "glyph": "=",
     "stack_max": 4,
     "tags": [
@@ -1897,6 +1920,7 @@
   },
   "transit_daypass": {
     "name": "Transit Daypass",
+    "item_drawable": "transit_daypass",
     "glyph": "=",
     "stack_max": 3,
     "tags": [
@@ -1908,6 +1932,7 @@
   },
   "forged_badge": {
     "name": "Forged Badge",
+    "item_drawable": "forged_badge",
     "glyph": "=",
     "stack_max": 1,
     "tags": [
@@ -1932,6 +1957,7 @@
   },
   "city_pass_token": {
     "name": "City Pass Token",
+    "item_drawable": "city_pass_token",
     "glyph": "=",
     "stack_max": 5,
     "tags": [
@@ -2397,6 +2423,7 @@
   },
   "bandage_roll": {
     "name": "Bandage Roll",
+    "item_drawable": "bandage_roll",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
@@ -2420,6 +2447,7 @@
   },
   "field_dressing": {
     "name": "Field Dressing",
+    "item_drawable": "field_dressing",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
@@ -2453,6 +2481,7 @@
   },
   "pain_blocker": {
     "name": "Pain Blocker",
+    "item_drawable": "pain_blocker",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
@@ -2594,6 +2623,7 @@
   },
   "meal_voucher": {
     "name": "Meal Voucher",
+    "item_drawable": "meal_voucher",
     "glyph": "=",
     "stack_max": 3,
     "tags": [
@@ -2605,6 +2635,7 @@
   },
   "sealed_packet": {
     "name": "Sealed Packet",
+    "item_drawable": "sealed_packet",
     "glyph": "=",
     "stack_max": 1,
     "tags": [
@@ -2617,6 +2648,7 @@
   },
   "parking_stub": {
     "name": "Parking Claim Ticket",
+    "item_drawable": "parking_stub",
     "glyph": "=",
     "stack_max": 5,
     "tags": [
@@ -2630,6 +2662,7 @@
   },
   "metro_flyer": {
     "name": "Metro Flyer",
+    "item_drawable": "metro_flyer",
     "glyph": "=",
     "stack_max": 5,
     "tags": [
@@ -2654,6 +2687,7 @@
   },
   "backroom_card": {
     "name": "Scrawled Card",
+    "item_drawable": "backroom_card",
     "glyph": "=",
     "stack_max": 3,
     "tags": [
@@ -2677,6 +2711,7 @@
   },
   "clinic_scrap": {
     "name": "Folded Clinic Note",
+    "item_drawable": "clinic_scrap",
     "glyph": "=",
     "stack_max": 3,
     "tags": [
@@ -2700,6 +2735,7 @@
   },
   "scratch_ticket": {
     "name": "Scratch Ticket",
+    "item_drawable": "scratch_ticket",
     "glyph": "=",
     "stack_max": 3,
     "tags": [
@@ -2751,6 +2787,7 @@
   },
   "pocket_notebook": {
     "name": "Pocket Notebook",
+    "item_drawable": "pocket_notebook",
     "glyph": "=",
     "stack_max": 2,
     "tags": [
@@ -2763,6 +2800,7 @@
   },
   "operations_docket": {
     "name": "Operations Docket",
+    "item_drawable": "operations_docket",
     "glyph": "=",
     "stack_max": 1,
     "tags": [
@@ -2784,6 +2822,7 @@
   },
   "room_ledger_note": {
     "name": "Marked Ledger Note",
+    "item_drawable": "room_ledger_note",
     "glyph": "=",
     "stack_max": 3,
     "tags": [
@@ -2804,6 +2843,7 @@
   },
   "deck_of_cards": {
     "name": "Deck of Cards",
+    "item_drawable": "deck_of_cards",
     "glyph": "=",
     "stack_max": 1,
     "tags": [
@@ -5718,6 +5758,7 @@
   },
   "lucky_charm": {
     "name": "Lucky Charm",
+    "item_drawable": "lucky_charm",
     "glyph": "=",
     "stack_max": 1,
     "tags": [
@@ -7771,6 +7812,7 @@
   },
   "water_purifier_tabs": {
     "name": "Water Purifier Tabs",
+    "item_drawable": "water_purifier_tabs",
     "glyph": "!",
     "stack_max": 3,
     "tags": [
@@ -7795,6 +7837,7 @@
   },
   "glucose_gel": {
     "name": "Glucose Gel",
+    "item_drawable": "glucose_gel",
     "glyph": "%",
     "stack_max": 3,
     "tags": [
@@ -7819,6 +7862,7 @@
   },
   "antiseptic_wipes": {
     "name": "Antiseptic Wipes",
+    "item_drawable": "antiseptic_wipes",
     "glyph": "!",
     "stack_max": 3,
     "tags": [
@@ -7844,6 +7888,7 @@
   },
   "suture_kit": {
     "name": "Suture Kit",
+    "item_drawable": "suture_kit",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
@@ -8025,6 +8070,7 @@
   },
   "emergency_blanket": {
     "name": "Emergency Blanket",
+    "item_drawable": "emergency_blanket",
     "glyph": "{",
     "stack_max": 2,
     "tags": [

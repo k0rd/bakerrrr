@@ -432,6 +432,7 @@ CONTROLLER_INTRUSION_PROFILES = {
 
 CASINO_HOLDEM_SERVICE_ID = "casino_holdem"
 HOLDEM_CASH_SERVICE_ID = "texas_holdem_cash"
+JUSTICE_CASHIER_SERVICE_ID = "justice_cashier"
 
 
 def site_services_with_holdem_mode(services, *, live_cash_available):
@@ -463,7 +464,7 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "butcher_shop": ("butcher_prepare", "fauna_registry"),
     "casino": ("slots", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", CASINO_HOLDEM_SERVICE_ID, HOLDEM_CASH_SERVICE_ID, "plinko", "crash", "twenty_one", "three_bones", "bloom_cards"),
     "contractor_office": ("building_repair", "business_remodel", "bodyguard_contract"),
-    "courthouse": ("civic_records",),
+    "courthouse": ("civic_records", JUSTICE_CASHIER_SERVICE_ID),
     "courier_office": ("courier_jobs",),
     "civic_office": ("civic_records",),
     "dock_shack": ("shuttle_transit", "ferry_transit"),
@@ -475,6 +476,7 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "herbalist_camp": ("herbal_care", "herbal_prepare", "herbal_recipe_sales", "flora_registry"),
     "herbalist_shop": ("herbal_care", "herbal_prepare", "herbal_recipe_sales", "flora_registry"),
     "hotel": ("rest",),
+    "jail": (JUSTICE_CASHIER_SERVICE_ID,),
     "makeup_counter": ("appearance_style",),
     "metro_exchange": ("rail_transit", "bus_transit"),
     "office": ("business_management",),
@@ -495,6 +497,7 @@ DEFAULT_SITE_SERVICE_EXTEND_ARCHETYPES = frozenset({
     "city_hall",
     "civic_office",
     "courthouse",
+    "jail",
     "employment_agency",
     "recruitment_office",
     "relay_post",
@@ -2207,7 +2210,52 @@ def property_is_open(sim, prop, hour=None):
 
 
 def property_open_window(sim, prop):
-    return property_access_controller(sim, prop).get("opening_window")
+    """Return opening hours without materializing access-control membership.
+
+    This read is used by incremental market-supply registration while genesis
+    is still constructing properties, organizations, and occupations.  Building
+    the complete access controller here would resolve authorized holders and can
+    therefore force organization creation or cache an incomplete member index.
+    Opening hours only depend on property configuration and, for owner-scheduled
+    sites, the owner's occupation.
+    """
+    if not isinstance(prop, dict):
+        return None
+
+    metadata = _property_metadata(prop)
+    owner_eid = prop.get("owner_eid")
+    owner_tag = str(prop.get("owner_tag", "") or "").strip().lower()
+    public_facing = bool(
+        property_is_public(prop)
+        or property_is_storefront(prop)
+        or finance_services_for_property(prop)
+        or site_services_for_property(prop)
+    )
+    always_open_lodging = _property_offers_lodging_or_shelter(prop)
+    configured_kind = str(metadata.get("access_controller_kind", "") or "").strip().lower()
+    configured_window = _normalize_open_window(metadata.get("access_controller_hours"))
+    default_window = configured_window or _jittered_default_open_window(sim, prop, _default_open_window_for(prop))
+
+    if configured_kind:
+        kind = configured_kind
+    elif owner_eid is not None and public_facing:
+        kind = "owner_schedule"
+    elif owner_eid is not None:
+        kind = "owner_keyed"
+    elif public_facing or owner_tag in AUTO_CONTROLLER_OWNER_TAGS:
+        kind = "auto_timer" if default_window is not None else "auto_lock"
+    else:
+        kind = "auto_lock"
+
+    if always_open_lodging:
+        return (0, 24)
+    if kind == "owner_schedule":
+        owner_occ = sim.ecs.get(Occupation).get(owner_eid) if sim is not None and owner_eid is not None else None
+        owner_window = _occupation_open_window(owner_occ)
+        return owner_window or default_window
+    if kind == "auto_timer":
+        return default_window
+    return None
 
 
 def property_status_text(sim, prop, hour=None):

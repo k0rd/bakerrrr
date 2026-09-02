@@ -112,6 +112,7 @@ from game.lighting import (
     update_lighting_state as _update_lighting_state,
 )
 import game.report_debug_ui as _report_debug_ui
+import game.chunk_service_survey_ui as _chunk_service_survey_ui
 from game.release_runtime import debug_mode_enabled, release_control_text
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
@@ -3032,6 +3033,10 @@ class RenderSystem(System):
             "scroll": 0,
         })
         debug_ui = _report_debug_ui.ensure_debug_ui_state(self.sim)
+        service_survey_ui = _chunk_service_survey_ui.refresh_service_survey_ui_if_stale(
+            self.sim,
+            self.player_eid,
+        )
         blocking_panel_open = any(
             bool(state.get("open"))
             for state in (
@@ -3049,6 +3054,7 @@ class RenderSystem(System):
                 character_ui,
                 report_ui,
                 log_ui,
+                service_survey_ui,
                 debug_ui,
             )
             if isinstance(state, dict)
@@ -5974,6 +5980,22 @@ class RenderSystem(System):
                 footer = "T cycle filter | H set HUD filter | L close | O ops | Y notebooks | D debug | Up/Down scroll | ? help"
             footer = release_control_text(footer, self.sim)
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, body_w), color=self._theme_color(modal_theme, "footer"))
+        elif service_survey_ui.get("open"):
+            _report_debug_ui.draw_debug_modal(
+                self.view,
+                service_survey_ui,
+                screen_w=screen_w,
+                map_w=map_w,
+                map_h=map_h,
+                view_text_wrap_width_fn=_view_text_wrap_width,
+                draw_display_line_fn=self._draw_display_line,
+                clip_display_line_fn=_clip_display_line,
+                wrap_display_lines_fn=_wrap_display_lines,
+                line_text_fn=_line_text,
+                modal_theme=modal_theme,
+                draw_box_fn=lambda view, x, y, w, h: self._draw_modal_frame(x, y, w, h, modal_theme),
+                footer_actions="Tab | F follow | R cache | E close | D back",
+            )
         elif debug_ui.get("open"):
             _report_debug_ui.draw_debug_modal(
                 self.view,

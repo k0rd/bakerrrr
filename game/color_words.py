@@ -303,6 +303,15 @@ CASINO_COLOR_WORDS: tuple[str, ...] = (
     "brown",
 )
 
+# Table themes may use the full gang style vocabulary without expanding the
+# mechanically meaningful color set used by games such as Three Bright.
+CASINO_PRESENTATION_COLOR_WORDS: tuple[str, ...] = CASINO_COLOR_WORDS + (
+    "wine",
+    "emerald",
+    "silver",
+    "teal",
+)
+
 _FLORA_FLOWER_COLOR_KEYS: dict[str, str] = {
     "black": "flora_flower_violet",
     "total_black": "flora_flower_violet",
@@ -823,6 +832,21 @@ def casino_color_word(value: object) -> str:
     elif normalized == "gray":
         normalized = "charcoal"
     return normalized if normalized in CASINO_COLOR_WORDS else ""
+
+
+def casino_presentation_color_word(value: object) -> str:
+    """Normalize decorative table colors without changing casino game colors."""
+
+    normalized = normalize_color_word(value)
+    if normalized == "total_black":
+        normalized = "black"
+    if normalized == "yellow":
+        normalized = "gold"
+    elif normalized in {"cream", "ivory"}:
+        normalized = "white"
+    elif normalized == "gray":
+        normalized = "charcoal"
+    return normalized if normalized in CASINO_PRESENTATION_COLOR_WORDS else ""
 
 
 def render_key_for_color_word(

@@ -47,6 +47,7 @@ from game.economy import chunk_economy_profile
 from game.flora_runtime import ensure_chunk_flora
 from game.items import ITEM_CATALOG
 from game.large_span_places import register_large_span_child_properties
+from game.local_service_demand import initialize_local_service_supply_for_records
 from game.opportunities import seed_run_opportunities
 from game.organizations import (
     ensure_property_organization,
@@ -833,6 +834,11 @@ def _register_chunk_properties(sim, chunk):
             "archetype": "vehicle",
             "building_id": None,
         })
+    initialize_local_service_supply_for_records(
+        sim,
+        (chunk["cx"], chunk["cy"]),
+        records,
+    )
     return records
 
 

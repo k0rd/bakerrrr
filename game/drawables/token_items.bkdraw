@@ -1,0 +1,1077 @@
+bakerrrr-drawable 1
+
+# Passes, notes, vouchers, and keepsakes. These are small information-bearing
+# objects, so their paper edge, binding, seal, punch, or hardware does most of
+# the recognition work without requiring readable miniature text.
+drawable credstick_chip context ground:
+    paint substrate = fill
+    paint contacts = edge
+    paint circuit = shade
+
+    variant compact:
+        layer chip:
+            polygon cred_chip substrate outline contacts width 0.45:
+                2, 4
+                12, 4
+                14, 6
+                14, 12
+                4, 12
+                2, 10
+            rect contact_bank contacts:
+                x 8
+                y 5.5
+                w 4.5
+                h 5
+            line contact_split_one circuit width 0.4:
+                9.5, 5.5
+                9.5, 10.5
+            line contact_split_two circuit width 0.4:
+                11, 5.5
+                11, 10.5
+            circle credit_node circuit:
+                center 5, 8
+                radius 1.25
+        surface item:
+            cred_chip
+
+    variant detailed:
+        layer chip:
+            polygon cred_chip substrate outline contacts width 0.3:
+                1.75, 3.75
+                12.15, 3.75
+                14.25, 5.85
+                14.25, 12.25
+                3.85, 12.25
+                1.75, 10.15
+            rect contact_bank contacts:
+                x 7.8
+                y 5.25
+                w 4.75
+                h 5.5
+                outline circuit
+                width 0.2
+            line contact_split_one circuit width 0.25:
+                9.35, 5.45
+                9.35, 10.55
+            line contact_split_two circuit width 0.25:
+                10.95, 5.45
+                10.95, 10.55
+            circle credit_node circuit:
+                center 4.8, 8
+                radius 1.25
+                outline contacts
+                width 0.2
+            line circuit_trace contacts width 0.25:
+                5.9, 8
+                7.8, 8
+        surface item:
+            cred_chip
+
+drawable transit_daypass context ground:
+    paint card = fill
+    paint route = edge
+    paint punch = shade
+
+    variant compact:
+        layer pass:
+            rect daypass card:
+                x 3
+                y 2.5
+                w 10
+                h 11
+                outline route
+                width 0.45
+            line route_line route width 0.75:
+                5, 11.5
+                5, 7
+                8, 5
+                11, 7
+                11, 10
+            circle stop_one punch:
+                center 5, 11.5
+                radius 0.7
+            circle stop_two punch:
+                center 8, 5
+                radius 0.7
+            circle stop_three punch:
+                center 11, 10
+                radius 0.7
+        surface item:
+            daypass
+
+    variant detailed:
+        layer pass:
+            rect daypass card:
+                x 2.75
+                y 2.25
+                w 10.5
+                h 11.5
+                outline route
+                width 0.3
+            line validity_band punch width 0.65:
+                3.5, 4
+                12.5, 4
+            line route_line route width 0.45:
+                4.75, 11.8
+                4.75, 7
+                8, 5.15
+                11.25, 7
+                11.25, 10.25
+            circle stop_one punch:
+                center 4.75, 11.8
+                radius 0.55
+            circle stop_two punch:
+                center 8, 5.15
+                radius 0.55
+            circle stop_three punch:
+                center 11.25, 10.25
+                radius 0.55
+            circle date_punch route:
+                center 11.5, 2.9
+                radius 0.45
+        surface item:
+            daypass
+
+drawable forged_badge context ground:
+    paint laminate = fill
+    paint ink = edge
+    paint backing = shade
+
+    variant compact:
+        layer badge:
+            polygon forged_card laminate outline ink width 0.45:
+                2, 4
+                13, 3
+                14, 12
+                3, 13
+            rect wrong_photo backing:
+                x 3.5
+                y 5
+                w 3.5
+                h 4
+                outline ink
+                width 0.35
+            line crooked_name ink width 0.6:
+                8, 6
+                12.5, 5.5
+            line false_stripe backing width 1:
+                4, 11
+                12.75, 10.25
+            polygon peeled_laminate backing:
+                11, 10
+                14, 12
+                11.5, 13
+        surface item:
+            forged_card
+
+    variant detailed:
+        layer badge:
+            polygon forged_card laminate outline ink width 0.3:
+                1.8, 3.8
+                13.15, 2.75
+                14.2, 12.15
+                2.85, 13.25
+            rect wrong_photo backing:
+                x 3.25
+                y 4.8
+                w 3.75
+                h 4.25
+                outline ink
+                width 0.2
+            circle rough_head ink:
+                center 5.15, 6.05
+                radius 0.7
+            line rough_shoulders ink width 0.45:
+                4, 8.3
+                5.15, 7.25
+                6.3, 8.3
+            line crooked_name ink width 0.35:
+                7.8, 5.7
+                12.7, 5.2
+            line false_stripe backing width 0.75:
+                3.7, 11.05
+                12.9, 10.15
+            polygon peeled_laminate backing outline ink width 0.15:
+                10.85, 10
+                14.2, 12.15
+                11.45, 13
+        surface item:
+            forged_card
+
+drawable city_pass_token context ground:
+    paint token = fill
+    paint rim = edge
+    paint city = shade
+
+    variant compact:
+        layer token:
+            circle pass_token token:
+                center 8, 8
+                radius 6
+                outline rim
+                width 0.45
+            rect tower_left city:
+                x 4.5
+                y 7
+                w 2.5
+                h 4
+            rect tower_center city:
+                x 7
+                y 4.5
+                w 2.5
+                h 6.5
+            rect tower_right city:
+                x 9.5
+                y 6
+                w 2
+                h 5
+            line city_base rim width 0.55:
+                4, 11.5
+                12, 11.5
+        surface item:
+            pass_token
+
+    variant detailed:
+        layer token:
+            circle pass_token token:
+                center 8, 8
+                radius 6.2
+                outline rim
+                width 0.3
+            circle inner_rim token:
+                center 8, 8
+                radius 5
+                outline rim
+                width 0.2
+            rect tower_left city:
+                x 4.4
+                y 7
+                w 2.35
+                h 4.1
+            rect tower_center city:
+                x 6.75
+                y 4.25
+                w 2.5
+                h 6.85
+            rect tower_right city:
+                x 9.25
+                y 5.9
+                w 2.25
+                h 5.2
+            line antenna rim width 0.25:
+                8, 4.25
+                8, 2.9
+            line city_base rim width 0.35:
+                3.9, 11.4
+                12.1, 11.4
+        surface item:
+            pass_token
+
+drawable sealed_packet context ground:
+    paint paper = fill
+    paint fold = edge
+    paint seal = shade
+
+    variant compact:
+        layer packet:
+            rect sealed_envelope paper:
+                x 2
+                y 4
+                w 12
+                h 8.5
+                outline fold
+                width 0.45
+            line envelope_fold fold width 0.55:
+                2.5, 4.5
+                8, 9
+                13.5, 4.5
+            circle wax_seal seal:
+                center 8, 9
+                radius 1.5
+                outline fold
+                width 0.3
+            line seal_ribbon seal width 0.7:
+                7.5, 10
+                6.5, 13.5
+            line seal_ribbon_two seal width 0.7:
+                8.5, 10
+                9.5, 13.5
+        surface item:
+            sealed_envelope
+            wax_seal
+
+    variant detailed:
+        layer packet:
+            rect sealed_envelope paper:
+                x 1.75
+                y 3.75
+                w 12.5
+                h 8.9
+                outline fold
+                width 0.3
+            line envelope_fold fold width 0.35:
+                2.25, 4.15
+                8, 8.85
+                13.75, 4.15
+            line lower_fold fold width 0.25:
+                2.25, 12.2
+                6.65, 8.1
+            line lower_fold_two fold width 0.25:
+                13.75, 12.2
+                9.35, 8.1
+            circle wax_seal seal:
+                center 8, 8.9
+                radius 1.55
+                outline fold
+                width 0.2
+            circle seal_stamp fold:
+                center 8, 8.9
+                radius 0.55
+            line seal_ribbon seal width 0.45:
+                7.45, 10
+                6.35, 13.7
+            line seal_ribbon_two seal width 0.45:
+                8.55, 10
+                9.65, 13.7
+        surface item:
+            sealed_envelope
+            wax_seal
+
+drawable meal_voucher context ground:
+    paint ticket = fill
+    paint print = edge
+    paint meal = shade
+
+    variant compact:
+        layer voucher:
+            polygon meal_ticket ticket outline print width 0.45:
+                2, 4
+                14, 4
+                14, 6
+                13, 7
+                14, 8
+                14, 12
+                2, 12
+                2, 9
+                3, 8
+                2, 7
+            polygon bowl meal:
+                5, 7
+                11, 7
+                10, 10.5
+                6, 10.5
+            line steam_one print width 0.45:
+                6.5, 6.5
+                6.5, 5
+            line steam_two print width 0.45:
+                9.5, 6.5
+                9.5, 5
+        surface item:
+            meal_ticket
+
+    variant detailed:
+        layer voucher:
+            polygon meal_ticket ticket outline print width 0.3:
+                1.75, 3.75
+                14.25, 3.75
+                14.25, 6
+                13.1, 7
+                14.25, 8
+                14.25, 12.25
+                1.75, 12.25
+                1.75, 9
+                2.9, 8
+                1.75, 7
+            line perforation meal width 0.25:
+                4, 4.3
+                4, 11.7
+            polygon bowl meal outline print width 0.2:
+                5.5, 7
+                11.5, 7
+                10.4, 10.5
+                6.6, 10.5
+            line bowl_rim print width 0.35:
+                5.25, 7
+                11.75, 7
+            line steam_one print width 0.3:
+                7, 6.5
+                6.6, 5.7
+                7.1, 4.9
+            line steam_two print width 0.3:
+                9.7, 6.5
+                9.3, 5.7
+                9.8, 4.9
+        surface item:
+            meal_ticket
+
+drawable parking_stub context ground:
+    paint paper = fill
+    paint print = edge
+    paint faded = shade
+
+    variant compact:
+        layer stub:
+            polygon claim_stub paper outline print width 0.45:
+                3, 2.5
+                12.5, 2.5
+                13, 5
+                12, 6
+                13, 7
+                12, 8
+                13, 9
+                12.5, 13.5
+                3, 13.5
+            circle parking_mark faded:
+                center 7, 7
+                radius 2.25
+                outline print
+                width 0.35
+            line claim_number print width 0.55:
+                5, 11
+                11, 11
+        surface item:
+            claim_stub
+
+    variant detailed:
+        layer stub:
+            polygon claim_stub paper outline print width 0.3:
+                2.75, 2.25
+                12.7, 2.25
+                13.2, 4.8
+                12, 5.8
+                13.2, 6.8
+                12, 7.8
+                13.2, 8.8
+                12.7, 13.75
+                2.75, 13.75
+            circle parking_mark faded:
+                center 7, 6.8
+                radius 2.3
+                outline print
+                width 0.25
+            line parking_stem print width 0.45:
+                6.2, 5.25
+                6.2, 8.5
+            line parking_bowl print width 0.45:
+                6.2, 5.25
+                8, 5.25
+                8.5, 6.25
+                8, 7.1
+                6.2, 7.1
+            line claim_number print width 0.35:
+                4.7, 10.6
+                11.1, 10.6
+            line old_fold faded width 0.25:
+                3.5, 12
+                11.5, 12
+        surface item:
+            claim_stub
+
+drawable metro_flyer context ground:
+    paint paper = fill
+    paint map = edge
+    paint fold = shade
+
+    variant compact:
+        layer flyer:
+            polygon folded_flyer paper outline map width 0.45:
+                2.5, 3
+                12, 2
+                13.5, 12
+                4, 14
+            line paper_fold fold width 0.6:
+                7.5, 2.75
+                8.5, 13
+            line metro_route map width 0.65:
+                4, 6
+                6.5, 8
+                10.5, 5
+                12, 9.5
+            circle station_one fold:
+                center 4, 6
+                radius 0.6
+            circle station_two fold:
+                center 10.5, 5
+                radius 0.6
+            circle station_three fold:
+                center 12, 9.5
+                radius 0.6
+        surface item:
+            folded_flyer
+
+    variant detailed:
+        layer flyer:
+            polygon folded_flyer paper outline map width 0.3:
+                2.25, 2.8
+                12.2, 1.75
+                13.75, 12.2
+                3.8, 14.25
+            line paper_fold fold width 0.4:
+                7.35, 2.25
+                8.55, 13.25
+            line second_fold fold width 0.25:
+                3.2, 8.5
+                13, 7
+            line metro_route map width 0.4:
+                3.8, 5.8
+                6.35, 7.8
+                10.65, 4.75
+                12.25, 9.7
+            circle station_one fold:
+                center 3.8, 5.8
+                radius 0.45
+            circle station_two fold:
+                center 6.35, 7.8
+                radius 0.45
+            circle station_three fold:
+                center 10.65, 4.75
+                radius 0.45
+            circle station_four fold:
+                center 12.25, 9.7
+                radius 0.45
+        surface item:
+            folded_flyer
+
+drawable backroom_card context ground:
+    paint card = fill
+    paint ink = edge
+    paint stain = shade
+
+    variant compact:
+        layer card:
+            polygon scrawled_card card outline ink width 0.45:
+                2, 5
+                13.5, 3.5
+                14, 11
+                2.5, 12.5
+            line back_arrow ink width 0.75:
+                4, 9.5
+                8, 6
+                12, 8
+            line arrow_head ink width 0.75:
+                9.75, 4.5
+                8, 6
+                9.5, 7.25
+            circle thumb_stain stain:
+                center 12, 10
+                radius 1
+        surface item:
+            scrawled_card
+
+    variant detailed:
+        layer card:
+            polygon scrawled_card card outline ink width 0.3:
+                1.75, 4.8
+                13.7, 3.2
+                14.25, 11.2
+                2.3, 12.8
+            line back_arrow ink width 0.5:
+                3.8, 9.65
+                7.85, 6
+                12.15, 8.1
+            line arrow_head ink width 0.5:
+                9.65, 4.4
+                7.85, 6
+                9.45, 7.35
+            line scrawl_one ink width 0.25:
+                4, 11
+                8, 10.4
+            line scrawl_two ink width 0.25:
+                10.2, 5
+                12.2, 4.7
+            circle thumb_stain stain:
+                center 12, 10.1
+                radius 1.05
+                outline ink
+                width 0.15
+        surface item:
+            scrawled_card
+
+drawable clinic_scrap context ground:
+    paint paper = fill
+    paint writing = edge
+    paint fold = shade
+
+    variant compact:
+        layer note:
+            polygon clinic_note paper outline writing width 0.45:
+                3, 2.5
+                12.5, 3.5
+                13, 13
+                2.5, 12
+            line fold_line fold width 0.55:
+                3, 7.5
+                12.75, 8.5
+            line clinic_cross writing width 0.7:
+                6, 4.5
+                6, 8
+            line cross_arm writing width 0.7:
+                4.5, 6.25
+                7.5, 6.25
+            line note_line writing width 0.45:
+                5, 10
+                11, 10.5
+        surface item:
+            clinic_note
+
+    variant detailed:
+        layer note:
+            polygon clinic_note paper outline writing width 0.3:
+                2.75, 2.25
+                12.7, 3.3
+                13.25, 13.25
+                2.25, 12.15
+            line fold_line fold width 0.35:
+                2.9, 7.35
+                13, 8.4
+            line diagonal_fold fold width 0.25:
+                8, 2.8
+                7, 12.6
+            line clinic_cross writing width 0.5:
+                5.5, 4.25
+                5.5, 7.85
+            line cross_arm writing width 0.5:
+                3.9, 6.05
+                7.1, 6.05
+            line note_line_one writing width 0.3:
+                8.25, 5.1
+                11.5, 5.45
+            line note_line_two writing width 0.3:
+                8, 6.7
+                11.75, 7.1
+            line note_line_three writing width 0.25:
+                4.5, 10
+                11.3, 10.7
+        surface item:
+            clinic_note
+
+drawable scratch_ticket context ground:
+    paint ticket = fill
+    paint print = edge
+    paint scratch = shade
+
+    variant compact:
+        layer ticket:
+            polygon scratch_card ticket outline print width 0.45:
+                2, 4
+                14, 4
+                14, 12
+                2, 12
+                2, 9
+                3, 8
+                2, 7
+            rect scratch_one scratch:
+                x 4
+                y 6
+                w 2.5
+                h 4
+            rect scratch_two scratch:
+                x 7
+                y 6
+                w 2.5
+                h 4
+            rect scratch_three scratch:
+                x 10
+                y 6
+                w 2.5
+                h 4
+            line revealed_slash print width 0.55:
+                7.25, 9.5
+                9.25, 6.5
+        surface item:
+            scratch_card
+
+    variant detailed:
+        layer ticket:
+            polygon scratch_card ticket outline print width 0.3:
+                1.75, 3.75
+                14.25, 3.75
+                14.25, 12.25
+                1.75, 12.25
+                1.75, 9
+                2.9, 8
+                1.75, 7
+            line ticket_band scratch width 0.55:
+                2.5, 5
+                13.5, 5
+            rect scratch_one scratch:
+                x 3.75
+                y 6.25
+                w 2.65
+                h 4
+                outline print
+                width 0.15
+            rect scratch_two scratch:
+                x 6.7
+                y 6.25
+                w 2.65
+                h 4
+                outline print
+                width 0.15
+            rect scratch_three scratch:
+                x 9.65
+                y 6.25
+                w 2.65
+                h 4
+                outline print
+                width 0.15
+            line revealed_slash print width 0.35:
+                6.95, 9.8
+                9.1, 6.6
+            line scratch_dust print width 0.25:
+                10.2, 11.1
+                12.8, 11.5
+        surface item:
+            scratch_card
+
+drawable pocket_notebook context ground:
+    paint cover = fill
+    paint binding = edge
+    paint pages = shade
+
+    variant compact:
+        layer notebook:
+            rect notebook_cover cover:
+                x 4
+                y 2.5
+                w 9
+                h 11.5
+                outline binding
+                width 0.45
+            line spine binding width 1:
+                5, 3
+                5, 13.5
+            circle ring_one pages:
+                center 4.5, 5
+                radius 0.55
+            circle ring_two pages:
+                center 4.5, 8
+                radius 0.55
+            circle ring_three pages:
+                center 4.5, 11
+                radius 0.55
+            line note_line pages width 0.55:
+                7, 6
+                11, 6
+            line note_line_two pages width 0.55:
+                7, 9
+                11, 9
+        surface item:
+            notebook_cover
+
+    variant detailed:
+        layer notebook:
+            rect notebook_cover cover:
+                x 3.75
+                y 2.25
+                w 9.5
+                h 12
+                outline binding
+                width 0.3
+            line spine binding width 0.65:
+                4.9, 2.75
+                4.9, 13.75
+            circle ring_one pages:
+                center 4.4, 4.5
+                radius 0.45
+            circle ring_two pages:
+                center 4.4, 7
+                radius 0.45
+            circle ring_three pages:
+                center 4.4, 9.5
+                radius 0.45
+            circle ring_four pages:
+                center 4.4, 12
+                radius 0.45
+            line note_line_one pages width 0.35:
+                6.7, 5.25
+                11.5, 5.25
+            line note_line_two pages width 0.35:
+                6.7, 7.5
+                11.5, 7.5
+            line note_line_three pages width 0.35:
+                6.7, 9.75
+                10.5, 9.75
+            line pencil_mark binding width 0.3:
+                7, 12.25
+                11.5, 10.75
+        surface item:
+            notebook_cover
+
+drawable operations_docket context ground:
+    paint paper = fill
+    paint clip = edge
+    paint stamp = shade
+
+    variant compact:
+        layer docket:
+            rect docket_sheet paper:
+                x 3
+                y 3
+                w 10
+                h 11
+                outline clip
+                width 0.45
+            rect docket_clip clip:
+                x 5.5
+                y 1.5
+                w 5
+                h 2.5
+            circle site_one stamp:
+                center 5.5, 7
+                radius 0.8
+            circle site_two stamp:
+                center 10.5, 10.5
+                radius 0.8
+            line site_link clip width 0.65:
+                5.5, 7
+                10.5, 10.5
+            line docket_line clip width 0.45:
+                5, 12.5
+                11, 12.5
+        surface item:
+            docket_sheet
+            docket_clip
+
+    variant detailed:
+        layer docket:
+            rect docket_sheet paper:
+                x 2.75
+                y 2.75
+                w 10.5
+                h 11.5
+                outline clip
+                width 0.3
+            rect docket_clip clip:
+                x 5.25
+                y 1.25
+                w 5.5
+                h 2.5
+                outline stamp
+                width 0.2
+            circle site_one stamp:
+                center 5.25, 6.5
+                radius 0.7
+                outline clip
+                width 0.2
+            circle site_two stamp:
+                center 10.75, 10.25
+                radius 0.7
+                outline clip
+                width 0.2
+            circle site_three stamp:
+                center 5.75, 11.5
+                radius 0.55
+            line site_link clip width 0.4:
+                5.25, 6.5
+                10.75, 10.25
+                5.75, 11.5
+            line docket_line_one clip width 0.3:
+                7, 5
+                11.5, 5
+            line docket_line_two clip width 0.3:
+                4.5, 13
+                10, 13
+        surface item:
+            docket_sheet
+            docket_clip
+
+drawable room_ledger_note context ground:
+    paint paper = fill
+    paint rules = edge
+    paint fold = shade
+
+    variant compact:
+        layer ledger:
+            polygon ledger_note paper outline rules width 0.45:
+                3, 2.5
+                12.5, 3.5
+                13, 12
+                10.5, 14
+                2.5, 12.5
+            line ledger_spine rules width 0.65:
+                5.5, 3
+                5, 12.5
+            line ledger_row_one rules width 0.45:
+                4, 6
+                11.5, 6.5
+            line ledger_row_two rules width 0.45:
+                3.5, 9
+                12, 9.5
+            polygon folded_corner fold:
+                10.5, 11.5
+                13, 12
+                10.5, 14
+        surface item:
+            ledger_note
+
+    variant detailed:
+        layer ledger:
+            polygon ledger_note paper outline rules width 0.3:
+                2.75, 2.25
+                12.7, 3.25
+                13.25, 12.15
+                10.55, 14.25
+                2.25, 12.7
+            line ledger_spine rules width 0.4:
+                5.4, 2.8
+                4.9, 12.95
+            line ledger_row_one rules width 0.3:
+                3.8, 5.5
+                11.8, 6.3
+            line ledger_row_two rules width 0.3:
+                3.55, 7.9
+                12, 8.7
+            line ledger_row_three rules width 0.3:
+                3.3, 10.3
+                12.25, 11.2
+            line amount_column fold width 0.25:
+                9, 3.5
+                8.7, 11.8
+            polygon folded_corner fold outline rules width 0.15:
+                10.45, 11.5
+                13.25, 12.15
+                10.55, 14.25
+        surface item:
+            ledger_note
+
+drawable deck_of_cards context ground:
+    paint cards = fill
+    paint ink = edge
+    paint backs = shade
+
+    variant compact:
+        layer deck:
+            polygon back_card backs outline ink width 0.35:
+                4, 4
+                11, 2
+                13.5, 11
+                6.5, 13
+            polygon face_card cards outline ink width 0.45:
+                2.5, 3
+                9.5, 4
+                8, 13.5
+                1, 12.5
+            circle suit_mark ink:
+                center 5.25, 8
+                radius 1.25
+            line suit_stem ink width 0.55:
+                5.25, 9
+                5.25, 11
+        surface item:
+            back_card
+            face_card
+
+    variant detailed:
+        layer deck:
+            polygon back_card backs outline ink width 0.25:
+                4, 3.8
+                11.2, 1.75
+                13.75, 11.2
+                6.55, 13.25
+            line back_pattern ink width 0.25:
+                6, 4.1
+                11.8, 9.8
+            line back_pattern_two ink width 0.25:
+                10.1, 2.5
+                5, 11.8
+            polygon face_card cards outline ink width 0.3:
+                2.25, 2.75
+                9.7, 3.8
+                8.15, 13.75
+                0.75, 12.7
+            circle suit_mark ink:
+                center 5.15, 8
+                radius 1.25
+            line suit_stem ink width 0.35:
+                5.15, 9
+                5.15, 11
+            circle corner_suit ink:
+                center 3.15, 4.6
+                radius 0.45
+        surface item:
+            back_card
+            face_card
+
+drawable lucky_charm context ground:
+    paint cord = fill
+    paint hardware = edge
+    paint charm = shade
+
+    variant compact:
+        layer cord:
+            line charm_cord cord width 1.1:
+                3, 2
+                4, 7
+                8, 9
+                12, 7
+                13, 2
+            circle jump_ring hardware:
+                center 8, 9
+                radius 0.8
+        layer charm:
+            circle leaf_one charm:
+                center 6.5, 11
+                radius 1.5
+                outline hardware
+                width 0.3
+            circle leaf_two charm:
+                center 9.5, 11
+                radius 1.5
+                outline hardware
+                width 0.3
+            circle leaf_three charm:
+                center 8, 13
+                radius 1.5
+                outline hardware
+                width 0.3
+        surface item:
+            charm_cord
+            leaf_one
+            leaf_two
+            leaf_three
+
+    variant detailed:
+        layer cord:
+            line charm_cord cord width 0.75:
+                2.75, 1.5
+                3.8, 6.8
+                8, 8.8
+                12.2, 6.8
+                13.25, 1.5
+            line cord_edge hardware width 0.2:
+                2.75, 1.5
+                3.8, 6.8
+                8, 8.8
+                12.2, 6.8
+                13.25, 1.5
+            circle jump_ring hardware:
+                center 8, 8.75
+                radius 0.75
+        layer charm:
+            circle leaf_one charm:
+                center 6.4, 10.8
+                radius 1.55
+                outline hardware
+                width 0.2
+            circle leaf_two charm:
+                center 9.6, 10.8
+                radius 1.55
+                outline hardware
+                width 0.2
+            circle leaf_three charm:
+                center 8, 13.15
+                radius 1.55
+                outline hardware
+                width 0.2
+            circle clover_center hardware:
+                center 8, 11.5
+                radius 0.65
+            line clover_stem hardware width 0.3:
+                8, 12
+                9, 14.5
+        surface item:
+            charm_cord
+            leaf_one
+            leaf_two
+            leaf_three

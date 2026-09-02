@@ -15,7 +15,6 @@ from engine.tilemap import Tile
 from game.components import (
     AI,
     CreatureIdentity,
-    FinancialProfile,
     Inventory,
     ItemUseProfile,
     LeisureDrive,
@@ -27,7 +26,11 @@ from game.components import (
     Position,
     Vitality,
 )
-from game.population import _spawn_human
+from game.local_service_demand import (
+    record_actor_local_service_demand_sample,
+    record_local_service_supply,
+)
+from game.population import _spawn_human, work_shift_active
 from game.movement_runtime import try_move_entity
 from game.property_access import (
     HOLDEM_CASH_SERVICE_ID,
@@ -49,14 +52,24 @@ from game.vertical_navigation import next_vertical_route_segment, vertical_route
 
 
 HOLDEM_CASH_MAX_SEATS = 8
-HOLDEM_CASH_SMALL_BLIND = 2
-HOLDEM_CASH_BIG_BLIND = 4
+HOLDEM_CASH_SMALL_BLIND = 1
+HOLDEM_CASH_BIG_BLIND = 2
+HOLDEM_CASH_MIN_BUY_IN = 20
+HOLDEM_CASH_MAX_BUY_IN = 40
 HOLDEM_CASH_BUY_IN = 40
 HOLDEM_CASH_ACTION_DELAY_TICKS = 6
 HOLDEM_CASH_PLAYER_CLOCK_TICKS = 300
 HOLDEM_CASH_BETWEEN_HAND_TICKS = 14
 HOLDEM_CASH_LEISURE_ID = "holdem_cash"
 HOLDEM_CASH_GUEST_APPROACH_RANGE = 14
+HOLDEM_CASH_DISCRETIONARY_STATES = frozenset({
+    "idle",
+    "lounging",
+    "patrolling",
+    "resting",
+    "seeking_social",
+    "socializing",
+})
 
 # Eight real player chairs around a five-by-three table, plus the dealer.
 _SEAT_OFFSETS = (
@@ -90,6 +103,72 @@ def _int(value, default=0):
         return int(default)
 
 
+def _normalize_cash_table_stakes(table):
+    """Install the variable cash-game buy-in contract on new and saved tables."""
+
+    if not isinstance(table, dict):
+        return None
+    legacy_stakes = (
+        "min_buy_in" not in table
+        and "max_buy_in" not in table
+        and _int(table.get("small_blind"), 2) == 2
+        and _int(table.get("big_blind"), 4) == 4
+        and _int(table.get("buy_in"), HOLDEM_CASH_BUY_IN) == HOLDEM_CASH_BUY_IN
+    )
+    if legacy_stakes:
+        table["small_blind"] = HOLDEM_CASH_SMALL_BLIND
+        table["big_blind"] = HOLDEM_CASH_BIG_BLIND
+        if str(table.get("phase", "waiting") or "waiting") == "waiting":
+            table["min_raise"] = HOLDEM_CASH_BIG_BLIND
+            table["last_raise_size"] = HOLDEM_CASH_BIG_BLIND
+
+    minimum = max(
+        _int(table.get("big_blind"), HOLDEM_CASH_BIG_BLIND) * 2,
+        _int(table.get("min_buy_in"), HOLDEM_CASH_MIN_BUY_IN),
+    )
+    maximum = max(minimum, _int(table.get("max_buy_in"), HOLDEM_CASH_MAX_BUY_IN))
+    default = max(minimum, min(maximum, _int(table.get("buy_in"), maximum)))
+    table["min_buy_in"] = minimum
+    table["max_buy_in"] = maximum
+    # Keep the old field as the default/full buy-in for save and UI consumers.
+    table["buy_in"] = default
+    table["stake_schema"] = 2
+    return table
+
+
+def _cash_table_buy_in_bounds(table):
+    table = _normalize_cash_table_stakes(table)
+    if not isinstance(table, dict):
+        return HOLDEM_CASH_MIN_BUY_IN, HOLDEM_CASH_MAX_BUY_IN
+    return _int(table.get("min_buy_in"), HOLDEM_CASH_MIN_BUY_IN), _int(table.get("max_buy_in"), HOLDEM_CASH_MAX_BUY_IN)
+
+
+def _cash_table_buy_in_options(table):
+    minimum, maximum = _cash_table_buy_in_bounds(table)
+    if minimum >= maximum:
+        return (minimum,)
+    options = list(range(minimum, maximum + 1, 10))
+    if options[-1] != maximum:
+        options.append(maximum)
+    return tuple(sorted(set(options)))
+
+
+def _npc_cash_table_buy_in(sim, table, actor_eid):
+    """Choose an affordable stack without treating every NPC as equally reckless."""
+
+    minimum, maximum = _cash_table_buy_in_bounds(table)
+    wallet = _npc_wallet(sim, actor_eid)
+    if wallet <= minimum:
+        return minimum
+    affordable = min(wallet, maximum)
+    profile = sim.ecs.get(ItemUseProfile).get(actor_eid)
+    risk = max(0.0, min(1.0, float(getattr(profile, "risk_tolerance", 0.4))))
+    blind = max(1, _int(table.get("big_blind"), HOLDEM_CASH_BIG_BLIND))
+    desired = minimum + int((affordable - minimum) * risk)
+    desired = minimum + ((desired - minimum) // blind) * blind
+    return max(minimum, min(affordable, desired))
+
+
 def _name_for_actor(sim, actor_eid, fallback="Player"):
     if actor_eid is None:
         return fallback
@@ -118,7 +197,7 @@ def _table_for_property_id(sim, property_id):
         return None
     for table in _tables(sim, create=False).values():
         if isinstance(table, dict) and str(table.get("property_id", "")) == property_id:
-            return table
+            return _normalize_cash_table_stakes(table)
     return None
 
 
@@ -168,7 +247,7 @@ def _room_cells_for_property(sim, prop):
     return tuple(dedicated or rows or fallback)
 
 
-def _set_cash_service_available(prop, available):
+def _set_cash_service_available(sim, prop, available):
     if not isinstance(prop, dict):
         return False
     metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
@@ -179,6 +258,8 @@ def _set_cash_service_available(prop, available):
     metadata["site_services_replace_defaults"] = True
     metadata["holdem_cash_available"] = bool(available)
     metadata["holdem_offer_mode"] = "live_cash" if bool(available) else "casino_holdem"
+    if changed:
+        record_local_service_supply(sim, prop)
     return changed
 
 
@@ -331,7 +412,10 @@ def _create_table_for_property(sim, prop):
         "seats": seats,
         "small_blind": HOLDEM_CASH_SMALL_BLIND,
         "big_blind": HOLDEM_CASH_BIG_BLIND,
+        "min_buy_in": HOLDEM_CASH_MIN_BUY_IN,
+        "max_buy_in": HOLDEM_CASH_MAX_BUY_IN,
         "buy_in": HOLDEM_CASH_BUY_IN,
+        "stake_schema": 2,
         "phase": "waiting",
         "hand_number": 0,
         "button": -1,
@@ -459,8 +543,9 @@ def holdem_cash_interact_at(sim, actor_eid, x, y, z=0):
         return False
     if seat is None:
         seat = _open_seat_near(table, x, y, z)
-    if seat is not None and seat.get("actor_eid") is None and seat.get("reserved_eid") is None:
-        holdem_cash_join(sim, table, actor_eid, seat_index=seat.get("index"), actor_kind="player")
+    # Taking a chair opens the live table first so the player can choose a
+    # stack between the posted minimum and maximum.  No cash changes hands
+    # merely because the player inspected or bumped an open chair.
     sim.emit(Event(
         "holdem_cash_view_request",
         eid=actor_eid,
@@ -579,10 +664,11 @@ def _poker_approach_distance(sim, pos, table, prop):
     return approach_distance
 
 
-def holdem_cash_join(sim, table_or_id, actor_eid, *, seat_index=None, actor_kind="npc", house_funded=False):
+def holdem_cash_join(sim, table_or_id, actor_eid, *, seat_index=None, actor_kind="npc", house_funded=False, buy_in=None):
     table = table_or_id if isinstance(table_or_id, dict) else _tables(sim, create=False).get(str(table_or_id))
     if not isinstance(table, dict) or actor_eid is None:
         return {"ok": False, "reason": "missing_table"}
+    _normalize_cash_table_stakes(table)
     actor_eid = int(actor_eid)
     for existing in list(table.get("seats", ()) or ()):
         if existing.get("actor_eid") == actor_eid:
@@ -593,8 +679,23 @@ def holdem_cash_join(sim, table_or_id, actor_eid, *, seat_index=None, actor_kind
     if not open_seats:
         return {"ok": False, "reason": "table_full"}
     seat = open_seats[0]
-    buy_in = max(_int(table.get("big_blind"), HOLDEM_CASH_BIG_BLIND) * 10, _int(table.get("buy_in"), HOLDEM_CASH_BUY_IN))
     kind = str(actor_kind or "npc").strip().lower()
+    minimum, maximum = _cash_table_buy_in_bounds(table)
+    if house_funded:
+        buy_in = _int(table.get("buy_in"), maximum)
+    elif buy_in is None and kind == "npc":
+        buy_in = _npc_cash_table_buy_in(sim, table, actor_eid)
+    elif buy_in is None:
+        buy_in = _int(table.get("buy_in"), maximum)
+    else:
+        buy_in = _int(buy_in, -1)
+    if buy_in < minimum or buy_in > maximum:
+        return {
+            "ok": False,
+            "reason": "invalid_buy_in",
+            "minimum": minimum,
+            "maximum": maximum,
+        }
     if kind == "player":
         assets = _player_assets(sim, actor_eid)
         if assets is None or _int(getattr(assets, "credits", 0)) < buy_in:
@@ -661,12 +762,6 @@ def _cash_out(sim, table, seat):
         if assets is not None:
             assets.credits += chips
     elif kind != "house_regular" and chips > 0:
-        profile = sim.ecs.get(FinancialProfile).get(actor_eid)
-        if profile is not None:
-            profile.wallet_buffer = max(
-                _int(getattr(profile, "wallet_buffer", 0)),
-                _npc_wallet(sim, actor_eid) + chips,
-            )
         grant_npc_wallet_credits(
             sim,
             actor_eid,
@@ -1160,6 +1255,7 @@ def holdem_cash_public_snapshot(sim, table_or_id, viewer_eid=None):
     table = table_or_id if isinstance(table_or_id, dict) else _tables(sim, create=False).get(str(table_or_id))
     if not isinstance(table, dict):
         return None
+    _normalize_cash_table_stakes(table)
     reveal = {_int(index) for index in list(table.get("showdown_reveal", ()) or ())}
     seats = []
     for seat in list(table.get("seats", ()) or ()):
@@ -1194,6 +1290,9 @@ def holdem_cash_public_snapshot(sim, table_or_id, viewer_eid=None):
         "small_blind": _int(table.get("small_blind")),
         "big_blind": _int(table.get("big_blind")),
         "buy_in": _int(table.get("buy_in")),
+        "min_buy_in": _int(table.get("min_buy_in")),
+        "max_buy_in": _int(table.get("max_buy_in")),
+        "buy_in_options": list(_cash_table_buy_in_options(table)),
         "board": list(table.get("board", ()) or ()),
         "pot": sum(_int(seat.get("total_bet")) for seat in list(table.get("seats", ()) or ())),
         "current_bet": _int(table.get("current_bet")),
@@ -1231,6 +1330,7 @@ class HoldemCashSystem(System):
         for table in list(_tables(self.sim, create=False).values()):
             if not isinstance(table, dict):
                 continue
+            _normalize_cash_table_stakes(table)
             self._reassert_seated_actors(table)
             self._expire_reservations(table)
             self._advance_table(table, tick)
@@ -1244,16 +1344,16 @@ class HoldemCashSystem(System):
                 # Genesis has already made the structural qualification decision
                 # for this venue.  Keep its compact game without repeatedly
                 # searching every stamped room during live time or sleep.
-                _set_cash_service_available(prop, False)
+                _set_cash_service_available(self.sim, prop, False)
                 continue
             if table is None:
                 # Missing metadata identifies a legacy venue.  Let the migration
                 # path inspect/retrofit it instead of treating absence as denial.
                 table = holdem_cash_table_for_property(self.sim, prop, ensure=True)
             if table is None:
-                _set_cash_service_available(prop, False)
+                _set_cash_service_available(self.sim, prop, False)
                 continue
-            _set_cash_service_available(prop, True)
+            _set_cash_service_available(self.sim, prop, True)
             _stamp_table(self.sim, table)
             self._ensure_dealer(table, prop)
             self._ensure_house_regulars(table, prop)
@@ -1436,13 +1536,21 @@ class HoldemCashSystem(System):
                 identity = identities.get(eid)
                 if ai is None or identity is None or str(getattr(identity, "taxonomy_class", "")) != "hominid":
                     continue
-                if str(getattr(ai, "state", "") or "") not in {"idle", "lounging", "socializing"}:
+                if str(getattr(ai, "state", "") or "") not in HOLDEM_CASH_DISCRETIONARY_STATES:
                     continue
                 approach_distance = _poker_approach_distance(self.sim, pos, table, prop)
                 if approach_distance is None or approach_distance > HOLDEM_CASH_GUEST_APPROACH_RANGE:
                     continue
-                career = str(getattr(occupations.get(eid), "career", "") or "").strip().lower()
-                if career in {"table_dealer", "proposition_player"} or _npc_wallet(self.sim, eid) < _int(table.get("buy_in")):
+                occupation = occupations.get(eid)
+                career = str(getattr(occupation, "career", "") or "").strip().lower()
+                workplace_ref = getattr(occupation, "workplace", None) if occupation is not None else None
+                workplace_prop = workplace_ref if isinstance(workplace_ref, dict) else None
+                if workplace_prop is None and isinstance(workplace_ref, (str, int)):
+                    workplace_prop = getattr(self.sim, "properties", {}).get(workplace_ref)
+                if workplace_ref is not None and work_shift_active(self.sim, occupation=occupation, workplace_prop=workplace_prop):
+                    continue
+                minimum_buy_in, _maximum_buy_in = _cash_table_buy_in_bounds(table)
+                if career in {"table_dealer", "proposition_player"} or _npc_wallet(self.sim, eid) < minimum_buy_in:
                     continue
                 drive = _leisure_drive_for(self.sim, eid)
                 if drive is None or not drive.available(HOLDEM_CASH_LEISURE_ID, now):
@@ -1467,6 +1575,16 @@ class HoldemCashSystem(System):
                 gain = 0.055 + affinity * 0.085 + social_need * 0.075 + risk * 0.045
                 gain += (1.0 - discipline) * 0.025 + proximity * 0.025
                 urge = drive.add_urge(HOLDEM_CASH_LEISURE_ID, gain)
+                record_actor_local_service_demand_sample(
+                    self.sim,
+                    actor_eid=eid,
+                    x=pos.x,
+                    y=pos.y,
+                    service=HOLDEM_CASH_SERVICE_ID,
+                    motive="leisure_cards",
+                    intensity=max(0.05, urge),
+                    tick=now,
+                )
                 threshold = 0.70 - affinity * 0.17 - risk * 0.07 - social_need * 0.08
                 if urge >= threshold:
                     candidates.append((-urge, -affinity, int(approach_distance), int(eid), pos, drive))
