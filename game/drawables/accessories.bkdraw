@@ -82,23 +82,22 @@ drawable ring context garment:
     variant compact:
         layer body:
             circle band metal:
-                center right_hand_x, hand_y
-                radius body_unit * 0.55
+                center right_hand_x, right_hand_y
+                radius body_unit * 0.22
         surface garment:
             band
     variant detailed:
         layer body:
             circle band metal:
-                center right_hand_x, hand_y
-                radius body_unit * 0.7
+                center right_hand_x, right_hand_y
+                radius body_unit * 0.28
                 outline glint
-                width 0.25
-            circle stone glint:
-                center right_hand_x, hand_y - body_unit * 0.5
-                radius body_unit * 0.25
+                width 0.12
+            line stone_glint glint width 0.12:
+                right_hand_x, right_hand_y - body_unit * 0.2
+                right_hand_x + body_unit * 0.12, right_hand_y - body_unit * 0.2
         surface garment:
             band
-            stone
 
 drawable necklace context garment:
     let body_unit = body_height / 14

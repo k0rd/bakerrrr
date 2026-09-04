@@ -110,20 +110,16 @@ drawable buttoned_top context garment:
                 body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1.5
             mirror left_sleeve as right_sleeve
         layer detail:
-            polygon left_collar trim:
-                body_mid_x - body_unit * 2, top_y
+            line collar trim width 0.22:
+                body_mid_x - body_unit * 1.75, top_y + body_unit * 0.25
                 body_mid_x, top_y + body_unit * 1.5
-                body_mid_x - body_unit * 0.5, top_y + body_unit * 2
-            mirror left_collar as right_collar
-            line placket shadow width 0.25:
+                body_mid_x + body_unit * 1.75, top_y + body_unit * 0.25
+            line placket shadow width 0.2:
                 body_mid_x, top_y + body_unit * 1.5
                 body_mid_x, bottom_y
-            circle upper_button trim:
-                center body_mid_x + body_unit * 0.5, top_y + body_unit * 3
-                radius body_unit * 0.2
-            circle lower_button trim:
-                center body_mid_x + body_unit * 0.5, top_y + body_unit * 5
-                radius body_unit * 0.2
+            circle button trim:
+                center body_mid_x + body_unit * 0.35, top_y + body_unit * 4
+                radius body_unit * 0.13
         surface garment:
             torso
             left_sleeve
