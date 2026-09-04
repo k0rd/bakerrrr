@@ -1,39 +1,50 @@
-bakerrrr-drawable 1
+bakerrrr-drawable 2
 
+# Worn geometry is derived from frozen body Points. Local coordinate Scalars
+# are explicit; body_unit is a body-height measure, never a naked offset.
 # Basewear families are catalogue content. Both variants are authored here so
 # the renderer never needs to know an individual garment name on its live path.
 
 drawable camisole context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (shoulder_anchor_x, shoulder_y) = shoulder_left
+    let (crotch_x, hip_y) = crotch
+    let shoulder_half = upper_torso_width / 2
+    let hip_half = hip_width / 2
+    let waist_half = waist_width / 2
+    let body_left_x = body_mid_x - hip_half
+    let body_right_x = body_mid_x + hip_half
     paint fabric = fill
     paint trim = edge
     paint shadow = shade
-    let cami_half = shoulder - 1
-    let neckline_y = shoulder_y + 2
-    let bottom_y = hip_y - 1
+    let cami_half = shoulder_half - body_unit * 1
+    let neckline_y = shoulder_y + body_unit * 2
+    let bottom_y = hip_y - body_unit * 1
 
     variant compact:
         layer body:
             polygon bodice fabric:
-                mid - cami_half, neckline_y
-                mid, neckline_y + 1
-                mid + cami_half, neckline_y
-                mid + waist, hip_y - 2
-                body_right - 1, bottom_y
-                body_left + 1, bottom_y
-                mid - waist, hip_y - 2
+                body_mid_x - cami_half, neckline_y
+                body_mid_x, neckline_y + body_unit * 1
+                body_mid_x + cami_half, neckline_y
+                body_mid_x + waist_half, hip_y - body_unit * 2
+                body_right_x - body_unit * 1, bottom_y
+                body_left_x + body_unit * 1, bottom_y
+                body_mid_x - waist_half, hip_y - body_unit * 2
         layer trim:
             line neckline shadow width 0.5:
-                mid - cami_half, neckline_y
-                mid, neckline_y + 1
-                mid + cami_half, neckline_y
+                body_mid_x - cami_half, neckline_y
+                body_mid_x, neckline_y + body_unit * 1
+                body_mid_x + cami_half, neckline_y
             line left_strap trim width 0.5:
-                mid - cami_half, neckline_y
-                mid - cami_half, shoulder_y
+                body_mid_x - cami_half, neckline_y
+                body_mid_x - cami_half, shoulder_y
             mirror left_strap as right_strap
             when detail has strappy:
                 line cross_left trim width 0.5:
-                    mid - cami_half, shoulder_y
-                    mid - 1, neckline_y + 1
+                    body_mid_x - cami_half, shoulder_y
+                    body_mid_x - body_unit * 1, neckline_y + body_unit * 1
                 mirror cross_left as cross_right
         group straps:
             left_strap
@@ -42,30 +53,30 @@ drawable camisole context garment:
             bodice
 
     variant detailed:
-        let neck_depth = 1
-        let waist_y = neckline_y + 2
+        let neck_depth = body_unit * 1
+        let waist_y = neckline_y + body_unit * 2
         layer body:
             polygon bodice fabric outline trim width 0.35:
-                mid - cami_half, neckline_y
-                mid, neckline_y + neck_depth
-                mid + cami_half, neckline_y
-                mid + waist, waist_y
-                body_right - 1, bottom_y
-                body_left + 1, bottom_y
-                mid - waist, waist_y
+                body_mid_x - cami_half, neckline_y
+                body_mid_x, neckline_y + neck_depth
+                body_mid_x + cami_half, neckline_y
+                body_mid_x + waist_half, waist_y
+                body_right_x - body_unit * 1, bottom_y
+                body_left_x + body_unit * 1, bottom_y
+                body_mid_x - waist_half, waist_y
         layer trim:
             line neckline shadow width 0.35:
-                mid - cami_half, neckline_y
-                mid, neckline_y + neck_depth
-                mid + cami_half, neckline_y
+                body_mid_x - cami_half, neckline_y
+                body_mid_x, neckline_y + neck_depth
+                body_mid_x + cami_half, neckline_y
             line left_strap trim width 0.35:
-                mid - cami_half, neckline_y
-                mid - cami_half, shoulder_y
+                body_mid_x - cami_half, neckline_y
+                body_mid_x - cami_half, shoulder_y
             mirror left_strap as right_strap
             when detail has strappy:
                 line cross_left trim width 0.35:
-                    mid - cami_half, shoulder_y
-                    mid - 1, neckline_y + neck_depth
+                    body_mid_x - cami_half, shoulder_y
+                    body_mid_x - body_unit * 1, neckline_y + neck_depth
                 mirror cross_left as cross_right
         group straps:
             left_strap
@@ -94,24 +105,29 @@ drawable camisole context garment:
                 folded
 
 drawable boyshorts context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (crotch_x, hip_y) = crotch
+    let hip_half = hip_width / 2
+    let basewear_half = hip_half - body_unit
     paint fabric = fill
     paint trim = edge
-    let gap = 1
-    let waist_y = hip_y - 2
+    let gap = body_unit * 1
+    let waist_y = hip_y - body_unit * 2
 
     variant compact:
-        let leg_bottom = hip_y + 1
+        let leg_bottom = hip_y + body_unit * 1
         layer body:
             polygon left_leg fabric:
-                mid - basewear_hip, waist_y
-                mid - gap, waist_y
-                mid - gap, leg_bottom
-                mid - basewear_hip + 1, leg_bottom
+                body_mid_x - basewear_half, waist_y
+                body_mid_x - gap, waist_y
+                body_mid_x - gap, leg_bottom
+                body_mid_x - basewear_half + body_unit * 1, leg_bottom
             mirror left_leg as right_leg
         layer trim:
             line left_waist trim width 0.5:
-                mid - basewear_hip, waist_y
-                mid - gap, waist_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x - gap, waist_y
             mirror left_waist as right_waist
         group legs:
             left_leg
@@ -121,22 +137,22 @@ drawable boyshorts context garment:
             right_leg
 
     variant detailed:
-        let leg_bottom = hip_y + 1.5
+        let leg_bottom = hip_y + body_unit * 1.5
         layer body:
             polygon left_leg fabric outline trim width 0.35:
-                mid - basewear_hip, waist_y
-                mid - gap, waist_y
-                mid - gap, leg_bottom
-                mid - basewear_hip + 1, leg_bottom
+                body_mid_x - basewear_half, waist_y
+                body_mid_x - gap, waist_y
+                body_mid_x - gap, leg_bottom
+                body_mid_x - basewear_half + body_unit * 1, leg_bottom
             mirror left_leg as right_leg
         layer trim:
             line left_waist trim width 0.35:
-                mid - basewear_hip, waist_y
-                mid - gap, waist_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x - gap, waist_y
             mirror left_waist as right_waist
             line center_seam trim width 0.25:
-                mid, waist_y
-                mid, leg_bottom - 0.5
+                body_mid_x, waist_y
+                body_mid_x, leg_bottom - body_unit * 0.5
         group legs:
             left_leg
             right_leg
@@ -162,26 +178,32 @@ drawable boyshorts context garment:
                 right_leg
 
 drawable undershirt context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (shoulder_anchor_x, shoulder_y) = shoulder_left
+    let (crotch_x, hip_y) = crotch
+    let shoulder_half = upper_torso_width / 2
+    let waist_half = waist_width / 2
     paint fabric = fill
     paint trim = edge
-    let top_y = shoulder_y + 1
-    let bottom_y = hip_y - 1
+    let top_y = shoulder_y + body_unit * 1
+    let bottom_y = hip_y - body_unit * 1
 
     variant compact:
         layer body:
             polygon torso fabric:
-                mid - shoulder, top_y
-                mid - 1, top_y
-                mid, top_y + 1
-                mid + 1, top_y
-                mid + shoulder, top_y
-                mid + waist, bottom_y
-                mid - waist, bottom_y
+                body_mid_x - shoulder_half, top_y
+                body_mid_x - body_unit * 1, top_y
+                body_mid_x, top_y + body_unit * 1
+                body_mid_x + body_unit * 1, top_y
+                body_mid_x + shoulder_half, top_y
+                body_mid_x + waist_half, bottom_y
+                body_mid_x - waist_half, bottom_y
             polygon left_sleeve fabric:
-                mid - shoulder, top_y
-                mid - shoulder - 1, top_y + 1
-                mid - shoulder, top_y + 2
-                mid - shoulder + 1, top_y + 1
+                body_mid_x - shoulder_half, top_y
+                body_mid_x - shoulder_half - body_unit * 1, top_y + body_unit * 1
+                body_mid_x - shoulder_half, top_y + body_unit * 2
+                body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1
             mirror left_sleeve as right_sleeve
         surface garment:
             torso
@@ -191,18 +213,18 @@ drawable undershirt context garment:
     variant detailed:
         layer body:
             polygon torso fabric outline trim width 0.35:
-                mid - shoulder, top_y
-                mid - 1, top_y
-                mid, top_y + 1
-                mid + 1, top_y
-                mid + shoulder, top_y
-                mid + waist, bottom_y
-                mid - waist, bottom_y
+                body_mid_x - shoulder_half, top_y
+                body_mid_x - body_unit * 1, top_y
+                body_mid_x, top_y + body_unit * 1
+                body_mid_x + body_unit * 1, top_y
+                body_mid_x + shoulder_half, top_y
+                body_mid_x + waist_half, bottom_y
+                body_mid_x - waist_half, bottom_y
             polygon left_sleeve fabric outline trim width 0.3:
-                mid - shoulder, top_y
-                mid - shoulder - 1, top_y + 1.5
-                mid - shoulder, top_y + 2.5
-                mid - shoulder + 1, top_y + 1
+                body_mid_x - shoulder_half, top_y
+                body_mid_x - shoulder_half - body_unit * 1, top_y + body_unit * 1.5
+                body_mid_x - shoulder_half, top_y + body_unit * 2.5
+                body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1
             mirror left_sleeve as right_sleeve
         surface garment:
             torso
@@ -233,26 +255,32 @@ drawable undershirt context garment:
                 torso
 
 drawable tank_undershirt context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (shoulder_anchor_x, shoulder_y) = shoulder_left
+    let (crotch_x, hip_y) = crotch
+    let shoulder_half = upper_torso_width / 2
+    let waist_half = waist_width / 2
     paint fabric = fill
     paint trim = edge
-    let neck_y = shoulder_y + 2
-    let bottom_y = hip_y - 1
-    let tank_half = shoulder - 1
+    let neck_y = shoulder_y + body_unit * 2
+    let bottom_y = hip_y - body_unit * 1
+    let tank_half = shoulder_half - body_unit * 1
 
     variant compact:
         layer body:
             polygon torso fabric:
-                mid - tank_half, neck_y
-                mid - 1, neck_y
-                mid, neck_y + 1
-                mid + 1, neck_y
-                mid + tank_half, neck_y
-                mid + waist, bottom_y
-                mid - waist, bottom_y
+                body_mid_x - tank_half, neck_y
+                body_mid_x - body_unit * 1, neck_y
+                body_mid_x, neck_y + body_unit * 1
+                body_mid_x + body_unit * 1, neck_y
+                body_mid_x + tank_half, neck_y
+                body_mid_x + waist_half, bottom_y
+                body_mid_x - waist_half, bottom_y
         layer straps:
             line left_strap trim width 0.55:
-                mid - tank_half, neck_y
-                mid - tank_half, shoulder_y
+                body_mid_x - tank_half, neck_y
+                body_mid_x - tank_half, shoulder_y
             mirror left_strap as right_strap
         surface garment:
             torso
@@ -260,17 +288,17 @@ drawable tank_undershirt context garment:
     variant detailed:
         layer body:
             polygon torso fabric outline trim width 0.35:
-                mid - tank_half, neck_y
-                mid - 1, neck_y
-                mid, neck_y + 1.25
-                mid + 1, neck_y
-                mid + tank_half, neck_y
-                mid + waist, bottom_y
-                mid - waist, bottom_y
+                body_mid_x - tank_half, neck_y
+                body_mid_x - body_unit * 1, neck_y
+                body_mid_x, neck_y + body_unit * 1.25
+                body_mid_x + body_unit * 1, neck_y
+                body_mid_x + tank_half, neck_y
+                body_mid_x + waist_half, bottom_y
+                body_mid_x - waist_half, bottom_y
         layer straps:
             line left_strap trim width 0.35:
-                mid - tank_half, neck_y
-                mid - tank_half, shoulder_y
+                body_mid_x - tank_half, neck_y
+                body_mid_x - tank_half, shoulder_y
             mirror left_strap as right_strap
         surface garment:
             torso
@@ -299,34 +327,37 @@ drawable tank_undershirt context garment:
                 torso
 
 drawable bra context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (shoulder_anchor_x, shoulder_y) = shoulder_left
     paint fabric = fill
     paint trim = edge
     paint shadow = shade
-    let cup_y = shoulder_y + 2
-    let band_y = shoulder_y + 4
-    let cup_offset = 1.25
+    let cup_y = shoulder_y + body_unit * 2
+    let band_y = shoulder_y + body_unit * 4
+    let cup_offset = body_unit * 1.25
 
     variant compact:
         layer body:
             polygon left_cup fabric:
-                mid - 3, band_y
-                mid - cup_offset, cup_y
-                mid, band_y
+                body_mid_x - body_unit * 3, band_y
+                body_mid_x - cup_offset, cup_y
+                body_mid_x, band_y
             mirror left_cup as right_cup
             rect band fabric:
-                x mid - 3
+                x body_mid_x - body_unit * 3
                 y band_y
-                w 6
-                h 0.75
+                w body_unit * 6
+                h body_unit * 0.75
         layer straps:
             line left_strap trim width 0.5:
-                mid - 2.5, shoulder_y + 1
-                mid - cup_offset, cup_y
+                body_mid_x - body_unit * 2.5, shoulder_y + body_unit * 1
+                body_mid_x - cup_offset, cup_y
             mirror left_strap as right_strap
             when detail has strappy:
                 line left_cross trim width 0.4:
-                    mid - 2.5, shoulder_y + 1
-                    mid - 0.5, band_y
+                    body_mid_x - body_unit * 2.5, shoulder_y + body_unit * 1
+                    body_mid_x - body_unit * 0.5, band_y
                 mirror left_cross as right_cross
         surface garment:
             left_cup
@@ -336,26 +367,26 @@ drawable bra context garment:
     variant detailed:
         layer body:
             polygon left_cup fabric outline trim width 0.3:
-                mid - 3.25, band_y
-                mid - cup_offset, cup_y - 0.25
-                mid, band_y
+                body_mid_x - body_unit * 3.25, band_y
+                body_mid_x - cup_offset, cup_y - body_unit * 0.25
+                body_mid_x, band_y
             mirror left_cup as right_cup
             rect band fabric:
-                x mid - 3.25
+                x body_mid_x - body_unit * 3.25
                 y band_y
-                w 6.5
-                h 0.65
+                w body_unit * 6.5
+                h body_unit * 0.65
                 outline shadow
                 width 0.25
         layer straps:
             line left_strap trim width 0.3:
-                mid - 2.6, shoulder_y
-                mid - cup_offset, cup_y
+                body_mid_x - body_unit * 2.6, shoulder_y
+                body_mid_x - cup_offset, cup_y
             mirror left_strap as right_strap
             when detail has strappy:
                 line left_cross trim width 0.3:
-                    mid - 2.6, shoulder_y
-                    mid - 0.5, band_y
+                    body_mid_x - body_unit * 2.6, shoulder_y
+                    body_mid_x - body_unit * 0.5, band_y
                 mirror left_cross as right_cross
         surface garment:
             left_cup
@@ -386,37 +417,40 @@ drawable bra context garment:
                 right_cup
 
 drawable bralette context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (shoulder_anchor_x, shoulder_y) = shoulder_left
     paint fabric = fill
     paint trim = edge
-    let top_y = shoulder_y -1
-    let band_y = shoulder_y +1
+    let top_y = shoulder_y - body_unit * 1
+    let band_y = shoulder_y + body_unit * 1
 
     variant compact:
         layer body:
             polygon left_panel fabric:
-                mid - 2, band_y
-                mid - 2, top_y
-                mid-3, band_y
+                body_mid_x - body_unit * 2, band_y
+                body_mid_x - body_unit * 2, top_y
+                body_mid_x- body_unit * 3, band_y
             mirror left_panel as right_panel
             rect band fabric:
-                x mid - 3
+                x body_mid_x - body_unit * 3
                 y band_y
-                w 6
-                h 1
+                w body_unit * 6
+                h body_unit * 1
         layer straps:
             line left_strap trim width 0.55:
-                mid - 2, top_y
-                mid - 2.5, shoulder_y
+                body_mid_x - body_unit * 2, top_y
+                body_mid_x - body_unit * 2.5, shoulder_y
             mirror left_strap as right_strap
             when detail has cross:
                 line left_cross trim width 0.45:
-                    mid - 2.5, shoulder_y
-                    mid - 0.5, band_y
+                    body_mid_x - body_unit * 2.5, shoulder_y
+                    body_mid_x - body_unit * 0.5, band_y
                 mirror left_cross as right_cross
             when detail has strappy:
                 line left_extra trim width 0.4:
-                    mid - 3, top_y + 1
-                    mid - 1, band_y
+                    body_mid_x - body_unit * 3, top_y + body_unit * 1
+                    body_mid_x - body_unit * 1, band_y
                 mirror left_extra as right_extra
         surface garment:
             left_panel
@@ -426,31 +460,31 @@ drawable bralette context garment:
     variant detailed:
         layer body:
             polygon left_panel fabric outline trim width 0.3:
-                mid - 3.25, band_y
-                mid - 2, top_y
-                mid, band_y
+                body_mid_x - body_unit * 3.25, band_y
+                body_mid_x - body_unit * 2, top_y
+                body_mid_x, band_y
             mirror left_panel as right_panel
             rect band fabric:
-                x mid - 3.25
+                x body_mid_x - body_unit * 3.25
                 y band_y
-                w 6.5
-                h 0.8
+                w body_unit * 6.5
+                h body_unit * 0.8
                 outline trim
                 width 0.25
         layer straps:
             line left_strap trim width 0.3:
-                mid - 2, top_y
-                mid - 2.6, shoulder_y
+                body_mid_x - body_unit * 2, top_y
+                body_mid_x - body_unit * 2.6, shoulder_y
             mirror left_strap as right_strap
             when detail has cross:
                 line left_cross trim width 0.3:
-                    mid - 2.6, shoulder_y
-                    mid - 0.5, band_y
+                    body_mid_x - body_unit * 2.6, shoulder_y
+                    body_mid_x - body_unit * 0.5, band_y
                 mirror left_cross as right_cross
             when detail has strappy:
                 line left_extra trim width 0.3:
-                    mid - 3, top_y + 1
-                    mid - 1, band_y
+                    body_mid_x - body_unit * 3, top_y + body_unit * 1
+                    body_mid_x - body_unit * 1, band_y
                 mirror left_extra as right_extra
         surface garment:
             left_panel
@@ -478,27 +512,31 @@ drawable bralette context garment:
                 right_cup
 
 drawable bandeau context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (shoulder_anchor_x, shoulder_y) = shoulder_left
+    let shoulder_half = upper_torso_width / 2
     paint fabric = fill
     paint trim = edge
-    let band_y = shoulder_y + 3
+    let band_y = shoulder_y + body_unit * 3
 
     variant compact:
         layer body:
             rect band fabric:
-                x mid - shoulder + 1
+                x body_mid_x - shoulder_half + body_unit * 1
                 y band_y
-                w shoulder + shoulder - 2
-                h 1.5
+                w shoulder_half + shoulder_half - body_unit * 2
+                h body_unit * 1.5
         surface garment:
             band
 
     variant detailed:
         layer body:
             rect band fabric:
-                x mid - shoulder + 0.75
-                y band_y - 0.25
-                w shoulder + shoulder - 1.5
-                h 1.75
+                x body_mid_x - shoulder_half + body_unit * 0.75
+                y band_y - body_unit * 0.25
+                w shoulder_half + shoulder_half - body_unit * 1.5
+                h body_unit * 1.75
                 outline trim
                 width 0.3
         surface garment:
@@ -522,23 +560,27 @@ drawable bandeau context garment:
                 band
 
 drawable boxers context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (crotch_x, hip_y) = crotch
+    let hip_half = hip_width / 2
     paint fabric = fill
     paint trim = edge
-    let waist_y = hip_y - 1
-    let leg_y = hip_y + 2
+    let waist_y = hip_y - body_unit * 1
+    let leg_y = hip_y + body_unit * 2
 
     variant compact:
         layer body:
             polygon left_leg fabric:
-                mid - hip, waist_y
-                mid, waist_y
-                mid - 0.5, leg_y
-                mid - hip, leg_y
+                body_mid_x - hip_half, waist_y
+                body_mid_x, waist_y
+                body_mid_x - body_unit * 0.5, leg_y
+                body_mid_x - hip_half, leg_y
             mirror left_leg as right_leg
         layer seam:
             line center trim width 0.4:
-                mid, waist_y
-                mid, leg_y - 0.5
+                body_mid_x, waist_y
+                body_mid_x, leg_y - body_unit * 0.5
         surface garment:
             left_leg
             right_leg
@@ -546,18 +588,18 @@ drawable boxers context garment:
     variant detailed:
         layer body:
             polygon left_leg fabric outline trim width 0.3:
-                mid - hip, waist_y
-                mid, waist_y
-                mid - 0.6, leg_y + 0.25
-                mid - hip, leg_y
+                body_mid_x - hip_half, waist_y
+                body_mid_x, waist_y
+                body_mid_x - body_unit * 0.6, leg_y + body_unit * 0.25
+                body_mid_x - hip_half, leg_y
             mirror left_leg as right_leg
         layer seam:
             line waistband trim width 0.35:
-                mid - hip, waist_y
-                mid + hip, waist_y
+                body_mid_x - hip_half, waist_y
+                body_mid_x + hip_half, waist_y
             line center trim width 0.3:
-                mid, waist_y
-                mid, leg_y
+                body_mid_x, waist_y
+                body_mid_x, leg_y
         surface garment:
             left_leg
             right_leg
@@ -583,19 +625,24 @@ drawable boxers context garment:
                 right_leg
 
 drawable boxer_briefs context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (crotch_x, hip_y) = crotch
+    let hip_half = hip_width / 2
+    let basewear_half = hip_half - body_unit
     paint fabric = fill
     paint trim = edge
-    let waist_y = hip_y - 1
-    let leg_y = hip_y + 2
-    let gap = 0.5
+    let waist_y = hip_y - body_unit * 1
+    let leg_y = hip_y + body_unit * 2
+    let gap = body_unit * 0.5
 
     variant compact:
         layer body:
             polygon left_leg fabric:
-                mid - basewear_hip, waist_y
-                mid - gap, waist_y
-                mid - gap, leg_y
-                mid - basewear_hip + 0.5, leg_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x - gap, waist_y
+                body_mid_x - gap, leg_y
+                body_mid_x - basewear_half + body_unit * 0.5, leg_y
             mirror left_leg as right_leg
         surface garment:
             left_leg
@@ -604,15 +651,15 @@ drawable boxer_briefs context garment:
     variant detailed:
         layer body:
             polygon left_leg fabric outline trim width 0.3:
-                mid - basewear_hip, waist_y
-                mid - gap, waist_y
-                mid - gap, leg_y + 0.25
-                mid - basewear_hip + 0.5, leg_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x - gap, waist_y
+                body_mid_x - gap, leg_y + body_unit * 0.25
+                body_mid_x - basewear_half + body_unit * 0.5, leg_y
             mirror left_leg as right_leg
         layer trim:
             line waistband trim width 0.4:
-                mid - basewear_hip, waist_y
-                mid + basewear_hip, waist_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x + basewear_half, waist_y
         surface garment:
             left_leg
             right_leg
@@ -635,32 +682,37 @@ drawable boxer_briefs context garment:
                 right_leg
 
 drawable briefs context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (crotch_x, hip_y) = crotch
+    let hip_half = hip_width / 2
+    let basewear_half = hip_half - body_unit
     paint fabric = fill
     paint trim = edge
-    let waist_y = hip_y - 1
-    let bottom_y = hip_y + 2
+    let waist_y = hip_y - body_unit * 1
+    let bottom_y = hip_y + body_unit * 2
 
     variant compact:
         layer body:
             polygon panel fabric:
-                mid - basewear_hip, waist_y
-                mid + basewear_hip, waist_y
-                mid + 1, bottom_y
-                mid - 1, bottom_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x + basewear_half, waist_y
+                body_mid_x + body_unit * 1, bottom_y
+                body_mid_x - body_unit * 1, bottom_y
         surface garment:
             panel
 
     variant detailed:
         layer body:
             polygon panel fabric outline trim width 0.3:
-                mid - basewear_hip, waist_y
-                mid + basewear_hip, waist_y
-                mid + 1, bottom_y + 0.25
-                mid - 1, bottom_y + 0.25
+                body_mid_x - basewear_half, waist_y
+                body_mid_x + basewear_half, waist_y
+                body_mid_x + body_unit * 1, bottom_y + body_unit * 0.25
+                body_mid_x - body_unit * 1, bottom_y + body_unit * 0.25
         layer trim:
             line waistband trim width 0.35:
-                mid - basewear_hip, waist_y
-                mid + basewear_hip, waist_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x + basewear_half, waist_y
         surface garment:
             panel
 
@@ -680,28 +732,33 @@ drawable briefs context garment:
                 folded
 
 drawable bikini_panties context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (crotch_x, hip_y) = crotch
+    let hip_half = hip_width / 2
+    let basewear_half = hip_half - body_unit
     paint fabric = fill
     paint trim = edge
-    let waist_y = hip_y - 1
+    let waist_y = hip_y - body_unit * 1
     let panel_y = hip_y
-    let bottom_y = hip_y + 2
+    let bottom_y = hip_y + body_unit * 2
 
     variant compact:
         layer body:
             polygon panel fabric:
-                mid - 1.5, panel_y
-                mid + 1.5, panel_y
-                mid + 0.75, bottom_y
-                mid - 0.75, bottom_y
+                body_mid_x - body_unit * 1.5, panel_y
+                body_mid_x + body_unit * 1.5, panel_y
+                body_mid_x + body_unit * 0.75, bottom_y
+                body_mid_x - body_unit * 0.75, bottom_y
         layer sides:
             line left_side fabric width 0.7:
-                mid - basewear_hip, waist_y
-                mid - 1.5, panel_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x - body_unit * 1.5, panel_y
             mirror left_side as right_side
             when detail has strappy:
                 line left_extra trim width 0.35:
-                    mid - basewear_hip, waist_y - 0.5
-                    mid - 1.5, panel_y - 0.4
+                    body_mid_x - basewear_half, waist_y - body_unit * 0.5
+                    body_mid_x - body_unit * 1.5, panel_y - body_unit * 0.4
                 mirror left_extra as right_extra
         surface garment:
             panel
@@ -709,19 +766,19 @@ drawable bikini_panties context garment:
     variant detailed:
         layer body:
             polygon panel fabric outline trim width 0.25:
-                mid - 1.65, panel_y
-                mid + 1.65, panel_y
-                mid + 0.75, bottom_y + 0.25
-                mid - 0.75, bottom_y + 0.25
+                body_mid_x - body_unit * 1.65, panel_y
+                body_mid_x + body_unit * 1.65, panel_y
+                body_mid_x + body_unit * 0.75, bottom_y + body_unit * 0.25
+                body_mid_x - body_unit * 0.75, bottom_y + body_unit * 0.25
         layer sides:
             line left_side fabric width 0.55:
-                mid - basewear_hip, waist_y
-                mid - 1.65, panel_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x - body_unit * 1.65, panel_y
             mirror left_side as right_side
             when detail has strappy:
                 line left_extra trim width 0.3:
-                    mid - basewear_hip, waist_y - 0.5
-                    mid - 1.65, panel_y - 0.35
+                    body_mid_x - basewear_half, waist_y - body_unit * 0.5
+                    body_mid_x - body_unit * 1.65, panel_y - body_unit * 0.35
                 mirror left_extra as right_extra
         surface garment:
             panel
@@ -742,36 +799,41 @@ drawable bikini_panties context garment:
                 folded
 
 drawable cheeky_panties context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (crotch_x, hip_y) = crotch
+    let hip_half = hip_width / 2
+    let basewear_half = hip_half - body_unit
     paint fabric = fill
     paint trim = edge
-    let waist_y = hip_y - 1
-    let bottom_y = hip_y + 2
+    let waist_y = hip_y - body_unit * 1
+    let bottom_y = hip_y + body_unit * 2
 
     variant compact:
         layer body:
             polygon panel fabric:
-                mid - basewear_hip, waist_y
-                mid + basewear_hip, waist_y
-                mid + 1.75, hip_y
-                mid + 0.75, bottom_y
-                mid - 0.75, bottom_y
-                mid - 1.75, hip_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x + basewear_half, waist_y
+                body_mid_x + body_unit * 1.75, hip_y
+                body_mid_x + body_unit * 0.75, bottom_y
+                body_mid_x - body_unit * 0.75, bottom_y
+                body_mid_x - body_unit * 1.75, hip_y
         surface garment:
             panel
 
     variant detailed:
         layer body:
             polygon panel fabric outline trim width 0.25:
-                mid - basewear_hip, waist_y
-                mid + basewear_hip, waist_y
-                mid + 1.75, hip_y
-                mid + 0.75, bottom_y
-                mid - 0.75, bottom_y
-                mid - 1.75, hip_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x + basewear_half, waist_y
+                body_mid_x + body_unit * 1.75, hip_y
+                body_mid_x + body_unit * 0.75, bottom_y
+                body_mid_x - body_unit * 0.75, bottom_y
+                body_mid_x - body_unit * 1.75, hip_y
         layer trim:
             line upper_trim trim width 0.35:
-                mid - basewear_hip, waist_y
-                mid + basewear_hip, waist_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x + basewear_half, waist_y
         surface garment:
             panel
 
@@ -795,27 +857,32 @@ drawable cheeky_panties context garment:
                 folded
 
 drawable thong context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (crotch_x, hip_y) = crotch
+    let hip_half = hip_width / 2
+    let basewear_half = hip_half - body_unit
     paint fabric = fill
     paint trim = edge
-    let waist_y = hip_y - 1
+    let waist_y = hip_y - body_unit * 1
     let panel_y = hip_y
-    let bottom_y = hip_y + 2
+    let bottom_y = hip_y + body_unit * 2
 
     variant compact:
         layer body:
             polygon panel fabric:
-                mid - 1, panel_y
-                mid + 1, panel_y
-                mid, bottom_y
+                body_mid_x - body_unit * 1, panel_y
+                body_mid_x + body_unit * 1, panel_y
+                body_mid_x, bottom_y
         layer strings:
             line left_string fabric width 0.55:
-                mid - basewear_hip, waist_y
-                mid - 1, panel_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x - body_unit * 1, panel_y
             mirror left_string as right_string
             when detail has strappy:
                 line left_extra trim width 0.3:
-                    mid - basewear_hip, waist_y - 0.5
-                    mid - 1, panel_y - 0.3
+                    body_mid_x - basewear_half, waist_y - body_unit * 0.5
+                    body_mid_x - body_unit * 1, panel_y - body_unit * 0.3
                 mirror left_extra as right_extra
         surface garment:
             panel
@@ -823,18 +890,18 @@ drawable thong context garment:
     variant detailed:
         layer body:
             polygon panel fabric outline trim width 0.25:
-                mid - 1, panel_y
-                mid + 1, panel_y
-                mid, bottom_y + 0.25
+                body_mid_x - body_unit * 1, panel_y
+                body_mid_x + body_unit * 1, panel_y
+                body_mid_x, bottom_y + body_unit * 0.25
         layer strings:
             line left_string fabric width 0.4:
-                mid - basewear_hip, waist_y
-                mid - 1, panel_y
+                body_mid_x - basewear_half, waist_y
+                body_mid_x - body_unit * 1, panel_y
             mirror left_string as right_string
             when detail has strappy:
                 line left_extra trim width 0.25:
-                    mid - basewear_hip, waist_y - 0.5
-                    mid - 1, panel_y - 0.3
+                    body_mid_x - basewear_half, waist_y - body_unit * 0.5
+                    body_mid_x - body_unit * 1, panel_y - body_unit * 0.3
                 mirror left_extra as right_extra
         surface garment:
             panel
@@ -859,37 +926,43 @@ drawable thong context garment:
                 panel
 
 drawable high_waist_panties context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (crotch_x, hip_y) = crotch
+    let hip_half = hip_width / 2
+    let waist_half = waist_width / 2
+    let basewear_half = hip_half - body_unit
     paint fabric = fill
     paint trim = edge
-    let high_y = hip_y - 1
+    let high_y = hip_y - body_unit * 1
     let waist_y = hip_y 
-    let bottom_y = hip_y + 1
+    let bottom_y = hip_y + body_unit * 1
 
     variant compact:
         layer body:
             polygon panel fabric:
-                mid - waist, high_y
-                mid + waist, high_y
-                mid + basewear_hip -0.3, waist_y
-                mid + 1, bottom_y
-                mid - 1, bottom_y
-                mid - basewear_hip +0.3, waist_y
+                body_mid_x - waist_half, high_y
+                body_mid_x + waist_half, high_y
+                body_mid_x + basewear_half - body_unit * 0.3, waist_y
+                body_mid_x + body_unit * 1, bottom_y
+                body_mid_x - body_unit * 1, bottom_y
+                body_mid_x - basewear_half + body_unit * 0.3, waist_y
         surface garment:
             panel
 
     variant detailed:
         layer body:
             polygon panel fabric outline trim width 0.3:
-                mid - waist, high_y
-                mid + waist, high_y
-                mid + basewear_hip, waist_y
-                mid + 1, bottom_y + 0.25
-                mid - 1, bottom_y + 0.25
-                mid - basewear_hip, waist_y
+                body_mid_x - waist_half, high_y
+                body_mid_x + waist_half, high_y
+                body_mid_x + basewear_half, waist_y
+                body_mid_x + body_unit * 1, bottom_y + body_unit * 0.25
+                body_mid_x - body_unit * 1, bottom_y + body_unit * 0.25
+                body_mid_x - basewear_half, waist_y
         layer trim:
             line waistband trim width 0.35:
-                mid - waist, high_y
-                mid + waist, high_y
+                body_mid_x - waist_half, high_y
+                body_mid_x + waist_half, high_y
         surface garment:
             panel
 
@@ -907,4 +980,3 @@ drawable high_waist_panties context garment:
                     mid + 6, 3
             surface item:
                 folded
-

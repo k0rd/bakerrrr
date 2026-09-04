@@ -51,6 +51,7 @@ GARMENT_MEASURE_SYMBOLS = frozenset({
     "neck_width",
     "shoulder_width",
     "armpit_width",
+    "upper_torso_width",
     "waist_width",
     "hip_width",
     "torso_height",
@@ -1459,6 +1460,10 @@ class DrawableRenderContext:
         symbols["neck_width"] = distance("neck_left", "neck_right")
         symbols["shoulder_width"] = distance("shoulder_left", "shoulder_right")
         symbols["armpit_width"] = distance("armpit_left", "armpit_right")
+        symbols["upper_torso_width"] = max(
+            symbols["shoulder_width"],
+            symbols["armpit_width"],
+        )
         symbols["waist_width"] = distance("waist_left", "waist_right")
         symbols["hip_width"] = distance("hip_left", "hip_right")
         symbols["torso_height"] = distance("shoulder_center", "hip_center")
@@ -1493,7 +1498,7 @@ class DrawableRenderContext:
         # derived from shared geometry.  One legacy logical unit is expressed as
         # 1/16 of the frame width rather than as an independent body constant.
         mid = point("tile_center")[0]
-        shoulder = max(symbols["shoulder_width"], symbols["armpit_width"]) / 2.0
+        shoulder = symbols["upper_torso_width"] / 2.0
         hip = symbols["hip_width"] / 2.0
         waist = (
             min(shoulder, hip)

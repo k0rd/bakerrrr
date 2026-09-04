@@ -1,16 +1,21 @@
-bakerrrr-drawable 1
+bakerrrr-drawable 2
 
+# Worn geometry is derived from frozen body Points. Local coordinate Scalars
+# are explicit; body_unit is a body-height measure, never a naked offset.
 drawable boots context garment:
+    let body_unit = body_height / 14
+    let (left_toe_x, foot_y) = toe_tip_left
+    let left_foot_x = left_toe_x + ankle_width_left
     paint fabric = fill
     paint trim = edge
     let sole_y = foot_y
     variant compact:
         layer body:
             rect left_boot fabric:
-                x left_foot_x - 1.25
-                y foot_y - 2
-                w 2.5
-                h 2.5
+                x left_foot_x - body_unit * 1.25
+                y foot_y - body_unit * 2
+                w body_unit * 2.5
+                h body_unit * 2.5
             mirror left_boot as right_boot
         surface garment:
             left_boot
@@ -18,30 +23,33 @@ drawable boots context garment:
     variant detailed:
         layer body:
             polygon left_boot fabric outline trim width 0.3:
-                left_foot_x - 1, foot_y - 3
-                left_foot_x + 0.75, foot_y - 3
-                left_foot_x + 1, sole_y
-                left_foot_x - 2, sole_y
+                left_foot_x - body_unit * 1, foot_y - body_unit * 3
+                left_foot_x + body_unit * 0.75, foot_y - body_unit * 3
+                left_foot_x + body_unit * 1, sole_y
+                left_foot_x - body_unit * 2, sole_y
             mirror left_boot as right_boot
         layer detail:
             line left_sole trim width 0.4:
-                left_foot_x - 2, sole_y
-                left_foot_x + 1, sole_y
+                left_foot_x - body_unit * 2, sole_y
+                left_foot_x + body_unit * 1, sole_y
             mirror left_sole as right_sole
         surface garment:
             left_boot
             right_boot
 
 drawable sneakers context garment:
+    let body_unit = body_height / 14
+    let (left_toe_x, foot_y) = toe_tip_left
+    let left_foot_x = left_toe_x + ankle_width_left
     paint fabric = fill
     paint trim = edge
     variant compact:
         layer body:
             ellipse left_shoe fabric:
-                x left_foot_x - 1.5
-                y foot_y - 1.5
-                w 3
-                h 2
+                x left_foot_x - body_unit * 1.5
+                y foot_y - body_unit * 1.5
+                w body_unit * 3
+                h body_unit * 2
             mirror left_shoe as right_shoe
         surface garment:
             left_shoe
@@ -49,35 +57,38 @@ drawable sneakers context garment:
     variant detailed:
         layer body:
             polygon left_shoe fabric outline trim width 0.25:
-                left_foot_x - 1, foot_y - 1.75
-                left_foot_x + 1, foot_y - 1.75
-                left_foot_x + 1.5, foot_y
-                left_foot_x - 1.5, foot_y
+                left_foot_x - body_unit * 1, foot_y - body_unit * 1.75
+                left_foot_x + body_unit * 1, foot_y - body_unit * 1.75
+                left_foot_x + body_unit * 1.5, foot_y
+                left_foot_x - body_unit * 1.5, foot_y
             mirror left_shoe as right_shoe
         layer detail:
             line left_lace trim width 0.25:
-                left_foot_x - 0.5, foot_y - 1.25
-                left_foot_x + 0.75, foot_y - 1.25
+                left_foot_x - body_unit * 0.5, foot_y - body_unit * 1.25
+                left_foot_x + body_unit * 0.75, foot_y - body_unit * 1.25
             mirror left_lace as right_lace
         surface garment:
             left_shoe
             right_shoe
 
 drawable sandals context garment:
+    let body_unit = body_height / 14
+    let (left_toe_x, foot_y) = toe_tip_left
+    let left_foot_x = left_toe_x + ankle_width_left
     paint fabric = fill
     paint trim = edge
     variant compact:
         layer body:
             ellipse left_sole fabric:
-                x left_foot_x - 1.5
-                y foot_y - 0.75
-                w 3
-                h 1.25
+                x left_foot_x - body_unit * 1.5
+                y foot_y - body_unit * 0.75
+                w body_unit * 3
+                h body_unit * 1.25
             mirror left_sole as right_sole
         layer straps:
             line left_strap trim width 0.55:
-                left_foot_x - 1, foot_y - 1.5
-                left_foot_x + 1, foot_y - 0.5
+                left_foot_x - body_unit * 1, foot_y - body_unit * 1.5
+                left_foot_x + body_unit * 1, foot_y - body_unit * 0.5
             mirror left_strap as right_strap
         surface garment:
             left_sole
@@ -85,20 +96,20 @@ drawable sandals context garment:
     variant detailed:
         layer body:
             ellipse left_sole fabric:
-                x left_foot_x - 1.5
-                y foot_y - 0.75
-                w 3
-                h 0.75
+                x left_foot_x - body_unit * 1.5
+                y foot_y - body_unit * 0.75
+                w body_unit * 3
+                h body_unit * 0.75
                 outline trim
                 width 0.2
             mirror left_sole as right_sole
         layer straps:
             line left_strap_a trim width 0.35:
-                left_foot_x - 1, foot_y - 1.5
-                left_foot_x + 1, foot_y - 0.5
+                left_foot_x - body_unit * 1, foot_y - body_unit * 1.5
+                left_foot_x + body_unit * 1, foot_y - body_unit * 0.5
             line left_strap_b trim width 0.35:
-                left_foot_x + 1, foot_y - 1.5
-                left_foot_x - 1, foot_y - 0.5
+                left_foot_x + body_unit * 1, foot_y - body_unit * 1.5
+                left_foot_x - body_unit * 1, foot_y - body_unit * 0.5
             mirror left_strap_a as right_strap_a
             mirror left_strap_b as right_strap_b
         surface garment:
@@ -106,80 +117,91 @@ drawable sandals context garment:
             right_sole
 
 drawable cap context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, head_top_y) = crown
+    let (head_center_x, head_y) = between(crown, chin, 0.5)
+    let head_half = head_width / 2
     paint fabric = fill
     paint trim = edge
-    let hat_half = head_half + 1
-    let crown_bottom = head_y + head_half - 1
+    let hat_half = head_half + body_unit * 1
+    let crown_bottom = head_y + head_half - body_unit * 1
     variant compact:
         layer body:
             ellipse crown fabric:
-                x mid - hat_half
+                x body_mid_x - hat_half
                 y head_top_y
                 w hat_half + hat_half
-                h head_half + 1
+                h head_half + body_unit * 1
             rect brim fabric:
-                x mid
+                x body_mid_x
                 y crown_bottom
-                w hat_half + 1
-                h 0.75
+                w hat_half + body_unit * 1
+                h body_unit * 0.75
         surface garment:
             crown
             brim
     variant detailed:
         layer body:
             ellipse crown fabric:
-                x mid - hat_half - 0.25
-                y head_top_y - 0.25
-                w hat_half + hat_half + 0.5
-                h head_half + 1.25
+                x body_mid_x - hat_half - body_unit * 0.25
+                y head_top_y - body_unit * 0.25
+                w hat_half + hat_half + body_unit * 0.5
+                h head_half + body_unit * 1.25
                 outline trim
                 width 0.25
             polygon brim fabric outline trim width 0.25:
-                mid - 0.25, crown_bottom
-                mid + hat_half + 1, crown_bottom
-                mid + hat_half + 0.25, crown_bottom + 0.75
-                mid, crown_bottom + 0.75
+                body_mid_x - body_unit * 0.25, crown_bottom
+                body_mid_x + hat_half + body_unit * 1, crown_bottom
+                body_mid_x + hat_half + body_unit * 0.25, crown_bottom + body_unit * 0.75
+                body_mid_x, crown_bottom + body_unit * 0.75
         layer seam:
             line crown_seam trim width 0.2:
-                mid, head_top_y
-                mid, crown_bottom + 0.5
+                body_mid_x, head_top_y
+                body_mid_x, crown_bottom + body_unit * 0.5
         surface garment:
             crown
             brim
 
 drawable bandana context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (shoulder_anchor_x, shoulder_y) = shoulder_left
+    let (head_center_x, head_y) = between(crown, chin, 0.5)
+    let head_half = head_width / 2
+    let right_ear_x = body_mid_x + head_half
+    let ear_y = head_y
     paint fabric = fill
     paint trim = edge
-    let wrap_half = head_half + 1
+    let wrap_half = head_half + body_unit * 1
     variant compact:
         layer body:
             polygon wrap fabric:
-                mid - wrap_half, ear_y - 1
-                mid + wrap_half, ear_y - 1
-                mid + head_half, ear_y + 1
-                mid - head_half, ear_y + 1
+                body_mid_x - wrap_half, ear_y - body_unit * 1
+                body_mid_x + wrap_half, ear_y - body_unit * 1
+                body_mid_x + head_half, ear_y + body_unit * 1
+                body_mid_x - head_half, ear_y + body_unit * 1
             polygon tail fabric:
-                right_ear_x - 0.5, ear_y + 0.5
-                right_ear_x + 2, shoulder_y
-                right_ear_x, shoulder_y + 0.5
+                right_ear_x - body_unit * 0.5, ear_y + body_unit * 0.5
+                right_ear_x + body_unit * 2, shoulder_y
+                right_ear_x, shoulder_y + body_unit * 0.5
         surface garment:
             wrap
             tail
     variant detailed:
         layer body:
             polygon wrap fabric outline trim width 0.25:
-                mid - wrap_half, ear_y - 1.25
-                mid + wrap_half, ear_y - 1.25
-                mid + head_half, ear_y + 1
-                mid - head_half, ear_y + 1
+                body_mid_x - wrap_half, ear_y - body_unit * 1.25
+                body_mid_x + wrap_half, ear_y - body_unit * 1.25
+                body_mid_x + head_half, ear_y + body_unit * 1
+                body_mid_x - head_half, ear_y + body_unit * 1
             polygon tail fabric outline trim width 0.25:
-                right_ear_x - 0.5, ear_y + 0.5
-                right_ear_x + 2, shoulder_y
-                right_ear_x, shoulder_y + 0.5
+                right_ear_x - body_unit * 0.5, ear_y + body_unit * 0.5
+                right_ear_x + body_unit * 2, shoulder_y
+                right_ear_x, shoulder_y + body_unit * 0.5
         layer seam:
             line fold trim width 0.25:
-                mid - head_half, ear_y + 0.5
-                mid + head_half, ear_y + 0.5
+                body_mid_x - head_half, ear_y + body_unit * 0.5
+                body_mid_x + head_half, ear_y + body_unit * 0.5
         surface garment:
             wrap
             tail

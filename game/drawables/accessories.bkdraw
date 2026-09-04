@@ -1,13 +1,21 @@
-bakerrrr-drawable 1
+bakerrrr-drawable 2
 
+# Worn geometry is derived from frozen body Points. Local coordinate Scalars
+# are explicit; body_unit is a body-height measure, never a naked offset.
 drawable earrings context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (head_center_x, head_y) = between(crown, chin, 0.5)
+    let head_half = head_width / 2
+    let left_ear_x = body_mid_x - head_half
+    let ear_y = head_y
     paint metal = fill
     paint glint = edge
     variant compact:
         layer body:
             circle left_stud metal:
                 center left_ear_x, ear_y
-                radius 0.55
+                radius body_unit * 0.55
             mirror left_stud as right_stud
         surface garment:
             left_stud
@@ -16,173 +24,193 @@ drawable earrings context garment:
         layer body:
             circle left_stud metal:
                 center left_ear_x, ear_y
-                radius 0.65
+                radius body_unit * 0.65
                 outline glint
                 width 0.2
             mirror left_stud as right_stud
             line left_drop metal width 0.3:
-                left_ear_x, ear_y + 0.5
-                left_ear_x, ear_y + 1.5
+                left_ear_x, ear_y + body_unit * 0.5
+                left_ear_x, ear_y + body_unit * 1.5
             mirror left_drop as right_drop
         surface garment:
             left_stud
             right_stud
 
 drawable earpiece context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (head_center_x, head_y) = between(crown, chin, 0.5)
+    let head_half = head_width / 2
+    let right_ear_x = body_mid_x + head_half
+    let ear_y = head_y
     paint shell = fill
     paint trim = edge
     variant compact:
         layer body:
             circle bud shell:
                 center right_ear_x, ear_y
-                radius 0.65
+                radius body_unit * 0.65
             line wire trim width 0.4:
-                right_ear_x, ear_y + 0.5
-                right_ear_x + 0.25, ear_y + 2
+                right_ear_x, ear_y + body_unit * 0.5
+                right_ear_x + body_unit * 0.25, ear_y + body_unit * 2
         surface garment:
             bud
     variant detailed:
         layer body:
             circle bud shell:
                 center right_ear_x, ear_y
-                radius 0.7
+                radius body_unit * 0.7
                 outline trim
                 width 0.2
             line wire trim width 0.3:
-                right_ear_x, ear_y + 0.5
-                right_ear_x + 0.5, ear_y + 1.5
-                right_ear_x, ear_y + 2.5
+                right_ear_x, ear_y + body_unit * 0.5
+                right_ear_x + body_unit * 0.5, ear_y + body_unit * 1.5
+                right_ear_x, ear_y + body_unit * 2.5
             circle mic shell:
-                center right_ear_x, ear_y + 2.5
-                radius 0.3
+                center right_ear_x, ear_y + body_unit * 2.5
+                radius body_unit * 0.3
         surface garment:
             bud
             mic
 
 drawable ring context garment:
+    let body_unit = body_height / 14
+    let (left_hand_x, hand_y) = between(wrist_inner_left, wrist_outer_left, 0.5)
+    let (right_hand_x, right_hand_y) = between(wrist_inner_right, wrist_outer_right, 0.5)
     paint metal = fill
     paint glint = edge
     variant compact:
         layer body:
             circle band metal:
                 center right_hand_x, hand_y
-                radius 0.55
+                radius body_unit * 0.55
         surface garment:
             band
     variant detailed:
         layer body:
             circle band metal:
                 center right_hand_x, hand_y
-                radius 0.7
+                radius body_unit * 0.7
                 outline glint
                 width 0.25
             circle stone glint:
-                center right_hand_x, hand_y - 0.5
-                radius 0.25
+                center right_hand_x, hand_y - body_unit * 0.5
+                radius body_unit * 0.25
         surface garment:
             band
             stone
 
 drawable necklace context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (shoulder_anchor_x, shoulder_y) = shoulder_left
     paint metal = fill
     paint glint = edge
     variant compact:
         layer body:
             line chain metal width 0.45:
-                mid - 2, shoulder_y + 0.5
-                mid, shoulder_y + 3
-                mid + 2, shoulder_y + 0.5
+                body_mid_x - body_unit * 2, shoulder_y + body_unit * 0.5
+                body_mid_x, shoulder_y + body_unit * 3
+                body_mid_x + body_unit * 2, shoulder_y + body_unit * 0.5
             circle pendant metal:
-                center mid, shoulder_y + 3
-                radius 0.45
+                center body_mid_x, shoulder_y + body_unit * 3
+                radius body_unit * 0.45
         surface garment:
             pendant
     variant detailed:
         layer body:
             line chain metal width 0.3:
-                mid - 2.25, shoulder_y + 0.5
-                mid, shoulder_y + 3.25
-                mid + 2.25, shoulder_y + 0.5
+                body_mid_x - body_unit * 2.25, shoulder_y + body_unit * 0.5
+                body_mid_x, shoulder_y + body_unit * 3.25
+                body_mid_x + body_unit * 2.25, shoulder_y + body_unit * 0.5
             circle pendant metal:
-                center mid, shoulder_y + 3.25
-                radius 0.6
+                center body_mid_x, shoulder_y + body_unit * 3.25
+                radius body_unit * 0.6
                 outline glint
                 width 0.2
         surface garment:
             pendant
 
 drawable scarf context garment:
+    let body_unit = body_height / 14
+    let (body_mid_x, crown_y) = crown
+    let (shoulder_anchor_x, shoulder_y) = shoulder_left
     paint fabric = fill
     paint trim = edge
     variant compact:
         layer body:
             ellipse wrap fabric:
-                x mid - 3
-                y shoulder_y - 0.5
-                w 6
-                h 2.5
+                x body_mid_x - body_unit * 3
+                y shoulder_y - body_unit * 0.5
+                w body_unit * 6
+                h body_unit * 2.5
             polygon tail fabric:
-                mid + 1, shoulder_y + 1
-                mid + 3, shoulder_y + 6
-                mid + 1, shoulder_y + 5
+                body_mid_x + body_unit * 1, shoulder_y + body_unit * 1
+                body_mid_x + body_unit * 3, shoulder_y + body_unit * 6
+                body_mid_x + body_unit * 1, shoulder_y + body_unit * 5
         surface garment:
             wrap
             tail
     variant detailed:
         layer body:
             ellipse wrap fabric:
-                x mid - 3.25
-                y shoulder_y - 0.75
-                w 6.5
-                h 2.75
+                x body_mid_x - body_unit * 3.25
+                y shoulder_y - body_unit * 0.75
+                w body_unit * 6.5
+                h body_unit * 2.75
                 outline trim
                 width 0.25
             polygon tail fabric outline trim width 0.25:
-                mid + 1, shoulder_y + 1
-                mid + 3.25, shoulder_y + 6.5
-                mid + 1, shoulder_y + 5.5
+                body_mid_x + body_unit * 1, shoulder_y + body_unit * 1
+                body_mid_x + body_unit * 3.25, shoulder_y + body_unit * 6.5
+                body_mid_x + body_unit * 1, shoulder_y + body_unit * 5.5
         layer detail:
             line tail_fold trim width 0.25:
-                mid + 1.5, shoulder_y + 2
-                mid + 2.5, shoulder_y + 5.5
+                body_mid_x + body_unit * 1.5, shoulder_y + body_unit * 2
+                body_mid_x + body_unit * 2.5, shoulder_y + body_unit * 5.5
         surface garment:
             wrap
             tail
 
 drawable bracelet context garment:
+    let body_unit = body_height / 14
+    let (left_hand_x, hand_y) = between(wrist_inner_left, wrist_outer_left, 0.5)
+    let (right_hand_x, right_hand_y) = between(wrist_inner_right, wrist_outer_right, 0.5)
     paint metal = fill
     paint glint = edge
     variant compact:
         layer body:
             circle band metal:
-                center right_hand_x, hand_y - 0.5
-                radius 0.75
+                center right_hand_x, hand_y - body_unit * 0.5
+                radius body_unit * 0.75
         surface garment:
             band
     variant detailed:
         layer body:
             circle band metal:
-                center right_hand_x, hand_y - 0.5
-                radius 0.9
+                center right_hand_x, hand_y - body_unit * 0.5
+                radius body_unit * 0.9
                 outline glint
                 width 0.3
             circle clasp glint:
-                center right_hand_x + 0.5, hand_y - 1
-                radius 0.2
+                center right_hand_x + body_unit * 0.5, hand_y - body_unit * 1
+                radius body_unit * 0.2
         surface garment:
             band
             clasp
 
 drawable gloves context garment:
+    let body_unit = body_height / 14
+    let (left_hand_x, hand_y) = between(wrist_inner_left, wrist_outer_left, 0.5)
     paint fabric = fill
     paint trim = edge
     variant compact:
         layer body:
             ellipse left_glove fabric:
-                x left_hand_x - 1
-                y hand_y - 1
-                w 2
-                h 2.5
+                x left_hand_x - body_unit * 1
+                y hand_y - body_unit * 1
+                w body_unit * 2
+                h body_unit * 2.5
             mirror left_glove as right_glove
         surface garment:
             left_glove
@@ -190,46 +218,49 @@ drawable gloves context garment:
     variant detailed:
         layer body:
             polygon left_glove fabric outline trim width 0.25:
-                left_hand_x - 0.75, hand_y - 1
-                left_hand_x + 1, hand_y - 1
-                left_hand_x + 1, hand_y + 1.5
-                left_hand_x - 0.5, hand_y + 1.5
-                left_hand_x - 1, hand_y + 0.5
+                left_hand_x - body_unit * 0.75, hand_y - body_unit * 1
+                left_hand_x + body_unit * 1, hand_y - body_unit * 1
+                left_hand_x + body_unit * 1, hand_y + body_unit * 1.5
+                left_hand_x - body_unit * 0.5, hand_y + body_unit * 1.5
+                left_hand_x - body_unit * 1, hand_y + body_unit * 0.5
             mirror left_glove as right_glove
         layer detail:
             line left_cuff trim width 0.3:
-                left_hand_x - 0.75, hand_y - 1
-                left_hand_x + 1, hand_y - 1
+                left_hand_x - body_unit * 0.75, hand_y - body_unit * 1
+                left_hand_x + body_unit * 1, hand_y - body_unit * 1
             mirror left_cuff as right_cuff
         surface garment:
             left_glove
             right_glove
 
 drawable watch context garment:
+    let body_unit = body_height / 14
+    let (left_hand_x, hand_y) = between(wrist_inner_left, wrist_outer_left, 0.5)
+    let (right_hand_x, right_hand_y) = between(wrist_inner_right, wrist_outer_right, 0.5)
     paint metal = fill
     paint glint = edge
     paint shadow = shade
     variant compact:
         layer body:
             rect face metal:
-                x right_hand_x - 0.75
-                y hand_y - 1.5
-                w 1.5
-                h 1.5
+                x right_hand_x - body_unit * 0.75
+                y hand_y - body_unit * 1.5
+                w body_unit * 1.5
+                h body_unit * 1.5
         surface garment:
             face
     variant detailed:
         layer body:
             rect face metal:
-                x right_hand_x - 0.875
-                y hand_y - 1.5
-                w 1.75
-                h 1.75
+                x right_hand_x - body_unit * 0.875
+                y hand_y - body_unit * 1.5
+                w body_unit * 1.75
+                h body_unit * 1.75
                 outline glint
                 width 0.25
             line strap shadow width 0.45:
-                right_hand_x, hand_y - 2.5
-                right_hand_x, hand_y - 1.5
-                right_hand_x, hand_y + 0.25
+                right_hand_x, hand_y - body_unit * 2.5
+                right_hand_x, hand_y - body_unit * 1.5
+                right_hand_x, hand_y + body_unit * 0.25
         surface garment:
             face
