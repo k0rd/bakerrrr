@@ -422,7 +422,7 @@ class RunEpilogueLedgerSystem(System):
         npc = self._eid_name(event.data.get("npc_eid"), "NPC")
         reason = str(event.data.get("reason", "social choice") or "social choice").replace("_", " ")
         subject = self._incident_subject(self._event_incident_id(event))
-        self._record("look_away", f"{npc} chose not to make {subject} official ({reason}).", event, weight=0.75, incident_id=self._event_incident_id(event))
+        self._record("look_away", f"{npc} chose not to report {subject} ({reason}).", event, weight=0.75, incident_id=self._event_incident_id(event))
 
     def on_observed_response_cue(self, event):
         cue = str(event.data.get("cue_kind", "response") or "response").strip().lower()

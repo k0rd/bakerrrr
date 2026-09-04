@@ -43,14 +43,20 @@ drawable sneakers context garment:
     let left_foot_x = left_toe_x + ankle_width_left
     paint fabric = fill
     paint trim = edge
+    paint sole = shade
     variant compact:
         layer body:
-            ellipse left_shoe fabric:
-                x left_foot_x - body_unit * 1.5
-                y foot_y - body_unit * 1.5
-                w body_unit * 3
-                h body_unit * 2
+            polygon left_shoe fabric:
+                left_foot_x - body_unit * 1, foot_y - body_unit * 1.25
+                left_foot_x + body_unit * 0.5, foot_y - body_unit * 1.25
+                left_foot_x + body_unit * 0.85, foot_y
+                left_foot_x - body_unit * 1, foot_y
             mirror left_shoe as right_shoe
+        layer detail:
+            line left_sole sole width 0.22:
+                left_foot_x - body_unit * 1, foot_y
+                left_foot_x + body_unit * 0.85, foot_y
+            mirror left_sole as right_sole
         surface garment:
             left_shoe
             right_shoe
