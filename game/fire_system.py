@@ -1455,7 +1455,7 @@ class FireSystem(System):
                     "drift_preferred": False,
                 },
                 "local_line": f"{_text(prop.get('name', prop.get('id', 'The site')))} is still on fire, and the front is being held while people try to keep the block from feeding it.",
-                "detail_line": f"Flame and smoke are still visible at {_text(prop.get('name', prop.get('id', 'the site')))}. Expect a public cordon, live response motion, and a frontage nobody trusts yet.",
+                "detail_line": f"Flame and smoke are still visible at {_text(prop.get('name', prop.get('id', 'the site')))}. Expect a public cordon, live response motion, and a building nobody trusts yet.",
                 "lead_kind": "access",
                 "shared": False,
                 "consequence_seed_id": "",

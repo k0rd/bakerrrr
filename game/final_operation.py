@@ -881,9 +881,9 @@ def _target_entry_plan(sim, prop, *, intel_profile=None, player_eid=None):
 
     if backup.get("active"):
         if side_label:
-            tail_bits.append(f"Your hired backup can pull eyes to the frontage while you slip the {side_label}.")
+            tail_bits.append(f"Your hired backup can pull eyes to the door while you slip the {side_label}.")
         else:
-            tail_bits.append("Your hired backup can keep the frontage busy if you need the outer layer to look away.")
+            tail_bits.append("Your hired backup can keep the door busy if you need the outer layer to look away.")
         if not label and not detail:
             label = "backup distraction"
             detail = tail_bits[-1]

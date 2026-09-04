@@ -43,7 +43,7 @@ from game.world_event_presentation import (
 _PHASE_PROFILES = {
     "regulars_spill": {
         "title": "Regulars Table",
-        "summary": "loyal regulars are making the frontage visibly theirs",
+        "summary": "loyal regulars are making the front of the shop visibly theirs",
         "action": "talk for the neighborhood read or lean on their vouch",
     },
     "grumbling_front": {
@@ -58,17 +58,17 @@ _PHASE_PROFILES = {
     },
     "soft_front": {
         "title": "Soft Front",
-        "summary": "opportunists are testing a weak frontage for easy marks",
+        "summary": "opportunists are testing a weak buisiness for easy marks",
         "action": "read the sheet, challenge the nuisance, exploit it, or leave it alone",
     },
     "taped_off_front": {
         "title": "Held Aftermath",
-        "summary": "recent trouble still has the frontage held in public view",
+        "summary": "recent trouble still has the business held in public view",
         "action": "inspect the hold notes or question nearby witnesses",
     },
     "afterhours_aftermath": {
         "title": "Afterhours Aftermath",
-        "summary": "the last incident has left visible residue at the frontage",
+        "summary": "the last incident has left visible residue at the doorstep",
         "action": "check the tape, read the room, or ask who stayed late",
     },
     "aftermath_cleanup": {
@@ -78,7 +78,7 @@ _PHASE_PROFILES = {
     },
     "candle_vigil": {
         "title": "Candle Vigil",
-        "summary": "neighbors have turned the frontage into a public memory site",
+        "summary": "neighbors have turned the front of the buisiness into a public memory site",
         "action": "listen carefully, inspect the offerings, or avoid drawing heat",
     },
     "street_triage": {
@@ -108,7 +108,7 @@ _PHASE_PROFILES = {
     },
     "boarding_crush": {
         "title": "Boarding Crush",
-        "summary": "passenger movement is crowding the frontage",
+        "summary": "passenger movement is crowding the doorway",
         "action": "read the fare rack, ask for connections, or use the bustle",
     },
     "arrival_handoff": {

@@ -716,7 +716,7 @@ def gang_visible_cue(gang_org_eid, prop, *, action_kind, claim_kind="", resistan
     if action_kind in {"intimidation", "retaliation"}:
         return "people lower their voices when the same crew colors pass"
     if claim_kind == "front":
-        return "matching colors and repeated faces are turning the frontage into a crew place"
+        return "matching colors and repeated faces are turning the building into a crew place"
     if claim_kind == "stash_site":
         return "the place has too many short visits and too few honest errands"
     if claim_kind == "fence_contact":

@@ -49,9 +49,9 @@ _BUSINESS_SCENE_PHASE_BIASES = {
 }
 
 _BUSINESS_SCENE_NOTES = {
-    "supply_shortage": "the shortage is showing at this frontage",
-    "power_outage": "the outage is shaping how this frontage is being handled",
-    "faction_clash": "local clash pressure is tightening this frontage",
+    "supply_shortage": "the shortage is showing at this business",
+    "power_outage": "the outage is shaping how this businessg handled",
+    "faction_clash": "local clash pressure is tightening this business"
 }
 
 
@@ -205,7 +205,7 @@ def active_world_event_business_scene_contexts(sim, chunk):
             "key": key,
             "label": _text(event.get("label")) or "World Event",
             "effect_summary": world_event_effect_summary(event, include_handles=False),
-            "note": _BUSINESS_SCENE_NOTES.get(key, "a world event is shaping this frontage"),
+            "note": _BUSINESS_SCENE_NOTES.get(key, "a world event is shaping this business")
         })
     return tuple(contexts)
 
