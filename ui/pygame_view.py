@@ -4518,49 +4518,6 @@ class PygameView:
                 ],
                 max(1, stroke_w),
             )
-        elif kind == "guard":
-            points = [
-                (mid_x, inset),
-                (self.cell_px - inset - 2, inset + max(2, self.cell_px // 4)),
-                (self.cell_px - inset - 3, self.cell_px - inset - max(2, self.cell_px // 4)),
-                (mid_x, self.cell_px - inset - 1),
-                (inset + 2, self.cell_px - inset - max(2, self.cell_px // 4)),
-                (inset + 1, inset + max(2, self.cell_px // 4)),
-            ]
-            shadow_points = [(px + 1, py + 1) for px, py in points]
-            self.pygame.draw.polygon(overlay, outline, shadow_points)
-            self.pygame.draw.polygon(overlay, fill, points)
-            self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
-            cap = self.pygame.Rect(
-                mid_x - max(3, self.cell_px // 5),
-                inset + max(1, self.cell_px // 10),
-                max(6, (self.cell_px // 5) * 2),
-                max(2, self.cell_px // 8),
-            )
-            self.pygame.draw.rect(overlay, highlight, cap, border_radius=max(1, self.cell_px // 24))
-            self.pygame.draw.rect(overlay, role_accent, cap.inflate(-max(2, self.cell_px // 7), 0), border_radius=max(1, self.cell_px // 28))
-            self.pygame.draw.line(
-                overlay,
-                role_accent,
-                (mid_x - max(2, self.cell_px // 6), mid_y - max(1, self.cell_px // 8)),
-                (mid_x + max(2, self.cell_px // 6), mid_y - max(1, self.cell_px // 8)),
-                max(1, stroke_w),
-            )
-            self.pygame.draw.line(
-                overlay,
-                shadow,
-                (mid_x - max(2, self.cell_px // 8), mid_y + max(1, self.cell_px // 5)),
-                (mid_x, mid_y + max(3, self.cell_px // 3)),
-                max(1, stroke_w),
-            )
-            self.pygame.draw.line(
-                overlay,
-                shadow,
-                (mid_x, mid_y + max(3, self.cell_px // 3)),
-                (mid_x + max(2, self.cell_px // 8), mid_y + max(1, self.cell_px // 5)),
-                max(1, stroke_w),
-            )
-            self.pygame.draw.circle(overlay, highlight, (mid_x, mid_y + max(1, self.cell_px // 12)), max(1, self.cell_px // 18))
         elif kind == "scout":
             diamond = [
                 (mid_x, inset),
@@ -4776,12 +4733,7 @@ class PygameView:
         mid_x = px // 2
         shoulder_y = int(round(points["shoulder_left"][1]))
 
-        # Occupational marks sit behind a crisp one-pixel person. The player
-        # needs no targeting reticle or identifying watermark.
-        if kind == "guard":
-            shield = [(mid_x, q(1)), (q(13), q(5)), (q(12), q(13)), (mid_x, q(15)), (q(4), q(13)), (q(3), q(5))]
-            self.pygame.draw.lines(overlay, role_accent, True, shield, 1)
-        elif kind == "scout":
+        if kind == "scout":
             diamond = [(mid_x, q(1)), (q(14), mid_x), (mid_x, q(15)), (q(2), mid_x)]
             self.pygame.draw.lines(overlay, self._lightened_rgba(frame, 112, amount=0.45), True, diamond, 1)
 
@@ -4824,6 +4776,11 @@ class PygameView:
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _draw_actor_token_overlay(self, x, y, glyph, color=None, attrs=0, *, kind="civilian", effects=()):
+        # Justice remains behavioral rather than a visible actor badge. Guards
+        # use the same body rendering as civilians so they can blend into the
+        # population until their actions identify them.
+        if kind == "guard":
+            kind = "civilian"
         if self.cell_px <= 10:
             self._draw_actor_token_overlay_legacy(x, y, glyph, color=color, attrs=attrs, kind=kind)
             return
@@ -4873,20 +4830,7 @@ class PygameView:
             alpha=106,
         )
 
-        # Occupational marks live behind the body so clothing remains
-        # readable. Player identity does not need a targeting reticle.
-        if kind == "guard":
-            shield = [
-                (mid_x, max(1, px // 14)),
-                (px - max(2, px // 8), max(4, px // 4)),
-                (px - max(3, px // 7), px - max(3, px // 6)),
-                (mid_x, px - max(1, px // 18)),
-                (max(3, px // 7), px - max(3, px // 6)),
-                (max(2, px // 8), max(4, px // 4)),
-            ]
-            self.pygame.draw.polygon(overlay, self._darkened_rgba(frame, 84, amount=0.68), shield)
-            self.pygame.draw.polygon(overlay, role_accent, shield, stroke_w)
-        elif kind == "scout":
+        if kind == "scout":
             diamond = [
                 (mid_x, max(1, px // 12)),
                 (px - max(2, px // 9), px // 2),
@@ -4969,11 +4913,7 @@ class PygameView:
             overlay.set_at((mid_x - eye_offset, eye_y), eye_rgba)
             overlay.set_at((mid_x + eye_offset, eye_y), eye_rgba)
 
-        if kind == "guard":
-            cap_y = max(1, head_y - head_r)
-            self.pygame.draw.line(overlay, role_accent, (mid_x - head_r - 1, cap_y + 1), (mid_x + head_r + 2, cap_y + 1), max(1, stroke_w + 1))
-            self.pygame.draw.circle(overlay, role_accent, (mid_x, shoulder_y + max(2, px // 9)), max(1, px // 24))
-        elif kind == "scout":
+        if kind == "scout":
             hood = [(mid_x, max(1, head_y - head_r - 2)), (mid_x - head_r - 2, head_y + head_r + 1), (mid_x + head_r + 2, head_y + head_r + 1)]
             self.pygame.draw.lines(overlay, role_accent, True, hood, stroke_w)
         self.surface.blit(overlay, (cell_x, cell_y))
@@ -7118,6 +7058,8 @@ class PygameView:
         body_kind = self._actor_outfit_effect_value(effects, "actor_kind_", "civilian")
         material = self._actor_outfit_effect_value(effects, "outfit_material_", "")
         detail = self._actor_outfit_effect_value(effects, "outfit_detail_", "")
+        style = self._actor_outfit_effect_value(effects, "outfit_style_", "")
+        drawable_details = tuple(value for value in (detail, style) if value)
         pattern = self._actor_outfit_effect_value(effects, "outfit_pattern_", "")
         emblem = self._actor_outfit_effect_value(effects, "outfit_emblem_", "")
         flora_motif = self._actor_outfit_effect_value(effects, "outfit_flora_motif_", "")
@@ -7133,7 +7075,7 @@ class PygameView:
         context = DrawableRenderContext.garment(
             geometry,
             material=material,
-            detail=detail,
+            detail=drawable_details,
             pattern=pattern,
         )
         variant = "detailed" if self.cell_px > 28 else "compact"
@@ -7166,9 +7108,9 @@ class PygameView:
                 bounds,
                 frame,
                 material=material,
-                seed=len(drawable_id) + len(detail) + len(pattern),
+                seed=len(drawable_id) + sum(len(value) for value in drawable_details) + len(pattern),
             )
-            detail_tokens = condition_tokens(detail)
+            detail_tokens = condition_tokens(drawable_details)
             stroke_w = max(1, self.cell_px // 26)
             edge = paints["edge"]
             if detail_tokens.intersection({"ribbon", "contrast", "sporty"}):
@@ -9707,6 +9649,7 @@ class PygameView:
         normalized_tint = self._normalize_light_tint(light_tint)
         source = tuple(visual_source) if isinstance(visual_source, (list, tuple)) else (x, y)
         cache_key = (
+            int(self.cell_px),
             self._render_cache_key_value(source),
             str(ch)[:1] or " ",
             self._render_cache_key_value(color),
@@ -9842,7 +9785,7 @@ class PygameView:
         return self.world_magnification
 
     def begin_world_view(self, width_cells, height_cells, *, allocation_width_cells=None, allocation_height_cells=None):
-        """Redirect world draws to a base-resolution surface for later magnification."""
+        """Redirect world draws to a high-resolution surface for magnification."""
         if self._world_view_state is not None:
             return False
         magnification = self.set_world_magnification(self.world_magnification)
@@ -9862,8 +9805,10 @@ class PygameView:
         main_surface = self.surface
         main_width_cells = self.width_cells
         main_height_cells = self.height_cells
+        main_cell_px = self.cell_px
+        world_cell_px = main_cell_px * magnification
         world_surface = self.pygame.Surface(
-            (width_cells * self.cell_px, height_cells * self.cell_px),
+            (width_cells * world_cell_px, height_cells * world_cell_px),
             self.pygame.SRCALPHA,
         )
         world_surface.fill((0, 0, 0, 255))
@@ -9871,9 +9816,18 @@ class PygameView:
             "main_surface": main_surface,
             "main_width_cells": main_width_cells,
             "main_height_cells": main_height_cells,
+            "main_cell_px": main_cell_px,
+            "main_fonts": (
+                self.font,
+                self._ui_font,
+                self._ui_bold_font,
+                self._marker_font,
+                self._token_font,
+            ),
             "world_surface": world_surface,
             "world_width_cells": width_cells,
             "world_height_cells": height_cells,
+            "world_cell_px": world_cell_px,
             "allocation_width_cells": allocation_width_cells,
             "allocation_height_cells": allocation_height_cells,
             "magnification": magnification,
@@ -9881,6 +9835,12 @@ class PygameView:
         self.surface = world_surface
         self.width_cells = width_cells
         self.height_cells = height_cells
+        self.cell_px = world_cell_px
+        self.font = self._system_font("DejaVu Sans Mono", world_cell_px)
+        self._ui_font = self._system_font("DejaVu Sans Mono", max(8, int(round(world_cell_px * 0.78))))
+        self._ui_bold_font = self._system_font("DejaVu Sans Mono", max(8, int(round(world_cell_px * 0.78))), bold=True)
+        self._marker_font = self._system_font("DejaVu Sans Mono", max(8, int(round(world_cell_px * 0.62))), bold=True)
+        self._token_font = self._system_font("DejaVu Sans Mono", max(7, int(round(world_cell_px * 0.32))), bold=True)
         return True
 
     def end_world_view(self):
@@ -9891,16 +9851,28 @@ class PygameView:
         world_surface = state["world_surface"]
         main_surface = state["main_surface"]
         magnification = max(1, int(state["magnification"]))
-        output_width = max(1, int(state["world_width_cells"]) * self.cell_px * magnification)
-        output_height = max(1, int(state["world_height_cells"]) * self.cell_px * magnification)
-        allocation_width = max(1, int(state["allocation_width_cells"]) * self.cell_px)
-        allocation_height = max(1, int(state["allocation_height_cells"]) * self.cell_px)
-        scaled = self.pygame.transform.scale(world_surface, (output_width, output_height))
+        main_cell_px = max(1, int(state["main_cell_px"]))
+        world_cell_px = max(1, int(state["world_cell_px"]))
+        output_width = max(1, int(state["world_width_cells"]) * world_cell_px)
+        output_height = max(1, int(state["world_height_cells"]) * world_cell_px)
+        allocation_width = max(1, int(state["allocation_width_cells"]) * main_cell_px)
+        allocation_height = max(1, int(state["allocation_height_cells"]) * main_cell_px)
+        scaled = world_surface
+        if world_surface.get_size() != (output_width, output_height):
+            scaled = self.pygame.transform.scale(world_surface, (output_width, output_height))
         offset_x = (allocation_width - output_width) // 2
         offset_y = (allocation_height - output_height) // 2
         self.surface = main_surface
         self.width_cells = int(state["main_width_cells"])
         self.height_cells = int(state["main_height_cells"])
+        self.cell_px = main_cell_px
+        (
+            self.font,
+            self._ui_font,
+            self._ui_bold_font,
+            self._marker_font,
+            self._token_font,
+        ) = state["main_fonts"]
         self._world_view_state = None
         clip = self.pygame.Rect(0, 0, allocation_width, allocation_height)
         previous_clip = main_surface.get_clip()
