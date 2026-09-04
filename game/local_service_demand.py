@@ -20,6 +20,8 @@ LOCAL_SERVICE_SUPPLY_PRESSURE_FLOOR = 1
 LOCAL_SERVICE_DEMAND_INTENSITY_CAP = 2.0
 LOCAL_SERVICE_DISSATISFACTION_RELIABILITY = 0.82
 LOCAL_SERVICE_DISSATISFACTION_WEIGHT = 1.25
+LOCAL_SERVICE_PLAYER_INQUIRY_KNOWN_INTENSITY = 0.05
+LOCAL_SERVICE_PLAYER_INQUIRY_GAP_INTENSITY = 0.10
 LOCAL_SERVICE_SUPPLY_SCHEMA = 2
 
 NEIGHBORHOOD_MARKET_TUNING = {
@@ -717,6 +719,72 @@ def record_actor_local_service_demand_sample(
     )
 
 
+def record_player_service_inquiry_demand(
+    sim,
+    *,
+    x,
+    y,
+    topic_id,
+    respondent_knows_nearby,
+    tick=None,
+):
+    """Silently record one small player-authored market signal per local day.
+
+    Asking where to find a service is evidence that somebody wants that
+    capability in the current chunk.  It is deliberately much weaker than an
+    NPC's embodied failed service attempt, but a respondent with no nearby lead
+    makes the local supply gap slightly stronger evidence.
+    """
+
+    if sim is None:
+        return None
+    topic_id = str(topic_id or "").strip().lower()
+    if topic_id not in _service_registry().SERVICE_LOCATOR_TOPICS:
+        return None
+    try:
+        chunk = tuple(int(value) for value in sim.chunk_coords(int(x), int(y))[:2])
+    except (TypeError, ValueError, AttributeError):
+        return None
+    tick = _int(getattr(sim, "tick", 0) if tick is None else tick, 0)
+    day = tick // (24 * _ticks_per_hour(sim))
+    sample_days = getattr(sim, "local_service_player_inquiry_days", None)
+    if not isinstance(sample_days, dict):
+        sample_days = {}
+        sim.local_service_player_inquiry_days = sample_days
+    key = (chunk, topic_id)
+    if _int(sample_days.get(key), -1) == day:
+        return None
+
+    knows_nearby = bool(respondent_knows_nearby)
+    intensity = (
+        LOCAL_SERVICE_PLAYER_INQUIRY_KNOWN_INTENSITY
+        if knows_nearby
+        else LOCAL_SERVICE_PLAYER_INQUIRY_GAP_INTENSITY
+    )
+    result = record_local_service_demand_sample(
+        sim,
+        x=x,
+        y=y,
+        service=topic_id,
+        motive=(
+            "player_service_inquiry_known"
+            if knows_nearby
+            else "player_service_inquiry_gap"
+        ),
+        intensity=intensity,
+        tick=tick,
+    )
+    if not isinstance(result, dict):
+        return None
+    sample_days[key] = day
+    return {
+        **result,
+        "day": day,
+        "respondent_knows_nearby": knows_nearby,
+        "inquiry_intensity": intensity,
+    }
+
+
 def initialize_local_service_demand_for_actors(sim, actor_eids):
     """Seed one deterministic current consumer will per new neighborhood actor."""
 
@@ -1190,6 +1258,7 @@ __all__ = [
     "record_local_service_demand_sample",
     "record_local_service_dissatisfaction",
     "record_local_service_supply",
+    "record_player_service_inquiry_demand",
     "record_unmet_local_service_demand",
     "refresh_property_market_supply",
 ]

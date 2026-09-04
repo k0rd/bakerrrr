@@ -10,16 +10,16 @@ drawable tee context garment:
     variant compact:
         layer body:
             polygon torso fabric:
-                mid - shoulder + 0.25, top_y
+                mid - shoulder + 0.5, top_y
                 mid - 1, top_y
                 mid, top_y + 1
                 mid + 1, top_y
-                mid + shoulder - 0.25, top_y
+                mid + shoulder - 0.5, top_y
                 mid + waist, bottom_y
                 mid - waist, bottom_y
             polygon left_sleeve fabric:
-                mid - shoulder + 0.25, top_y
-                mid - shoulder - 0.25, top_y + 0.75
+                mid - shoulder + 0.5, top_y
+                mid - shoulder - 0.5, top_y + 0.75
                 mid - shoulder, top_y + 1.5
                 mid - shoulder + 1, top_y + 1.25
             mirror left_sleeve as right_sleeve

@@ -14402,10 +14402,23 @@ class NPCInteractionSystem(System):
                     confidence=max(0.56, float(context.get("lead_confidence", 0.6)) - 0.02),
                     hidden=True if bool(spec.get("hidden_lead")) else None,
                 )
+            locator_summary = str(locator.get("summary", "")).strip()
+            player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+            if player_pos is not None:
+                from game.local_service_demand import record_player_service_inquiry_demand
+
+                record_player_service_inquiry_demand(
+                    self.sim,
+                    x=player_pos.x,
+                    y=player_pos.y,
+                    topic_id=topic_id,
+                    respondent_knows_nearby=bool(locator_summary),
+                    tick=getattr(self.sim, "tick", 0),
+                )
             summary = self._service_locator_personal_context(
                 context,
                 topic_id,
-                str(locator.get("summary", "")).strip(),
+                locator_summary,
             )
             service_label = str(locator.get("service_label", "service")).strip() or "service"
             bank_id = "service_locator" if summary else "service_locator_none"

@@ -864,11 +864,20 @@ def _actor_badge_overlay(sim, eid, *, player_eid=None, ai=None, will=None, socia
     return ()
 
 
-def _actor_outfit_color_overlays(render_colors, humanoid_profile=None):
+def _actor_outfit_color_overlays(
+    render_colors,
+    humanoid_profile=None,
+    *,
+    body_kind="civilian",
+):
     if not isinstance(render_colors, Mapping):
         return ()
     overlays = []
-    actor_effects = _actor_presentation_effects(humanoid_profile)
+    actor_effects = list(_actor_presentation_effects(humanoid_profile))
+    body_kind = str(body_kind or "civilian").strip().lower()
+    if body_kind not in {"guard", "scout"}:
+        body_kind = "civilian"
+    actor_effects.append(f"actor_kind_{body_kind}")
     rows = (
         ("base_top", "ui_actor_basewear_top"),
         ("base_bottom", "ui_actor_basewear_bottom"),
@@ -2203,9 +2212,15 @@ class AppearanceManager:
         humanoid_profile = humanoid_render_profile(self.sim, eid) if taxonomy == "hominid" else {}
 
         player_controlled = player_eid is not None and eid == player_eid
+        presentation_role = actor_presentation_role(
+            self.sim,
+            eid,
+            ai=ai,
+            occupation=occupation,
+        )
         defaults = entity_default_snapshot(
             identity,
-            role=actor_presentation_role(self.sim, eid, ai=ai, occupation=occupation),
+            role=presentation_role,
             player=player_controlled,
             catalog=self.catalog,
             seed=getattr(self.sim, "seed", None),
@@ -2262,7 +2277,11 @@ class AppearanceManager:
         hair_overlays = ()
         if taxonomy == "hominid":
             hair_overlays = _actor_hair_overlay(humanoid_profile)
-            outfit_overlays = _actor_outfit_color_overlays(appearance_render_colors(self.sim, eid), humanoid_profile=humanoid_profile)
+            outfit_overlays = _actor_outfit_color_overlays(
+                appearance_render_colors(self.sim, eid),
+                humanoid_profile=humanoid_profile,
+                body_kind=presentation_role,
+            )
         if taxonomy == "hominid" and str(owned_color or "").strip().lower() in {"human", "guard", "scout", "player"}:
             owned_color = None
         uses_legacy_hominid_placeholder = (

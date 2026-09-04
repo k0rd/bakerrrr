@@ -535,6 +535,45 @@ def _music_note_count(beat_count: int, *, armed: bool) -> int:
     return int(bar_notes + melody_notes + bass_notes)
 
 
+def _music_melody_degree(
+    rng: random.Random,
+    scale: tuple[int, ...],
+    *,
+    previous_degree: int | None,
+    bar_degree: int,
+    phrase_progress: float,
+) -> int:
+    """Pick a note with light melodic memory, without turning the cue into a song."""
+    weights = []
+    for degree, semitones in enumerate(scale):
+        weight = 1.0
+        if previous_degree is not None:
+            interval = abs(int(semitones) - int(scale[previous_degree]))
+            if interval == 0:
+                weight *= 0.55
+            elif interval <= 3:
+                weight *= 3.20
+            elif interval <= 5:
+                weight *= 2.10
+            elif interval <= 7:
+                weight *= 1.10
+            else:
+                weight *= 0.35
+
+        # The sustained bar tone is already audible underneath the melody.
+        # Let it exert some gravity without forcing every phrase to outline it.
+        if degree == bar_degree:
+            weight *= 1.65
+
+        # Late in a passage, home becomes increasingly attractive rather than
+        # mandatory. Some cues will resolve; others can still hang in the air.
+        if phrase_progress >= 0.70 and degree == 0:
+            closing = min(1.0, max(0.0, (phrase_progress - 0.70) / 0.30))
+            weight *= 1.0 + (2.40 * closing)
+
+        weights.append(weight)
+    return int(rng.choices(range(len(scale)), weights=weights, k=1)[0])
+
 def _run_theme_passage(
     duration: float,
     sample_rate: int,
@@ -543,6 +582,7 @@ def _run_theme_passage(
     armed: bool,
     variant: int,
     beat_count: int,
+    seed_key: str = "default",
 ) -> list[float]:
     """One coherent passage shaped by the run's home or a visited biome."""
 
@@ -553,7 +593,7 @@ def _run_theme_passage(
     beat_count = max(4, int(beat_count))
     beat = float(duration) / float(beat_count)
     samples = _blank(duration, sample_rate)
-    rng = random.Random(f"run-theme:{style_key}:{int(bool(armed))}:{variant}:{beat_count}")
+    rng = random.Random(f"run-theme:{seed_key}:{style_key}:{int(bool(armed))}:{variant}:{beat_count}")
 
     def degree_frequency(degree: int, octave: int = 0) -> float:
         semitones = scale[int(degree) % len(scale)] + (12 * int(octave))
@@ -568,10 +608,20 @@ def _run_theme_passage(
         _add_tone(samples, sample_rate=sample_rate, start=start + beat * 0.12, duration=beat * 1.15, frequency=base * 4.0, amplitude=0.018 * brightness, shape="triangle", attack=0.025, release=beat * 0.34, decay=2.8)
 
     melody_step = 1 if armed else 2
+    previous_degree = None
     melody_index = 0
     melody_beat = 0.50 + (0.25 if style_key == "city" else 0.0)
     while melody_beat < beat_count - 0.45:
-        degree = rng.randrange(len(scale))
+        bar_index = min(bar_count - 1, int(melody_beat // 4.0))
+        bar_degree = (bar_index + variant) % len(scale)
+        degree = _music_melody_degree(
+            rng,
+            scale,
+            previous_degree=previous_degree,
+            bar_degree=bar_degree,
+            phrase_progress=melody_beat / float(beat_count),
+        )
+        previous_degree = degree
         frequency = degree_frequency(degree, octave=2)
         start = melody_beat * beat
         _add_tone(samples, sample_rate=sample_rate, start=start, duration=beat * (0.44 if armed else 0.58), frequency=frequency, amplitude=(0.088 if armed else 0.073) * brightness, shape="triangle", attack=0.012, release=beat * 0.22, decay=3.6)
@@ -827,7 +877,7 @@ def _music_bpm(style_key: str, *, armed: bool) -> float:
     return float(spec["bpm"]) + (10.0 if armed else 0.0)
 
 
-def _music_passage_builder(*, style_key: str, armed: bool, variant: int, beat_count: int):
+def _music_passage_builder(*, style_key: str, armed: bool, variant: int, beat_count: int, seed_key: str = "default"):
     def build(duration: float, sample_rate: int) -> list[float]:
         return _run_theme_passage(
             duration,
@@ -836,6 +886,7 @@ def _music_passage_builder(*, style_key: str, armed: bool, variant: int, beat_co
             armed=armed,
             variant=variant,
             beat_count=beat_count,
+            seed_key=seed_key,
         )
 
     return build
@@ -847,6 +898,7 @@ def _music_cue_definitions(profile: dict[str, object]) -> tuple[CueDefinition, .
     if home_biome not in _MUSIC_STYLE_SPECS:
         home_biome = "frontier"
     armed = bool(profile.get("armed"))
+    theme_seed = str(profile.get("theme_seed", "default-frontier") or "default-frontier")
     home_beats = tuple(int(value) for value in profile.get("home_passage_beats", (12, 16, 20)))
     if len(home_beats) != len(MUSIC_HOME_CUE_NAMES):
         home_beats = (12, 16, 20)
@@ -862,6 +914,7 @@ def _music_cue_definitions(profile: dict[str, object]) -> tuple[CueDefinition, .
                 armed=armed,
                 variant=variant,
                 beat_count=max(4, beat_count),
+                seed_key=theme_seed,
             ),
             gain=0.58 if armed else 0.55,
             loop=False,
@@ -885,6 +938,7 @@ def _music_cue_definitions(profile: dict[str, object]) -> tuple[CueDefinition, .
                 armed=False,
                 variant=variant,
                 beat_count=beat_count,
+                seed_key=theme_seed,
             ),
             gain=0.52,
             loop=False,

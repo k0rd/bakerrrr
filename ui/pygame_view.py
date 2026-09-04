@@ -9,6 +9,7 @@ from pathlib import Path
 from game.appearance_palette import pygame_palette_entries
 from game.action_bindings import CONTROLLER_DEADZONE, CONTROLLER_REPEAT_DELAY, CONTROLLER_REPEAT_INTERVAL
 from game.color_words import casino_color_word, casino_presentation_color_word, color_contrast_ratio, color_word_rgb, render_key_for_color_word
+from game.body_geometry import actor_body_geometry, actor_torso_half_widths
 from game.drawable_catalog import RUNTIME_DRAWABLES
 from game.drawable_dsl import DrawableError, DrawableRenderContext, condition_tokens
 from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_semantic_catalog
@@ -4630,102 +4631,40 @@ class PygameView:
 
     @staticmethod
     def _actor_torso_half_widths(px, presentation="mixed", silhouette=""):
-        px = max(1, int(px))
-        presentation = str(presentation or "mixed").strip().lower()
-        silhouette = str(silhouette or "").strip().lower()
-        if presentation == "femme":
-            shoulder_half = max(2, px // 7)
-            hip_half = shoulder_half + {"straight": 0, "soft": 1, "curvy": 2}.get(silhouette, 1)
-        elif presentation == "masc":
-            shoulder_half = max(2, px // 6)
-            hip_half = max(2, px // 7)
-            if silhouette == "broad":
-                shoulder_half += max(1, px // 24)
-            elif silhouette == "lean":
-                hip_half = max(1, hip_half - 1)
-        else:
-            shoulder_half = max(3, px // 6)
-            hip_half = max(3, px // 6)
-            if silhouette == "solid":
-                shoulder_half += max(1, px // 28)
-                hip_half += max(0, px // 32)
-            elif silhouette == "slight":
-                shoulder_half = max(3, shoulder_half - max(0, px // 28))
-                hip_half = max(2, hip_half - max(0, px // 32))
-        return shoulder_half, hip_half
+        return actor_torso_half_widths(px, presentation, silhouette)
 
     @classmethod
     def _actor_garment_geometry(cls, px, presentation="mixed", silhouette=""):
-        """Return the actor body's actual pixel anchors for fitted garments."""
+        """Compatibility view derived from the authoritative BodyGeometry."""
+
         px = max(1, int(px))
-        mid_x = px // 2
-        shoulder_half, hip_half = cls._actor_torso_half_widths(
-            px,
-            presentation,
-            silhouette,
-        )
-        if px <= 28:
-            q = lambda value: int(round(float(value) * px / 16.0))
-            shoulder_y = q(7)
-            hip_y = q(11)
-            foot_y = min(px - 1, q(15))
-            waist_half = max(1, min(shoulder_half, hip_half) - 1)
-            head_y = q(3.5)
-            head_half = max(1, q(2))
-            head_top_y = q(2)
-            left_ear_x = q(6)
-            right_ear_x = q(10)
-            ear_y = q(4)
-            left_hand_x = q(6)
-            right_hand_x = q(10)
-            hand_y = hip_y
-            left_foot_x = q(6)
-            right_foot_x = q(10)
-        else:
-            head_r = max(2, px // 8)
-            head_y = max(head_r + 1, px // 4)
-            shoulder_y = head_y + head_r + max(1, px // 18)
-            hip_y = px - max(5, px // 4)
-            foot_y = px - max(2, px // 12)
-            if str(presentation or "mixed").strip().lower() == "femme":
-                waist_half = max(
-                    1,
-                    min(shoulder_half, hip_half) - max(1, px // 20),
-                )
-            else:
-                waist_half = min(shoulder_half, hip_half)
-            head_half = head_r
-            head_top_y = head_y - head_r
-            left_ear_x = mid_x - head_r
-            right_ear_x = mid_x + head_r
-            ear_y = head_y
-            arm_outset = max(2, px // 12)
-            left_hand_x = mid_x - shoulder_half - arm_outset
-            right_hand_x = mid_x + shoulder_half + arm_outset
-            hand_y = min(hip_y - 1, shoulder_y + max(3, px // 4))
-            stance_half = max(2, px // 7)
-            left_foot_x = mid_x - stance_half
-            right_foot_x = mid_x + stance_half
+        body = actor_body_geometry(px, presentation, silhouette)
+        symbols = DrawableRenderContext.garment(body).symbols
+        scale = float(px) / 16.0
+
+        def pixel(symbol):
+            return int(round(float(symbols[symbol]) * scale))
+
         return {
-            "mid_x": mid_x,
-            "shoulder_half": shoulder_half,
-            "hip_half": hip_half,
-            "waist_half": waist_half,
-            "basewear_hip_half": max(1, hip_half - max(1, int(round(px / 16.0)))),
-            "shoulder_y": shoulder_y,
-            "hip_y": hip_y,
-            "foot_y": foot_y,
-            "left_foot_x": left_foot_x,
-            "right_foot_x": right_foot_x,
-            "left_hand_x": left_hand_x,
-            "right_hand_x": right_hand_x,
-            "hand_y": hand_y,
-            "head_y": head_y,
-            "head_half": head_half,
-            "head_top_y": head_top_y,
-            "left_ear_x": left_ear_x,
-            "right_ear_x": right_ear_x,
-            "ear_y": ear_y,
+            "mid_x": pixel("mid"),
+            "shoulder_half": pixel("shoulder"),
+            "hip_half": pixel("hip"),
+            "waist_half": pixel("waist"),
+            "basewear_hip_half": pixel("basewear_hip"),
+            "shoulder_y": pixel("shoulder_y"),
+            "hip_y": pixel("hip_y"),
+            "foot_y": pixel("foot_y"),
+            "left_foot_x": pixel("left_foot_x"),
+            "right_foot_x": pixel("right_foot_x"),
+            "left_hand_x": pixel("left_hand_x"),
+            "right_hand_x": pixel("right_hand_x"),
+            "hand_y": pixel("hand_y"),
+            "head_y": pixel("head_y"),
+            "head_half": pixel("head_half"),
+            "head_top_y": pixel("head_top_y"),
+            "left_ear_x": pixel("left_ear_x"),
+            "right_ear_x": pixel("right_ear_x"),
+            "ear_y": pixel("ear_y"),
         }
 
     def _actor_body_garment_mask(self, effects=()):
@@ -4753,6 +4692,7 @@ class PygameView:
 
         presentation = suffix("actor_presentation_", "mixed")
         silhouette = suffix("actor_silhouette_", "")
+        body_kind = suffix("actor_kind_", "civilian")
         mid_x = px // 2
 
         if px <= 10:
@@ -4762,71 +4702,21 @@ class PygameView:
             self.pygame.draw.circle(mask, body, (mid_x, px // 2), max(2, (px // 2) - inset))
             return mask
 
-        geometry = self._actor_garment_geometry(px, presentation, silhouette)
-        shoulder_half = geometry["shoulder_half"]
-        hip_half = geometry["hip_half"]
-        if px <= 28:
-            def q(value):
-                return int(round(float(value) * px / 16.0))
-
-            shoulder_y = geometry["shoulder_y"]
-            waist_y = q(9)
-            hip_y = geometry["hip_y"]
-            foot_y = geometry["foot_y"]
-            waist_half = geometry["waist_half"]
-            torso = [
-                (mid_x - shoulder_half, shoulder_y),
-                (mid_x + shoulder_half, shoulder_y),
-                (mid_x + waist_half, waist_y),
-                (mid_x + hip_half, hip_y),
-                (mid_x - hip_half, hip_y),
-                (mid_x - waist_half, waist_y),
-            ]
-            self.pygame.draw.polygon(mask, body, torso)
-            leg_gap = max(1, q(1))
-            self.pygame.draw.lines(mask, body, False, [(mid_x - leg_gap, hip_y), (mid_x - leg_gap, q(13)), (q(6), foot_y)], 1)
-            self.pygame.draw.lines(mask, body, False, [(mid_x + leg_gap, hip_y), (mid_x + leg_gap, q(13)), (q(10), foot_y)], 1)
-            return mask
-
-        stroke_w = max(1, px // 20)
-        head_r = max(2, px // 8)
-        head_y = max(head_r + 1, px // 4)
-        shoulder_y = geometry["shoulder_y"]
-        hip_y = geometry["hip_y"]
-        foot_y = geometry["foot_y"]
-        body_corner = max(1, px // 16)
-        if presentation == "femme":
-            waist_y = shoulder_y + max(2, (hip_y - shoulder_y) // 2)
-            waist_half = max(1, min(shoulder_half, hip_half) - max(1, px // 20))
-            torso = [
-                (mid_x - shoulder_half + body_corner, shoulder_y),
-                (mid_x + shoulder_half - body_corner, shoulder_y),
-                (mid_x + shoulder_half, shoulder_y + body_corner),
-                (mid_x + waist_half, waist_y),
-                (mid_x + hip_half, hip_y - body_corner),
-                (mid_x + hip_half - body_corner, hip_y),
-                (mid_x - hip_half + body_corner, hip_y),
-                (mid_x - hip_half, hip_y - body_corner),
-                (mid_x - waist_half, waist_y),
-                (mid_x - shoulder_half, shoulder_y + body_corner),
-            ]
-        else:
-            torso = [
-                (mid_x - shoulder_half + body_corner, shoulder_y),
-                (mid_x + shoulder_half - body_corner, shoulder_y),
-                (mid_x + shoulder_half, shoulder_y + body_corner),
-                (mid_x + hip_half, hip_y - body_corner),
-                (mid_x + hip_half - body_corner, hip_y),
-                (mid_x - hip_half + body_corner, hip_y),
-                (mid_x - hip_half, hip_y - body_corner),
-                (mid_x - shoulder_half, shoulder_y + body_corner),
-            ]
+        geometry = actor_body_geometry(
+            px,
+            presentation,
+            silhouette,
+            kind=body_kind,
+        )
+        torso = [tuple(int(round(value)) for value in point) for point in geometry.pixel_torso_contour]
         self.pygame.draw.polygon(mask, body, torso)
-        leg_gap = max(1, px // 18)
-        stance_half = max(2, px // 7)
-        limb_w = max(1, stroke_w + 1)
-        for top_x, bottom_x in ((mid_x - leg_gap, mid_x - stance_half), (mid_x + leg_gap, mid_x + stance_half)):
-            self.pygame.draw.line(mask, body, (top_x, hip_y), (bottom_x, foot_y), limb_w)
+        limb_width = 1 if geometry.variant == "compact" else max(1, px // 20 + 1)
+        for name in ("leg_left", "leg_right"):
+            path = [
+                tuple(int(round(value)) for value in point)
+                for point in geometry.pixel_limb_paths[name]
+            ]
+            self.pygame.draw.lines(mask, body, False, path, limb_width)
         return mask
 
     def _clip_fitted_basewear_to_actor(self, overlay, *, kind, effects=()):
@@ -4881,12 +4771,10 @@ class PygameView:
 
         presentation = suffix("actor_presentation_", "mixed")
         silhouette = suffix("actor_silhouette_", "")
-        shoulder_half, hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
+        geometry = actor_body_geometry(px, presentation, silhouette, kind=kind)
+        points = geometry.pixel_anchors
         mid_x = px // 2
-        shoulder_y = q(7)
-        waist_y = q(9)
-        hip_y = q(11)
-        foot_y = min(px - 1, q(15))
+        shoulder_y = int(round(points["shoulder_left"][1]))
 
         # Occupational marks sit behind a crisp one-pixel person. The player
         # needs no targeting reticle or identifying watermark.
@@ -4919,23 +4807,18 @@ class PygameView:
         self.pygame.draw.line(overlay, fill, (mid_x, q(5)), (mid_x, shoulder_y), 1)
 
         # Symmetric bent arms read as relaxed limbs without tilting the body.
-        left_arm = [(mid_x - shoulder_half, shoulder_y), (q(5), q(8)), (q(5), q(10)), (q(6), hip_y)]
-        right_arm = [(mid_x + shoulder_half, shoulder_y), (q(11), q(8)), (q(11), q(10)), (q(10), hip_y)]
+        left_arm = [tuple(int(round(value)) for value in point) for point in geometry.pixel_limb_paths["arm_left"]]
+        right_arm = [tuple(int(round(value)) for value in point) for point in geometry.pixel_limb_paths["arm_right"]]
         self.pygame.draw.lines(overlay, fill, False, left_arm, 1)
         self.pygame.draw.lines(overlay, fill, False, right_arm, 1)
 
-        waist_half = max(1, min(shoulder_half, hip_half) - 1)
-        left_torso = [(mid_x - shoulder_half, shoulder_y), (mid_x - waist_half, waist_y), (mid_x - hip_half, hip_y)]
-        right_torso = [(mid_x + shoulder_half, shoulder_y), (mid_x + waist_half, waist_y), (mid_x + hip_half, hip_y)]
-        torso = [left_torso[0], right_torso[0], right_torso[1], right_torso[2], left_torso[2], left_torso[1]]
+        torso = [tuple(int(round(value)) for value in point) for point in geometry.pixel_torso_contour]
         self.pygame.draw.polygon(overlay, fill, torso)
-        self.pygame.draw.lines(overlay, fill, False, left_torso, 1)
-        self.pygame.draw.lines(overlay, fill, False, right_torso, 1)
-        self.pygame.draw.line(overlay, edge, left_torso[0], right_torso[0], 1)
+        self.pygame.draw.lines(overlay, fill, True, torso, 1)
+        self.pygame.draw.line(overlay, edge, torso[0], torso[1], 1)
 
-        leg_gap = max(1, q(1))
-        left_leg = [(mid_x - leg_gap, hip_y), (mid_x - leg_gap, q(13)), (q(6), foot_y)]
-        right_leg = [(mid_x + leg_gap, hip_y), (mid_x + leg_gap, q(13)), (q(10), foot_y)]
+        left_leg = [tuple(int(round(value)) for value in point) for point in geometry.pixel_limb_paths["leg_left"]]
+        right_leg = [tuple(int(round(value)) for value in point) for point in geometry.pixel_limb_paths["leg_right"]]
         self.pygame.draw.lines(overlay, fill, False, left_leg, 1)
         self.pygame.draw.lines(overlay, fill, False, right_leg, 1)
         self.surface.blit(overlay, (cell_x, cell_y))
@@ -5013,55 +4896,23 @@ class PygameView:
             self.pygame.draw.polygon(overlay, self._darkened_rgba(frame, 58, amount=0.7), diamond)
             self.pygame.draw.lines(overlay, glow, True, diamond, stroke_w)
 
-        head_r = max(2, px // 8)
-        head_y = max(head_r + 1, px // 4)
-        shoulder_y = head_y + head_r + max(1, px // 18)
-        hip_y = px - max(5, px // 4)
-        foot_y = px - max(2, px // 12)
-        shoulder_half, hip_half = self._actor_torso_half_widths(px, presentation, silhouette)
-        if kind == "guard":
-            shoulder_half += max(0, px // 24)
-        if kind == "scout":
-            shoulder_half = max(3, shoulder_half - max(0, px // 28))
-        body_corner = max(1, px // 16)
+        geometry = actor_body_geometry(px, presentation, silhouette, kind=kind)
+        points = geometry.pixel_anchors
+        internal = geometry.internal_pixel_anchors
+        head_r = int(round((internal["head_right"][0] - internal["head_left"][0]) / 2.0))
+        head_y = int(round(internal["head_center"][1]))
+        shoulder_y = int(round(points["shoulder_left"][1]))
+        torso = [tuple(int(round(value)) for value in point) for point in geometry.pixel_torso_contour]
         if presentation == "femme":
-            waist_y = shoulder_y + max(2, (hip_y - shoulder_y) // 2)
-            waist_half = max(1, min(shoulder_half, hip_half) - max(1, px // 20))
-            torso = [
-                (mid_x - shoulder_half + body_corner, shoulder_y),
-                (mid_x + shoulder_half - body_corner, shoulder_y),
-                (mid_x + shoulder_half, shoulder_y + body_corner),
-                (mid_x + waist_half, waist_y),
-                (mid_x + hip_half, hip_y - body_corner),
-                (mid_x + hip_half - body_corner, hip_y),
-                (mid_x - hip_half + body_corner, hip_y),
-                (mid_x - hip_half, hip_y - body_corner),
-                (mid_x - waist_half, waist_y),
-                (mid_x - shoulder_half, shoulder_y + body_corner),
-            ]
             right_contour = (torso[1], torso[2], torso[3], torso[4], torso[5])
             left_contour = (torso[0], torso[9], torso[8], torso[7], torso[6])
         else:
-            torso = [
-                (mid_x - shoulder_half + body_corner, shoulder_y),
-                (mid_x + shoulder_half - body_corner, shoulder_y),
-                (mid_x + shoulder_half, shoulder_y + body_corner),
-                (mid_x + hip_half, hip_y - body_corner),
-                (mid_x + hip_half - body_corner, hip_y),
-                (mid_x - hip_half + body_corner, hip_y),
-                (mid_x - hip_half, hip_y - body_corner),
-                (mid_x - shoulder_half, shoulder_y + body_corner),
-            ]
             right_contour = (torso[1], torso[2], torso[3], torso[4])
             left_contour = (torso[0], torso[7], torso[6], torso[5])
 
-        arm_y = min(hip_y - 1, shoulder_y + max(3, px // 4))
-        arm_outset = max(1, px // 18) if native_play_scale else max(2, px // 12)
-        left_arm_x = mid_x - shoulder_half - arm_outset
-        right_arm_x = mid_x + shoulder_half + arm_outset
-        arm_paths = (
-            ((mid_x - shoulder_half + 1, shoulder_y + 1), (left_arm_x, shoulder_y + 2), (left_arm_x, arm_y)),
-            ((mid_x + shoulder_half - 1, shoulder_y + 1), (right_arm_x, shoulder_y + 2), (right_arm_x, arm_y)),
+        arm_paths = tuple(
+            tuple(tuple(int(round(value)) for value in point) for point in geometry.pixel_limb_paths[name])
+            for name in ("arm_left", "arm_right")
         )
         for path in arm_paths:
             shadow_path = tuple((tx + 1, ty + 1) for tx, ty in path)
@@ -5079,11 +4930,26 @@ class PygameView:
         self.pygame.draw.line(overlay, outline, (torso[0][0] + 1, torso[0][1] + 1), (torso[1][0] + 1, torso[1][1] + 1), stroke_w + (1 if native_play_scale else 2))
         self.pygame.draw.line(overlay, edge, torso[0], torso[1], stroke_w if native_play_scale else max(1, stroke_w + 1))
 
-        leg_gap = max(1, px // 18)
-        stance_half = max(2, px // (6 if kind == "guard" else 7))
-        for top_x, bottom_x in ((mid_x - leg_gap, mid_x - stance_half), (mid_x + leg_gap, mid_x + stance_half)):
-            self.pygame.draw.line(overlay, outline, (top_x + 1, hip_y), (bottom_x + 1, foot_y + 1), stroke_w + (1 if native_play_scale else 2))
-            self.pygame.draw.line(overlay, fill, (top_x, hip_y), (bottom_x, foot_y), stroke_w if native_play_scale else max(1, stroke_w + 1))
+        for name in ("leg_left", "leg_right"):
+            path = tuple(
+                tuple(int(round(value)) for value in point)
+                for point in geometry.pixel_limb_paths[name]
+            )
+            shadow_path = tuple((tx + 1, ty + 1) for tx, ty in path)
+            self.pygame.draw.lines(
+                overlay,
+                outline,
+                False,
+                shadow_path,
+                stroke_w + (1 if native_play_scale else 2),
+            )
+            self.pygame.draw.lines(
+                overlay,
+                fill,
+                False,
+                path,
+                stroke_w if native_play_scale else max(1, stroke_w + 1),
+            )
 
         head_rect = self.pygame.Rect(mid_x - head_r, head_y - head_r, max(4, head_r * 2), max(5, head_r * 2 + 1))
         self.pygame.draw.ellipse(overlay, outline, head_rect.inflate(max(2, stroke_w * 2), max(2, stroke_w * 2)).move(1, 1))
@@ -7249,6 +7115,7 @@ class PygameView:
 
         presentation = self._actor_outfit_effect_value(effects, "actor_presentation_", "mixed")
         silhouette = self._actor_outfit_effect_value(effects, "actor_silhouette_", "")
+        body_kind = self._actor_outfit_effect_value(effects, "actor_kind_", "civilian")
         material = self._actor_outfit_effect_value(effects, "outfit_material_", "")
         detail = self._actor_outfit_effect_value(effects, "outfit_detail_", "")
         pattern = self._actor_outfit_effect_value(effects, "outfit_pattern_", "")
@@ -7257,32 +7124,14 @@ class PygameView:
         motif_treatment = self._actor_outfit_effect_value(effects, "outfit_motif_treatment_", "")
         motif_shape = self._actor_outfit_effect_value(effects, "outfit_motif_shape_", "")
 
-        geometry = self._actor_garment_geometry(
+        geometry = actor_body_geometry(
             self.cell_px,
             presentation,
             silhouette,
+            kind=body_kind,
         )
-        logical_scale = 16.0 / max(1, self.cell_px)
         context = DrawableRenderContext.garment(
-            mid=geometry["mid_x"] * logical_scale,
-            shoulder=geometry["shoulder_half"] * logical_scale,
-            hip=geometry["hip_half"] * logical_scale,
-            waist=geometry["waist_half"] * logical_scale,
-            basewear_hip=geometry["basewear_hip_half"] * logical_scale,
-            shoulder_y=geometry["shoulder_y"] * logical_scale,
-            hip_y=geometry["hip_y"] * logical_scale,
-            foot_y=geometry["foot_y"] * logical_scale,
-            left_foot_x=geometry["left_foot_x"] * logical_scale,
-            right_foot_x=geometry["right_foot_x"] * logical_scale,
-            left_hand_x=geometry["left_hand_x"] * logical_scale,
-            right_hand_x=geometry["right_hand_x"] * logical_scale,
-            hand_y=geometry["hand_y"] * logical_scale,
-            head_y=geometry["head_y"] * logical_scale,
-            head_half=geometry["head_half"] * logical_scale,
-            head_top_y=geometry["head_top_y"] * logical_scale,
-            left_ear_x=geometry["left_ear_x"] * logical_scale,
-            right_ear_x=geometry["right_ear_x"] * logical_scale,
-            ear_y=geometry["ear_y"] * logical_scale,
+            geometry,
             material=material,
             detail=detail,
             pattern=pattern,
