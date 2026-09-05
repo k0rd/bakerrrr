@@ -126,116 +126,187 @@ drawable buttoned_top context garment:
             right_sleeve
 
 drawable blouse context garment:
-    let body_unit = body_height / 14
-    let (body_mid_x, crown_y) = crown
-    let (shoulder_anchor_x, shoulder_y) = shoulder_left
-    let (crotch_x, hip_y) = crotch
-    let shoulder_half = upper_torso_width / 2
-    let waist_half = waist_width / 2
     paint fabric = fill
     paint trim = edge
-    let top_y = shoulder_y
-    let bottom_y = hip_y - body_unit * 1
+    point neck_center = between(neck_left, neck_right, 0.5)
+    point waist_center = between(waist_left, waist_right, 0.5)
+    point collar_left = between(neck_left, armpit_left, 0.35)
+    point collar_right = between(neck_right, armpit_right, 0.35)
+    point neckline = between(neck_center, waist_center, 0.3)
+    let (mid_x, neck_y) = neckline
+    point scoop_left = mid_x - neck_width * 0.55, neck_y
+    point scoop_right = mid_x + neck_width * 0.55, neck_y
+    point waist_fit_left = between(waist_right, waist_left, 1.08)
+    point waist_fit_right = between(waist_left, waist_right, 1.08)
+    point hem_left = between(waist_fit_left, hip_left, 0.35)
+    point hem_right = between(waist_fit_right, hip_right, 0.35)
+    point puff_base = between(shoulder_left, elbow_outer_left, 0.5)
+    point puff_outer = between(armpit_left, puff_base, 1.3)
+    point cuff_outer = between(shoulder_left, elbow_outer_left, 0.82)
+    point cuff_inner = between(armpit_left, elbow_inner_left, 0.82)
     variant compact:
         layer body:
             polygon torso fabric:
-                body_mid_x - shoulder_half, top_y + body_unit * 1
-                body_mid_x - body_unit * 1, top_y
-                body_mid_x, top_y + body_unit * 1
-                body_mid_x + body_unit * 1, top_y
-                body_mid_x + shoulder_half, top_y + body_unit * 1
-                body_mid_x + waist_half, bottom_y
-                body_mid_x - waist_half, bottom_y
-            ellipse left_sleeve fabric:
-                x body_mid_x - shoulder_half - body_unit * 0.75
-                y top_y + body_unit * 0.5
-                w body_unit * 2
-                h body_unit * 3
+                shoulder_left
+                collar_left
+                scoop_left
+                scoop_right
+                collar_right
+                shoulder_right
+                armpit_right
+                waist_fit_right
+                hem_right
+                hem_left
+                waist_fit_left
+                armpit_left
+            polygon left_sleeve fabric:
+                shoulder_left
+                puff_outer
+                cuff_outer
+                cuff_inner
+                armpit_left
             mirror left_sleeve as right_sleeve
+        layer seam:
+            line neck trim width 0.2:
+                collar_left
+                scoop_left
+                scoop_right
+                collar_right
+            line left_cuff trim width 0.25:
+                cuff_inner
+                cuff_outer
+            mirror left_cuff as right_cuff
         surface garment:
             torso
             left_sleeve
             right_sleeve
+
     variant detailed:
         layer body:
             polygon torso fabric outline trim width 0.25:
-                body_mid_x - shoulder_half, top_y + body_unit * 1
-                body_mid_x - body_unit * 1.25, top_y
-                body_mid_x, top_y + body_unit * 1.5
-                body_mid_x + body_unit * 1.25, top_y
-                body_mid_x + shoulder_half, top_y + body_unit * 1
-                body_mid_x + waist_half, bottom_y
-                body_mid_x - waist_half, bottom_y
-            ellipse left_sleeve fabric:
-                x body_mid_x - shoulder_half - body_unit * 1
-                y top_y + body_unit * 0.25
-                w body_unit * 2.25
-                h body_unit * 3.5
-                outline trim
-                width 0.25
+                shoulder_left
+                collar_left
+                scoop_left
+                scoop_right
+                collar_right
+                shoulder_right
+                armpit_right
+                waist_fit_right
+                hem_right
+                hem_left
+                waist_fit_left
+                armpit_left
+            polygon left_sleeve fabric outline trim width 0.25:
+                shoulder_left
+                puff_outer
+                cuff_outer
+                cuff_inner
+                armpit_left
             mirror left_sleeve as right_sleeve
         layer seam:
-            line neck trim width 0.25:
-                body_mid_x - body_unit * 1.25, top_y
-                body_mid_x, top_y + body_unit * 1.5
-                body_mid_x + body_unit * 1.25, top_y
+            line neck trim width 0.2:
+                collar_left
+                scoop_left
+                scoop_right
+                collar_right
+            line left_cuff trim width 0.25:
+                cuff_inner
+                cuff_outer
+            mirror left_cuff as right_cuff
+            line center_pleat trim width 0.15:
+                between(neckline, waist_center, 0.35)
+                between(neckline, waist_center, 0.75)
         surface garment:
             torso
             left_sleeve
             right_sleeve
 
 drawable sweater context garment:
-    let body_unit = body_height / 14
-    let (body_mid_x, crown_y) = crown
-    let (shoulder_anchor_x, shoulder_y) = shoulder_left
-    let (crotch_x, hip_y) = crotch
-    let (left_hand_x, hand_y) = between(wrist_inner_left, wrist_outer_left, 0.5)
-    let shoulder_half = upper_torso_width / 2
-    let hip_half = hip_width / 2
     paint fabric = fill
     paint trim = edge
-    let top_y = shoulder_y
-    let bottom_y = hip_y
+    # Ease and shaping follow the wearer; cuffs follow the bent forearms.
+    point waist_fit_left = between(waist_right, waist_left, 1.18)
+    point waist_fit_right = between(waist_left, waist_right, 1.18)
+    point hem_left = between(waist_fit_left, hip_left, 0.75)
+    point hem_right = between(waist_fit_right, hip_right, 0.75)
+    point cuff_inner = between(elbow_inner_left, wrist_inner_left, 0.95)
+    point cuff_outer = between(elbow_outer_left, wrist_outer_left, 0.95)
+    point neck_center = between(neck_left, neck_right, 0.5)
+    point waist_center = between(waist_left, waist_right, 0.5)
+    point neckline = between(neck_center, waist_center, 0.25)
     variant compact:
         layer body:
             polygon torso fabric:
-                body_mid_x - shoulder_half - body_unit * 0.5, top_y
-                body_mid_x + shoulder_half + body_unit * 0.5, top_y
-                body_mid_x + hip_half, bottom_y
-                body_mid_x - hip_half, bottom_y
+                shoulder_left
+                neck_left
+                neckline
+                neck_right
+                shoulder_right
+                armpit_right
+                waist_fit_right
+                hem_right
+                hem_left
+                waist_fit_left
+                armpit_left
             polygon left_sleeve fabric:
-                body_mid_x - shoulder_half, top_y
-                body_mid_x - shoulder_half - body_unit * 0.75, top_y + body_unit * 1
-                left_hand_x - body_unit * 0.25, hand_y - body_unit * 0.5
-                left_hand_x + body_unit * 0.5, hand_y - body_unit * 0.5
-                body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1.5
+                shoulder_left
+                elbow_outer_left
+                cuff_outer
+                cuff_inner
+                elbow_inner_left
+                armpit_left
             mirror left_sleeve as right_sleeve
+        layer knit:
+            line hem trim width 0.3:
+                hem_left
+                hem_right
+            line left_cuff trim width 0.3:
+                cuff_inner
+                cuff_outer
+            mirror left_cuff as right_cuff
+            line neck trim width 0.25:
+                neck_left
+                neckline
+                neck_right
         surface garment:
             torso
             left_sleeve
             right_sleeve
+
     variant detailed:
         layer body:
-            polygon torso fabric outline trim width 0.35:
-                body_mid_x - shoulder_half - body_unit * 0.5, top_y
-                body_mid_x + shoulder_half + body_unit * 0.5, top_y
-                body_mid_x + hip_half, bottom_y
-                body_mid_x - hip_half, bottom_y
-            polygon left_sleeve fabric outline trim width 0.3:
-                body_mid_x - shoulder_half, top_y
-                body_mid_x - shoulder_half - body_unit * 0.25, top_y + body_unit * 1
-                left_hand_x - body_unit * 0.25, hand_y - body_unit * 0.5
-                left_hand_x + body_unit * 0.5, hand_y - body_unit * 0.5
-                body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1.5
+            polygon torso fabric outline trim width 0.25:
+                shoulder_left
+                neck_left
+                neckline
+                neck_right
+                shoulder_right
+                armpit_right
+                waist_fit_right
+                hem_right
+                hem_left
+                waist_fit_left
+                armpit_left
+            polygon left_sleeve fabric outline trim width 0.25:
+                shoulder_left
+                elbow_outer_left
+                cuff_outer
+                cuff_inner
+                elbow_inner_left
+                armpit_left
             mirror left_sleeve as right_sleeve
         layer knit:
-            line hem trim width 0.4:
-                body_mid_x - hip_half, bottom_y
-                body_mid_x + hip_half, bottom_y
-            line neck trim width 0.3:
-                body_mid_x - body_unit * 1.5, top_y
-                body_mid_x, top_y + body_unit * 1
-                body_mid_x + body_unit * 1.5, top_y
+            line hem trim width 0.3:
+                hem_left
+                hem_right
+            line left_cuff trim width 0.3:
+                cuff_inner
+                cuff_outer
+            mirror left_cuff as right_cuff
+            line neck trim width 0.25:
+                neck_left
+                neckline
+                neck_right
         surface garment:
             torso
             left_sleeve
@@ -306,66 +377,96 @@ drawable overshirt context garment:
             right_sleeve
 
 drawable turtleneck context garment:
-    let body_unit = body_height / 14
-    let (body_mid_x, crown_y) = crown
-    let (shoulder_anchor_x, shoulder_y) = shoulder_left
-    let (crotch_x, hip_y) = crotch
-    let (left_hand_x, hand_y) = between(wrist_inner_left, wrist_outer_left, 0.5)
-    let shoulder_half = upper_torso_width / 2
-    let waist_half = waist_width / 2
     paint fabric = fill
     paint trim = edge
-    let top_y = shoulder_y
-    let bottom_y = hip_y - body_unit * 1
+    # Ease and shaping follow the wearer; cuffs follow the bent forearms.
+    point waist_fit_left = between(waist_right, waist_left, 1.04)
+    point waist_fit_right = between(waist_left, waist_right, 1.04)
+    point hem_left = between(waist_fit_left, hip_left, 0.55)
+    point hem_right = between(waist_fit_right, hip_right, 0.55)
+    point cuff_inner = between(elbow_inner_left, wrist_inner_left, 0.95)
+    point cuff_outer = between(elbow_outer_left, wrist_outer_left, 0.95)
+    point neck_center = between(neck_left, neck_right, 0.5)
+    point waist_center = between(waist_left, waist_right, 0.5)
+    point collar_top = between(chin, neck_center, 0.5)
+    let (collar_mid_x, collar_top_y) = collar_top
+    let (shoulder_x, shoulder_y) = shoulder_left
+    let (neck_x, neck_y) = neck_center
+    let collar_half = neck_width * 0.75
+    let collar_bottom_y = shoulder_y + neck_width / 4
     variant compact:
         layer body:
             polygon torso fabric:
-                body_mid_x - shoulder_half, top_y
-                body_mid_x + shoulder_half, top_y
-                body_mid_x + waist_half, bottom_y
-                body_mid_x - waist_half, bottom_y
+                shoulder_left
+                shoulder_right
+                armpit_right
+                waist_fit_right
+                hem_right
+                hem_left
+                waist_fit_left
+                armpit_left
             polygon left_sleeve fabric:
-                body_mid_x - shoulder_half, top_y
-                body_mid_x - shoulder_half - body_unit * 0.75, top_y + body_unit * 1
-                left_hand_x - body_unit * 0.25, hand_y - body_unit * 0.5
-                left_hand_x + body_unit * 0.5, hand_y - body_unit * 0.5
-                body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1.5
+                shoulder_left
+                elbow_outer_left
+                cuff_outer
+                cuff_inner
+                elbow_inner_left
+                armpit_left
             mirror left_sleeve as right_sleeve
             rect collar fabric:
-                x body_mid_x - body_unit * 1.5
-                y top_y - body_unit * 1
-                w body_unit * 3
-                h body_unit * 1.5
+                x collar_mid_x - collar_half
+                y collar_top_y
+                w collar_half * 2
+                h collar_bottom_y - collar_top_y
+        layer knit:
+            line hem trim width 0.3:
+                hem_left
+                hem_right
+            line left_cuff trim width 0.3:
+                cuff_inner
+                cuff_outer
+            mirror left_cuff as right_cuff
         surface garment:
             torso
             left_sleeve
             right_sleeve
             collar
+
     variant detailed:
         layer body:
-            polygon torso fabric outline trim width 0.3:
-                body_mid_x - shoulder_half, top_y
-                body_mid_x + shoulder_half, top_y
-                body_mid_x + waist_half, bottom_y
-                body_mid_x - waist_half, bottom_y
-            polygon left_sleeve fabric outline trim width 0.3:
-                body_mid_x - shoulder_half, top_y
-                body_mid_x - shoulder_half - body_unit * 0.25, top_y + body_unit * 1
-                left_hand_x - body_unit * 0.25, hand_y - body_unit * 0.5
-                left_hand_x + body_unit * 0.5, hand_y - body_unit * 0.5
-                body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1.5
+            polygon torso fabric outline trim width 0.25:
+                shoulder_left
+                shoulder_right
+                armpit_right
+                waist_fit_right
+                hem_right
+                hem_left
+                waist_fit_left
+                armpit_left
+            polygon left_sleeve fabric outline trim width 0.25:
+                shoulder_left
+                elbow_outer_left
+                cuff_outer
+                cuff_inner
+                elbow_inner_left
+                armpit_left
             mirror left_sleeve as right_sleeve
             rect collar fabric:
-                x body_mid_x - body_unit * 1.6
-                y top_y - body_unit * 0.75
-                w body_unit * 3.2
-                h body_unit * 1.25
-                outline trim
-                width 0.3
-        layer detail:
+                x collar_mid_x - collar_half
+                y collar_top_y
+                w collar_half * 2
+                h collar_bottom_y - collar_top_y
+        layer knit:
+            line hem trim width 0.3:
+                hem_left
+                hem_right
+            line left_cuff trim width 0.3:
+                cuff_inner
+                cuff_outer
+            mirror left_cuff as right_cuff
             line collar_fold trim width 0.25:
-                body_mid_x - body_unit * 1.5, top_y
-                body_mid_x + body_unit * 1.5, top_y
+                collar_mid_x - collar_half, neck_y
+                collar_mid_x + collar_half, neck_y
         surface garment:
             torso
             left_sleeve

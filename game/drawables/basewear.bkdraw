@@ -6,45 +6,42 @@ bakerrrr-drawable 2
 # the renderer never needs to know an individual garment name on its live path.
 
 drawable camisole context garment:
-    let body_unit = body_height / 14
-    let (body_mid_x, crown_y) = crown
-    let (shoulder_anchor_x, shoulder_y) = shoulder_left
-    let (crotch_x, hip_y) = crotch
-    let shoulder_half = upper_torso_width / 2
-    let hip_half = hip_width / 2
-    let waist_half = waist_width / 2
-    let body_left_x = body_mid_x - hip_half
-    let body_right_x = body_mid_x + hip_half
     paint fabric = fill
     paint trim = edge
     paint shadow = shade
-    let cami_half = shoulder_half - body_unit * 1
-    let neckline_y = shoulder_y + body_unit * 2
-    let bottom_y = hip_y - body_unit * 1
+    point waist_center = between(waist_left, waist_right, 0.5)
+    point chest_left = between(armpit_left, waist_left, 0.2)
+    point chest_right = between(armpit_right, waist_right, 0.2)
+    point chest_center = between(chest_left, chest_right, 0.5)
+    point neckline_left = between(chest_left, chest_center, 0.15)
+    point neckline_right = between(chest_right, chest_center, 0.15)
+    point neckline_dip = between(chest_center, waist_center, 0.25)
+    point hem_left = between(waist_left, hip_left, 0.7)
+    point hem_right = between(waist_right, hip_right, 0.7)
 
     variant compact:
         layer body:
             polygon bodice fabric:
-                body_mid_x - cami_half, neckline_y
-                body_mid_x, neckline_y + body_unit * 1
-                body_mid_x + cami_half, neckline_y
-                body_mid_x + waist_half, hip_y - body_unit * 2
-                body_right_x - body_unit * 1, bottom_y
-                body_left_x + body_unit * 1, bottom_y
-                body_mid_x - waist_half, hip_y - body_unit * 2
+                neckline_left
+                neckline_dip
+                neckline_right
+                waist_right
+                hem_right
+                hem_left
+                waist_left
         layer trim:
             line neckline shadow width 0.5:
-                body_mid_x - cami_half, neckline_y
-                body_mid_x, neckline_y + body_unit * 1
-                body_mid_x + cami_half, neckline_y
+                neckline_left
+                neckline_dip
+                neckline_right
             line left_strap trim width 0.5:
-                body_mid_x - cami_half, neckline_y
-                body_mid_x - cami_half, shoulder_y
+                neckline_left
+                shoulder_left
             mirror left_strap as right_strap
             when detail has strappy:
                 line cross_left trim width 0.5:
-                    body_mid_x - cami_half, shoulder_y
-                    body_mid_x - body_unit * 1, neckline_y + body_unit * 1
+                    shoulder_left
+                    neckline_dip
                 mirror cross_left as cross_right
         group straps:
             left_strap
@@ -53,30 +50,28 @@ drawable camisole context garment:
             bodice
 
     variant detailed:
-        let neck_depth = body_unit * 1
-        let waist_y = neckline_y + body_unit * 2
         layer body:
             polygon bodice fabric outline trim width 0.35:
-                body_mid_x - cami_half, neckline_y
-                body_mid_x, neckline_y + neck_depth
-                body_mid_x + cami_half, neckline_y
-                body_mid_x + waist_half, waist_y
-                body_right_x - body_unit * 1, bottom_y
-                body_left_x + body_unit * 1, bottom_y
-                body_mid_x - waist_half, waist_y
+                neckline_left
+                neckline_dip
+                neckline_right
+                waist_right
+                hem_right
+                hem_left
+                waist_left
         layer trim:
             line neckline shadow width 0.35:
-                body_mid_x - cami_half, neckline_y
-                body_mid_x, neckline_y + neck_depth
-                body_mid_x + cami_half, neckline_y
+                neckline_left
+                neckline_dip
+                neckline_right
             line left_strap trim width 0.35:
-                body_mid_x - cami_half, neckline_y
-                body_mid_x - cami_half, shoulder_y
+                neckline_left
+                shoulder_left
             mirror left_strap as right_strap
             when detail has strappy:
                 line cross_left trim width 0.35:
-                    body_mid_x - cami_half, shoulder_y
-                    body_mid_x - body_unit * 1, neckline_y + neck_depth
+                    shoulder_left
+                    neckline_dip
                 mirror cross_left as cross_right
         group straps:
             left_strap

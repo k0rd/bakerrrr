@@ -23,6 +23,7 @@ from game.property_runtime import (
     property_metadata,
 )
 from game.system_support.building_repair_runtime import fire_damage_record_at
+from game.system_support.fire_advance_queue import FireAdvanceQueue
 
 
 RISKY_ROOM_KINDS = {
@@ -108,8 +109,17 @@ _STATE_DICT_KEYS = (
     "response_seed_ids",
     "environmental_candidate_cache",
     "reforestation",
+    "summary_cell_signatures",
+    "property_fire_counts",
+    "property_fire_revisions",
+    "building_fire_revisions",
+    "property_summary_cache",
+    "summary_properties_by_building",
 )
-_STATE_SET_KEYS = ("last_active_properties", "last_smoke_properties")
+_STATE_SET_KEYS = (
+    "last_active_properties", "last_smoke_properties",
+    "dirty_fire_properties", "dirty_fire_buildings", "dirty_response_properties",
+)
 
 _BURN_TIER_PROFILES = {
     "none": {
@@ -321,10 +331,9 @@ def _fire_state_runtime_ready(state):
     for name in _STATE_DICT_KEYS:
         if not isinstance(state.get(name), dict):
             return False
-    if not isinstance(state.get("advance_due"), dict):
-        return False
-    if not isinstance(state.get("advance_tick_by_coord"), dict):
-        return False
+    if not isinstance(state.get("advance_queue"), FireAdvanceQueue):
+        if not isinstance(state.get("advance_due"), dict) or not isinstance(state.get("advance_tick_by_coord"), dict):
+            return False
     if not isinstance(state.get("protected_chunks"), set):
         return False
     for name in _STATE_SET_KEYS:
@@ -342,6 +351,7 @@ def fire_state(sim):
         bool(state.get("_runtime_normalized"))
         and isinstance(state.get("z_index"), dict)
         and isinstance(state.get("light_revision_by_z"), dict)
+        and isinstance(state.get("summary_cell_signatures"), dict)
     ):
         # All live mutation paths preserve the normalized containers. Rechecking
         # every index on every cell lookup turns a large due fire wave quadratic.
@@ -453,7 +463,70 @@ def fire_state(sim):
     state.setdefault("fire_response_dirty", bool(normalized_cells))
     state.setdefault("fire_response_next_tick", 0)
     state["_runtime_normalized"] = True
+    # Derived counts/cache are rebuilt once for old saves, from canonical cells.
+    state["summary_cell_signatures"] = {}
+    state["property_fire_counts"] = {}
+    state["property_summary_cache"] = {}
+    for coord, cell in normalized_cells.items():
+        sync_fire_cell_summary(sim, coord, cell, state=state)
+    state["dirty_fire_properties"].update(saved_active_properties | saved_smoke_properties)
     return state
+
+
+def sync_fire_cell_summary(sim, coord, cell=None, *, state=None):
+    """Maintain summary inputs after an in-place cell edit or removal.
+
+    Burn budget and positive-to-positive smoke decay do not change a summary.
+    Canonical cells have normalized IDs and intensities already.
+    """
+    if state is None:
+        state = fire_state(sim)
+    signatures = state["summary_cell_signatures"]
+    previous = signatures.get(coord)
+    property_id = (cell.get("property_id") or "") if cell is not None else ""
+    building_id = (cell.get("building_id") or "") if cell is not None else ""
+    # Unowned cells need building invalidation only once a property summary
+    # actually observes that building. Its first read seeds these inputs below.
+    tracked = property_id or building_id in state["summary_properties_by_building"]
+    current = None if not tracked else (
+        property_id, building_id, cell.get("fire_intensity", 0),
+        cell.get("smoke_intensity", 0) > 0,
+    )
+    if previous == current:
+        return False
+    if current is None:
+        property_id = building_id = ""
+    old_property, old_building, old_fire, old_smoke = previous or ("", "", 0, False)
+    new_fire, new_smoke = current[2:] if current is not None else (0, False)
+    counts = state["property_fire_counts"]
+    if old_property:
+        row = counts[old_property]
+        row[0] -= old_fire > 0
+        row[1] -= old_smoke
+    if property_id:
+        row = counts.setdefault(property_id, [0, 0])
+        row[0] += new_fire > 0
+        row[1] += new_smoke
+    property_revisions = state["property_fire_revisions"]
+    if old_property and old_property != property_id:
+        property_revisions[old_property] = property_revisions.get(old_property, 0) + 1
+        state["dirty_fire_properties"].add(old_property)
+    if property_id:
+        property_revisions[property_id] = property_revisions.get(property_id, 0) + 1
+        state["dirty_fire_properties"].add(property_id)
+    building_revisions = state["building_fire_revisions"]
+    if old_building and old_building != building_id:
+        building_revisions[old_building] = building_revisions.get(old_building, 0) + 1
+        state["dirty_fire_buildings"].add(old_building)
+    if building_id:
+        building_revisions[building_id] = building_revisions.get(building_id, 0) + 1
+        state["dirty_fire_buildings"].add(building_id)
+    if current is None:
+        signatures.pop(coord, None)
+    else:
+        signatures[coord] = current
+    state["fire_property_transition_dirty"] = True
+    return True
 
 
 def mark_fire_light_changed(sim, *, state=None, z=None):
@@ -471,51 +544,49 @@ def rebuild_fire_advance_due_index(sim, *, advance_interval=5):
         interval = max(1, int(advance_interval))
     except (TypeError, ValueError):
         interval = 5
-    due = {}
-    by_coord = {}
-    active_count = 0
-    for coord, cell in tuple(state.get("cells", {}).items()):
+    queue = FireAdvanceQueue()
+    for coord, cell in state.get("cells", {}).items():
         if not isinstance(cell, dict):
             continue
         if _safe_int(cell.get("fire_intensity"), 0) <= 0 and _safe_int(cell.get("smoke_intensity"), 0) <= 0:
             continue
-        active_count += 1
         next_tick = _safe_int(cell.get("last_advanced_tick"), _safe_int(getattr(sim, "tick", 0), 0)) + interval
-        _int_bucket(due, next_tick).add(coord)
-        by_coord[coord] = int(next_tick)
-    state["advance_due"] = due
-    state["advance_tick_by_coord"] = by_coord
-    state["advance_due_signature"] = (active_count, interval)
+        queue.schedule(coord, next_tick, sim.chunk_coords(coord[0], coord[1]))
+    state["advance_queue"] = queue
+    state.pop("advance_due", None)
+    state.pop("advance_tick_by_coord", None)
+    state.pop("advance_due_signature", None)
     state["advance_due_dirty"] = False
     return state
 
 
 def ensure_fire_advance_due_index(sim, *, advance_interval=5):
     state = fire_state(sim)
-    try:
-        interval = max(1, int(advance_interval))
-    except (TypeError, ValueError):
-        interval = 5
-    by_coord = state.get("advance_tick_by_coord", {})
-    due = state.get("advance_due", {})
+    queue = state.get("advance_queue")
+    if not isinstance(queue, FireAdvanceQueue) and not state.get("advance_due_dirty"):
+        # Migrate intact legacy indexes with their scheduled times, including
+        # overflow delays. Missing/invalid indexes still rebuild from cell truth.
+        by_coord = state.get("advance_tick_by_coord", {})
+        if by_coord and state.get("advance_due"):
+            queue = FireAdvanceQueue()
+            cells = state["cells"]
+            for coord, tick in by_coord.items():
+                cell = cells.get(coord)
+                if isinstance(cell, dict) and (cell.get("fire_intensity", 0) > 0 or cell.get("smoke_intensity", 0) > 0):
+                    queue.schedule(coord, tick, sim.chunk_coords(coord[0], coord[1]))
+            state["advance_queue"] = queue
+            state.pop("advance_due", None)
+            state.pop("advance_tick_by_coord", None)
+            state.pop("advance_due_signature", None)
     if (
-        bool(state.get("advance_due_dirty"))
-        or state.get("advance_due_signature") is None
-        or not isinstance(by_coord, dict)
-        or not isinstance(due, dict)
-        or (
-            not by_coord
-            and any(
-                isinstance(cell, dict)
-                and (
-                    _safe_int(cell.get("fire_intensity"), 0) > 0
-                    or _safe_int(cell.get("smoke_intensity"), 0) > 0
-                )
-                for cell in tuple(state.get("cells", {}).values())
-            )
-        )
+        state.get("advance_due_dirty")
+        or not isinstance(queue, FireAdvanceQueue)
+        or (not queue and any(
+            isinstance(cell, dict) and (cell.get("fire_intensity", 0) > 0 or cell.get("smoke_intensity", 0) > 0)
+            for cell in state["cells"].values()
+        ))
     ):
-        return rebuild_fire_advance_due_index(sim, advance_interval=interval)
+        return rebuild_fire_advance_due_index(sim, advance_interval=advance_interval)
     return state
 
 
@@ -530,25 +601,14 @@ def schedule_fire_cell_advance(sim, coord, *, due_tick=None, advance_interval=5)
     if _safe_int(cell.get("fire_intensity"), 0) <= 0 and _safe_int(cell.get("smoke_intensity"), 0) <= 0:
         unschedule_fire_cell_advance(sim, key)
         return None
-    try:
-        interval = max(1, int(advance_interval))
-    except (TypeError, ValueError):
-        interval = 5
+    interval = max(1, _safe_int(advance_interval, 5))
     if due_tick is None:
         due_tick = _safe_int(cell.get("last_advanced_tick"), _safe_int(getattr(sim, "tick", 0), 0)) + interval
-    due_tick = int(max(0, _safe_int(due_tick, 0)))
-    old_tick = state.setdefault("advance_tick_by_coord", {}).get(key)
-    if old_tick is not None and int(old_tick) != due_tick:
-        old_bucket = _int_bucket(state.setdefault("advance_due", {}), old_tick)
-        old_bucket.discard(key)
-        if not old_bucket:
-            state.setdefault("advance_due", {}).pop(int(old_tick), None)
-    _int_bucket(state.setdefault("advance_due", {}), due_tick).add(key)
-    state.setdefault("advance_tick_by_coord", {})[key] = due_tick
-    # The due indexes are already maintained incrementally.  Recounting every
-    # active fire cell here made a due wave quadratic because every advanced
-    # cell schedules itself again.
-    state["advance_due_signature"] = (len(state["advance_tick_by_coord"]), interval)
+    due_tick = max(0, _safe_int(due_tick, 0))
+    queue = state.get("advance_queue")
+    if not isinstance(queue, FireAdvanceQueue):
+        queue = ensure_fire_advance_due_index(sim, advance_interval=interval)["advance_queue"]
+    queue.schedule(key, due_tick, sim.chunk_coords(key[0], key[1]))
     return due_tick
 
 
@@ -557,33 +617,23 @@ def unschedule_fire_cell_advance(sim, coord):
     if key is None:
         return False
     state = fire_state(sim)
-    old_tick = state.setdefault("advance_tick_by_coord", {}).pop(key, None)
-    if old_tick is None:
-        return False
-    bucket = _int_bucket(state.setdefault("advance_due", {}), old_tick)
-    bucket.discard(key)
-    if not bucket:
-        state.setdefault("advance_due", {}).pop(int(old_tick), None)
-    signature = state.get("advance_due_signature")
-    interval = signature[1] if isinstance(signature, (tuple, list)) and len(signature) >= 2 else 5
-    state["advance_due_signature"] = (len(state.get("advance_tick_by_coord", {})), interval)
-    return True
+    queue = state.get("advance_queue")
+    if isinstance(queue, FireAdvanceQueue):
+        return queue.remove(key)
+    state["advance_due_dirty"] = True
+    return False
 
 
 def pop_due_fire_cells(sim, *, current_tick=None, advance_interval=5):
+    """Uncapped compatibility read; FireSystem uses the queue's bounded batch."""
     if current_tick is None:
         current_tick = _safe_int(getattr(sim, "tick", 0), 0)
-    state = ensure_fire_advance_due_index(sim, advance_interval=advance_interval)
-    due = state.setdefault("advance_due", {})
-    by_coord = state.setdefault("advance_tick_by_coord", {})
-    ready = []
-    for due_tick in sorted(tick for tick in due.keys() if int(tick) <= int(current_tick)):
-        bucket = due.pop(due_tick, set())
-        for coord in tuple(bucket or ()):
-            if by_coord.get(coord) == due_tick:
-                by_coord.pop(coord, None)
-            ready.append(coord)
-    return tuple(ready)
+    queue = ensure_fire_advance_due_index(sim, advance_interval=advance_interval)["advance_queue"]
+    foreground, _, _, _ = queue.take_batch(
+        current_tick, player_z=None, chunk_loaded=lambda chunk: True,
+        foreground_cap=len(queue), background_cap=0, interval=advance_interval,
+    )
+    return foreground
 
 
 def _rebuild_fire_indexes(sim):
@@ -825,9 +875,8 @@ def suppress_fire_cell(
         remove_fire_cell(sim, key[0], key[1], key[2], sync_protected=True)
     elif chunk is not None:
         _refresh_protected_chunk(sim, chunk, state=state)
-
-    state["fire_response_dirty"] = True
-    state["fire_property_transition_dirty"] = True
+    if next_fire > 0 or next_smoke > 0:
+        sync_fire_cell_summary(sim, key, cell, state=state)
     result = {
         "ok": True,
         "reason": "suppressed",
@@ -862,8 +911,7 @@ def remove_fire_cell(sim, x, y, z=0, *, sync_protected=True):
     unschedule_fire_cell_advance(sim, key)
     _unindex_fire_cell(sim, key, cell, sync_protected=sync_protected)
     state.get("frozen_boundaries", {}).pop(key, None)
-    state["fire_response_dirty"] = True
-    state["fire_property_transition_dirty"] = True
+    sync_fire_cell_summary(sim, key, state=state)
     return True
 
 
@@ -1510,9 +1558,10 @@ def upsert_fire_cell(
                 state.get("last_active_properties", set()).add(tracked_property_id)
             if _safe_int(cell.get("smoke_intensity"), 0) > 0:
                 state.get("last_smoke_properties", set()).add(tracked_property_id)
-        state["fire_response_dirty"] = True
+        sync_fire_cell_summary(sim, key, cell, state=state)
         return cell
 
+    previous_identity = (existing.get("property_id"), existing.get("building_id"))
     previous_fire_intensity = _safe_int(existing.get("fire_intensity"), 0)
     existing["fire_intensity"] = max(_safe_int(existing.get("fire_intensity"), 0), _safe_int(fire_intensity, 0))
     existing["smoke_intensity"] = max(_safe_int(existing.get("smoke_intensity"), 0), _safe_int(smoke_intensity, 0))
@@ -1523,6 +1572,11 @@ def upsert_fire_cell(
     existing["source_property_id"] = _text(source_property_id) or existing.get("source_property_id") or behavior.get("property_id")
     existing["property_id"] = _text(property_id) or existing.get("property_id") or behavior.get("property_id")
     existing["building_id"] = _text(building_id) or existing.get("building_id") or behavior.get("building_id")
+    if previous_identity != (existing.get("property_id"), existing.get("building_id")):
+        _unindex_fire_cell(sim, key, {
+            "property_id": previous_identity[0], "building_id": previous_identity[1],
+        }, sync_protected=False)
+        _index_fire_cell(sim, key, existing)
     existing["burn_tier"] = _text(burn_tier).lower() or _text(existing.get("burn_tier")).lower() or behavior.get("burn_tier") or "none"
     existing["burn_budget"] = max(_safe_int(existing.get("burn_budget"), 0), _safe_int(burn_budget, existing.get("burn_budget", 0)))
     aerosol_status = _text(aerosol_status).lower()
@@ -1555,7 +1609,7 @@ def upsert_fire_cell(
         chunk = _normalize_chunk_key(sim.chunk_coords(key[0], key[1]))
         if chunk is not None:
             state.setdefault("protected_chunks", set()).add(chunk)
-    state["fire_response_dirty"] = True
+    sync_fire_cell_summary(sim, key, existing, state=state)
     return existing
 
 
@@ -1599,6 +1653,23 @@ def property_fire_summary(sim, prop):
     state = fire_state(sim)
     property_id = _text(prop.get("id"))
     building_id = _text(property_metadata(prop).get("building_id"))
+    if building_id:
+        observers = state["summary_properties_by_building"]
+        first_read = building_id not in observers
+        _set_bucket(observers, building_id).add(property_id)
+        if first_read:
+            for coord in state["building_index"].get(building_id, ()):
+                sync_fire_cell_summary(sim, coord, state["cells"].get(coord), state=state)
+    public_frontage = bool(property_is_public(prop) or property_is_storefront(prop))
+    signature = (
+        state["property_fire_revisions"].get(property_id, 0),
+        state["building_fire_revisions"].get(building_id, 0),
+        building_id, _text(prop.get("name")),
+        prop.get("x"), prop.get("y"), prop.get("z"), public_frontage,
+    )
+    cached = state["property_summary_cache"].get(property_id)
+    if cached is not None and cached[0] == signature:
+        return dict(cached[1])
     coords = set(_set_bucket(state.get("property_index", {}), property_id))
     if building_id:
         coords.update(_set_bucket(state.get("building_index", {}), building_id))
@@ -1620,15 +1691,14 @@ def property_fire_summary(sim, prop):
             smoke_cells += 1
     anchor = None
     if cells:
-        cells.sort(key=lambda row: (_safe_int(row.get("y"), 0), _safe_int(row.get("x"), 0), _safe_int(row.get("z"), 0)))
-        first = cells[0]
+        first = min(cells, key=lambda row: (_safe_int(row.get("y"), 0), _safe_int(row.get("x"), 0), _safe_int(row.get("z"), 0)))
         anchor = (_safe_int(first.get("x"), 0), _safe_int(first.get("y"), 0), _safe_int(first.get("z"), 0))
     else:
         try:
             anchor = (int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0)))
         except (TypeError, ValueError):
             anchor = None
-    return {
+    summary = {
         "active": bool(active_cells),
         "active_cells": int(active_cells),
         "smoke_cells": int(smoke_cells),
@@ -1637,9 +1707,11 @@ def property_fire_summary(sim, prop):
         "property_name": _text(prop.get("name")),
         "building_id": building_id,
         "chunk": _normalize_chunk_key(sim.chunk_coords(anchor[0], anchor[1])) if anchor is not None else None,
-        "public_frontage": bool(property_is_public(prop) or property_is_storefront(prop)),
+        "public_frontage": public_frontage,
         "anchor": anchor,
     }
+    state["property_summary_cache"][property_id] = (signature, summary)
+    return dict(summary)
 
 
 def chunk_fire_summary(sim, chunk_coord):

@@ -38,11 +38,11 @@ from game.system_support.fire_runtime import (
     mark_fire_cell_spent,
     mark_chunk_environmental_ignition,
     note_frozen_fire_boundary,
-    pop_due_fire_cells,
     property_fire_summary,
     refresh_fire_protected_chunk,
     remove_fire_cell,
     schedule_fire_cell_advance,
+    sync_fire_cell_summary,
     upsert_fire_cell,
 )
 from game.system_support.structure_damage_runtime import (
@@ -221,7 +221,12 @@ class FireSystem(System):
         incident = incident_record(self.sim, event.data.get("incident_id"))
         if not isinstance(incident, dict) or _text(incident.get("kind")).lower() != "structure_fire":
             return
-        fire_state(self.sim)["fire_response_dirty"] = True
+        state = fire_state(self.sim)
+        property_id = _text(incident.get("property_id"))
+        if property_id:
+            state["dirty_response_properties"].add(property_id)
+        else:
+            state["fire_response_dirty"] = True
 
     def _begin_update_caches(self):
         self._loaded_chunk_cache = set(_loaded_chunk_keys(self.sim))
@@ -1165,35 +1170,30 @@ class FireSystem(System):
             if self._attempt_spread_to_neighbor(from_coord, source_cell, target_coord):
                 clear_frozen_fire_boundary(self.sim, target_coord)
 
-    def _sync_fire_property_transitions(self, previous_active, previous_smoke):
+    def _sync_fire_property_transitions(self, previous_active=None, previous_smoke=None):
         state = fire_state(self.sim)
-        candidate_property_ids = (
-            set(previous_active or ())
-            | set(previous_smoke or ())
-            | set(state.get("last_active_properties", ()) or ())
-            | set(state.get("last_smoke_properties", ()) or ())
-        )
-        cells = state.get("cells", {})
-        property_index = state.get("property_index", {})
-        current_active = {
-            property_id
-            for property_id in candidate_property_ids
-            if any(
-                _safe_int((cells.get(coord) or {}).get("fire_intensity"), 0) > 0
-                for coord in tuple(property_index.get(property_id, ()) or ())
+        dirty = state["dirty_fire_properties"]
+        previous_active = (state["last_active_properties"] if previous_active is None else previous_active) & dirty
+        previous_smoke = (state["last_smoke_properties"] if previous_smoke is None else previous_smoke) & dirty
+        current_active = set()
+        current_smoke = set()
+        for property_id in dirty:
+            active, smoke = state["property_fire_counts"].get(property_id, (0, 0))
+            if active:
+                current_active.add(property_id)
+            if smoke:
+                current_smoke.add(property_id)
+        state["last_active_properties"].difference_update(dirty)
+        state["last_active_properties"].update(current_active)
+        state["last_smoke_properties"].difference_update(dirty)
+        state["last_smoke_properties"].update(current_smoke)
+        state["dirty_response_properties"].update(dirty)
+        for building_id in state["dirty_fire_buildings"]:
+            state["dirty_response_properties"].update(
+                state["summary_properties_by_building"].get(building_id, ())
             )
-        }
-        current_smoke = {
-            property_id
-            for property_id in candidate_property_ids
-            if any(
-                _safe_int((cells.get(coord) or {}).get("smoke_intensity"), 0) > 0
-                for coord in tuple(property_index.get(property_id, ()) or ())
-            )
-        }
-        state["last_active_properties"] = set(current_active)
-        state["last_smoke_properties"] = set(current_smoke)
-        state["fire_response_dirty"] = True
+        dirty.clear()
+        state["dirty_fire_buildings"].clear()
         state["fire_property_transition_dirty"] = False
 
         for property_id in sorted(set(previous_active or ()) - current_active):
@@ -1232,60 +1232,39 @@ class FireSystem(System):
                 )
             )
 
+    def _take_fire_advance_batch(self):
+        state = fire_state(self.sim)
+        tick = _safe_int(getattr(self.sim, "tick", 0), 0)
+        queue = ensure_fire_advance_due_index(self.sim, advance_interval=FIRE_SPREAD_INTERVAL)["advance_queue"]
+        player_pos = self.sim.ecs.get(Position).get(getattr(self.sim, "player_eid", None))
+        player_z = int(player_pos.z) if player_pos is not None else None
+        foreground, background, counts, had_due = queue.take_batch(
+            tick, player_z=player_z, chunk_loaded=self._chunk_is_loaded,
+            foreground_cap=FOREGROUND_FIRE_ADVANCE_CAP,
+            background_cap=BACKGROUND_FIRE_ADVANCE_CAP, interval=FIRE_SPREAD_INTERVAL,
+        )
+        foreground_cycle = max(FIRE_SPREAD_INTERVAL, (counts[0] + FOREGROUND_FIRE_ADVANCE_CAP - 1) // FOREGROUND_FIRE_ADVANCE_CAP)
+        background_cycle = max(FIRE_SPREAD_INTERVAL, (counts[1] + BACKGROUND_FIRE_ADVANCE_CAP - 1) // BACKGROUND_FIRE_ADVANCE_CAP)
+        if had_due:
+            state["last_fire_advance_load"] = {
+                "tick": tick,
+                "foreground_due": counts[0],
+                "background_due": counts[1],
+                "advanced": len(foreground) + len(background),
+                "deferred": sum(counts) - len(foreground) - len(background),
+            }
+        return foreground + background, set(foreground), set(background), foreground_cycle, background_cycle
+
     def _advance_cells(self):
         state = fire_state(self.sim)
         tick = _safe_int(getattr(self.sim, "tick", 0), 0)
-        due_coords = pop_due_fire_cells(self.sim, current_tick=tick, advance_interval=FIRE_SPREAD_INTERVAL)
+        due_coords, foreground_selected_set, background_selected_set, foreground_cycle, background_cycle = self._take_fire_advance_batch()
         if not due_coords:
             if bool(state.get("fire_property_transition_dirty")):
-                self._sync_fire_property_transitions(
-                    set(state.get("last_active_properties", ()) or ()),
-                    set(state.get("last_smoke_properties", ()) or ()),
-                )
+                self._sync_fire_property_transitions()
             return
-        player_pos = self.sim.ecs.get(Position).get(getattr(self.sim, "player_eid", None))
-        player_z = int(player_pos.z) if player_pos is not None else None
-        foreground_due = []
-        background_due = []
-        unloaded_due = []
-        for coord in sorted(due_coords):
-            if not self._chunk_is_loaded(self.sim.chunk_coords(coord[0], coord[1])):
-                unloaded_due.append(coord)
-            elif player_z is None or int(coord[2]) == player_z:
-                foreground_due.append(coord)
-            else:
-                background_due.append(coord)
-
-        foreground_selected = foreground_due[:FOREGROUND_FIRE_ADVANCE_CAP]
-        background_selected = background_due[:BACKGROUND_FIRE_ADVANCE_CAP]
-        deferred = foreground_due[FOREGROUND_FIRE_ADVANCE_CAP:] + background_due[BACKGROUND_FIRE_ADVANCE_CAP:]
-        for coord in deferred:
-            schedule_fire_cell_advance(
-                self.sim,
-                coord,
-                due_tick=tick + 1,
-                advance_interval=FIRE_SPREAD_INTERVAL,
-            )
-        background_cycle = max(
-            FIRE_SPREAD_INTERVAL,
-            (len(background_due) + BACKGROUND_FIRE_ADVANCE_CAP - 1) // BACKGROUND_FIRE_ADVANCE_CAP,
-        )
-        foreground_cycle = max(
-            FIRE_SPREAD_INTERVAL,
-            (len(foreground_due) + FOREGROUND_FIRE_ADVANCE_CAP - 1) // FOREGROUND_FIRE_ADVANCE_CAP,
-        )
-        foreground_selected_set = set(foreground_selected)
-        background_selected_set = set(background_selected)
-        due_coords = tuple(unloaded_due + foreground_selected + background_selected)
-        state["last_fire_advance_load"] = {
-            "tick": tick,
-            "foreground_due": len(foreground_due),
-            "background_due": len(background_due),
-            "advanced": len(foreground_selected) + len(background_selected),
-            "deferred": len(deferred),
-        }
-        previous_active = set(state.get("last_active_properties", ()) or ())
-        previous_smoke = set(state.get("last_smoke_properties", ()) or ())
+        previous_active = set(state["last_active_properties"])
+        previous_smoke = set(state["last_smoke_properties"])
         changed_chunks = set()
         fire_light_changed_z = set()
 
@@ -1352,6 +1331,7 @@ class FireSystem(System):
             if _safe_int(cell.get("fire_intensity"), 0) <= 0 and _safe_int(cell.get("smoke_intensity"), 0) <= 0:
                 remove_fire_cell(self.sim, coord[0], coord[1], coord[2], sync_protected=False)
             else:
+                sync_fire_cell_summary(self.sim, coord, cell, state=state)
                 if coord in foreground_selected_set:
                     next_interval = foreground_cycle
                 elif coord in background_selected_set:
@@ -1370,42 +1350,48 @@ class FireSystem(System):
 
         for chunk in changed_chunks:
             refresh_fire_protected_chunk(self.sim, chunk)
-        self._sync_fire_property_transitions(previous_active, previous_smoke)
+        if state.get("fire_property_transition_dirty"):
+            self._sync_fire_property_transitions(previous_active, previous_smoke)
 
-    def _sync_fire_response_seeds(self):
+    def _sync_fire_response_seeds(self, *, refresh_all=True):
         state = fire_state(self.sim)
         seed_state = _business_event_seed_state(self.sim)
         response_seed_ids = state.get("response_seed_ids", {})
         ticks_per_hour = _world_ticks_per_hour(self.sim)
 
-        summaries = {}
-        for property_id in tuple(state.get("last_active_properties", ()) or ()):
+        if state.get("fire_property_transition_dirty"):
+            self._sync_fire_property_transitions()
+        candidates = set(state["dirty_response_properties"])
+        if refresh_all:
+            candidates.update(state["last_active_properties"])
+            candidates.update(response_seed_ids)
+        state["dirty_response_properties"].clear()
+        for property_id in sorted(candidates):
             prop = getattr(self.sim, "properties", {}).get(property_id)
-            if not isinstance(prop, dict):
-                continue
-            summary = property_fire_summary(self.sim, prop)
-            if summary.get("active"):
-                summaries[property_id] = summary
-        active_properties = set(summaries)
-        response_properties = set()
-
-        for property_id in tuple(active_properties):
-            prop = getattr(self.sim, "properties", {}).get(property_id)
-            if not isinstance(prop, dict):
-                continue
-            summary = summaries[property_id]
-            if not summary.get("active") or not summary.get("public_frontage"):
-                continue
-            incident = latest_reported_incident(
-                self.sim,
-                kind="structure_fire",
-                property_id=property_id,
-            )
+            summary = property_fire_summary(self.sim, prop) if isinstance(prop, dict) else {}
+            incident = None
+            if property_id in state["last_active_properties"] and summary.get("active") and summary.get("public_frontage"):
+                incident = latest_reported_incident(
+                    self.sim, kind="structure_fire", property_id=property_id,
+                )
             if not isinstance(incident, dict):
+                seed_id = response_seed_ids.pop(property_id, None)
+                if seed_id is not None:
+                    seed_state["active"].pop(_text(seed_id), None)
                 continue
-            response_properties.add(property_id)
             seed_id = _text(response_seed_ids.get(property_id)) or f"fire-response:{property_id}"
             response_seed_ids[property_id] = seed_id
+            # Only inputs used by a response require replacing its entry.
+            signature = (
+                summary.get("active_cells"), _seed_archetype_category(prop),
+                _text(prop.get("name", prop.get("id", "The site"))),
+                _safe_int(incident.get("id"), -1), incident.get("reported_by_eid"),
+                _text(incident.get("report_method")).lower(),
+            )
+            signatures = state.setdefault("response_signatures", {})
+            if not refresh_all and signatures.get(property_id) == signature and seed_id in seed_state["active"]:
+                continue
+            signatures[property_id] = signature
             seed_state["active"][seed_id] = {
                 "seed_id": seed_id,
                 "kind": "fire_response",
@@ -1449,14 +1435,10 @@ class FireSystem(System):
                 "consequence_seed_id": "",
             }
 
-        for property_id, seed_id in tuple(response_seed_ids.items()):
-            if property_id in response_properties:
-                continue
-            seed_state["active"].pop(_text(seed_id), None)
-            response_seed_ids.pop(property_id, None)
-        tick = _safe_int(getattr(self.sim, "tick", 0), 0)
-        state["fire_response_dirty"] = False
-        state["fire_response_next_tick"] = tick + FIRE_RESPONSE_REFRESH_INTERVAL
+        if refresh_all:
+            tick = _safe_int(getattr(self.sim, "tick", 0), 0)
+            state["fire_response_dirty"] = False
+            state["fire_response_next_tick"] = tick + FIRE_RESPONSE_REFRESH_INTERVAL
 
     def update(self):
         ensure_fire_advance_due_index(self.sim, advance_interval=FIRE_SPREAD_INTERVAL)
@@ -1469,8 +1451,9 @@ class FireSystem(System):
             self._apply_entity_exposure()
             state = fire_state(self.sim)
             tick = _safe_int(getattr(self.sim, "tick", 0), 0)
-            if bool(state.get("fire_response_dirty")) or tick >= _safe_int(state.get("fire_response_next_tick"), 0):
-                self._sync_fire_response_seeds()
+            refresh_all = bool(state.get("fire_response_dirty")) or tick >= _safe_int(state.get("fire_response_next_tick"), 0)
+            if refresh_all or state["dirty_response_properties"]:
+                self._sync_fire_response_seeds(refresh_all=refresh_all)
         finally:
             self._end_update_caches()
 

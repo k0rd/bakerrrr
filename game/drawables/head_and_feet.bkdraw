@@ -123,91 +123,124 @@ drawable sandals context garment:
             right_sole
 
 drawable cap context garment:
-    let body_unit = body_height / 14
     let (body_mid_x, head_top_y) = crown
-    let (head_center_x, head_y) = between(crown, chin, 0.5)
     let head_half = head_width / 2
     paint fabric = fill
     paint trim = edge
-    let hat_half = head_half + body_unit * 1
-    let crown_bottom = head_y + head_half - body_unit * 1
+    point forehead = between(crown, chin, 0.35)
+    let (forehead_x, brim_y) = forehead
+    let hat_half = head_half * 1.05
+    let top_y = head_top_y - head_height / 10
+    point crown_left = body_mid_x - hat_half, brim_y
+    point crown_right = body_mid_x + hat_half, brim_y
+    point brim_tip = body_mid_x + head_half * 1.65, brim_y
+    point brim_lower = body_mid_x + head_half * 1.4, brim_y + head_height / 12
+    point brim_inner = body_mid_x, brim_y + head_height / 12
     variant compact:
         layer body:
-            ellipse crown fabric:
-                x body_mid_x - hat_half
-                y head_top_y
-                w hat_half + hat_half
-                h head_half + body_unit * 1
-            rect brim fabric:
-                x body_mid_x
-                y crown_bottom
-                w hat_half + body_unit * 1
-                h body_unit * 0.75
+            polygon crown fabric:
+                crown_left
+                body_mid_x - hat_half * 0.85, head_top_y + head_height / 12
+                body_mid_x - hat_half * 0.4, top_y
+                body_mid_x + hat_half * 0.4, top_y
+                body_mid_x + hat_half * 0.85, head_top_y + head_height / 12
+                crown_right
+            polygon brim fabric:
+                forehead
+                brim_tip
+                brim_lower
+                brim_inner
         surface garment:
             crown
             brim
+
     variant detailed:
         layer body:
-            ellipse crown fabric:
-                x body_mid_x - hat_half - body_unit * 0.25
-                y head_top_y - body_unit * 0.25
-                w hat_half + hat_half + body_unit * 0.5
-                h head_half + body_unit * 1.25
-                outline trim
-                width 0.25
-            polygon brim fabric outline trim width 0.25:
-                body_mid_x - body_unit * 0.25, crown_bottom
-                body_mid_x + hat_half + body_unit * 1, crown_bottom
-                body_mid_x + hat_half + body_unit * 0.25, crown_bottom + body_unit * 0.75
-                body_mid_x, crown_bottom + body_unit * 0.75
+            polygon crown fabric outline trim width 0.2:
+                crown_left
+                body_mid_x - hat_half * 0.85, head_top_y + head_height / 12
+                body_mid_x - hat_half * 0.4, top_y
+                body_mid_x + hat_half * 0.4, top_y
+                body_mid_x + hat_half * 0.85, head_top_y + head_height / 12
+                crown_right
+            polygon brim fabric outline trim width 0.2:
+                forehead
+                brim_tip
+                brim_lower
+                brim_inner
         layer seam:
             line crown_seam trim width 0.2:
-                body_mid_x, head_top_y
-                body_mid_x, crown_bottom + body_unit * 0.5
+                body_mid_x, top_y
+                forehead
         surface garment:
             crown
             brim
 
 drawable bandana context garment:
-    let body_unit = body_height / 14
     let (body_mid_x, crown_y) = crown
-    let (shoulder_anchor_x, shoulder_y) = shoulder_left
-    let (head_center_x, head_y) = between(crown, chin, 0.5)
     let head_half = head_width / 2
-    let right_ear_x = body_mid_x + head_half
-    let ear_y = head_y
     paint fabric = fill
     paint trim = edge
-    let wrap_half = head_half + body_unit * 1
+    point band_top = between(crown, chin, 0.15)
+    point band_bottom = between(crown, chin, 0.38)
+    let (band_x, top_y) = band_top
+    let (band_bottom_x, bottom_y) = band_bottom
+    point knot = body_mid_x + head_half, top_y + head_height / 8
+    let (knot_x, knot_y) = knot
+    point tail_tip = knot_x + head_width / 4, knot_y + head_height / 3
+    point tail_inner = knot_x + head_width / 14, knot_y + head_height / 3
+    point short_tip = knot_x + head_width / 3, knot_y + head_height / 12
+    point short_inner = knot_x + head_width / 6, knot_y + head_height / 5
     variant compact:
+        layer ties:
+            polygon tail fabric:
+                knot
+                tail_tip
+                tail_inner
+            polygon short_tail fabric:
+                knot
+                short_tip
+                short_inner
         layer body:
             polygon wrap fabric:
-                body_mid_x - wrap_half, ear_y - body_unit * 1
-                body_mid_x + wrap_half, ear_y - body_unit * 1
-                body_mid_x + head_half, ear_y + body_unit * 1
-                body_mid_x - head_half, ear_y + body_unit * 1
-            polygon tail fabric:
-                right_ear_x - body_unit * 0.5, ear_y + body_unit * 0.5
-                right_ear_x + body_unit * 2, shoulder_y
-                right_ear_x, shoulder_y + body_unit * 0.5
+                body_mid_x - head_half * 0.85, top_y
+                body_mid_x + head_half * 0.85, top_y
+                body_mid_x + head_half * 1.05, bottom_y
+                body_mid_x - head_half * 1.05, bottom_y
+            circle knot trim:
+                center knot
+                radius head_width / 14
         surface garment:
             wrap
             tail
+            short_tail
+            knot
+
     variant detailed:
+        layer ties:
+            polygon tail fabric outline trim width 0.2:
+                knot
+                tail_tip
+                tail_inner
+            polygon short_tail fabric outline trim width 0.2:
+                knot
+                short_tip
+                short_inner
         layer body:
-            polygon wrap fabric outline trim width 0.25:
-                body_mid_x - wrap_half, ear_y - body_unit * 1.25
-                body_mid_x + wrap_half, ear_y - body_unit * 1.25
-                body_mid_x + head_half, ear_y + body_unit * 1
-                body_mid_x - head_half, ear_y + body_unit * 1
-            polygon tail fabric outline trim width 0.25:
-                right_ear_x - body_unit * 0.5, ear_y + body_unit * 0.5
-                right_ear_x + body_unit * 2, shoulder_y
-                right_ear_x, shoulder_y + body_unit * 0.5
+            polygon wrap fabric outline trim width 0.2:
+                body_mid_x - head_half * 0.85, top_y
+                body_mid_x + head_half * 0.85, top_y
+                body_mid_x + head_half * 1.05, bottom_y
+                body_mid_x - head_half * 1.05, bottom_y
+            circle knot trim:
+                center knot
+                radius head_width / 14
         layer seam:
-            line fold trim width 0.25:
-                body_mid_x - head_half, ear_y + body_unit * 0.5
-                body_mid_x + head_half, ear_y + body_unit * 0.5
+            line tie_fold trim width 0.15:
+                knot
+                between(tail_tip, tail_inner, 0.5)
         surface garment:
             wrap
             tail
+            short_tail
+            knot

@@ -1291,12 +1291,15 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None, sim=N
         + tuple(_property_open_status_overlay(sim, prop))
     )
     if kind == "vehicle":
-        effects = ()
+        vehicle_class = str(metadata.get("vehicle_class", "sedan") or "sedan").strip().lower()
+        effects = (f"vehicle_class_{vehicle_class}",)
+        if str(metadata.get("vehicle_medium", "land")).strip().lower() == "water":
+            effects += ("vehicle_medium_water",)
         quality = str(metadata.get("vehicle_quality", "used")).strip().lower()
         paint_color = str(metadata.get("vehicle_paint", "")).strip()
         owner_tag = str(prop.get("owner_tag", "")).strip().lower()
         if bool(metadata.get("vehicle_explosion_armed")) and not bool(metadata.get("vehicle_exploded")):
-            effects = ("blink",)
+            effects += ("blink",)
         if explicit_color:
             color = explicit_color
         elif paint_color:

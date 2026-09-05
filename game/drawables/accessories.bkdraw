@@ -131,42 +131,56 @@ drawable necklace context garment:
             pendant
 
 drawable scarf context garment:
-    let body_unit = body_height / 14
-    let (body_mid_x, crown_y) = crown
-    let (shoulder_anchor_x, shoulder_y) = shoulder_left
     paint fabric = fill
     paint trim = edge
+    point neck_center = between(neck_left, neck_right, 0.5)
+    point waist_center = between(waist_left, waist_right, 0.5)
+    point wrap_top = between(chin, neck_center, 0.7)
+    let (neck_x, wrap_y) = wrap_top
+    let wrap_width = neck_width * 2.5
+    let wrap_height = y_distance(chin, waist_center) / 3
+    point tail_end = between(waist_right, hip_right, 0.4)
+    let (tail_x, tail_y) = tail_end
+    point tail_left = neck_x, wrap_y + wrap_height / 2
+    point tail_right = neck_x + neck_width * 0.8, wrap_y + wrap_height / 2
+    point tail_tip = tail_x + neck_width / 4, tail_y
+    point tail_inner = tail_x - neck_width / 2, tail_y - neck_width / 2
+    point fold_top = between(tail_left, tail_right, 0.5)
+    point fold_bottom = between(tail_inner, tail_tip, 0.5)
     variant compact:
         layer body:
-            ellipse wrap fabric:
-                x body_mid_x - body_unit * 3
-                y shoulder_y - body_unit * 0.5
-                w body_unit * 6
-                h body_unit * 2.5
             polygon tail fabric:
-                body_mid_x + body_unit * 1, shoulder_y + body_unit * 1
-                body_mid_x + body_unit * 3, shoulder_y + body_unit * 6
-                body_mid_x + body_unit * 1, shoulder_y + body_unit * 5
+                tail_left
+                tail_right
+                tail_tip
+                tail_inner
+            ellipse wrap fabric:
+                x neck_x - wrap_width / 2
+                y wrap_y
+                w wrap_width
+                h wrap_height
         surface garment:
             wrap
             tail
+
     variant detailed:
         layer body:
+            polygon tail fabric outline trim width 0.25:
+                tail_left
+                tail_right
+                tail_tip
+                tail_inner
             ellipse wrap fabric:
-                x body_mid_x - body_unit * 3.25
-                y shoulder_y - body_unit * 0.75
-                w body_unit * 6.5
-                h body_unit * 2.75
+                x neck_x - wrap_width / 2
+                y wrap_y
+                w wrap_width
+                h wrap_height
                 outline trim
                 width 0.25
-            polygon tail fabric outline trim width 0.25:
-                body_mid_x + body_unit * 1, shoulder_y + body_unit * 1
-                body_mid_x + body_unit * 3.25, shoulder_y + body_unit * 6.5
-                body_mid_x + body_unit * 1, shoulder_y + body_unit * 5.5
         layer detail:
-            line tail_fold trim width 0.25:
-                body_mid_x + body_unit * 1.5, shoulder_y + body_unit * 2
-                body_mid_x + body_unit * 2.5, shoulder_y + body_unit * 5.5
+            line tail_fold trim width 0.2:
+                between(fold_top, fold_bottom, 0.2)
+                between(fold_top, fold_bottom, 0.85)
         surface garment:
             wrap
             tail
