@@ -210,7 +210,6 @@ class FireSystem(System):
         self.runs_without_turn = True
         self._loaded_chunk_cache = None
         self._fire_behavior_cache = None
-        self._property_damage_records_cache = None
         self.sim.events.subscribe("explosion_triggered", self.on_explosion_triggered)
         self.sim.events.subscribe("smoke_cloud_released", self.on_smoke_cloud_released)
         self.sim.events.subscribe("incident_authority_reported", self.on_incident_authority_reported)
@@ -227,12 +226,10 @@ class FireSystem(System):
     def _begin_update_caches(self):
         self._loaded_chunk_cache = set(_loaded_chunk_keys(self.sim))
         self._fire_behavior_cache = {}
-        self._property_damage_records_cache = {}
 
     def _end_update_caches(self):
         self._loaded_chunk_cache = None
         self._fire_behavior_cache = None
-        self._property_damage_records_cache = None
 
     def _chunk_is_loaded(self, chunk):
         normalized = tuple(chunk) if isinstance(chunk, (tuple, list)) else None
@@ -249,7 +246,6 @@ class FireSystem(System):
                 y,
                 z,
                 prop=prop,
-                property_damage_records_cache=self._property_damage_records_cache,
             )
         cache = self._fire_behavior_cache
         key = _coord_key(x, y, z)
@@ -265,7 +261,6 @@ class FireSystem(System):
                 key[1],
                 key[2],
                 prop=prop,
-                property_damage_records_cache=self._property_damage_records_cache,
             )
             cache[key] = behavior
             return behavior
@@ -275,12 +270,7 @@ class FireSystem(System):
             key[1],
             key[2],
             prop=prop,
-            property_damage_records_cache=self._property_damage_records_cache,
         )
-
-    def _invalidate_property_damage_cache(self, prop):
-        if isinstance(prop, dict) and isinstance(self._property_damage_records_cache, dict):
-            self._property_damage_records_cache.pop(id(prop), None)
 
     def on_explosion_triggered(self, event):
         x = event.data.get("x")
@@ -879,7 +869,6 @@ class FireSystem(System):
             offender_eid=cell.get("source_eid"),
             damage_tick=tick,
         )
-        self._invalidate_property_damage_cache(prop)
         if not isinstance(result, dict) or not result.get("damaged"):
             return
         state["damage_marks"][mark_key] = tick
@@ -1074,7 +1063,6 @@ class FireSystem(System):
                     offender_eid=source_cell.get("source_eid"),
                     damage_tick=tick,
                 )
-                self._invalidate_property_damage_cache(prop)
                 if not bool(isinstance(result, dict) and result.get("broken")):
                     if existing_smoke <= 0 or (tick - target_last_advanced) >= FIRE_SPREAD_INTERVAL:
                         upsert_fire_cell(

@@ -22,7 +22,7 @@ from game.property_runtime import (
     property_is_storefront,
     property_metadata,
 )
-from game.system_support.building_repair_runtime import property_damage_records
+from game.system_support.building_repair_runtime import fire_damage_record_at
 
 
 RISKY_ROOM_KINDS = {
@@ -894,27 +894,6 @@ def _active_fire_at(sim, key):
     return _safe_int(cell.get("fire_intensity"), 0) > 0
 
 
-def _fire_damage_record_at(sim, prop, key, *, records_cache=None):
-    if not isinstance(prop, dict) or key is None:
-        return None
-    cache_key = id(prop)
-    records = records_cache.get(cache_key) if isinstance(records_cache, dict) else None
-    if records is None:
-        records = tuple(property_damage_records(sim, prop))
-        if isinstance(records_cache, dict):
-            records_cache[cache_key] = records
-    for record in records:
-        if _text(record.get("cause")).lower() != "fire":
-            continue
-        try:
-            record_key = (int(record.get("x")), int(record.get("y")), int(record.get("z", 0)))
-        except (TypeError, ValueError):
-            continue
-        if record_key == key:
-            return record
-    return None
-
-
 def _fire_spent_record_at(sim, key):
     if key is None:
         return None
@@ -1296,7 +1275,7 @@ def _mark_terrain_burned(sim, key, *, behavior=None):
     return True
 
 
-def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None, property_damage_records_cache=None):
+def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
     key = _coord_key(x, y, z)
     if sim is None or key is None:
         return dict(_BURN_TIER_PROFILES["none"], burn_tier="none")
@@ -1330,11 +1309,12 @@ def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None, property_damage_records
 
     spent_record = None
     if not _active_fire_at(sim, key):
-        spent_record = _fire_damage_record_at(
+        spent_record = fire_damage_record_at(
             sim,
             linked_prop,
-            key,
-            records_cache=property_damage_records_cache,
+            key[0],
+            key[1],
+            key[2],
         ) or _fire_spent_record_at(sim, key)
     if spent_record is not None:
         structural_damage_kind = _text(spent_record.get("repair_kind")).lower()

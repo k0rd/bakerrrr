@@ -263,6 +263,13 @@ class Simulation:
                 briefing_state["query_cache"] = {}
         if not isinstance(getattr(self, "social_fact_graph", None), dict):
             self.social_fact_graph = {}
+        # Graph schema migration and safe next-id repair may scan accumulated
+        # history.  Pay that cost once while binding new/restored runtime state,
+        # never from an actor-local perspective lookup.
+        from game.social_fact_graph import initialize_social_fact_graph_state
+        initialize_social_fact_graph_state(self)
+        from game.system_support.building_repair_runtime import rebuild_fire_damage_record_index
+        rebuild_fire_damage_record_index(self)
         if not isinstance(getattr(self, "social_fact_actions", None), dict):
             self.social_fact_actions = {}
         if not isinstance(getattr(self, "social_requests", None), dict):
@@ -3519,6 +3526,8 @@ class Simulation:
 
         from game.local_service_demand import forget_local_service_supply
         forget_local_service_supply(self, property_id)
+        from game.system_support.building_repair_runtime import forget_property_fire_damage_records
+        forget_property_fire_damage_records(self, removed)
 
         stores = getattr(self, "stores", None)
         if isinstance(stores, dict):

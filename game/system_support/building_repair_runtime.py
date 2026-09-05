@@ -23,6 +23,8 @@ BUILDING_REPAIR_BASE_COSTS = {
     "window": 24,
 }
 
+_FIRE_DAMAGE_RECORD_INDEX_ATTR = "_building_fire_damage_record_index"
+
 
 def _text(value):
     return str(value or "").strip()
@@ -126,6 +128,119 @@ def _clean_damage_record(record, *, default_kind="", default_aperture_kind=""):
         "damage_tick": _int_or(record.get("damage_tick"), default=-10_000),
     }
 
+
+def _fire_damage_record_index(sim, *, create=False):
+    if sim is None:
+        return None
+    index = getattr(sim, _FIRE_DAMAGE_RECORD_INDEX_ATTR, None)
+    if not isinstance(index, dict) and create:
+        index = {}
+        setattr(sim, _FIRE_DAMAGE_RECORD_INDEX_ATTR, index)
+    return index if isinstance(index, dict) else None
+
+
+def _explicit_damage_records(prop):
+    state = _stored_damage_state(prop, create=False)
+    records = state.get("records") if isinstance(state, dict) else None
+    return records if isinstance(records, list) else None
+
+
+def index_property_fire_damage_records(sim, prop):
+    """Rebuild one building's explicit fire-damage coordinate index."""
+
+    if sim is None or not isinstance(prop, dict) or _text(prop.get("kind")).lower() != "building":
+        return {}
+    records = _explicit_damage_records(prop)
+    by_coord = {}
+    for raw_record in tuple(records or ()):
+        clean = _clean_damage_record(raw_record)
+        if clean is None or _text(clean.get("cause")).lower() != "fire":
+            continue
+        by_coord[_record_key(clean)] = clean
+    index = _fire_damage_record_index(sim, create=True)
+    index[id(prop)] = {
+        "property": prop,
+        "by_coord": by_coord,
+    }
+    return by_coord
+
+
+def rebuild_fire_damage_record_index(sim):
+    """Rebuild the derived explicit-fire index after construction or restore."""
+
+    if sim is None:
+        return {}
+    setattr(sim, _FIRE_DAMAGE_RECORD_INDEX_ATTR, {})
+    for prop in tuple(getattr(sim, "properties", {}).values()):
+        if isinstance(prop, dict) and _text(prop.get("kind")).lower() == "building":
+            index_property_fire_damage_records(sim, prop)
+    return getattr(sim, _FIRE_DAMAGE_RECORD_INDEX_ATTR)
+
+
+def forget_property_fire_damage_records(sim, prop):
+    """Drop one property's derived fire-damage entry when it leaves runtime."""
+
+    index = _fire_damage_record_index(sim, create=False)
+    if not isinstance(index, dict) or not isinstance(prop, dict):
+        return False
+    key = id(prop)
+    entry = index.get(key)
+    if isinstance(entry, dict) and entry.get("property") is not prop:
+        return False
+    return index.pop(key, None) is not None
+
+
+def fire_damage_record_at(sim, prop, x, y, z=0):
+    """Return explicit fire damage at one coordinate without inferred scans."""
+
+    if sim is None or not isinstance(prop, dict) or _text(prop.get("kind")).lower() != "building":
+        return None
+    try:
+        coord = int(x), int(y), int(z)
+    except (TypeError, ValueError):
+        return None
+    index = _fire_damage_record_index(sim, create=True)
+    entry = index.get(id(prop))
+    if (
+        not isinstance(entry, dict)
+        or entry.get("property") is not prop
+        or not isinstance(entry.get("by_coord"), dict)
+    ):
+        by_coord = index_property_fire_damage_records(sim, prop)
+    else:
+        by_coord = entry["by_coord"]
+    record = by_coord.get(coord)
+    return record if isinstance(record, dict) else None
+
+
+def _note_damage_record_added(sim, prop, record):
+    index = _fire_damage_record_index(sim, create=True)
+    entry = index.get(id(prop))
+    if (
+        not isinstance(entry, dict)
+        or entry.get("property") is not prop
+        or not isinstance(entry.get("by_coord"), dict)
+    ):
+        index_property_fire_damage_records(sim, prop)
+        return
+    if _text(record.get("cause")).lower() == "fire":
+        entry["by_coord"][_record_key(record)] = record
+
+
+def _note_damage_records_removed(sim, prop, removed_keys):
+    index = _fire_damage_record_index(sim, create=True)
+    entry = index.get(id(prop))
+    if (
+        not isinstance(entry, dict)
+        or entry.get("property") is not prop
+        or not isinstance(entry.get("by_coord"), dict)
+    ):
+        index_property_fire_damage_records(sim, prop)
+        return
+    for record_key in tuple(removed_keys or ()):
+        entry["by_coord"].pop(record_key, None)
+
+
 def damage_record_repair_cost(prop, record):
     clean = _clean_damage_record(record)
     if clean is None:
@@ -160,7 +275,8 @@ def record_building_damage(sim, prop, x, y, z=0, *, kind="", aperture_kind="", c
     if clean is None:
         return None
     state = _stored_damage_state(prop, create=True)
-    records = list(state.get("records", ()))
+    previous_records = state.get("records")
+    records = list(previous_records or ())
     key = _record_key(clean)
     for index, existing in enumerate(records):
         normalized = _clean_damage_record(existing)
@@ -169,6 +285,7 @@ def record_building_damage(sim, prop, x, y, z=0, *, kind="", aperture_kind="", c
         return normalized
     records.append(clean)
     state["records"] = records
+    _note_damage_record_added(sim, prop, clean)
     return clean
 
 
@@ -484,6 +601,11 @@ def repair_building_damage(sim, prop):
 
     state = _stored_damage_state(prop, create=True)
     state["records"] = []
+    _note_damage_records_removed(
+        sim,
+        prop,
+        {_record_key(record) for record in records},
+    )
     return {
         **summary,
         "restored_count": len(records),
@@ -570,11 +692,13 @@ def quiet_maintenance_cleanup(sim, prop, *, max_records=1, source_kind="maintena
             "restored_count": 0,
         }
     state = _stored_damage_state(prop, create=True)
+    previous_records = state.get("records")
     state["records"] = [
         existing
-        for existing in list(state.get("records", ()) or ())
+        for existing in list(previous_records or ())
         if _record_key(_clean_damage_record(existing) or {}) not in restored_keys
     ]
+    _note_damage_records_removed(sim, prop, restored_keys)
     result = {
         "ok": True,
         "reason": "restored",
@@ -660,11 +784,13 @@ def structural_maintenance_cleanup(sim, prop, *, max_records=1, source_kind="str
         return {"ok": False, "reason": "nothing_restored", "restored_count": 0}
 
     state = _stored_damage_state(prop, create=True)
+    previous_records = state.get("records")
     state["records"] = [
         existing
-        for existing in list(state.get("records", ()) or ())
+        for existing in list(previous_records or ())
         if _record_key(_clean_damage_record(existing) or {}) not in restored_keys
     ]
+    _note_damage_records_removed(sim, prop, restored_keys)
     result = {
         "ok": True,
         "reason": "restored",
@@ -693,11 +819,15 @@ __all__ = [
     "owned_building_properties",
     "owned_repairable_buildings",
     "damage_record_repair_cost",
+    "fire_damage_record_at",
+    "forget_property_fire_damage_records",
+    "index_property_fire_damage_records",
     "property_damage_records",
     "property_damage_summary",
     "property_needs_building_repair",
     "quiet_maintenance_cleanup",
     "record_building_damage",
+    "rebuild_fire_damage_record_index",
     "repair_building_damage",
     "structural_maintenance_cleanup",
 ]

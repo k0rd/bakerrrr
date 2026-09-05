@@ -96,6 +96,8 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "_npc_path_search_failures",
     "_routine_will_signatures",
     "_hidden_contact_referral_property_cache",
+    "_social_fact_graph_runtime_state",
+    "_building_fire_damage_record_index",
     "_flora_at_chunk_index",
     "_herbal_decay_next_tick",
     "_underground_plan_cache",
@@ -575,6 +577,8 @@ def _remove_snapshot_live_state(sim, snapshot):
         )
     )
 
+    from game.system_support.building_repair_runtime import forget_property_fire_damage_records
+
     property_removed = False
     for ground_item_id in tuple(snapshot.get("ground_items", {}).keys()):
         ground = sim.ground_items.pop(ground_item_id, None)
@@ -587,6 +591,7 @@ def _remove_snapshot_live_state(sim, snapshot):
         if prop is None:
             continue
         property_removed = True
+        forget_property_fire_damage_records(sim, prop)
         if can_update_indexes:
             sim._unindex_property_record(property_id, prop)
             sim.property_order.pop(property_id, None)
@@ -644,6 +649,11 @@ def _index_restored_chunk_state(sim, restored_properties, restored_ground_items,
     transit-derived state therefore need work here. Keeping that work local
     avoids rebuilding every loaded chunk after restoring one snapshot.
     """
+
+    from game.system_support.building_repair_runtime import index_property_fire_damage_records
+
+    for prop in restored_properties.values():
+        index_property_fire_damage_records(sim, prop)
 
     if not _can_restore_spatial_indexes_incrementally(sim):
         rebuild = getattr(sim, "rebuild_spatial_indexes", None)

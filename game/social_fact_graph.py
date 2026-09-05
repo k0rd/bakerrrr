@@ -288,12 +288,32 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
     return state
 
 
-def social_fact_graph_state(sim) -> dict[str, Any]:
-    """Return the persistent, versioned social graph state for ``sim``."""
+def initialize_social_fact_graph_state(sim) -> dict[str, Any]:
+    """Normalize persistent graph state at a construction/restore boundary.
+
+    Counter repair scans accumulated occurrence and thread ids, so it belongs
+    here rather than on ordinary actor-scoped reads.  Record creation keeps the
+    repaired counters current after this boundary pass.
+    """
 
     state = _normalize_state(getattr(sim, "social_fact_graph", None))
     sim.social_fact_graph = state
+    sim._social_fact_graph_runtime_state = state
     return state
+
+
+def social_fact_graph_state(sim) -> dict[str, Any]:
+    """Return the persistent, versioned social graph state for ``sim``."""
+
+    state = getattr(sim, "social_fact_graph", None)
+    if (
+        isinstance(state, dict)
+        and getattr(sim, "_social_fact_graph_runtime_state", None) is state
+    ):
+        return state
+    # Keep a lazy repair path for unusual callers that replace the graph
+    # wholesale outside Simulation's construction/restore lifecycle.
+    return initialize_social_fact_graph_state(sim)
 
 
 def register_referent(
