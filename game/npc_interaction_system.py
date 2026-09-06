@@ -4459,14 +4459,14 @@ class NPCInteractionSystem(System):
         elif stock_mult >= 1.14:
             stock_text = "supply looks better than usual"
         else:
-            stock_text = "supply looks ordinary"
+            stock_text = "supply is about the same as usual"
 
         if price_mult >= 1.12:
-            price_text = "prices are running tight"
+            price_text = "prices are higher than usual"
         elif price_mult <= 0.92:
-            price_text = "prices are softer than usual"
+            price_text = "prices are lower than usual"
         else:
-            price_text = "prices are ordinary"
+            price_text = "prices are about what you'd expect"
         return stock_text, price_text
 
     def _local_economy_business_note(self, context, *, tier="none"):
@@ -4474,7 +4474,7 @@ class NPCInteractionSystem(System):
         scene_note = context.get("scene_note") if isinstance(context.get("scene_note"), dict) else {}
         scene_line = str(context.get("scene_local_line", "") or scene_note.get("local_line", "") or "").strip()
         if scene_line and self._dialogue_competence_at_least(tier, "familiar"):
-            return f"The live scene around here says this too: {_dialogue_lower_start(scene_line)}"
+            return scene_line
         if not self._dialogue_competence_at_least(tier, "familiar"):
             return ""
         candidates = self._social_knowledge_dialogue_candidates(context, domain="business")
@@ -4484,7 +4484,7 @@ class NPCInteractionSystem(System):
         summary = str(record.get("summary", "") or "").strip()
         if not summary:
             return ""
-        return f"The named reputation thread is this: {_dialogue_lower_start(summary)}"
+        return f"I've also heard this: {_dialogue_lower_start(summary)}"
 
     def _local_economy_summary(self, context, *, tier="none"):
         context = context if isinstance(context, dict) else {}
@@ -4492,24 +4492,23 @@ class NPCInteractionSystem(System):
         profile = profile if isinstance(profile, dict) else {}
         if not profile:
             return ""
-        context_label = str(profile.get("context_label", "") or profile.get("store_note", "") or "mixed city blocks").strip()
         pressure_note = str(profile.get("pressure_note", "") or "").strip()
         workplace_name = str(context.get("workplace_name", "") or "").strip()
         owner_place_name = str(context.get("owner_place_name", "") or "").strip()
         stock_text, price_text = self._local_economy_pressure_bits(profile)
         tier = str(tier or "none").strip().lower() or "none"
         if tier == "skilled":
-            anchor = workplace_name or owner_place_name or "the work side"
-            summary = f"{anchor} reads like {context_label}; {stock_text}, and {price_text}"
+            anchor = workplace_name or owner_place_name or "work"
+            summary = f"{stock_text.capitalize()} around {anchor}, and {price_text}"
         elif tier == "familiar":
-            anchor = workplace_name or owner_place_name or "this block"
-            summary = f"{anchor} reads like {context_label}; {stock_text}, and {price_text}"
+            anchor = workplace_name or owner_place_name or "here"
+            summary = f"{stock_text.capitalize()} around {anchor}, and {price_text}"
         elif tier == "rumor":
-            summary = f"{context_label} is the broad shape; {stock_text}, and {price_text}"
+            summary = f"{stock_text.capitalize()}, and {price_text}"
         else:
             return ""
         if pressure_note:
-            summary = f"{summary}. The pressure people mention is {pressure_note}"
+            summary = f"{summary}. People have been talking about {pressure_note}"
         note = self._local_economy_business_note(context, tier=tier)
         if note:
             summary = f"{summary}. {note}"
@@ -4522,19 +4521,19 @@ class NPCInteractionSystem(System):
         bias = str(persona.get("self_interest_bias", "") or "").strip().lower()
         agenda = str(persona.get("agenda_kind", "") or "").strip().lower()
         if bias == "protect_place" or agenda == "protect_place":
-            return "I am giving you the weather, not painting a target on a single counter."
+            return "That's all I want to say. I don't want to bring trouble to anyone's shop."
         if bias == "trade":
-            return "If you are buying, keep it clean; counters remember who wastes their time."
+            return "If you're buying, be fair with people. They've got a living to make."
         if bias == "safety":
             return "Keep the question broad. Specific names make people start watching."
         if bias == "work":
             return "If you are asking because you need work, thin staffing matters more than gossip."
         if bias == "opportunity":
-            return "If you are hunting an angle, follow shortages, not speeches."
+            return "If you're looking for work, find out what people are short of."
         if bias == "reputation":
             return "People here remember who leaves a place steadier than they found it."
         if bias == "privacy":
-            return "That is as far as I would take the read without putting someone's business in the street."
+            return "I'll leave it there. The rest is their business to tell."
         return ""
 
     def _resolve_local_economy_dialogue_topic(self, context, *, ask_count=1):
@@ -8561,7 +8560,7 @@ class NPCInteractionSystem(System):
         career = str(scene_note.get("career", "")).strip().lower()
         if scene_type == "delivery" and (career == "courier" or not site_affiliated):
             if event_phase == "doorstep_drop":
-                return "Not long. I am only here long enough to finish this doorstep drop."
+                return "Not long. I'm just leaving a delivery at the door."
             return "Not long. I am only here for this drop before I move on."
         if event_phase == "maintenance_loop" and not site_affiliated:
             return "Not long. I am just here for a service call before I move on."
@@ -8598,7 +8597,7 @@ class NPCInteractionSystem(System):
                 (
                     "I have been around {owner_place_name} long enough to know who belongs near it.",
                     "Long enough to know {owner_place_name} has regular faces and wrong ones.",
-                    "Enough to know the rhythm at {owner_place_name}. Not enough to hand out my whole route.",
+                    "I know {owner_place_name} well enough. That's all you need to know about me.",
                 ),
                 owner_place_name=owner_place_name,
             )
@@ -8608,10 +8607,10 @@ class NPCInteractionSystem(System):
                     context,
                     "full_work_home",
                     (
-                        "I keep the work side at {workplace_name} and the quiet hours around {home_name}.",
+                        "I've settled in. I work at {workplace_name} and live around {home_name}.",
                         "{workplace_name} takes the shift; {home_name} takes the rest of me.",
-                        "Enough that my day usually bends through {workplace_name} and ends back near {home_name}.",
-                        "Work pulls me to {workplace_name}. When I am done, I usually fold back toward {home_name}.",
+                        "A while now. Most days it's {workplace_name}, then back to {home_name}.",
+                        "A while. I work at {workplace_name}, then head back toward {home_name} when I'm done.",
                     ),
                     workplace_name=workplace_name,
                     home_name=home_name,
@@ -8621,10 +8620,10 @@ class NPCInteractionSystem(System):
                     context,
                     "partial_work_home",
                     (
-                        "I know the work side around {workplace_name}. The rest is not for everybody.",
-                        "You can find me around {workplace_name} when the day needs me. After that, I keep my own map.",
-                        "{workplace_name} is the part I talk about. Where I land after is quieter.",
-                        "Long enough to know {workplace_name}. I do not give every address to every conversation.",
+                        "I've been around {workplace_name} a while. I keep my home life to myself.",
+                        "You can find me at {workplace_name} when I'm working. I like my privacy after that.",
+                        "I know {workplace_name} pretty well by now. I'd rather leave it at that.",
+                        "Long enough to know {workplace_name}. I don't give out my home address, though.",
                     ),
                     workplace_name=workplace_name,
                     home_name=home_name,
@@ -8634,9 +8633,9 @@ class NPCInteractionSystem(System):
                     context,
                     "refuse_work_home",
                     (
-                        "Long enough not to sketch my whole day for someone I barely know.",
-                        "Long enough to have routines. Not long enough with you to list them.",
-                        "I am around. That is the clean answer for now.",
+                        "A while. I'd rather get to know you before telling you much more.",
+                        "A while, but I don't know you well enough to tell you where I spend my days.",
+                        "I've been around a bit. Let's leave it at that for now.",
                     ),
                     workplace_name=workplace_name,
                     home_name=home_name,
@@ -8648,7 +8647,7 @@ class NPCInteractionSystem(System):
                     "home_only",
                     (
                         "Long enough that {home_name} feels like home.",
-                        "Most quiet hours pull me back toward {home_name}.",
+                        "A while. I usually head back to {home_name} at the end of the day.",
                         "I have roots around {home_name} now, for better or worse.",
                     ),
                     home_name=home_name,
@@ -8658,9 +8657,9 @@ class NPCInteractionSystem(System):
                     context,
                     "home_refuse",
                     (
-                        "Long enough to have somewhere I go quiet. I do not give that out cold.",
-                        "I sleep somewhere. That is enough detail for first talk.",
-                        "Long enough to have a door of my own. Not long enough with you to name it.",
+                        "Long enough to have a place to come home to. I'd rather not say where.",
+                        "I live around here. That's enough detail for now.",
+                        "I've got a place of my own. I don't know you well enough to give out the address.",
                     ),
                     home_name=home_name,
                 )
@@ -8670,7 +8669,7 @@ class NPCInteractionSystem(System):
                 "work_only",
                 (
                     "Long enough that {workplace_name} stopped feeling new.",
-                    "{workplace_name} has me on its rhythm now.",
+                    "I've settled into the routine at {workplace_name}.",
                     "I know the work side of {workplace_name} pretty well.",
                 ),
                 workplace_name=workplace_name,
@@ -8681,8 +8680,8 @@ class NPCInteractionSystem(System):
                 "owner_place",
                 (
                     "Long enough to know the rhythm around {owner_place_name}.",
-                    "Long enough to tell when {owner_place_name} is moving wrong.",
-                    "{owner_place_name} has a pattern. I have been around long enough to hear it.",
+                    "Long enough to notice when something's wrong at {owner_place_name}.",
+                    "I've been around {owner_place_name} long enough to know how things usually go.",
                 ),
                 owner_place_name=owner_place_name,
             )
@@ -8692,7 +8691,7 @@ class NPCInteractionSystem(System):
                 "other_faces",
                 (
                     "Long enough to know {other_name} and a few other faces.",
-                    "Long enough that {other_name} is not just another face in the stream.",
+                    "A while. I know {other_name}, for a start.",
                     "A while. Enough to place {other_name} and some regulars.",
                 ),
                 other_name=other_name,
@@ -8704,7 +8703,7 @@ class NPCInteractionSystem(System):
                 (
                     "Long enough to recognize the regulars.",
                     "Long enough to know which faces repeat.",
-                    "A while. The block has started naming itself back to me.",
+                    "A while. I know a few people by name now.",
                 ),
             )
         if run_echo_history_line:
@@ -8741,36 +8740,36 @@ class NPCInteractionSystem(System):
             return f"I keep an eye on {owner_place_name} and on who drifts through it."
         if quality_mode == "vague":
             if workplace_name and home_name and workplace_name.lower() != home_name.lower():
-                return f"I drift between {workplace_name} and {home_name} depending on who is moving."
+                return f"I'm between {workplace_name} and {home_name}, mostly. It depends on the day."
             if workplace_name:
-                return f"I show around {workplace_name} when the place is moving."
+                return f"You'll find me around {workplace_name} when people are working. I couldn't give you a time."
             if home_name:
                 return f"I stay around {home_name} until something pulls me out."
             if state_text:
-                return f"I have been keeping {state_text} and mobile."
+                return f"I'm {state_text} at the moment. That's about all I can tell you."
             return ""
         if quality_mode == "guarded":
             if workplace_name and home_name and workplace_name.lower() != home_name.lower():
-                return f"I am usually around {workplace_name} while the shift is moving, then back to {home_name} after."
+                return f"I'm usually at {workplace_name} during my shift, then back to {home_name}."
             if workplace_name and shift_text:
-                return f"I am usually around {workplace_name} while staff are on."
+                return f"I'm usually at {workplace_name} when the staff are in."
             if workplace_name:
-                return f"I drift through {workplace_name} when the day needs me."
+                return f"I'm in and out of {workplace_name}. I can't give you exact times."
             if home_name:
                 return f"I mostly stay around {home_name} unless work pulls me out."
             if state_text:
-                return f"Lately I have been {state_text} and staying flexible."
+                return f"I'm {state_text} right now. I'd rather not go through my whole day."
             return ""
         if workplace_name and shift_text and home_name and workplace_name.lower() != home_name.lower():
-            return f"I am usually at {workplace_name} {shift_text}, then back to {home_name} when I am off."
+            return f"I work at {workplace_name}, {shift_text}. After that, I head back to {home_name}."
         if workplace_name and shift_text:
-            return f"I am usually at {workplace_name} {shift_text}."
+            return f"I work at {workplace_name}, {shift_text}."
         if workplace_name:
             return f"I drift in and out of {workplace_name} depending on the day."
         if home_name:
             return f"I mostly stay around {home_name} unless something pulls me elsewhere."
         if state_text:
-            return f"Lately I have been {state_text} and seeing where that leads."
+            return f"I'm {state_text} at the moment. I tend to take the day as it comes."
         return ""
 
     def _player_business_dialogue_style_line(self, context):

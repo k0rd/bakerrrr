@@ -150,70 +150,90 @@ drawable backpack context ground:
 drawable plant_pot context ground:
     paint ceramic = fill
     paint glaze = edge
-    paint motif = shade
-
+    paint inside = shade
     variant compact:
         layer pot:
-            rect pot_rim ceramic:
-                x 3
-                y 3.5
-                w 10
-                h 3
+            polygon pot_body ceramic:
+                3.6, 5.3
+                12.4, 5.3
+                11, 12.7
+                10.2, 13.7
+                5.8, 13.7
+                5, 12.7
+            ellipse pot_rim ceramic:
+                x 2.5
+                y 3
+                w 11
+                h 4
                 outline glaze
-                width 0.45
-            polygon pot_body ceramic outline glaze width 0.45:
-                4, 6.5
-                12, 6.5
-                10.75, 14
-                5.25, 14
+                width 0.35
+            ellipse pot_opening inside:
+                x 3.7
+                y 3.7
+                w 8.6
+                h 1.9
         layer decoration:
-            polygon star_motif motif:
-                8, 7.5
-                8.7, 9.25
-                10.5, 9.25
-                9, 10.25
-                9.6, 12
-                8, 10.9
-                6.4, 12
-                7, 10.25
-                5.5, 9.25
-                7.3, 9.25
+            polygon star_motif inside:
+                8, 7.8
+                8.5, 9.1
+                10, 9.1
+                8.9, 10
+                9.3, 11.3
+                8, 10.5
+                6.7, 11.3
+                7.1, 10
+                6, 9.1
+                7.5, 9.1
         surface item:
             pot_rim
             pot_body
 
     variant detailed:
         layer pot:
-            rect pot_rim ceramic:
-                x 2.8
-                y 3.25
-                w 10.4
-                h 3.15
+            polygon pot_body ceramic outline glaze width 0.25:
+                3.6, 5.3
+                12.4, 5.3
+                11, 12.7
+                10.2, 13.7
+                5.8, 13.7
+                5, 12.7
+            ellipse pot_rim ceramic:
+                x 2.5
+                y 3
+                w 11
+                h 4
                 outline glaze
-                width 0.3
-            line inner_rim motif width 0.45:
-                3.4, 4.35
-                12.6, 4.35
-            polygon pot_body ceramic outline glaze width 0.3:
-                3.85, 6.4
-                12.15, 6.4
-                10.85, 14.2
-                5.15, 14.2
+                width 0.35
+            ellipse pot_opening inside:
+                x 3.7
+                y 3.7
+                w 8.6
+                h 1.9
         layer decoration:
-            polygon star_motif motif outline glaze width 0.15:
-                8, 7.45
-                8.7, 9.15
-                10.55, 9.15
-                9.05, 10.25
-                9.6, 12
-                8, 10.9
-                6.4, 12
-                6.95, 10.25
-                5.45, 9.15
-                7.3, 9.15
+            polygon star_motif inside:
+                8, 7.8
+                8.5, 9.1
+                10, 9.1
+                8.9, 10
+                9.3, 11.3
+                8, 10.5
+                6.7, 11.3
+                7.1, 10
+                6, 9.1
+                7.5, 9.1
+            line front_lip glaze width 0.25:
+                4.4, 6
+                6, 6.4
+                10, 6.4
+                11.6, 6
             line base_glaze glaze width 0.25:
-                5.4, 13.25
-                10.6, 13.25
+                5.9, 12.7
+                7, 13
+                9, 13
+                10.1, 12.7
+            line side_glaze glaze width 0.2:
+                4.5, 7.2
+                5.2, 10.6
         surface item:
             pot_rim
             pot_body

@@ -368,25 +368,25 @@ INFRASTRUCTURE_CONTEXTS = {
 
 PRESSURE_DEFAULTS = {
     "war_tension": {
-        "summary": "freight choked by war tension",
+        "summary": "worries about war holding up freight",
         "tag_weights": {"restricted": 1.0, "medical": 0.6, "tool": 0.5, "food": -0.3},
         "stock_mult": 0.88,
         "price_mult": 1.12,
     },
     "illness_wave": {
-        "summary": "medical stock under illness pressure",
+        "summary": "medicine getting harder to find with so many people ill",
         "tag_weights": {"medical": 1.2, "food": 0.3, "drink": -0.2},
         "stock_mult": 0.93,
         "price_mult": 1.08,
     },
     "ambient_contamination": {
-        "summary": "clean goods squeezed by contamination",
+        "summary": "contamination making clean supplies harder to find",
         "tag_weights": {"medical": 1.0, "food": -0.5, "drink": -0.3, "tool": 0.2},
         "stock_mult": 0.9,
         "price_mult": 1.09,
     },
     "lucky_currents": {
-        "summary": "good luck loosens supply",
+        "summary": "a lucky run of supplies coming through",
         "tag_weights": {"food": 0.4, "drink": 0.4, "token": 0.3},
         "stock_mult": 1.1,
         "price_mult": 0.94,

@@ -4,196 +4,379 @@ bakerrrr-drawable 1
 # ingredients should be distinguishable before the player opens a text panel.
 drawable fresh_blossoms context ground:
     paint petals = fill
-    paint stems = edge
+    paint stems = shade
+    paint highlights = edge
     paint centers = shade
-
     variant compact:
         layer stems:
             line left_stem stems width 0.45:
-                7, 13.5
-                4.75, 6.5
+                8.3, 13.5
+                6.8, 9.5
+                4.6, 5.3
             line center_stem stems width 0.45:
                 8, 13.5
-                8, 5
+                8.3, 3.5
             line right_stem stems width 0.45:
-                9, 13.5
-                11.25, 6.5
+                7.7, 13.5
+                9.3, 9.5
+                11.8, 6
+            polygon left_leaf petals:
+                7.2, 10.5
+                4.3, 9.6
+                3.5, 7.9
+                5.5, 8.1
+            polygon right_leaf petals:
+                8.8, 10.8
+                9.4, 8.8
+                12.4, 8.1
+                11.6, 10
+            line bouquet_tie highlights width 0.45:
+                6.7, 11.2
+                9.5, 11.2
         layer flowers:
-            circle left_bloom petals:
-                center 4.75, 5.25
-                radius 1.7
-            circle center_bloom petals:
-                center 8, 3.5
-                radius 1.7
-            circle right_bloom petals:
-                center 11.25, 5.25
-                radius 1.7
+            circle left_petal_0 petals:
+                center 4.6, 4.1
+                radius 0.76
+            circle left_petal_1 petals:
+                center 5.55, 4.8
+                radius 0.76
+            circle left_petal_2 petals:
+                center 5.2, 5.9
+                radius 0.76
+            circle left_petal_3 petals:
+                center 4, 5.9
+                radius 0.76
+            circle left_petal_4 petals:
+                center 3.65, 4.8
+                radius 0.76
             circle left_center centers:
-                center 4.75, 5.25
-                radius 0.55
+                center 4.6, 5.1
+                radius 0.4
+            circle center_petal_0 petals:
+                center 8.3, 2.3
+                radius 0.836
+            circle center_petal_1 petals:
+                center 9.345, 3.07
+                radius 0.836
+            circle center_petal_2 petals:
+                center 8.96, 4.28
+                radius 0.836
+            circle center_petal_3 petals:
+                center 7.64, 4.28
+                radius 0.836
+            circle center_petal_4 petals:
+                center 7.255, 3.07
+                radius 0.836
             circle center_center centers:
-                center 8, 3.5
-                radius 0.55
+                center 8.3, 3.4
+                radius 0.44
+            circle right_petal_0 petals:
+                center 11.8, 4.85
+                radius 0.722
+            circle right_petal_1 petals:
+                center 12.7025, 5.515
+                radius 0.722
+            circle right_petal_2 petals:
+                center 12.37, 6.56
+                radius 0.722
+            circle right_petal_3 petals:
+                center 11.23, 6.56
+                radius 0.722
+            circle right_petal_4 petals:
+                center 10.8975, 5.515
+                radius 0.722
             circle right_center centers:
-                center 11.25, 5.25
-                radius 0.55
+                center 11.8, 5.8
+                radius 0.38
         surface item:
-            left_bloom
-            center_bloom
-            right_bloom
+            left_petal_0
+            left_petal_1
+            left_petal_2
+            left_petal_3
+            left_petal_4
+            center_petal_0
+            center_petal_1
+            center_petal_2
+            center_petal_3
+            center_petal_4
+            right_petal_0
+            right_petal_1
+            right_petal_2
+            right_petal_3
+            right_petal_4
+            left_leaf
+            right_leaf
 
     variant detailed:
         layer stems:
-            line left_stem stems width 0.3:
-                7, 13.65
-                4.6, 6.35
-            line center_stem stems width 0.3:
-                8, 13.65
-                8, 4.8
-            line right_stem stems width 0.3:
-                9, 13.65
-                11.4, 6.35
-            line bouquet_tie centers width 0.45:
-                6.4, 10.5
-                9.6, 10.5
+            line left_stem stems width 0.45:
+                8.3, 13.5
+                6.8, 9.5
+                4.6, 5.3
+            line center_stem stems width 0.45:
+                8, 13.5
+                8.3, 3.5
+            line right_stem stems width 0.45:
+                7.7, 13.5
+                9.3, 9.5
+                11.8, 6
+            polygon left_leaf petals:
+                7.2, 10.5
+                4.3, 9.6
+                3.5, 7.9
+                5.5, 8.1
+            polygon right_leaf petals:
+                8.8, 10.8
+                9.4, 8.8
+                12.4, 8.1
+                11.6, 10
+            line bouquet_tie highlights width 0.45:
+                6.7, 11.2
+                9.5, 11.2
         layer flowers:
-            circle left_bloom petals:
-                center 4.6, 5.1
-                radius 1.75
-            circle center_bloom petals:
-                center 8, 3.35
-                radius 1.75
-            circle right_bloom petals:
-                center 11.4, 5.1
-                radius 1.75
+            circle left_petal_0 petals:
+                center 4.6, 4.1
+                radius 0.76
+            circle left_petal_1 petals:
+                center 5.55, 4.8
+                radius 0.76
+            circle left_petal_2 petals:
+                center 5.2, 5.9
+                radius 0.76
+            circle left_petal_3 petals:
+                center 4, 5.9
+                radius 0.76
+            circle left_petal_4 petals:
+                center 3.65, 4.8
+                radius 0.76
             circle left_center centers:
                 center 4.6, 5.1
-                radius 0.5
+                radius 0.4
+            circle left_pollen highlights:
+                center 4.48, 4.96
+                radius 0.18
+            circle center_petal_0 petals:
+                center 8.3, 2.3
+                radius 0.836
+            circle center_petal_1 petals:
+                center 9.345, 3.07
+                radius 0.836
+            circle center_petal_2 petals:
+                center 8.96, 4.28
+                radius 0.836
+            circle center_petal_3 petals:
+                center 7.64, 4.28
+                radius 0.836
+            circle center_petal_4 petals:
+                center 7.255, 3.07
+                radius 0.836
             circle center_center centers:
-                center 8, 3.35
-                radius 0.5
+                center 8.3, 3.4
+                radius 0.44
+            circle center_pollen highlights:
+                center 8.18, 3.26
+                radius 0.18
+            circle right_petal_0 petals:
+                center 11.8, 4.85
+                radius 0.722
+            circle right_petal_1 petals:
+                center 12.7025, 5.515
+                radius 0.722
+            circle right_petal_2 petals:
+                center 12.37, 6.56
+                radius 0.722
+            circle right_petal_3 petals:
+                center 11.23, 6.56
+                radius 0.722
+            circle right_petal_4 petals:
+                center 10.8975, 5.515
+                radius 0.722
             circle right_center centers:
-                center 11.4, 5.1
-                radius 0.5
-            ellipse left_leaf centers:
-                x 5.4
-                y 7.8
-                w 2.4
-                h 1.4
-            ellipse right_leaf centers:
-                x 8.2
-                y 8.2
-                w 2.4
-                h 1.4
+                center 11.8, 5.8
+                radius 0.38
+            circle right_pollen highlights:
+                center 11.68, 5.66
+                radius 0.18
+        layer leaves:
+            line left_vein highlights width 0.18:
+                4.1, 8.4
+                6.6, 9.9
+            line right_vein highlights width 0.18:
+                9.2, 10.3
+                11.6, 8.8
         surface item:
-            left_bloom
-            center_bloom
-            right_bloom
+            left_petal_0
+            left_petal_1
+            left_petal_2
+            left_petal_3
+            left_petal_4
+            center_petal_0
+            center_petal_1
+            center_petal_2
+            center_petal_3
+            center_petal_4
+            right_petal_0
+            right_petal_1
+            right_petal_2
+            right_petal_3
+            right_petal_4
+            left_leaf
+            right_leaf
 
 drawable mushroom_caps context ground:
     paint caps = fill
-    paint gills = edge
-    paint stems = shade
-
+    paint stems = edge
+    paint gills = shade
+    paint rim = edge
     variant compact:
-        layer stalks:
-            rect left_stalk stems:
-                x 4.25
-                y 8
-                w 2
-                h 5
-            rect center_stalk stems:
-                x 7
-                y 6
-                w 2.25
-                h 7
-            rect right_stalk stems:
-                x 10
-                y 8.5
-                w 1.75
-                h 4.5
-        layer caps:
-            ellipse left_cap caps:
+        layer center_mushroom:
+            polygon center_stalk stems:
+                7.8, 6.8
+                9.5, 6.8
+                9.7, 10.7
+                7.3, 10.7
+            polygon center_cap caps outline rim width 0.25:
+                5.2, 6.6
+                5.8, 4.8
+                7, 3.2
+                8.4, 2.6
+                9.8, 2.9
+                11.2, 4.2
+                12, 6.6
+                11.2, 7.4
+                6.4, 7.4
+            ellipse center_gills gills:
+                x 5.9
+                y 6.3
+                w 5.4
+                h 1.3
+        layer left_mushroom:
+            polygon left_stalk stems:
+                3.9, 9.8
+                5.3, 9.8
+                5.9, 13.1
+                3.6, 13.1
+            polygon left_cap caps outline rim width 0.25:
+                1.8, 9.9
+                2.3, 8.3
+                3.4, 7.1
+                4.8, 6.7
+                6.2, 7.2
+                7.3, 8.7
+                7.7, 10
+                6.7, 10.7
+                2.9, 10.7
+            ellipse left_gills gills:
                 x 2.5
-                y 5.75
-                w 5.5
-                h 3.5
-                outline gills
-                width 0.4
-            ellipse center_cap caps:
-                x 5
-                y 3.25
-                w 6.25
-                h 4
-                outline gills
-                width 0.4
-            ellipse right_cap caps:
-                x 8.5
-                y 6.25
-                w 5
-                h 3.25
-                outline gills
-                width 0.4
+                y 9.6
+                w 4.5
+                h 1.1
+        layer right_mushroom:
+            polygon right_stalk stems:
+                10.5, 10.5
+                12, 10.5
+                12.3, 13.3
+                10.1, 13.3
+            polygon right_cap caps outline rim width 0.25:
+                8.7, 10.6
+                9.5, 8.8
+                10.7, 7.8
+                12, 7.6
+                13.3, 8.5
+                14.1, 10.3
+                13.1, 11.2
+                9.7, 11.2
+            ellipse right_gills gills:
+                x 9.4
+                y 10.1
+                w 4
+                h 1.1
         surface item:
-            left_stalk
             center_stalk
-            right_stalk
-            left_cap
             center_cap
+            left_stalk
+            left_cap
+            right_stalk
             right_cap
 
     variant detailed:
-        layer stalks:
-            polygon left_stalk stems:
-                4.2, 7.8
-                6.3, 7.8
-                6.7, 13.2
-                3.9, 13.2
+        layer center_mushroom:
             polygon center_stalk stems:
-                6.85, 5.8
-                9.25, 5.8
-                9.65, 13.2
-                6.55, 13.2
+                7.8, 6.8
+                9.5, 6.8
+                9.7, 10.7
+                7.3, 10.7
+            polygon center_cap caps outline rim width 0.25:
+                5.2, 6.6
+                5.8, 4.8
+                7, 3.2
+                8.4, 2.6
+                9.8, 2.9
+                11.2, 4.2
+                12, 6.6
+                11.2, 7.4
+                6.4, 7.4
+            ellipse center_gills gills:
+                x 5.9
+                y 6.3
+                w 5.4
+                h 1.3
+            line center_cap_highlight rim width 0.2:
+                7, 3.7
+                8.4, 3.1
+        layer left_mushroom:
+            polygon left_stalk stems:
+                3.9, 9.8
+                5.3, 9.8
+                5.9, 13.1
+                3.6, 13.1
+            polygon left_cap caps outline rim width 0.25:
+                1.8, 9.9
+                2.3, 8.3
+                3.4, 7.1
+                4.8, 6.7
+                6.2, 7.2
+                7.3, 8.7
+                7.7, 10
+                6.7, 10.7
+                2.9, 10.7
+            ellipse left_gills gills:
+                x 2.5
+                y 9.6
+                w 4.5
+                h 1.1
+            line left_cap_highlight rim width 0.2:
+                3.4, 7.6
+                4.8, 7.2
+        layer right_mushroom:
             polygon right_stalk stems:
-                9.9, 8.25
-                11.85, 8.25
-                12.15, 13.2
-                9.55, 13.2
-        layer caps:
-            ellipse left_cap caps:
-                x 2.25
-                y 5.5
-                w 5.8
-                h 3.6
-                outline gills
-                width 0.3
-            ellipse center_cap caps:
-                x 4.75
-                y 3
-                w 6.6
-                h 4.1
-                outline gills
-                width 0.3
-            ellipse right_cap caps:
-                x 8.25
-                y 6
-                w 5.25
-                h 3.35
-                outline gills
-                width 0.3
-        layer gills:
-            line center_gill gills width 0.25:
-                5.75, 5.55
-                10.4, 5.55
-            circle cap_spot caps:
-                center 8.2, 4.15
-                radius 0.45
+                10.5, 10.5
+                12, 10.5
+                12.3, 13.3
+                10.1, 13.3
+            polygon right_cap caps outline rim width 0.25:
+                8.7, 10.6
+                9.5, 8.8
+                10.7, 7.8
+                12, 7.6
+                13.3, 8.5
+                14.1, 10.3
+                13.1, 11.2
+                9.7, 11.2
+            ellipse right_gills gills:
+                x 9.4
+                y 10.1
+                w 4
+                h 1.1
+            line right_cap_highlight rim width 0.2:
+                10.7, 8.3
+                12, 8.1
         surface item:
-            left_stalk
             center_stalk
-            right_stalk
-            left_cap
             center_cap
+            left_stalk
+            left_cap
+            right_stalk
             right_cap
 
 drawable leaf_clippings context ground:

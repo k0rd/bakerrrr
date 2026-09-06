@@ -4832,10 +4832,13 @@ class PygameView:
         style = _suffix("actor_hair_style_", "")
         side_braid_style = "side_braid" in style or "braid" in style
         pinned_back_style = "pinned_back" in style
-        cap_top = head_y - head_r
+        # Give the crown volume above the scalp while keeping its lower edge
+        # anchored to the existing hairline, temples, and braid attachment.
+        crown_lift = max(1, px // 24) if length != "cropped" else 0
+        cap_top = head_y - head_r - crown_lift
         cap_left = mid_x - head_r
         cap_right = mid_x + head_r - 1
-        cap_depth = max(2, head_r // 2 + 1)
+        cap_depth = max(2, head_r // 2 + 1) + crown_lift
         if side_braid_style:
             # A side braid is hair gathered around a visible face, not a cap
             # plus two curtains. An asymmetric crown leads into one temple;
@@ -4943,18 +4946,23 @@ class PygameView:
 
         length = suffix("actor_hair_length_", "short")
         style = suffix("actor_hair_style_", "")
+        crown_lift = max(1, px // 24) if length != "cropped" else 0
+        crown_y = q(2) - crown_lift
         side_braid_style = "side_braid" in style or "braid" in style
         pinned_back_style = "pinned_back" in style
         if side_braid_style:
-            self.pygame.draw.lines(overlay, fill, False, ((q(6), q(4)), (q(7), q(2)), (q(9), q(2)), (q(10), q(4))), 1)
-            self.pygame.draw.line(overlay, edge, (q(7), q(2)), (q(9), q(2)), 1)
+            self.pygame.draw.lines(overlay, fill, False, ((q(6), q(4)), (q(7), crown_y), (q(9), crown_y), (q(10), q(4))), 1)
+            self.pygame.draw.line(overlay, edge, (q(7), crown_y), (q(9), crown_y), 1)
         else:
-            # Flat two-row cap: four pixels across at the crown, wider at the
-            # hairline. It frames the face instead of sitting on it like a spike.
-            self.pygame.draw.line(overlay, shade, (q(7), q(2)), (q(9), q(2)), 1)
+            # Fill from the raised crown to the original hairline, retaining
+            # a broad top instead of growing a one-pixel spike.
+            crown_end = q(3) if crown_lift else q(2) + 1
+            for cap_y in range(crown_y, crown_end):
+                cap_color = shade if cap_y == crown_y else fill
+                self.pygame.draw.line(overlay, cap_color, (q(7), cap_y), (q(9), cap_y), 1)
             self.pygame.draw.line(overlay, fill, (q(6), q(3)), (q(10), q(3)), 1)
         if not side_braid_style and "swept" in style:
-            self.pygame.draw.line(overlay, edge, (q(7), q(3)), (q(9), q(2)), 1)
+            self.pygame.draw.line(overlay, edge, (q(7), q(3)), (q(9), crown_y), 1)
             self.pygame.draw.line(overlay, fill, (q(10), q(3)), (q(10), q(4)), 1)
         elif not side_braid_style and "one_sided" in style:
             self.pygame.draw.line(overlay, fill, (q(6), q(3)), (q(6), q(5)), 1)

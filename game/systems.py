@@ -3258,7 +3258,7 @@ BUILDING_CATEGORY_OPENINGS = {
         "Comfort is part of the plan here, even when the finish is worn.",
     ),
     "industrial": (
-        "The place is all throughput and hard-wearing surfaces.",
+        "The place is built to handle a lot of work and a fair bit of wear.",
         "It feels built for loading, repair, or storage before anything else.",
         "The layout favors utility over comfort at every turn.",
     ),
@@ -3268,9 +3268,9 @@ BUILDING_CATEGORY_OPENINGS = {
         "The place balances care with containment.",
     ),
     "office": (
-        "The space leans on workflow more than comfort.",
+        "Getting the day's work done seems to matter more here than being comfortable.",
         "It reads as a place built for meetings, paperwork, and people moving on schedule.",
-        "The interior feels arranged around desks, deadlines, and controlled circulation.",
+        "The place is arranged for people with work to finish and meetings to get to.",
     ),
     "residential": (
         "The building feels lived in before it feels designed.",
@@ -3278,8 +3278,8 @@ BUILDING_CATEGORY_OPENINGS = {
         "The layout gives more room to habit than ceremony.",
     ),
     "retail": (
-        "The frontage is meant to catch attention and hold it just long enough to make a sale.",
-        "It feels tuned for quick judgment from the threshold.",
+        "The front of the shop is meant to catch your eye and tempt you to buy something.",
+        "The shop tries to make a good impression as soon as you step inside.",
         "The place is arranged to turn foot traffic into decisions.",
     ),
     "secure": (
@@ -3352,54 +3352,54 @@ BUILDING_CATEGORY_DETAILS = {
 }
 ROOM_CATEGORY_SENTENCES = {
     "admin": (
-        "Paperwork, decisions, and quiet authority gather here.",
+        "A room for working through paperwork and deciding what happens next.",
         "The room feels built for schedules, files, and conversations that stay behind closed doors.",
-        "This is the kind of space where the building's rules get interpreted instead of explained.",
+        "A place for questions that take a little longer to sort out.",
     ),
     "entertainment": (
-        "The room is arranged to pull attention forward and keep the energy public.",
-        "Everything here feels tuned for spectacle, reaction, or shared focus.",
-        "The space wants an audience even when it is standing empty.",
+        "The room is arranged so everyone can share in the show.",
+        "This is a place for being part of a crowd.",
+        "The room seems made for an audience, whether or not it has one.",
     ),
     "front": (
-        "The room is built to receive people before the rest of the building decides what to do with them.",
-        "This is the threshold space where the building first states its intentions.",
-        "The room works as an introduction, not a conclusion.",
+        "This is where visitors get their bearings before going farther in.",
+        "A place to arrive, pause, and work out where to go next.",
+        "The room is arranged to welcome people into the building.",
     ),
     "general": (
-        "The room carries the building's purpose in a quieter, more focused form.",
-        "The space feels like one deliberate piece of a larger working plan.",
-        "Whatever else the building is doing, this room has a clear part in it.",
+        "An ordinary room with its own part in the life of the building.",
+        "The room looks meant for everyday use.",
+        "There is something practical about the way the room is laid out.",
     ),
     "hospitality": (
-        "The room is meant to keep people settled, fed, or at least willing to stay a while.",
-        "Comfort and service are doing most of the visible work here.",
-        "The space softens people before the more practical parts of the building take over.",
+        "The room invites you to settle in for a while.",
+        "This is a place for taking a break and being looked after.",
+        "The room is arranged for comfort rather than a quick stop on the way through.",
     ),
     "medical": (
         "The room is laid out for examination, treatment, or careful handling.",
-        "Everything about the space suggests procedure before improvisation.",
-        "The room feels tuned for care that still has to stay controlled.",
+        "The layout leaves little room for guesswork when someone needs care.",
+        "The room is arranged to make careful work easier.",
     ),
     "residential": (
-        "Privacy is thinner here than comfort, but routine still settles into the corners.",
+        "This feels like part of someone's everyday life, rather than a place put on show.",
         "The room feels shaped by repeated use more than by display.",
-        "It reads as a lived-in space, even when the details are sparse.",
+        "Even with little to go on, the room feels like somewhere people make themselves at home.",
     ),
     "secure": (
-        "Every surface suggests control, oversight, or deliberate delay.",
-        "The room feels stripped down to whatever can be watched, locked, or accounted for.",
-        "The space is plainly built for custody rather than comfort.",
+        "The room is arranged to make it hard to slip in or out unnoticed.",
+        "Keeping track of who and what comes through seems to matter most here.",
+        "This is a place for keeping things under watch, rather than making anyone comfortable.",
     ),
     "transit": (
-        "The room is set up for handoff and movement, not lingering.",
-        "Everything here suggests passage, timing, and quick exchange.",
-        "The space exists to keep people moving through a system bigger than this one room.",
+        "The room is laid out for people on their way somewhere else.",
+        "A place for arrivals, departures, and short waits in between.",
+        "The layout encourages you to keep moving once you know where you're going.",
     ),
     "work": (
-        "Tool reach, clearance, and workflow matter more here than comfort.",
-        "The room feels built around repeated tasks and quick access to the next step.",
-        "Everything about the space says this is where the practical work lands.",
+        "Having room to work matters more here than having somewhere comfortable to sit.",
+        "The layout is meant to save steps when the same job needs doing again and again.",
+        "This is a room for getting things done.",
     ),
 }
 ROOM_KIND_SENTENCES = {
@@ -3408,20 +3408,20 @@ ROOM_KIND_SENTENCES = {
         "Nothing here is casual; the whole point is to control what crosses through.",
     ),
     "bar_top": (
-        "The counter line turns the room into a narrow stage for service, gossip, and pacing.",
-        "Everything about the room funnels attention toward whoever is standing behind the bar.",
+        "The bar is a natural place to stop for a drink and a bit of conversation.",
+        "The room draws your attention to the bar, where orders and gossip can pass across the same counter.",
     ),
     "cash_cage": (
         "Grilles, sightlines, and controlled reach make the room feel secure even when it is quiet.",
         "The whole space is built around keeping money visible to staff and distant from everyone else.",
     ),
     "clerk_office": (
-        "The room feels like the quiet hinge between public procedure and the paperwork that keeps it standing up.",
-        "Everything here suggests filings, scheduling, and the smaller decisions that keep bigger authority moving.",
+        "This is where the paperwork goes after the visitor has gone home.",
+        "The room is set up for keeping files in order and appointments straight.",
     ),
     "concourse": (
-        "The room spreads movement wide enough to sort traffic before it narrows again elsewhere.",
-        "Everything about the space is built to absorb arrivals without letting them settle.",
+        "There is room here to get your bearings before heading on.",
+        "The concourse gives people coming and going space to pass each other.",
     ),
     "count_room": (
         "The room feels clinical about value: tally first, trust later.",
@@ -3448,20 +3448,20 @@ ROOM_KIND_SENTENCES = {
         "The room is quieter than the floor below, built around cards, faces, and the measured movement of chips.",
     ),
     "guest_floor": (
-        "The room trades privacy for orderly repetition, one door or partition after the next.",
-        "Everything here feels standardized enough to host strangers without ever really personalizing the space.",
+        "The repeating layout makes one guest's space much like the next.",
+        "This part of the building is meant to be home for a little while, then left for someone else.",
     ),
     "guest_lounge": (
-        "The room tries to keep waiting guests comfortable without ever pretending the building belongs to them.",
-        "Everything here softens transit and downtime into something the building can still manage.",
+        "A place for guests to spend a little time outside their own rooms.",
+        "The lounge makes waiting feel less like standing around with nowhere to go.",
     ),
     "evidence_lockup": (
         "The room feels built for custody of objects that matter to someone else's trouble.",
         "Shelving, locks, and deliberate access make the space feel like memory under seal.",
     ),
     "front_desk": (
-        "The room turns first contact into a small controlled ritual: greet, sort, direct, repeat.",
-        "Everything here is built to catch arrivals early and decide where they belong next.",
+        "The front desk gives newcomers somewhere to ask where they should go.",
+        "This is the first stop for someone with an appointment, a question, or no idea where to start.",
     ),
     "booking": (
         "Counters, rails, and procedure make the room feel more like intake than welcome.",
@@ -3480,28 +3480,28 @@ ROOM_KIND_SENTENCES = {
         "The room reads like controlled release, all perimeter and watchlines with just enough space to pace.",
     ),
     "kitchen": (
-        "Heat, prep space, and short working paths dominate the room.",
-        "Everything here is arranged around speed, mess, and staying one step ahead of the next plate.",
+        "The kitchen is laid out to keep preparing, cooking, and clearing up within easy reach.",
+        "The arrangement leaves few wasted steps between one meal and the next.",
     ),
     "lab_floor": (
         "Bench space, procedure, and controlled mess give the room a focused, technical tension.",
         "The room feels built for repeatable work where mistakes would echo longer than the noise that made them.",
     ),
     "loading_bay": (
-        "Wide clearance and blunt surfaces make the room feel ready for weight before people.",
-        "The room is built for turnover, not comfort.",
+        "The bay leaves room for bringing heavy loads in and getting them out again.",
+        "This is a place to load and unload, with little reason to linger afterward.",
     ),
     "manager_office": (
-        "The room keeps authority close to the floor without fully mixing with it.",
-        "Everything here suggests oversight with just enough distance to feel intentional.",
+        "The office gives the manager a place to work apart from the people they oversee.",
+        "Somewhere to deal with the day's problems without standing in the middle of them.",
     ),
     "noc": (
         "The room feels built for watching systems rather than touching them directly.",
         "Every surface suggests monitoring, escalation, and quiet urgency.",
     ),
     "open_office": (
-        "The room spreads work out in plain view, trading privacy for coordination.",
-        "Shared sightlines and repeated desks make the space feel like workflow made visible.",
+        "People working here can see one another easily. Finding a little privacy would be harder.",
+        "The open layout makes it easy to ask a colleague a question, and harder to be left alone.",
     ),
     "archive": (
         "The room feels less active than persistent, built to keep old answers within reach.",
@@ -3545,7 +3545,7 @@ ROOM_KIND_SENTENCES = {
     ),
     "service_corridor": (
         "The room exists to keep support work moving without asking the public to notice it.",
-        "Everything here feels like backstage circulation for a larger system.",
+        "This is a way for staff to get around without going through the public rooms.",
     ),
     "showroom": (
         "The room is staged to make stock look more certain than the back end probably feels.",
@@ -3653,24 +3653,24 @@ def _room_plan_description_sentence(rooms, rng):
         return _description_choice(
             rng,
             (
-                f"Most of the interior resolves into a single {labels[0]}.",
-                f"The plan is almost entirely given over to one main {labels[0]}.",
+                f"Most of the space inside is taken up by the {labels[0]}.",
+                f"The {labels[0]} takes up nearly all of the interior.",
             ),
         )
     if len(labels) == 2:
         return _description_choice(
             rng,
             (
-                f"The plan moves from {labels[0]} to {labels[1]}.",
-                f"Inside, the space steps from {labels[0]} into {labels[1]}.",
+                f"The {labels[0]} leads into the {labels[1]}.",
+                f"Farther in, beyond the {labels[0]}, is the {labels[1]}.",
             ),
         )
     return _description_choice(
         rng,
         (
-            f"The floor plan runs from {labels[0]} through {labels[1]} toward {labels[-1]}.",
-            f"Inside, the rooms progress from {labels[0]} to {labels[1]}, then tighten around {labels[-1]}.",
-            f"The plan starts with {labels[0]}, passes through {labels[1]}, and keeps pulling deeper toward {labels[-1]}.",
+            f"The rooms lead from the {labels[0]} through the {labels[1]} toward the {labels[-1]}.",
+            f"Beyond the {labels[0]} is the {labels[1]}, with the {labels[-1]} farther inside.",
+            f"The {labels[0]} comes first, followed by the {labels[1]} and, farther in, the {labels[-1]}.",
         ),
     )
 
@@ -3710,15 +3710,15 @@ def _building_detail_sentence(prop, structure, category, rng):
     if security_text:
         details.append(f"{security_text.capitalize()} keep the place feeling watched even when nobody is speaking.")
     if sign_text:
-        details.append(f'"{sign_text}" still does some of the welcoming before the room layout takes over.')
+        details.append(f'The sign reads "{sign_text}".')
     if floors > 1:
-        details.append("The stacked floors make it feel like a layered operation rather than a single public room.")
+        details.append("There is more to the place on the other floors.")
     if founder_last:
         details.append(f"It still carries the air of a {founder_last} venture meant to be remembered.")
     if isinstance(prop, dict) and bool(_property_is_storefront(prop)):
-        details.append("The front edge is arranged to make a fast first impression before the deeper rooms explain themselves.")
+        details.append("The shop puts its best face forward, with the everyday work going on farther inside.")
     if isinstance(prop, dict) and bool(metadata.get("large_parcel")):
-        details.append("It sprawls wide enough to feel like an operation, not just a frontage.")
+        details.append("The place spreads out well beyond its entrance.")
 
     if not details:
         details = BUILDING_CATEGORY_DETAILS.get(category, BUILDING_CATEGORY_DETAILS["general"])
@@ -3816,23 +3816,23 @@ def _room_position_sentence(structure, rng):
         return _description_choice(
             rng,
             (
-                "It works as the front edge of the floor plan.",
-                "This is where the building first starts telling you what kind of place it is.",
+                "It is near the front of the building.",
+                "This is one of the first rooms on the way in.",
             ),
         )
     if room_index >= len(rooms) - 1:
         return _description_choice(
             rng,
             (
-                "It sits at the deep end of the plan, where casual traffic thins out.",
-                "The room feels like the place the public side was always leading away from.",
+                "The room is tucked away toward the back.",
+                "It is one of the deeper rooms, well past the front of the building.",
             ),
         )
     return _description_choice(
         rng,
         (
-            "It occupies the middle stretch of the plan, meant to pass people inward or back out again.",
-            "The room acts as a hinge between the public edge and the deeper work beyond it.",
+            "It sits between the front rooms and those farther inside.",
+            "There are other rooms before and beyond this one.",
         ),
     )
 
@@ -3847,16 +3847,16 @@ def _room_floor_sentence(structure, rng):
         return _description_choice(
             rng,
             (
-                f"Up on {_floor_label(floor, long=True)}, the building feels a little more private and sorted.",
-                f"{_floor_label(floor, long=True)} pulls the room away from the public pace below.",
+                f"The room is upstairs, on {_floor_label(floor, long=True)}.",
+                f"You are on {_floor_label(floor, long=True)}, above the rooms at street level.",
             ),
         )
     if floor < 0:
         return _description_choice(
             rng,
             (
-                f"Down on {_floor_label(floor, long=True)}, the space feels more stripped to utility and control.",
-                f"{_floor_label(floor, long=True)} gives the room a deeper, more withheld mood.",
+                f"The room is downstairs, in {_floor_label(floor, long=True)}.",
+                f"You are in {_floor_label(floor, long=True)}, below street level.",
             ),
         )
     return ""
@@ -3871,47 +3871,47 @@ def _room_access_sentence(prop, room_kind, common_area_kind, rng):
             return _description_choice(
                 rng,
                 (
-                    "It reads as shared passage, not a tenant room.",
-                    "The space feels meant for crossing through, with eyes from more than one doorway.",
+                    "This is a shared passage rather than someone's own room.",
+                    "People use this space to reach their rooms. It doesn't belong to any one tenant.",
                 ),
             )
         return _description_choice(
             rng,
             (
-                "The room presents itself as public-facing space.",
-                "Nothing about the layout asks you to pretend you do not belong here yet.",
+                "This part of the building is meant for visitors.",
+                "This is one of the public rooms.",
             ),
         )
     if level == "semi_public":
         return _description_choice(
             rng,
             (
-                "It feels open enough for business, but not loose enough to disappear into.",
-                "The room allows visitors, with an edge of being accounted for.",
+                "Visitors can come here on business, though it isn't a place to wander freely.",
+                "Visitors are allowed here, but are expected to have a reason for coming.",
             ),
         )
     if level == "staff_only":
         return _description_choice(
             rng,
             (
-                "The room has the clipped feel of staff-only space.",
-                "This is where casual traffic starts needing a reason.",
+                "This is a staff-only room; visitors need permission to come in.",
+                "This part of the building is staff-only, away from the public rooms.",
             ),
         )
     if level == "private":
         return _description_choice(
             rng,
             (
-                "The room feels private enough that lingering would get remembered.",
-                "It has the hush of space meant for people with a claim here.",
+                "This is a private room. Being welcome elsewhere doesn't mean you're invited in here.",
+                "This space is for the people it belongs to and anyone they choose to let in.",
             ),
         )
     if level == "secure":
         return _description_choice(
             rng,
             (
-                "The room presents itself as controlled space, not casual access.",
-                "Even before anyone speaks, the room feels like it keeps records of strangers.",
+                "Access here is restricted. You need clearance to enter.",
+                "This is a secure area, beyond the parts open to ordinary visitors.",
             ),
         )
     return ""
