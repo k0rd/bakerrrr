@@ -46,7 +46,7 @@ from game.organizations import (
 )
 from game.player_businesses import (
     player_business_markup_profile as _player_business_markup_profile,
-    player_business_record_direct_sale as _player_business_record_direct_sale,
+    business_record_direct_sale as _business_record_direct_sale,
     refresh_player_business_runtime as _refresh_player_business_runtime,
 )
 from game.property_access import (
@@ -3716,7 +3716,7 @@ class TradeSystem(System):
             purchased_entry,
             item_catalog=ITEM_CATALOG,
         )
-        sale_result = _player_business_record_direct_sale(
+        sale_result = _business_record_direct_sale(
             self.sim,
             store_prop,
             price,
@@ -3761,7 +3761,7 @@ class TradeSystem(System):
             "motive": str(motive or "").strip().lower(),
             "quirk_id": str(quirk_id or "").strip().lower(),
             "impulse": bool(impulse),
-            "player_business_sale": bool(isinstance(sale_result, dict)),
+            "player_business_sale": bool(isinstance(sale_result, dict) and sale_result.get("player_owned")),
             "x": int(pos.x),
             "y": int(pos.y),
             "z": int(pos.z),
@@ -4152,6 +4152,8 @@ class TradeSystem(System):
             {"item_id": item_id, "metadata": metadata},
             item_catalog=ITEM_CATALOG,
         )
+        if not owner_transfer:
+            _business_record_direct_sale(self.sim, store_prop, price, buyer_eid=eid, item_id=item_id, item_name=item_name)
         self.sim.emit(Event(
             "trade_bought",
             eid=eid,
@@ -4355,18 +4357,21 @@ class TradeSystem(System):
                 item_catalog=ITEM_CATALOG,
             )
 
+        item_name = item_display_name_for_actor(
+            self.sim, self.player_eid, purchased_entry, item_catalog=ITEM_CATALOG,
+        )
+        if not owner_transfer:
+            _business_record_direct_sale(
+                self.sim, store_prop, price, buyer_eid=eid, item_id=item_id,
+                item_name=item_name,
+            )
         self.sim.emit(Event(
             "trade_bought",
             eid=eid,
             property_id=store_prop["id"],
             store_name=store_prop.get("name", store_prop["id"]),
             item_id=item_id,
-            item_name=item_display_name_for_actor(
-                self.sim,
-                self.player_eid,
-                purchased_entry,
-                item_catalog=ITEM_CATALOG,
-            ),
+            item_name=item_name,
             price=price,
             base_price=base_price,
             stock_left=choice["stock"],

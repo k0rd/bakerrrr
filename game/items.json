@@ -5335,6 +5335,7 @@
     "weapon_id": "sawed_off_shotgun"
   },
   "machine_carbine": {
+    "item_drawable": "machine_carbine",
     "name": "Machine Carbine",
     "glyph": ")",
     "stack_max": 1,
@@ -5465,6 +5466,7 @@
     "weapon_id": "pipe_pistol"
   },
   "pump_shotgun": {
+    "item_drawable": "pump_shotgun",
     "name": "Pump Shotgun",
     "glyph": ")",
     "stack_max": 1,
@@ -5478,6 +5480,7 @@
     "weapon_id": "pump_shotgun"
   },
   "riot_shotgun": {
+    "item_drawable": "riot_shotgun",
     "name": "Riot Shotgun",
     "glyph": ")",
     "stack_max": 1,
@@ -5492,6 +5495,7 @@
     "weapon_id": "riot_shotgun"
   },
   "varmint_rifle": {
+    "item_drawable": "varmint_rifle",
     "name": "Varmint Rifle",
     "glyph": ")",
     "stack_max": 1,
@@ -5506,6 +5510,7 @@
     "weapon_id": "varmint_rifle"
   },
   "marksman_rifle": {
+    "item_drawable": "marksman_rifle",
     "name": "Marksman Rifle",
     "glyph": ")",
     "stack_max": 1,

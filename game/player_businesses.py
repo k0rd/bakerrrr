@@ -1066,24 +1066,30 @@ def player_business_account_balance(prop):
     return int(state.get("account_balance", 0)) if state else 0
 
 
-def player_business_record_direct_sale(sim, prop, amount, *, buyer_eid=None, item_id="", item_name=""):
-    """Credit a player-owned business for one concrete storefront sale."""
+def business_record_direct_sale(sim, prop, amount, *, buyer_eid=None, item_id="", item_name=""):
+    """Credit one completed purchase to the seller's operating account."""
     if sim is None or not isinstance(prop, dict):
-        return None
-    player_eid = getattr(sim, "player_eid", None)
-    if player_eid is None or not _property_owned_by_actor(sim, player_eid, prop):
-        return None
-    state = player_business_state(prop, create=True)
-    if state is None:
         return None
     amount = max(0, _int_or(amount, default=0))
     if amount <= 0:
         return None
+    player_eid = getattr(sim, "player_eid", None)
+    player_owned = player_eid is not None and _property_owned_by_actor(sim, player_eid, prop)
+    created_account = player_business_state(prop, create=False) is None
+    state = player_business_state(prop, create=True)
+    if state is None:
+        return None
+    if created_account and not player_owned:
+        # A first purchase can precede the scheduled business review. Preserve
+        # that review's opening capital without seeding accounts at genesis.
+        state["opening_capital_pending"] = True
 
     before = int(state.get("account_balance", 0))
     after = max(0, before + amount)
     state["account_balance"] = int(after)
-    state["direct_sales_total"] = max(0, _int_or(state.get("direct_sales_total"), default=0)) + int(amount)
+    prior_sales = max(0, _int_or(state.get("direct_sales_total"), default=0))
+    state.setdefault("reviewed_direct_sales_total", prior_sales)
+    state["direct_sales_total"] = prior_sales + int(amount)
     state["direct_sale_count"] = max(0, _int_or(state.get("direct_sale_count"), default=0)) + 1
     summary = dict(state.get("last_summary", {})) if isinstance(state.get("last_summary"), dict) else {}
     summary["direct_sales"] = max(0, _int_or(summary.get("direct_sales"), default=0)) + int(amount)
@@ -1101,9 +1107,18 @@ def player_business_record_direct_sale(sim, prop, amount, *, buyer_eid=None, ite
         "amount": int(amount),
         "account_before": int(before),
         "account_after": int(after),
+        "player_owned": bool(player_owned),
     }
-    sim.emit(Event("player_business_direct_sale", **result))
+    sim.emit(Event("player_business_direct_sale" if player_owned else "business_direct_sale", **result))
     return result
+
+
+def player_business_record_direct_sale(sim, prop, amount, *, buyer_eid=None, item_id="", item_name=""):
+    """Compatibility entry point for explicitly player-owned business sales."""
+    player_eid = getattr(sim, "player_eid", None)
+    if not isinstance(prop, dict) or player_eid is None or not _property_owned_by_actor(sim, player_eid, prop):
+        return None
+    return business_record_direct_sale(sim, prop, amount, buyer_eid=buyer_eid, item_id=item_id, item_name=item_name)
 
 
 def player_business_customer_policy(prop):
@@ -4262,6 +4277,7 @@ __all__ = [
     "player_business_employee_wage_rows",
     "player_business_next_employee_wage_level",
     "player_business_record_direct_sale",
+    "business_record_direct_sale",
     "player_business_customer_policy",
     "player_business_customer_policy_label",
     "player_business_housing_plan",

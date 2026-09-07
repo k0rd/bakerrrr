@@ -541,10 +541,11 @@ def _review_business(sim, prop, entry):
         runtime = player_business_state(prop, create=True)
     if not isinstance(runtime, dict):
         return None
-    if created_runtime and not bool(entry.get("player_protected")):
+    opening_capital_pending = bool(runtime.pop("opening_capital_pending", False))
+    if (created_runtime or opening_capital_pending) and not bool(entry.get("player_protected")):
         metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
         seed_capital = max(60, int(round(max(80, _int(metadata.get("purchase_cost"), 150)) * 0.25)))
-        runtime["account_balance"] = max(seed_capital, _int(runtime.get("account_balance"), 0))
+        runtime["account_balance"] = seed_capital + max(0, _int(runtime.get("account_balance"), 0))
     retain_incumbents = not bool(runtime.get("incumbent_staff_retained", False))
     staffing = _sync_staff_roster(
         sim,
@@ -566,12 +567,17 @@ def _review_business(sim, prop, entry):
     manager_fit = _float(operating.get("manager_fit_score"), 0.0)
     chunk, captured, market_groups = _market_capture(sim, prop)
     pending = max(0, _int(runtime.pop("pending_patronage_revenue", 0), 0))
+    sales_total = max(0, _int(runtime.get("direct_sales_total"), 0))
+    direct_sales = max(0, sales_total - _int(runtime.get("reviewed_direct_sales_total"), sales_total))
+    runtime["reviewed_direct_sales_total"] = sales_total
     reliability = max(0.0, min(1.0, _float(operating.get("service_reliability"), 0.0)))
-    gross = pending + int(round(captured * _float(NEIGHBORHOOD_BUSINESS_TUNING["base_revenue_per_demand"], 10.0) * (0.35 + (0.65 * reliability))))
+    gross = pending + direct_sales + int(round(captured * _float(NEIGHBORHOOD_BUSINESS_TUNING["base_revenue_per_demand"], 10.0) * (0.35 + (0.65 * reliability))))
     wage_due = max(0, _int(staffing.get("staff_total"), 0)) * 4
     upkeep = _int(NEIGHBORHOOD_BUSINESS_TUNING["base_daily_upkeep"], 8) + len(service_categories_for_property(prop))
     account_before = max(0, _int(runtime.get("account_balance"), 0))
-    available = account_before + gross
+    # Direct purchases have already deposited cash; include them in profit,
+    # but never deposit that revenue a second time at the daily review.
+    available = account_before + gross - direct_sales
     wages_paid = min(available, wage_due)
     available -= wages_paid
     upkeep_paid = min(available, upkeep)
@@ -612,6 +618,7 @@ def _review_business(sim, prop, entry):
         **dict(runtime.get("last_summary", {}) if isinstance(runtime.get("last_summary"), dict) else {}),
         "gross_revenue": gross,
         "realized_revenue": gross,
+        "direct_sales": direct_sales,
         "wages_due": wage_due,
         "wages_paid": wages_paid,
         "upkeep_due": upkeep,

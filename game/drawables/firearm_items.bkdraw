@@ -2031,3 +2031,800 @@ drawable pipe_pistol context ground:
             pipe_body
             rear_collar
             muzzle_rim
+
+# Longarms: compact carbine, traditional and duty shotguns, and contrasting
+# field and marksman rifles. Core silhouettes are shared by both sizes.
+
+drawable machine_carbine context ground:
+    paint body = fill
+    paint light = edge
+    paint dark = shade
+
+    variant compact:
+        layer weapon:
+            line stock_brace light width 0.65:
+                4.7, 6.2
+                1.2, 6.2
+                1.2, 9.5
+                4.7, 7.6
+            line butt_pad body width 0.95:
+                1.2, 6
+                1.2, 9.7
+            polygon grip body outline dark width 0.35:
+                5, 7.8
+                6.9, 8
+                6.2, 11.5
+                4.4, 11.1
+            polygon magazine body outline dark width 0.4:
+                8.1, 7.5
+                10, 7.5
+                10.3, 12.8
+                8.3, 13.1
+            line magazine_edge light width 0.4:
+                9.5, 8.8
+                9.8, 12.4
+                8.7, 12.6
+            line guard light width 0.35:
+                6.8, 8.3
+                8.1, 8.3
+                8.1, 9.5
+                6.6, 9.5
+            polygon receiver body outline dark width 0.4:
+                4.1, 5.2
+                9.8, 5.2
+                10.2, 5.8
+                10, 8.6
+                4.5, 8.6
+                4.1, 7.8
+            polygon handguard body outline dark width 0.35:
+                9.8, 5.6
+                12.3, 5.6
+                12.6, 6.2
+                12.2, 8
+                9.8, 8
+            line barrel light width 0.85:
+                12.4, 6.3
+                14.8, 6.3
+            line top_edge light width 0.55:
+                4.6, 5.5
+                9.6, 5.5
+            line rear_sight body width 0.6:
+                5.2, 5.1
+                5.2, 4.3
+                6.1, 4.3
+            line front_sight body width 0.5:
+                12.8, 6.1
+                12.8, 4.9
+            line grip_panel dark width 0.6:
+                5.7, 9
+                5.3, 10.7
+        surface item:
+            stock_brace
+            butt_pad
+            grip
+            magazine
+            receiver
+            handguard
+            barrel
+
+    variant detailed:
+        layer weapon:
+            line stock_brace light width 0.65:
+                4.7, 6.2
+                1.2, 6.2
+                1.2, 9.5
+                4.7, 7.6
+            line butt_pad body width 0.95:
+                1.2, 6
+                1.2, 9.7
+            polygon grip body outline dark width 0.35:
+                5, 7.8
+                6.9, 8
+                6.2, 11.5
+                4.4, 11.1
+            polygon magazine body outline dark width 0.4:
+                8.1, 7.5
+                10, 7.5
+                10.3, 12.8
+                8.3, 13.1
+            line magazine_edge light width 0.4:
+                9.5, 8.8
+                9.8, 12.4
+                8.7, 12.6
+            line guard light width 0.35:
+                6.8, 8.3
+                8.1, 8.3
+                8.1, 9.5
+                6.6, 9.5
+            polygon receiver body outline dark width 0.4:
+                4.1, 5.2
+                9.8, 5.2
+                10.2, 5.8
+                10, 8.6
+                4.5, 8.6
+                4.1, 7.8
+            polygon handguard body outline dark width 0.35:
+                9.8, 5.6
+                12.3, 5.6
+                12.6, 6.2
+                12.2, 8
+                9.8, 8
+            line barrel light width 0.85:
+                12.4, 6.3
+                14.8, 6.3
+            line top_edge light width 0.55:
+                4.6, 5.5
+                9.6, 5.5
+            line rear_sight body width 0.6:
+                5.2, 5.1
+                5.2, 4.3
+                6.1, 4.3
+            line front_sight body width 0.5:
+                12.8, 6.1
+                12.8, 4.9
+            line grip_panel dark width 0.6:
+                5.7, 9
+                5.3, 10.7
+            line ejection_port dark width 0.3:
+                7, 6.4
+                9, 6.4
+                9, 7.3
+                7, 7.3
+            line handguard_vent dark width 0.4:
+                10.6, 6.5
+                11.8, 6.5
+            line magazine_seam dark width 0.25:
+                8.9, 9.3
+                9.1, 12
+            line receiver_pin light width 0.4:
+                5.3, 7.5
+                5.4, 7.5
+        surface item:
+            stock_brace
+            butt_pad
+            grip
+            magazine
+            receiver
+            handguard
+            barrel
+
+
+drawable pump_shotgun context ground:
+    paint body = fill
+    paint light = edge
+    paint dark = shade
+
+    variant compact:
+        layer weapon:
+            polygon stock body outline dark width 0.4:
+                1, 7.1
+                3.1, 7.2
+                4.7, 6.5
+                6.2, 6.8
+                6.1, 8.6
+                4.8, 9
+                3.2, 10.7
+                1, 10.5
+            line butt_pad dark width 0.7:
+                1.1, 7.3
+                1.1, 10.3
+            line stock_comb light width 0.4:
+                1.7, 7.6
+                3.1, 7.7
+                4.7, 7
+            line guard light width 0.4:
+                5.4, 8.4
+                7.3, 8.4
+                7.1, 9.8
+                5.4, 9.8
+                5.1, 9.2
+            polygon receiver body outline dark width 0.35:
+                5.1, 5.9
+                8.3, 5.9
+                8.6, 6.5
+                8.4, 8.6
+                5.2, 8.6
+            line receiver_top light width 0.5:
+                5.6, 6.2
+                8, 6.2
+            polygon barrel light outline dark width 0.35:
+                8.1, 5.6
+                15, 5.6
+                15, 6.6
+                8.1, 6.6
+            line lower_tube body width 0.8:
+                8.1, 7.6
+                13.8, 7.6
+            polygon pump body outline dark width 0.35:
+                9, 7
+                11.2, 7
+                11.7, 7.5
+                11.7, 8.5
+                11.2, 9
+                9, 9
+                8.6, 8.5
+                8.6, 7.5
+            line pump_ridge light width 0.4:
+                9.1, 7.3
+                11.1, 7.3
+            line pump_groove_one dark width 0.35:
+                9.6, 7.6
+                9.6, 8.6
+            line pump_groove_two dark width 0.35:
+                10.6, 7.6
+                10.6, 8.6
+            line bead_sight light width 0.45:
+                14.4, 5.5
+                14.4, 5
+        surface item:
+            stock
+            receiver
+            barrel
+            lower_tube
+            pump
+
+    variant detailed:
+        layer weapon:
+            polygon stock body outline dark width 0.4:
+                1, 7.1
+                3.1, 7.2
+                4.7, 6.5
+                6.2, 6.8
+                6.1, 8.6
+                4.8, 9
+                3.2, 10.7
+                1, 10.5
+            line butt_pad dark width 0.7:
+                1.1, 7.3
+                1.1, 10.3
+            line stock_comb light width 0.4:
+                1.7, 7.6
+                3.1, 7.7
+                4.7, 7
+            line guard light width 0.4:
+                5.4, 8.4
+                7.3, 8.4
+                7.1, 9.8
+                5.4, 9.8
+                5.1, 9.2
+            polygon receiver body outline dark width 0.35:
+                5.1, 5.9
+                8.3, 5.9
+                8.6, 6.5
+                8.4, 8.6
+                5.2, 8.6
+            line receiver_top light width 0.5:
+                5.6, 6.2
+                8, 6.2
+            polygon barrel light outline dark width 0.35:
+                8.1, 5.6
+                15, 5.6
+                15, 6.6
+                8.1, 6.6
+            line lower_tube body width 0.8:
+                8.1, 7.6
+                13.8, 7.6
+            polygon pump body outline dark width 0.35:
+                9, 7
+                11.2, 7
+                11.7, 7.5
+                11.7, 8.5
+                11.2, 9
+                9, 9
+                8.6, 8.5
+                8.6, 7.5
+            line pump_ridge light width 0.4:
+                9.1, 7.3
+                11.1, 7.3
+            line pump_groove_one dark width 0.35:
+                9.6, 7.6
+                9.6, 8.6
+            line pump_groove_two dark width 0.35:
+                10.6, 7.6
+                10.6, 8.6
+            line bead_sight light width 0.45:
+                14.4, 5.5
+                14.4, 5
+            polygon ejection_port dark:
+                6.2, 6.8
+                7.7, 6.8
+                7.7, 7.6
+                6.2, 7.6
+            line stock_grain dark width 0.25:
+                1.9, 9.8
+                2.9, 9.9
+                4, 8.8
+            line tube_cap light width 0.25:
+                13.5, 7.2
+                13.5, 8
+            line trigger body width 0.25:
+                6, 8.8
+                6.3, 9.3
+        surface item:
+            stock
+            receiver
+            barrel
+            lower_tube
+            pump
+
+
+drawable riot_shotgun context ground:
+    paint body = fill
+    paint light = edge
+    paint dark = shade
+
+    variant compact:
+        layer weapon:
+            polygon stock body outline dark width 0.4:
+                1.3, 5.6
+                4.8, 5.6
+                5.5, 6.5
+                5.1, 7.7
+                3.2, 8
+                2.7, 9
+                1.3, 9
+            line butt_pad dark width 0.7:
+                1.4, 5.7
+                1.4, 8.8
+            line stock_edge light width 0.45:
+                2, 6
+                4.3, 6
+            polygon grip body outline dark width 0.35:
+                5.1, 7.1
+                7, 7.8
+                6.2, 11.4
+                4.7, 11.1
+                4.9, 9.1
+            line grip_inset dark width 0.6:
+                5.8, 8.8
+                5.4, 10.6
+            line guard light width 0.4:
+                6.8, 8.1
+                8.6, 8.1
+                8.4, 9.8
+                6.7, 9.8
+            polygon receiver body outline dark width 0.4:
+                4.5, 5.4
+                8.6, 5.4
+                9, 6.1
+                8.7, 8.3
+                4.5, 8.3
+            polygon barrel body outline dark width 0.35:
+                8.5, 5.5
+                14.1, 5.5
+                14.1, 6.8
+                8.5, 6.8
+            line barrel_ridge light width 0.5:
+                5, 5.7
+                13.7, 5.7
+            line lower_tube light width 0.65:
+                8.7, 7.7
+                13.5, 7.7
+            polygon pump body outline dark width 0.35:
+                9.4, 7.2
+                12.3, 7.2
+                12.6, 7.8
+                12.3, 9
+                9.4, 9
+            line pump_inset dark width 0.55:
+                10, 8.2
+                11.9, 8.2
+            line rear_sight body width 0.6:
+                5.3, 5.2
+                5.3, 4.5
+                6.1, 4.5
+            line front_sight light width 0.6:
+                13.2, 5.5
+                13.2, 4.5
+        surface item:
+            stock
+            grip
+            receiver
+            barrel
+            lower_tube
+            pump
+
+    variant detailed:
+        layer weapon:
+            polygon stock body outline dark width 0.4:
+                1.3, 5.6
+                4.8, 5.6
+                5.5, 6.5
+                5.1, 7.7
+                3.2, 8
+                2.7, 9
+                1.3, 9
+            line butt_pad dark width 0.7:
+                1.4, 5.7
+                1.4, 8.8
+            line stock_edge light width 0.45:
+                2, 6
+                4.3, 6
+            polygon grip body outline dark width 0.35:
+                5.1, 7.1
+                7, 7.8
+                6.2, 11.4
+                4.7, 11.1
+                4.9, 9.1
+            line grip_inset dark width 0.6:
+                5.8, 8.8
+                5.4, 10.6
+            line guard light width 0.4:
+                6.8, 8.1
+                8.6, 8.1
+                8.4, 9.8
+                6.7, 9.8
+            polygon receiver body outline dark width 0.4:
+                4.5, 5.4
+                8.6, 5.4
+                9, 6.1
+                8.7, 8.3
+                4.5, 8.3
+            polygon barrel body outline dark width 0.35:
+                8.5, 5.5
+                14.1, 5.5
+                14.1, 6.8
+                8.5, 6.8
+            line barrel_ridge light width 0.5:
+                5, 5.7
+                13.7, 5.7
+            line lower_tube light width 0.65:
+                8.7, 7.7
+                13.5, 7.7
+            polygon pump body outline dark width 0.35:
+                9.4, 7.2
+                12.3, 7.2
+                12.6, 7.8
+                12.3, 9
+                9.4, 9
+            line pump_inset dark width 0.55:
+                10, 8.2
+                11.9, 8.2
+            line rear_sight body width 0.6:
+                5.3, 5.2
+                5.3, 4.5
+                6.1, 4.5
+            line front_sight light width 0.6:
+                13.2, 5.5
+                13.2, 4.5
+            polygon port dark:
+                6.3, 6.4
+                8, 6.4
+                8, 7.3
+                6.3, 7.3
+            line heat_shield_slot_one dark width 0.3:
+                9.8, 6.1
+                10.5, 6.1
+            line heat_shield_slot_two dark width 0.3:
+                11.3, 6.1
+                12, 6.1
+            line stock_seam dark width 0.25:
+                3.1, 6.5
+                3.1, 7.4
+        surface item:
+            stock
+            grip
+            receiver
+            barrel
+            lower_tube
+            pump
+
+
+drawable varmint_rifle context ground:
+    paint body = fill
+    paint light = edge
+    paint dark = shade
+
+    variant compact:
+        layer weapon:
+            polygon stock body outline dark width 0.4:
+                1, 8
+                2.7, 8.2
+                4.4, 7.2
+                6, 7.2
+                9.9, 7.1
+                10.6, 7.4
+                10.3, 8.1
+                6, 8.6
+                4.5, 8.8
+                2.8, 10.6
+                1.1, 10.2
+            line butt_pad dark width 0.6:
+                1.1, 8.2
+                1.2, 10.1
+            line stock_glint light width 0.35:
+                1.8, 8.6
+                2.7, 8.8
+                4.7, 7.7
+            line guard light width 0.35:
+                5.1, 8.6
+                6.9, 8.5
+                6.7, 9.7
+                5, 9.7
+            line barrel light width 0.65:
+                7.3, 6.6
+                15, 6.3
+            polygon receiver body outline dark width 0.35:
+                4.9, 6.4
+                7.7, 6.4
+                8, 7
+                7.7, 7.7
+                4.9, 7.7
+            line receiver_glint light width 0.35:
+                5.3, 6.6
+                7.4, 6.6
+            line bolt light width 0.45:
+                6.8, 7.2
+                7.2, 8.4
+                7.9, 8.5
+            line rear_sight body width 0.55:
+                8.7, 6.5
+                8.7, 5.8
+            line front_sight light width 0.45:
+                14.4, 6.2
+                14.4, 5.6
+        surface item:
+            stock
+            barrel
+            receiver
+
+    variant detailed:
+        layer weapon:
+            polygon stock body outline dark width 0.4:
+                1, 8
+                2.7, 8.2
+                4.4, 7.2
+                6, 7.2
+                9.9, 7.1
+                10.6, 7.4
+                10.3, 8.1
+                6, 8.6
+                4.5, 8.8
+                2.8, 10.6
+                1.1, 10.2
+            line butt_pad dark width 0.6:
+                1.1, 8.2
+                1.2, 10.1
+            line stock_glint light width 0.35:
+                1.8, 8.6
+                2.7, 8.8
+                4.7, 7.7
+            line guard light width 0.35:
+                5.1, 8.6
+                6.9, 8.5
+                6.7, 9.7
+                5, 9.7
+            line barrel light width 0.65:
+                7.3, 6.6
+                15, 6.3
+            polygon receiver body outline dark width 0.35:
+                4.9, 6.4
+                7.7, 6.4
+                8, 7
+                7.7, 7.7
+                4.9, 7.7
+            line receiver_glint light width 0.35:
+                5.3, 6.6
+                7.4, 6.6
+            line bolt light width 0.45:
+                6.8, 7.2
+                7.2, 8.4
+                7.9, 8.5
+            line rear_sight body width 0.55:
+                8.7, 6.5
+                8.7, 5.8
+            line front_sight light width 0.45:
+                14.4, 6.2
+                14.4, 5.6
+            line stock_grain dark width 0.22:
+                1.9, 9.6
+                2.6, 9.8
+                3.8, 8.9
+            line forestock_edge light width 0.25:
+                8.3, 7.6
+                9.9, 7.5
+            line bolt_seam dark width 0.25:
+                5.7, 7.1
+                6.5, 7.1
+            line trigger body width 0.25:
+                5.6, 8.8
+                5.9, 9.3
+        surface item:
+            stock
+            barrel
+            receiver
+
+
+drawable marksman_rifle context ground:
+    paint body = fill
+    paint light = edge
+    paint dark = shade
+
+    variant compact:
+        layer weapon:
+            polygon stock body outline dark width 0.4:
+                1, 6.9
+                3.9, 6.9
+                5.3, 7.2
+                5.5, 8.7
+                4.3, 9.1
+                3.3, 10.9
+                1.1, 10.6
+            polygon cheek_rest body outline dark width 0.35:
+                1.6, 6.2
+                3.5, 6.2
+                4.1, 6.9
+                1.6, 7.3
+            line cheek_edge light width 0.4:
+                1.9, 6.4
+                3.3, 6.4
+            line butt_pad dark width 0.7:
+                1.1, 7.3
+                1.2, 10.4
+            polygon grip body outline dark width 0.35:
+                4.7, 8
+                6.4, 8.3
+                5.6, 11.2
+                4.3, 10.7
+            polygon magazine body outline dark width 0.35:
+                7.7, 8
+                9.6, 8
+                9.4, 10.4
+                7.5, 10.4
+            line magazine_base light width 0.35:
+                7.9, 10
+                9.1, 10
+            line guard light width 0.35:
+                6.2, 8.5
+                7.6, 8.5
+                7.4, 9.8
+                6, 9.8
+            polygon receiver body outline dark width 0.35:
+                4.5, 6.1
+                9, 6.1
+                9.2, 6.6
+                9, 8.6
+                4.5, 8.6
+            polygon forestock body outline dark width 0.35:
+                8.8, 6.5
+                11.5, 6.5
+                11.7, 7.9
+                8.8, 8.3
+            line barrel light width 0.85:
+                11.6, 6.9
+                15, 6.9
+            line receiver_ridge light width 0.4:
+                5, 6.4
+                8.6, 6.4
+            line scope_mounts body width 0.6:
+                5.6, 5.2
+                5.6, 6.1
+                8.1, 6.1
+                8.1, 5.2
+            polygon scope dark outline light width 0.3:
+                3.7, 3.7
+                5, 3.7
+                5.6, 4.1
+                8.5, 4.1
+                9.1, 3.4
+                10.5, 3.4
+                10.5, 5.4
+                9.1, 5.4
+                8.5, 4.9
+                5.6, 4.9
+                5, 5.2
+                3.7, 5.2
+            line scope_turret body width 0.75:
+                6.8, 4
+                6.8, 3.1
+        surface item:
+            stock
+            cheek_rest
+            grip
+            magazine
+            receiver
+            forestock
+            barrel
+            scope
+
+    variant detailed:
+        layer weapon:
+            polygon stock body outline dark width 0.4:
+                1, 6.9
+                3.9, 6.9
+                5.3, 7.2
+                5.5, 8.7
+                4.3, 9.1
+                3.3, 10.9
+                1.1, 10.6
+            polygon cheek_rest body outline dark width 0.35:
+                1.6, 6.2
+                3.5, 6.2
+                4.1, 6.9
+                1.6, 7.3
+            line cheek_edge light width 0.4:
+                1.9, 6.4
+                3.3, 6.4
+            line butt_pad dark width 0.7:
+                1.1, 7.3
+                1.2, 10.4
+            polygon grip body outline dark width 0.35:
+                4.7, 8
+                6.4, 8.3
+                5.6, 11.2
+                4.3, 10.7
+            polygon magazine body outline dark width 0.35:
+                7.7, 8
+                9.6, 8
+                9.4, 10.4
+                7.5, 10.4
+            line magazine_base light width 0.35:
+                7.9, 10
+                9.1, 10
+            line guard light width 0.35:
+                6.2, 8.5
+                7.6, 8.5
+                7.4, 9.8
+                6, 9.8
+            polygon receiver body outline dark width 0.35:
+                4.5, 6.1
+                9, 6.1
+                9.2, 6.6
+                9, 8.6
+                4.5, 8.6
+            polygon forestock body outline dark width 0.35:
+                8.8, 6.5
+                11.5, 6.5
+                11.7, 7.9
+                8.8, 8.3
+            line barrel light width 0.85:
+                11.6, 6.9
+                15, 6.9
+            line receiver_ridge light width 0.4:
+                5, 6.4
+                8.6, 6.4
+            line scope_mounts body width 0.6:
+                5.6, 5.2
+                5.6, 6.1
+                8.1, 6.1
+                8.1, 5.2
+            polygon scope dark outline light width 0.3:
+                3.7, 3.7
+                5, 3.7
+                5.6, 4.1
+                8.5, 4.1
+                9.1, 3.4
+                10.5, 3.4
+                10.5, 5.4
+                9.1, 5.4
+                8.5, 4.9
+                5.6, 4.9
+                5, 5.2
+                3.7, 5.2
+            line scope_turret body width 0.75:
+                6.8, 4
+                6.8, 3.1
+            line scope_lens light width 0.25:
+                10.1, 3.8
+                10.1, 5
+            line port dark width 0.3:
+                6.8, 7.1
+                8.4, 7.1
+                8.4, 7.7
+            line stock_panel dark width 0.25:
+                1.9, 8.3
+                3.3, 8.3
+                2.8, 10
+                1.9, 9.8
+            line forestock_vent dark width 0.35:
+                9.6, 7.2
+                10.9, 7.2
+        surface item:
+            stock
+            cheek_rest
+            grip
+            magazine
+            receiver
+            forestock
+            barrel
+            scope
