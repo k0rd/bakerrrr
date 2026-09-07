@@ -3649,7 +3649,9 @@ class PygameView:
             self.pygame.draw.circle(overlay, outline, (mid_x, mid_y), max(1, self.cell_px // 18))
 
         mark = _effect_suffix("item_mark_", "")
-        if mark:
+        # Authored silhouettes provide their own identifying details. Keep the
+        # synthetic corner marks only for the generic fallback drawings.
+        if mark and not ground_drawable_rendered:
             mark_seed_text = _effect_suffix("item_mark_seed_", "0")
             try:
                 mark_seed = int(mark_seed_text)

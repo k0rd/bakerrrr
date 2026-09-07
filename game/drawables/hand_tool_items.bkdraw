@@ -1,0 +1,460 @@
+bakerrrr-drawable 2
+
+# Everyday hand tools. Ground coordinates use the 16-unit item canvas.
+# Shared anchors keep handles and working ends aligned in both size variants.
+# Detailed variants add wear, grip ribs and blade scores; silhouettes stay bold.
+
+drawable prybar context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer tool:
+            polygon bar body outline shadow width 0.45:
+                2.8, 12.4
+                8.1, 4.6
+                8.1, 3.2
+                8.8, 1.7
+                10.1, 1.1
+                11.5, 1.5
+                12.1, 2.5
+                12.1, 4.3
+                11.1, 4.8
+                10.9, 3
+                10.3, 2.7
+                9.6, 3.3
+                9.7, 4.8
+                4.2, 13.2
+                2, 14.2
+                1.4, 13.6
+            line steel_ridge steel width 0.5:
+                2.6, 13.1
+                3.6, 12.3
+                8.9, 4.6
+                8.9, 3
+                9.6, 2
+                10.7, 1.9
+            polygon flat_tip steel:
+                1.4, 13.6
+                2.8, 12.4
+                4.2, 13.2
+                2, 14.2
+            line fork_notch shadow width 0.4:
+                1.8, 14
+                2.7, 13.3
+        surface item:
+            bar
+            flat_tip
+
+    variant detailed:
+        layer tool:
+            polygon bar body outline shadow width 0.45:
+                2.8, 12.4
+                8.1, 4.6
+                8.1, 3.2
+                8.8, 1.7
+                10.1, 1.1
+                11.5, 1.5
+                12.1, 2.5
+                12.1, 4.3
+                11.1, 4.8
+                10.9, 3
+                10.3, 2.7
+                9.6, 3.3
+                9.7, 4.8
+                4.2, 13.2
+                2, 14.2
+                1.4, 13.6
+            line steel_ridge steel width 0.5:
+                2.6, 13.1
+                3.6, 12.3
+                8.9, 4.6
+                8.9, 3
+                9.6, 2
+                10.7, 1.9
+            polygon flat_tip steel:
+                1.4, 13.6
+                2.8, 12.4
+                4.2, 13.2
+                2, 14.2
+            line fork_notch shadow width 0.4:
+                1.8, 14
+                2.7, 13.3
+            line hook_bevel steel width 0.25:
+                11.5, 2.7
+                11.5, 4.1
+            line shaft_wear steel width 0.22:
+                5.4, 10
+                6.7, 8.1
+            line tip_edge body width 0.2:
+                2.2, 13.8
+                3.5, 13
+        surface item:
+            bar
+            flat_tip
+
+
+drawable sledgehammer context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+    point handle_end = 3.7, 13
+    point head_center = 9, 5.3
+    point grip_end = 5.5, 10.3
+
+    variant compact:
+        layer tool:
+            strip handle body:
+                start handle_end
+                finish head_center
+                width 1.9
+                finish_width 1.55
+                outline shadow
+                outline_width 0.35
+            line handle_glint steel width 0.35:
+                3.4, 12.4
+                7.7, 6.3
+            strip rubber_grip shadow:
+                start handle_end
+                finish grip_end
+                width 2.25
+                finish_width 2
+                outline shadow
+                outline_width 0.35
+            polygon hammer_head body outline shadow width 0.45:
+                5.3, 2.5
+                6.8, 1
+                8, 1.2
+                12.6, 4.7
+                12.9, 6
+                11.3, 7.6
+                10.2, 7.4
+                5.5, 3.8
+            polygon top_face steel:
+                5.3, 2.5
+                6.8, 1
+                8, 1.2
+                12.6, 4.7
+                11.1, 6.1
+                10, 5.7
+                5.5, 3.8
+            polygon striking_face body outline shadow width 0.25:
+                11.1, 6.1
+                12.6, 4.7
+                12.9, 6
+                11.3, 7.6
+                10.2, 7.4
+            line head_bevel steel width 0.3:
+                10.6, 7
+                11.3, 7.1
+                12.4, 6
+            line grip_ring body width 0.45:
+                3.1, 11.8
+                4.5, 12.8
+        surface item:
+            handle
+            rubber_grip
+            hammer_head
+
+    variant detailed:
+        layer tool:
+            strip handle body:
+                start handle_end
+                finish head_center
+                width 1.9
+                finish_width 1.55
+                outline shadow
+                outline_width 0.35
+            line handle_glint steel width 0.35:
+                3.4, 12.4
+                7.7, 6.3
+            strip rubber_grip shadow:
+                start handle_end
+                finish grip_end
+                width 2.25
+                finish_width 2
+                outline shadow
+                outline_width 0.35
+            polygon hammer_head body outline shadow width 0.45:
+                5.3, 2.5
+                6.8, 1
+                8, 1.2
+                12.6, 4.7
+                12.9, 6
+                11.3, 7.6
+                10.2, 7.4
+                5.5, 3.8
+            polygon top_face steel:
+                5.3, 2.5
+                6.8, 1
+                8, 1.2
+                12.6, 4.7
+                11.1, 6.1
+                10, 5.7
+                5.5, 3.8
+            polygon striking_face body outline shadow width 0.25:
+                11.1, 6.1
+                12.6, 4.7
+                12.9, 6
+                11.3, 7.6
+                10.2, 7.4
+            line head_bevel steel width 0.3:
+                10.6, 7
+                11.3, 7.1
+                12.4, 6
+            line grip_ring body width 0.45:
+                3.1, 11.8
+                4.5, 12.8
+            line grip_rib_two body width 0.25:
+                3.7, 10.9
+                5, 11.8
+            line grip_rib_three body width 0.25:
+                4.3, 10
+                5.6, 10.9
+            line head_scuff body width 0.25:
+                7.2, 2.4
+                8.5, 3.4
+            line head_joint shadow width 0.45:
+                7.7, 3.3
+                9, 4.3
+        surface item:
+            handle
+            rubber_grip
+            hammer_head
+
+
+drawable fire_axe context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+    point handle_end = 4.8, 13.2
+    point head_center = 9.4, 4
+    point grip_end = 6.2, 10.7
+
+    variant compact:
+        layer tool:
+            strip handle body:
+                start handle_end
+                finish head_center
+                width 1.8
+                finish_width 1.45
+                outline shadow
+                outline_width 0.35
+            line handle_glint steel width 0.4:
+                4.5, 12.5
+                8.5, 5.9
+            strip grip shadow:
+                start handle_end
+                finish grip_end
+                width 2
+                finish_width 1.85
+                outline shadow
+                outline_width 0.35
+            polygon axe_head body outline shadow width 0.45:
+                3.8, 1.7
+                6.4, 2
+                9.4, 3.2
+                13.2, 3.2
+                12.2, 4.4
+                10, 5
+                7.6, 5.8
+                5.7, 7.4
+                4, 7.1
+                2.7, 5.7
+                2.9, 3.5
+            polygon cutting_edge steel:
+                3.8, 1.7
+                4.6, 2.7
+                3.9, 4.5
+                4.4, 5.8
+                5.7, 6.5
+                5.7, 7.4
+                4, 7.1
+                2.7, 5.7
+                2.9, 3.5
+            line head_ridge steel width 0.35:
+                6.2, 2.6
+                9.5, 3.8
+                11.9, 3.6
+            circle head_pin shadow:
+                center 8.7, 4.2
+                radius 0.5
+            line grip_ring body width 0.4:
+                4.2, 12.2
+                5.5, 13
+        surface item:
+            handle
+            grip
+            axe_head
+
+    variant detailed:
+        layer tool:
+            strip handle body:
+                start handle_end
+                finish head_center
+                width 1.8
+                finish_width 1.45
+                outline shadow
+                outline_width 0.35
+            line handle_glint steel width 0.4:
+                4.5, 12.5
+                8.5, 5.9
+            strip grip shadow:
+                start handle_end
+                finish grip_end
+                width 2
+                finish_width 1.85
+                outline shadow
+                outline_width 0.35
+            polygon axe_head body outline shadow width 0.45:
+                3.8, 1.7
+                6.4, 2
+                9.4, 3.2
+                13.2, 3.2
+                12.2, 4.4
+                10, 5
+                7.6, 5.8
+                5.7, 7.4
+                4, 7.1
+                2.7, 5.7
+                2.9, 3.5
+            polygon cutting_edge steel:
+                3.8, 1.7
+                4.6, 2.7
+                3.9, 4.5
+                4.4, 5.8
+                5.7, 6.5
+                5.7, 7.4
+                4, 7.1
+                2.7, 5.7
+                2.9, 3.5
+            line head_ridge steel width 0.35:
+                6.2, 2.6
+                9.5, 3.8
+                11.9, 3.6
+            circle head_pin shadow:
+                center 8.7, 4.2
+                radius 0.5
+            line grip_ring body width 0.4:
+                4.2, 12.2
+                5.5, 13
+            line bevel body width 0.22:
+                3.5, 3.3
+                3.3, 4.6
+                3.7, 5.6
+            line handle_grain shadow width 0.2:
+                6.1, 10.3
+                7.8, 7.5
+            line grip_rib body width 0.25:
+                4.8, 11.2
+                6.1, 12
+        surface item:
+            handle
+            grip
+            axe_head
+
+
+drawable box_cutter context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer tool:
+            polygon blade steel outline shadow width 0.35:
+                7.7, 5.6
+                8.5, 2.7
+                11.1, 1.5
+                10.2, 5
+                9.7, 6.8
+            polygon handle body outline shadow width 0.45:
+                7.5, 5
+                9, 4.7
+                10.5, 6.1
+                10.2, 7.8
+                6.5, 13.3
+                4.9, 14.1
+                2.9, 12.8
+                3.3, 11
+            polygon rubber_insert shadow:
+                8.6, 7.9
+                9.6, 7.4
+                6, 12.8
+                4.8, 13.3
+                4.1, 12.7
+            line case_edge steel width 0.4:
+                3.9, 11.6
+                7.8, 5.8
+                8.8, 5.6
+            line slider_track shadow width 1:
+                5.4, 10.9
+                8.6, 6.4
+            polygon thumb_slider steel outline shadow width 0.25:
+                6.4, 8
+                7.3, 6.8
+                8.4, 7.6
+                7.5, 8.8
+            circle lanyard_hole shadow:
+                center 4.6, 12.5
+                radius 0.55
+        surface item:
+            blade
+            handle
+
+    variant detailed:
+        layer tool:
+            polygon blade steel outline shadow width 0.35:
+                7.7, 5.6
+                8.5, 2.7
+                11.1, 1.5
+                10.2, 5
+                9.7, 6.8
+            polygon handle body outline shadow width 0.45:
+                7.5, 5
+                9, 4.7
+                10.5, 6.1
+                10.2, 7.8
+                6.5, 13.3
+                4.9, 14.1
+                2.9, 12.8
+                3.3, 11
+            polygon rubber_insert shadow:
+                8.6, 7.9
+                9.6, 7.4
+                6, 12.8
+                4.8, 13.3
+                4.1, 12.7
+            line case_edge steel width 0.4:
+                3.9, 11.6
+                7.8, 5.8
+                8.8, 5.6
+            line slider_track shadow width 1:
+                5.4, 10.9
+                8.6, 6.4
+            polygon thumb_slider steel outline shadow width 0.25:
+                6.4, 8
+                7.3, 6.8
+                8.4, 7.6
+                7.5, 8.8
+            circle lanyard_hole shadow:
+                center 4.6, 12.5
+                radius 0.55
+            line blade_score_one body width 0.22:
+                8.4, 3.4
+                10.5, 3.3
+            line blade_score_two body width 0.22:
+                8, 4.6
+                10.1, 4.5
+            line slider_rib body width 0.22:
+                6.9, 7.6
+                7.8, 8.2
+            line grip_rib_one body width 0.25:
+                6.2, 11.1
+                7, 11.7
+            line grip_rib_two body width 0.25:
+                6.8, 10.2
+                7.6, 10.8
+        surface item:
+            blade
+            handle

@@ -2055,6 +2055,7 @@
     ]
   },
   "prybar": {
+    "item_drawable": "prybar",
     "name": "Prybar",
     "glyph": ")",
     "stack_max": 1,
@@ -5099,6 +5100,7 @@
     ]
   },
   "sledgehammer": {
+    "item_drawable": "sledgehammer",
     "name": "Sledgehammer",
     "glyph": ")",
     "stack_max": 1,
@@ -5149,6 +5151,7 @@
     "weapon_id": "telescopic_baton"
   },
   "holdout_pistol": {
+    "item_drawable": "holdout_pistol",
     "name": "Holdout Pistol",
     "glyph": ")",
     "stack_max": 1,
@@ -5162,6 +5165,7 @@
     "weapon_id": "holdout_pistol"
   },
   "service_pistol": {
+    "item_drawable": "service_pistol",
     "name": "Service Pistol",
     "glyph": ")",
     "stack_max": 1,
@@ -5175,6 +5179,7 @@
     "weapon_id": "service_pistol"
   },
   "rust_revolver": {
+    "item_drawable": "rust_revolver",
     "name": "Rust Revolver",
     "glyph": ")",
     "stack_max": 1,
@@ -5188,6 +5193,7 @@
     "weapon_id": "rust_revolver"
   },
   "alley_shotgun": {
+    "item_drawable": "alley_shotgun",
     "name": "Alley Shotgun",
     "glyph": ")",
     "stack_max": 1,
@@ -5201,6 +5207,7 @@
     "weapon_id": "alley_shotgun"
   },
   "compact_smg": {
+    "item_drawable": "compact_smg",
     "name": "Compact SMG",
     "glyph": ")",
     "stack_max": 1,
@@ -5214,6 +5221,7 @@
     "weapon_id": "compact_smg"
   },
   "machine_pistol": {
+    "item_drawable": "machine_pistol",
     "name": "Machine Pistol",
     "glyph": ")",
     "stack_max": 1,
@@ -5228,6 +5236,7 @@
     "weapon_id": "machine_pistol"
   },
   "patrol_carbine": {
+    "item_drawable": "patrol_carbine",
     "name": "Patrol Carbine",
     "glyph": ")",
     "stack_max": 1,
@@ -5241,6 +5250,7 @@
     "weapon_id": "patrol_carbine"
   },
   "hunting_rifle": {
+    "item_drawable": "hunting_rifle",
     "name": "Hunting Rifle",
     "glyph": ")",
     "stack_max": 1,
@@ -5268,6 +5278,7 @@
     "weapon_id": "trail_machete"
   },
   "fire_axe": {
+    "item_drawable": "fire_axe",
     "name": "Fire Axe",
     "glyph": ")",
     "stack_max": 1,
@@ -5296,6 +5307,7 @@
     ]
   },
   "heavy_revolver": {
+    "item_drawable": "heavy_revolver",
     "name": "Heavy Revolver",
     "glyph": ")",
     "stack_max": 1,
@@ -5309,6 +5321,7 @@
     "weapon_id": "heavy_revolver"
   },
   "sawed_off_shotgun": {
+    "item_drawable": "sawed_off_shotgun",
     "name": "Sawed-Off Shotgun",
     "glyph": ")",
     "stack_max": 1,
@@ -5335,6 +5348,7 @@
     "weapon_id": "machine_carbine"
   },
   "improvised_launcher": {
+    "item_drawable": "improvised_launcher",
     "name": "Improvised Launcher",
     "glyph": ")",
     "stack_max": 1,
@@ -5348,6 +5362,7 @@
     "weapon_id": "improvised_launcher"
   },
   "grenade_launcher": {
+    "item_drawable": "grenade_launcher",
     "name": "Grenade Launcher",
     "glyph": ")",
     "stack_max": 1,
@@ -5361,6 +5376,7 @@
     "weapon_id": "grenade_launcher"
   },
   "recoilless_launcher": {
+    "item_drawable": "recoilless_launcher",
     "name": "Recoilless Launcher",
     "glyph": ")",
     "stack_max": 1,
@@ -5374,6 +5390,7 @@
     "weapon_id": "recoilless_launcher"
   },
   "box_cutter": {
+    "item_drawable": "box_cutter",
     "name": "Box Cutter",
     "glyph": ")",
     "stack_max": 1,
@@ -5405,6 +5422,7 @@
     "weapon_id": "tire_iron"
   },
   "snub_revolver": {
+    "item_drawable": "snub_revolver",
     "name": "Snub Revolver",
     "glyph": ")",
     "stack_max": 1,
@@ -5432,6 +5450,7 @@
     "weapon_id": "surplus_pistol"
   },
   "pipe_pistol": {
+    "item_drawable": "pipe_pistol",
     "name": "Pipe Pistol",
     "glyph": ")",
     "stack_max": 1,
