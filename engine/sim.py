@@ -32,6 +32,8 @@ class Simulation:
     ):
 
         self.seed = seed
+        from game.fishing import ensure_fishing
+        ensure_fishing(self)
         self.log = EventLog()
         self.ecs = ECS()
         self.events = EventBus()
@@ -3426,6 +3428,8 @@ class Simulation:
 
         self._apply_custom_world_profile_water(chunk, rng, ox, oy, size)
         self.realized_chunks.add(key)
+        from game.fishing import index_fishing_chunk
+        index_fishing_chunk(self, *key)
         return True
 
     def ensure_loaded_chunk_terrain(self):

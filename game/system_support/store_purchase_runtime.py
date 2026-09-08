@@ -305,7 +305,7 @@ def _profile_for_archetype(archetype):
     elif archetype in {"outfitter", "bait_shop", "dock_shack"}:
         profile.update({
             "summary": "outdoor gear, blades, field food, ammo, and survival supplies",
-            "wanted": {"tool", "weapon", "melee", "blade", "ammo", "survival", "armor", "wearable", "clothing", "medical"},
+            "wanted": {"fish", "fishing", "tool", "weapon", "melee", "blade", "ammo", "survival", "armor", "wearable", "clothing", "medical"},
             "adjacent": {"food", "drink", "device", "phone", "communication", "social"},
             "refuse_dangerous": False,
         })

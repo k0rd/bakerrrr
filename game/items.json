@@ -8733,5 +8733,65 @@
       "max_durability": 5
     },
     "effects": []
+  },
+  "fishing_pole": {
+    "name": "Fishing Pole",
+    "glyph": "/",
+    "stack_max": 1,
+    "tags": [
+      "tool",
+      "fishing",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "broken_fishing_pole": {
+    "name": "Broken Fishing Pole",
+    "glyph": "/",
+    "stack_max": 1,
+    "tags": [
+      "junk",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "fishing_bait": {
+    "name": "Jar of Fishing Bait",
+    "glyph": "!",
+    "stack_max": 12,
+    "tags": [
+      "fishing",
+      "bait",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "fresh_fish": {
+    "name": "Fresh Fish",
+    "glyph": "%",
+    "stack_max": 1,
+    "tags": [
+      "fish",
+      "food",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "prepared_fish": {
+    "name": "Prepared Fish",
+    "glyph": "%",
+    "stack_max": 1,
+    "tags": [
+      "fish",
+      "food",
+      "consumable",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
   }
 }

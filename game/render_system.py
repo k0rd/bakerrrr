@@ -3040,6 +3040,7 @@ class RenderSystem(System):
         blocking_panel_open = any(
             bool(state.get("open"))
             for state in (
+                getattr(self.sim, "fishing_ui", {}),
                 inventory_ui,
                 trade_ui,
                 casino_ui,
@@ -4207,6 +4208,19 @@ class RenderSystem(System):
                     attrs=attrs,
                     light_tint=_surface_light_tint(_pos.x, _pos.y, _pos.z),
                 )
+
+            draw_line = getattr(self.view, "draw_fishing_line", None)
+            if callable(draw_line):
+                for session in getattr(self.sim, "fishing", {}).get("sessions", {}).values():
+                    origin, water = session["origin"], session["water"]
+                    if session.get("phase") not in {"waiting", "approach", "bite"} or origin[2] != active_z:
+                        continue
+                    if not (_is_visible(*origin) and _is_visible(*water)):
+                        continue
+                    sx, sy = origin[0]-camera_x, origin[1]-camera_y
+                    wx, wy = water[0]-camera_x, water[1]-camera_y
+                    if 0 <= sx < map_w and 0 <= sy < map_h and 0 <= wx < map_w and 0 <= wy < map_h:
+                        draw_line(sx, sy, wx, wy, phase=session["phase"], tick=int(self.sim.tick))
 
             radio_scan = getattr(self.sim, "world_traits", {}).get("justice_radio_scan", {})
             if isinstance(radio_scan, dict) and int(radio_scan.get("expires_tick", -1) or -1) >= int(getattr(self.sim, "tick", 0)):
@@ -5538,6 +5552,32 @@ class RenderSystem(System):
             hint = "E trade  B buy  S sell  X inspect  O ops  Y notebooks  L log  D debug  M/Esc close"
             hint = release_control_text(hint, self.sim)
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
+        elif getattr(self.sim, "fishing_ui", {}).get("open"):
+            from game.fishing import bait_choices
+            fishing_ui = self.sim.fishing_ui
+            session = getattr(self.sim, "fishing", {}).get("sessions", {}).get(self.player_eid, {})
+            panel_w = min(64, map_w)
+            panel_h = min(10, map_h)
+            panel_x, panel_y = max(0, (map_w-panel_w)//2), max(0, map_h-panel_h)
+            self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
+            body_w = max(1, panel_w-4)
+            self.view.draw_text(panel_x+2, panel_y+1, "Fishing", color="property_fixture")
+            lines = _wrap_text_lines(str(fishing_ui.get("message", "")), body_w)
+            for i, line in enumerate(lines[:2]):
+                self.view.draw_text(panel_x+2, panel_y+2+i, line, color="objective" if session.get("phase") == "bite" else "default")
+            if session.get("phase") == "bait":
+                choices = bait_choices(self.sim, self.player_eid)
+                selected = int(fishing_ui.get("selected", 0)) % len(choices)
+                start = max(0, selected-1)
+                for i, (_, label) in enumerate(choices[start:start+3]):
+                    text = ("> " if start+i == selected else "  ") + label
+                    self.view.draw_text(panel_x+2, panel_y+4+i, text[:body_w])
+                hint = "Up/Down bait   Enter cast   Esc leave"
+            elif session.get("phase") == "result":
+                hint = "Enter another cast   Esc leave"
+            else:
+                hint = "Enter strike   Esc reel in and leave"
+            self.view.draw_text(panel_x+2, panel_y+panel_h-2, hint[:body_w], color="property_fixture")
         elif casino_ui.get("open"):
             panel_w = min(max(78, map_w - 4), map_w)
             panel_w = max(42, panel_w)

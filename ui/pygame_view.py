@@ -8733,6 +8733,25 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def draw_fishing_line(self, x, y, water_x, water_y, *, phase="waiting", tick=0):
+        """Rod in the actor's hand, slack line, and a small dipping float."""
+        px = self.cell_px
+        hand = (int((x+.67)*px), int((y+.60)*px))
+        dx, dy = water_x-x, water_y-y
+        tip = (int(hand[0]+dx*px*.64), int(hand[1]+dy*px*.42-px*.36))
+        dip = .12 if phase == "bite" else (.035 if tick % 16 < 8 else 0)
+        bob = (int((water_x+.5)*px), int((water_y+.53+dip)*px))
+        pygame = self.pygame
+        pygame.draw.line(self.surface, (39, 31, 29), hand, tip, max(2, px//9))
+        pygame.draw.line(self.surface, (197, 147, 88), hand, tip, max(1, px//18))
+        mid = ((tip[0]+bob[0])//2, (tip[1]+bob[1])//2+max(1, px//10))
+        pygame.draw.lines(self.surface, (203, 217, 204), False, (tip, mid, bob), 1)
+        if phase in {"approach", "bite"}:
+            radius = max(3, px//4)
+            pygame.draw.ellipse(self.surface, (148, 212, 217), (bob[0]-radius, bob[1]-radius//2, radius*2, max(2, radius)), 1)
+        pygame.draw.circle(self.surface, (237, 235, 207), bob, max(2, px//9))
+        pygame.draw.circle(self.surface, (230, 94, 68), (bob[0], bob[1]-1), max(1, px//12))
+
     def _draw_stairs_overlay(self, x, y, color=None, attrs=0, *, direction="up", landing=False):
         frame = self._styled_overlay_color(color, attrs=attrs)
         cell_x = int(x) * self.cell_px
@@ -12309,6 +12328,10 @@ class PygameView:
         """Pump OS events without applying commands to a partial world tick."""
         self._pump_inputs(include_repeat=False)
         return len(self.input_queue)
+
+    def held_fishing_strike(self):
+        pressed = self.pygame.key.get_pressed()
+        return bool(pressed[self.pygame.K_RETURN] or pressed[self.pygame.K_KP_ENTER])
 
     def held_movement_delta(self):
         self.pygame.event.pump()

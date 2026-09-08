@@ -947,7 +947,17 @@ def _music_cue_definitions(profile: dict[str, object]) -> tuple[CueDefinition, .
     return tuple(definitions)
 
 
+def _fishing_bite(duration, sample_rate):
+    samples = [0.0] * _sample_count(duration, sample_rate)
+    _add_tone(samples, sample_rate=sample_rate, start=0, duration=.12, frequency=620,
+              end_frequency=180, amplitude=.45, shape="sine")
+    _add_tone(samples, sample_rate=sample_rate, start=.11, duration=.15, frequency=900,
+              end_frequency=320, amplitude=.32, shape="sine")
+    return samples
+
+
 SFX_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
+    CueDefinition("fishing_bite", .28, _fishing_bite, gain=.8, cooldown=.1),
     CueDefinition("footstep", 0.14, _footstep, gain=0.50, cooldown=0.055),
     CueDefinition("door", 0.24, _door, gain=0.74, cooldown=0.08),
     CueDefinition("pickup", 0.17, _pickup, gain=0.72, cooldown=0.06),
@@ -1016,6 +1026,9 @@ EVENT_CUE_MAP: dict[str, str] = {
     "player_moved": "footstep",
     "door_interacted": "door",
     "item_picked_up": "pickup",
+    "fishing_bite": "fishing_bite",
+    "fish_caught": "pickup",
+    "fish_prepared": "work",
     "trade_bought": "transaction",
     "trade_sold": "transaction",
     "street_deal_transaction": "transaction",

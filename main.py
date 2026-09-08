@@ -155,6 +155,7 @@ from game.run_objectives import evaluate_run_objective, seed_run_objective
 from game.run_epilogue import RunEpilogueLedgerSystem
 from game.service_menu import ServiceMenuSystem
 from game.holdem_cash_runtime import HoldemCashSystem
+from game.fishing import FishingSystem
 from game.site_services import SiteServiceSystem
 from game.skill_progression import SkillProgressionSystem
 from game.skills import seed_skill_profile
@@ -782,6 +783,7 @@ def _register_runtime_systems(sim, view, player, *, audio_progress_callback=None
     social_knowledge_influence_system = SocialKnowledgeInfluenceSystem(sim)
     npc_will_system = NPCWillSystem(sim)
     holdem_cash_system = HoldemCashSystem(sim)
+    fishing_system = FishingSystem(sim)
     npc_emergency_system = NPCEmergencyActionSystem(sim)
     business_pulse_aftermath_system = BusinessPulseAftermathSystem(sim)
     business_pulse_scene_system = BusinessPulseSceneSystem(sim, player)
@@ -985,6 +987,7 @@ def _register_runtime_systems(sim, view, player, *, audio_progress_callback=None
     # Reassert table-bound intent after ordinary will selection and before
     # movement resolves the actor's real chair anchor.
     sim.register_system(holdem_cash_system)
+    sim.register_system(fishing_system)
     sim.register_system(npc_emergency_system)
     sim.register_system(business_pulse_scene_system)
     sim.register_system(business_scene_work_system)

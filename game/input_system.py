@@ -7539,6 +7539,17 @@ class InputSystem(System):
             return
 
         effect_labels = []
+        if entry.get("item_id") in {"fresh_fish", "prepared_fish"}:
+            from game.fishing import species_for_entry, fish_fact
+            fish = species_for_entry(self.sim, entry)
+            known = getattr(self.sim, "fishing", {}).get("knowledge", {}).get(self.player_eid, {})
+            effect_labels.append("Prepare at a campfire, restaurant, or butcher" if entry["item_id"] == "fresh_fish" else "Lasting benefits require eating the whole fish; arrive hungry")
+            if fish and fish["id"] in known:
+                effect_labels.append(fish_fact(fish))
+            else:
+                effect_labels.append("You don't know how this species will agree with you; ask at a bait shop")
+        elif entry.get("item_id") == "fishing_pole":
+            effect_labels.append("Face adjacent water and use; Enter hooks a bite, striking early loses the catch")
         restraint_status = None
         if str(entry.get("item_id", "") or "").strip().lower() == "field_restraint_jab":
             restraint_status = bounty_restraint_jab_status(self.sim, self.player_eid, entry)
@@ -8398,6 +8409,17 @@ class InputSystem(System):
         }:
             self._execute_action(global_action_id, key=key, zoom_mode=zoom_mode)
             return
+        if getattr(self.sim, "fishing_ui", {}).get("open"):
+            from game.fishing import fishing_input
+            now = time.monotonic()
+            held = getattr(self.view, "held_fishing_strike", None)
+            if key is None and callable(held) and held() and now >= getattr(self, "_fishing_repeat_at", 0):
+                key = 10
+            if key in (10, 13):
+                self._fishing_repeat_at = now + .18
+            fishing_input(self.sim, self.player_eid, key)
+            return
+
         if physical_input is None and key is None:
             key = self._held_aim_repeat_key(look_state)
             physical_input = key_physical_input(key) if key is not None else None

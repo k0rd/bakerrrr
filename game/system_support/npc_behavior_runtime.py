@@ -510,6 +510,12 @@ def _npc_try_consume_nutrition(sim, actor_eid, needs, *, low_threshold=45.0, coo
             item_id = str(entry.get("item_id", "") or "").strip()
             item_def = ITEM_CATALOG.get(item_id)
             score = _nutrition_item_score(item_def, need)
+            if item_id == "prepared_fish" and need == "hunger":
+                from game.fishing import species_for_entry
+                fish = species_for_entry(sim, entry)
+                known = getattr(sim, "fishing", {}).get("knowledge", {}).get(actor_eid, {})
+                if fish and not (fish["id"] in known and (fish["toxic"] or not fish["edible"])):
+                    score = float(fish["nourishment"])
             if score <= 0.0:
                 continue
             candidates.append((score, item_id, entry, item_def))
@@ -517,6 +523,12 @@ def _npc_try_consume_nutrition(sim, actor_eid, needs, *, low_threshold=45.0, coo
             continue
         candidates.sort(key=lambda row: (row[0], row[1]), reverse=True)
         _score, item_id, entry, item_def = candidates[0]
+        if item_id == "prepared_fish":
+            from game.fishing import eat_fish
+            if eat_fish(sim, actor_eid, entry):
+                cooldowns[need] = current_tick + int(max(1, cooldown_ticks))
+                return {"item_id": item_id, "need": need}
+            continue
         before_value = _clamp_need_value(getattr(needs, need, 0.0))
         if sim.ecs.get(StatusEffects).get(actor_eid) is None:
             sim.ecs.add(actor_eid, StatusEffects())

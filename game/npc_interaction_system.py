@@ -7661,6 +7661,9 @@ class NPCInteractionSystem(System):
             )
         player_profile = self._player_profile()
         rumor_line = self._memory_line(memory, player_profile)
+        if not rumor_line:
+            from game.fishing import fishing_rumor
+            rumor_line = fishing_rumor(self.sim, npc_eid)
         objective_eval = evaluate_visible_run_objective(self.sim, self.player_eid)
         objective_title = str((objective_eval or {}).get("title", "")).strip()
         objective_next_step = str((objective_eval or {}).get("next_step", "")).strip()

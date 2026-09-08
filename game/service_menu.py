@@ -4163,6 +4163,16 @@ class ServiceMenuSystem(System):
                 if report_counter(prop):
                     options.append({"id": "market_report", "label": f"Local market report ({MARKET_REPORT_COST} cr)"})
 
+        from game.fishing import PREP_ARCHETYPES
+        archetype = str(prop.get("archetype", ""))
+        staffed = not _property_is_storefront(prop) or bool((storefront_service or {}).get("available"))
+        if access.can_use_services and staffed:
+            if archetype in PREP_ARCHETYPES or "campfire_cook" in advertised_site_services or "butcher_prepare" in advertised_site_services:
+                options.append({"id": "prepare_fish", "label": "Prepare a whole fish"})
+            if archetype == "bait_shop":
+                options.append({"id": "identify_fish", "label": "Ask about your catch"})
+                options.append({"id": "fish_rumor", "label": "Any fishing advice?"})
+
         finance_services = set(_finance_services_for_property(prop)) if access.can_use_services else set()
         if "banking" in finance_services:
             options.append({"id": "banking", "label": _service_menu_option_label("banking")})
@@ -6692,6 +6702,25 @@ class ServiceMenuSystem(System):
                 return
             options, storefront_service = self._service_menu_options(self.player_eid, prop, pos)
             self._open_service_menu(prop, options, storefront_service=storefront_service)
+            return
+        if option_id in {"prepare_fish", "identify_fish", "fish_rumor"}:
+            if state.get("close_pending"):
+                return
+            from game.fishing import prepare_fish, identify_fish, bait_shop_rumor
+            from game.property_runtime import property_distance
+            pos = self._position_for(self.player_eid)
+            covered = _property_covering(self.sim, pos.x, pos.y, pos.z) if pos else None
+            inside = isinstance(covered, dict) and str(covered.get("id")) == str(property_id)
+            if (not isinstance(prop, dict) or pos is None or str(state.get("property_id")) != str(property_id)
+                    or pos.z != int(prop.get("z", 0)) or (not inside and property_distance(pos.x, pos.y, prop) > 2)):
+                self._present_service_result("Fishing", ["You'll need to come over here with your catch."], property_id=property_id)
+                return
+            options, _ = self._service_menu_options(self.player_eid, prop, pos)
+            if not any(row["id"] == option_id for row in options):
+                self._present_service_result("Fishing", ["No one can help with that here right now."], property_id=property_id)
+                return
+            action = {"prepare_fish": prepare_fish, "identify_fish": identify_fish, "fish_rumor": bait_shop_rumor}[option_id]
+            self._present_service_result("Fishing", [action(self.sim, self.player_eid, prop)], property_id=property_id)
             return
         if option_id == "market_report":
             if state.get("close_pending"):

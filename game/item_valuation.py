@@ -16,6 +16,11 @@ from game.wire_distribution import WIRE_ITEM_BASE_VALUES
 
 
 CORE_ITEM_BASE_VALUES = {
+    "fishing_pole": 32,
+    "broken_fishing_pole": 2,
+    "fishing_bait": 2,
+    "fresh_fish": 10,
+    "prepared_fish": 15,
     "street_ration": 10,
     "protein_wrap": 11,
     "raw_game_meat": 6,
@@ -391,7 +396,10 @@ def item_value_quote(item_id, metadata=None, *, item_catalog=None) -> dict:
             }
 
     profile = metadata.get("object_profile") if isinstance(metadata.get("object_profile"), Mapping) else None
-    if item_id == "meaningful_object" and profile:
+    if item_id in {"fresh_fish", "prepared_fish"} and "fish_value" in metadata:
+        base = max(1, _number(metadata["fish_value"], 6))
+        details, source = {}, "fish_specimen"
+    elif item_id == "meaningful_object" and profile:
         base, details = _meaningful_object_value(profile)
         source = "object_profile"
     elif item_id in ITEM_BASE_VALUES:

@@ -2975,6 +2975,8 @@ def _seed_npc_gear(sim, eid, rng, role, workplace_prop=None, home_prop=None):
 
 
 def _seed_npc_inventory(sim, eid, rng, role, workplace_prop=None, home_prop=None):
+    from game.fishing import seed_fisher
+    seed_fisher(sim, eid, role, workplace_prop=workplace_prop, home_prop=home_prop)
     uniform_item_id = _uniform_item_for_npc(role, workplace_prop=workplace_prop, home_prop=home_prop)
     if uniform_item_id in ITEM_CATALOG:
         _give_item(sim, eid, uniform_item_id, quantity=1)

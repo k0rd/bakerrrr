@@ -2318,6 +2318,9 @@ class NPCNeedsSystem(System):
             current_thirst = getattr(needs, "thirst", 90.0)
             current_hunger = 86.0 if current_hunger is None else float(current_hunger)
             current_thirst = 90.0 if current_thirst is None else float(current_thirst)
+            from game.fishing import depletion_multiplier
+            hunger_drain *= depletion_multiplier(getattr(needs, "fish_food_resilience", 0))
+            thirst_drain *= depletion_multiplier(getattr(needs, "fish_water_resilience", 0))
             needs.hunger = _clamp(current_hunger - hunger_drain)
             needs.thirst = _clamp(current_thirst - thirst_drain)
 
@@ -2395,6 +2398,8 @@ class NPCWillSystem(System):
         "soliciting_player",
         "seeking_bank",
         "seeking_poker_table",
+        "seeking_fishing",
+        "seeking_fish_buyer",
         "seeking_civic_license",
         "war_advancing",
         "war_holding",
@@ -3371,6 +3376,13 @@ class NPCWillSystem(System):
                 )
 
             # Higher-priority external states can preempt intent planning.
+            if ai.state in {"fishing", "seeking_fishing", "seeking_fish_buyer"}:
+                critical = set(getattr(needs, "critical", ()) or ()).intersection({"energy", "hunger", "safety", "thirst"})
+                if not critical:
+                    will.intent, will.target, will.target_eid = ai.state, ai.target, None
+                    will.last_tick = self.sim.tick
+                    continue
+
             if ai.state == "seeking_poker_table" and ai.target:
                 survival_critical = {
                     str(value or "").strip().lower()
@@ -4948,6 +4960,8 @@ class NPCInvestigateSystem(System):
         "seeking_shelter": 2,
         "seeking_bank": 2,
         "seeking_poker_table": 2,
+        "seeking_fishing": 2,
+        "seeking_fish_buyer": 2,
         "seeking_civic_license": 2,
         "seeking_service": 2,
         "patrolling": 3,
@@ -4995,6 +5009,8 @@ class NPCInvestigateSystem(System):
         "seeking_shelter",
         "seeking_bank",
         "seeking_poker_table",
+        "seeking_fishing",
+        "seeking_fish_buyer",
         "seeking_civic_license",
         "seeking_service",
         "patrolling",
@@ -5037,6 +5053,8 @@ class NPCInvestigateSystem(System):
         "seeking_shelter",
         "seeking_bank",
         "seeking_poker_table",
+        "seeking_fishing",
+        "seeking_fish_buyer",
         "seeking_civic_license",
         "seeking_service",
         "patrolling",
@@ -7222,6 +7240,15 @@ class NPCInvestigateSystem(System):
                         ai.state = "idle"
                         ai.target = None
                         ai.target_eid = None
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                    continue
+                if ai.state in {"seeking_fishing", "seeking_fish_buyer"}:
+                    self.sim.emit(Event("npc_fishing_arrived" if ai.state == "seeking_fishing" else "npc_fish_buyer_arrived", npc_eid=eid))
+                    if ai.state in {"seeking_fishing", "seeking_fish_buyer"}:
+                        ai.state, ai.target, ai.target_eid = "idle", None, None
                     if throttle:
                         throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
                     else:

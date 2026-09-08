@@ -1702,9 +1702,12 @@ class TradeSystem(System):
             ),
         },
         "bait_shop": {
+            "required_items": ("fishing_pole", "fishing_bait"),
             "buy_mult_lo": 0.94,
             "buy_mult_hi": 1.24,
             "item_pool": (
+                ("fishing_pole", 60),
+                ("fishing_bait", 90),
                 ("street_ration", 18),
                 ("protein_wrap", 16),
                 ("packaged_game_meat", 4),
@@ -4480,6 +4483,54 @@ class TradeSystem(System):
                 violence_eligible=False,
             ))
         return False
+
+    def npc_sell_fish(self, eid, prop, instance_id):
+        """Buy one real catch at an attended counter, from operating funds."""
+        import copy
+        from game.fishing import species_for_entry
+        from game.player_businesses import player_business_state
+        from game.system_support.npc_income_runtime import grant_npc_wallet_credits
+        pos = self._position_for(eid)
+        inv = self._inventory_for(eid)
+        entry = inv.find(instance_id=instance_id) if inv else None
+        if not pos or not entry or entry.get("item_id") not in {"fresh_fish", "prepared_fish"}:
+            return False
+        if not species_for_entry(self.sim, entry) or _property_distance(pos.x, pos.y, prop) > 2:
+            return False
+        accessible, service = self._npc_store_accessible(eid, prop, x=pos.x, y=pos.y, z=pos.z)
+        if not accessible:
+            return False
+        account = player_business_state(prop, create=False)
+        if not account:
+            return False  # Scheduled business genesis/review owns opening funds.
+        store = self._store_state(prop)
+        interest = classify_store_purchase_interest(self.sim, eid, prop, store, entry, service_eid=(service or {}).get("service_eid"))
+        if not interest.get("accepted"):
+            return False
+        price, _ = self._sell_quote(entry["item_id"], store, terms=self._trade_terms(eid, prop), interest=interest, metadata=entry.get("metadata"))
+        price = max(1, int(price))
+        if int(account.get("account_balance", 0)) < price:
+            return False
+        old_items = copy.deepcopy(inv.items)
+        removed = inv.remove_item(instance_id=instance_id, quantity=1)
+        if not removed:
+            return False
+        paid = grant_npc_wallet_credits(self.sim, eid, price, source="fishing", property_id=prop["id"], emit_event=False)
+        if not paid or paid.get("wallet_granted") != price:
+            inv.items = old_items
+            return False
+        account["account_balance"] -= price
+        account["fish_purchases_total"] = int(account.get("fish_purchases_total", 0)) + price
+        metadata = copy.deepcopy(removed.get("metadata") or {})
+        base = item_fair_value(removed["item_id"], metadata)
+        store["entries"].append({"item_id": removed["item_id"], "stock_id": str(instance_id),
+                                 "metadata": metadata, "stock": 1,
+                                 "buy_price": max(price+1, int(round(base * 1.2))),
+                                 "sell_price": price, "sale_count": 0})
+        invalidate_item_quotes(self.sim, prop, removed["item_id"])
+        self.sim.emit(Event("npc_fish_sold", npc_eid=eid, property_id=prop["id"],
+                            item_id=removed["item_id"], species_id=metadata.get("fish_species"), price=price))
+        return True
 
     def _trade_sell(self, eid, pos, target_instance_id=None):
         assets = self._assets_for(eid)

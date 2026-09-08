@@ -1627,6 +1627,12 @@ class ItemActionRuntime:
         )
         item_def = self._item_def(entry["item_id"])
         item_name = self._display_name_for_actor(eid, entry)
+        if entry["item_id"] == "fishing_pole":
+            from game.fishing import begin_fishing
+            return begin_fishing(self.sim, eid, entry["instance_id"], self._stored_actor_interact_direction(eid))
+        if entry["item_id"] in {"fresh_fish", "prepared_fish"}:
+            from game.fishing import eat_fish
+            return eat_fish(self.sim, eid, entry)
         restraint_result = self._use_field_restraint_jab(
             eid,
             entry,
