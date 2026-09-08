@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 from game.release_runtime import release_control_text
+from game.market_reports import build_market_notebook
 from game.ui_text_runtime import _modal_body_widths, _modal_panel_width, _wrapped_selection_index
 from ui.input_keys import (
     ENTER_KEYS,
@@ -230,6 +231,8 @@ def refresh_report_ui(
         report = build_known_locations_report_fn(include_hidden=(filter_mode == "hidden"))
     elif next_kind == "known_people":
         report = build_known_people_report_fn()
+    elif next_kind == "market_reports":
+        report = build_market_notebook(host.sim, host.player_eid)
     else:
         next_kind = "progress"
         report = build_progress_report_fn()
@@ -367,17 +370,17 @@ def handle_report_input(host, key, *, line_text_fn, wrap_display_lines_fn):
             host._refresh_report_ui(reset_scroll=True, kind="progress")
         return True
 
-    if report_kind in {"known_locations", "known_people"} and (
+    if report_kind in {"known_locations", "known_people", "market_reports"} and (
         key == 9 or (key_btab is not None and key == key_btab)
     ):
-        if report_kind == "known_locations":
-            host._refresh_known_people_ui(reset_scroll=True)
-        else:
-            host._refresh_known_locations_ui(reset_scroll=True)
+        kinds = ("known_locations", "known_people", "market_reports")
+        step = -1 if key_btab is not None and key == key_btab else 1
+        next_kind = kinds[(kinds.index(report_kind) + step) % len(kinds)]
+        host._refresh_report_ui(reset_scroll=True, kind=next_kind)
         return True
 
     if key in (ord("y"), ord("Y")):
-        if report_kind in {"known_locations", "known_people"}:
+        if report_kind in {"known_locations", "known_people", "market_reports"}:
             host._close_report_ui()
         else:
             host._refresh_known_locations_ui(reset_scroll=True)
@@ -874,7 +877,7 @@ def draw_report_modal(
         if scroll + list_h < len(rows):
             footer_bits.append("more below")
         footer = " | ".join(footer_bits) if footer_bits else ""
-        action_tail = "Tab places notebook | Y close | O ops | L log | D debug | ? help"
+        action_tail = "Tab market reports | Y close | O ops | L log | D debug | ? help"
         footer = f"{footer} | {action_tail}" if footer else action_tail
     else:
         display_lines = report_display_lines(
@@ -902,6 +905,8 @@ def draw_report_modal(
             footer_bits.append("more below")
         footer = " | ".join(footer_bits) if footer_bits else ""
         action_tail = "O close | Y notebooks | L log | D debug | ? help"
+        if report_kind == "market_reports":
+            action_tail = "Tab places notebook | Y close | Up/Down scroll | O ops | ? help"
         footer = f"{footer} | {action_tail}" if footer else f"{action_tail} | Up/Down scroll"
 
     footer = release_control_text(footer, sim)

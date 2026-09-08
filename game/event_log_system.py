@@ -2554,6 +2554,8 @@ class EventLogSystem(System):
                 text = f"You identify {subject_name} in your people notebook {key_label}."
             else:
                 text = f"You update {subject_name} in your people notebook {key_label}."
+        elif notebook_kind == "market_reports":
+            text = f"You copy the local market report into your notebook {key_label}."
         else:
             subject_name = subject_name or "new information"
             verb = "record" if change_kind == "recorded" else "update"

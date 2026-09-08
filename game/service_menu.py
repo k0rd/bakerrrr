@@ -50,6 +50,7 @@ from game.ecology_registry import (
 from game.herbal_chemistry_runtime import secondary_trait_labels
 from game.justice_runtime import held_property_snapshot as _justice_held_property_snapshot
 from game.opportunities import SERVICE_JOB_BOARD_SERVICES, service_job_board_offers
+from game.market_reports import MARKET_REPORT_COST, buy_market_report, report_counter, report_lines
 from game.player_businesses import (
     player_business_account_balance,
     player_business_customer_policy,
@@ -4159,6 +4160,8 @@ class ServiceMenuSystem(System):
             if storefront_service.get("available") and not self._machine_service_profile(prop):
                 options.append({"id": "trade_buy", "label": _service_menu_option_label("trade_buy")})
                 options.append({"id": "trade_sell", "label": _service_menu_option_label("trade_sell")})
+                if report_counter(prop):
+                    options.append({"id": "market_report", "label": f"Local market report ({MARKET_REPORT_COST} cr)"})
 
         finance_services = set(_finance_services_for_property(prop)) if access.can_use_services else set()
         if "banking" in finance_services:
@@ -6689,6 +6692,34 @@ class ServiceMenuSystem(System):
                 return
             options, storefront_service = self._service_menu_options(self.player_eid, prop, pos)
             self._open_service_menu(prop, options, storefront_service=storefront_service)
+            return
+        if option_id == "market_report":
+            if state.get("close_pending"):
+                return
+            from game.property_runtime import property_distance
+            pos = self._position_for(self.player_eid)
+            covered = _property_covering(self.sim, pos.x, pos.y, pos.z) if pos is not None else None
+            inside = isinstance(covered, dict) and str(covered.get("id")) == str(property_id)
+            if (not isinstance(prop, dict) or pos is None
+                    or str(property_id) != str(state.get("property_id"))
+                    or int(prop.get("z", 0)) != int(pos.z)
+                    or (not inside and property_distance(pos.x, pos.y, prop) > 2)):
+                self._present_service_result("Local market report", ["You need to be at the counter to buy a report."], property_id=property_id)
+                return
+            options, _service = self._service_menu_options(self.player_eid, prop, pos)
+            if not any(row["id"] == "market_report" for row in options):
+                self._present_service_result("Local market report", ["This counter cannot issue a report right now."], property_id=property_id)
+                return
+            report, reason = buy_market_report(self.sim, prop, self.player_eid)
+            if report is None:
+                self._present_service_result("Local market report", [reason], property_id=property_id)
+            else:
+                lines = report_lines(self.sim, report)
+                # The counter gives the actionable tips; the notebook retains
+                # the complete edition, including the category outlook.
+                lines = lines[:lines.index("Local market outlook")]
+                lines.append("Copied to your notebook: open Notebooks and Tab to Market Reports for the full edition.")
+                self._present_service_result("Local market report", lines, property_id=property_id)
             return
         if option_id == "trade_buy":
             self._close_service_menu()

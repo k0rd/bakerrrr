@@ -35,6 +35,7 @@ from game.item_semantics import identify_item_for_actor, item_display_name_for_a
 from game.item_compatibility import compatibility_context, compatibility_row_fields, drone_compatibility_target
 from game.item_valuation import ITEM_BASE_VALUES as SHARED_ITEM_BASE_VALUES, item_fair_value
 from game.items import ITEM_CATALOG, world_distributed_item_pool
+from game.market_reports import MARKET_REFRESH_QUOTES, invalidate_item_quotes, record_shop_quote, reset_shop_quotes
 from game.inventory_display import inventory_entry_equipment_display
 from game.organization_reputation import organization_instability_profile
 from game.organization_response import property_vigilante_denial
@@ -2612,6 +2613,10 @@ class TradeSystem(System):
         state["corporate_occupation"] = dict(occupation_terms)
         state["entries"] = entries
         state["last_refresh_tick"] = self.sim.tick
+        reset_shop_quotes(self.sim, prop)
+        # A fixed sample from this refresh, never a scan of other shops.
+        for entry in entries[:MARKET_REFRESH_QUOTES]:
+            record_shop_quote(self.sim, prop, entry, self._effective_store_buy_price(entry, state, {"buy_mult": 1.0}))
         if self._actor_owns_property(self.player_eid, prop):
             _refresh_player_business_runtime(self.sim, prop)
 
@@ -2935,6 +2940,8 @@ class TradeSystem(System):
                 **equipment_display,
                 **self._fashion_row_fields(item_id, entry.get("metadata")),
             })
+            if not owner_transfer and actor_eid == self.player_eid and interest.get("accepted") and interest.get("interest_known", True):
+                record_shop_quote(self.sim, store_prop, entry, quote, side="sell", audience=actor_eid, item_name=display_name)
         if not owner_transfer:
             candidates.extend(
                 wire_data_store_sell_rows(
@@ -3011,6 +3018,9 @@ class TradeSystem(System):
                 **self._fashion_row_fields(item_id, row_entry.get("metadata")),
                 **({} if owner_transfer else self._trade_pressure_row_fields(store, item_id)),
             })
+            if not owner_transfer:
+                record_shop_quote(self.sim, self._store_prop_for_state(store), entry, rows[-1]["price"],
+                                  audience=self.player_eid, item_name=rows[-1]["item_name"])
         return self._compatibility_trade_rows(rows)
 
     def _trade_sell_rows(self, inventory, store, terms=None, owner_transfer=False, actor_eid=None, service_eid=None):
@@ -3701,6 +3711,7 @@ class TradeSystem(System):
             return None
         wallet_after = inventory_liquid_credits(inventory)
         self._consume_store_stock(choice, 1)
+        invalidate_item_quotes(self.sim, store_prop, item_id)
         choice["sale_count"] = next_sale_count
         purchased_entry = {"item_id": item_id, "metadata": item_metadata, "instance_id": instance_id}
         identified_by_trade = identify_item_for_actor(
@@ -4143,6 +4154,7 @@ class TradeSystem(System):
             assets.credits -= price
         next_sale_count = int(choice.get("sale_count", 0) or 0) + 1
         self._consume_store_stock(choice, 1)
+        invalidate_item_quotes(self.sim, store_prop, item_id)
         if owner_transfer:
             _refresh_player_business_runtime(self.sim, store_prop)
         choice["sale_count"] = next_sale_count
@@ -4343,6 +4355,7 @@ class TradeSystem(System):
         if not owner_transfer:
             assets.credits -= price
         self._consume_store_stock(choice, 1)
+        invalidate_item_quotes(self.sim, store_prop, item_id)
         if owner_transfer:
             _refresh_player_business_runtime(self.sim, store_prop)
         choice["sale_count"] = next_sale_count
@@ -4693,6 +4706,7 @@ class TradeSystem(System):
             existing["owner_stocked_stock"] = int(max(0, existing.get("owner_stocked_stock", 0) or 0)) + stocked_quantity
             _refresh_player_business_runtime(self.sim, store_prop)
 
+        invalidate_item_quotes(self.sim, store_prop, item_id)
         self.sim.emit(Event(
             "trade_sold",
             eid=eid,
