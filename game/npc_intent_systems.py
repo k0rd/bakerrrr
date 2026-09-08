@@ -2318,9 +2318,12 @@ class NPCNeedsSystem(System):
             current_thirst = getattr(needs, "thirst", 90.0)
             current_hunger = 86.0 if current_hunger is None else float(current_hunger)
             current_thirst = 90.0 if current_thirst is None else float(current_thirst)
-            from game.fishing import depletion_multiplier
-            hunger_drain *= depletion_multiplier(getattr(needs, "fish_food_resilience", 0))
-            thirst_drain *= depletion_multiplier(getattr(needs, "fish_water_resilience", 0))
+            fish_food = getattr(needs, "fish_food_resilience", 0)
+            fish_water = getattr(needs, "fish_water_resilience", 0)
+            if fish_food or fish_water:
+                from game.fishing import depletion_multiplier
+                hunger_drain *= depletion_multiplier(fish_food)
+                thirst_drain *= depletion_multiplier(fish_water)
             needs.hunger = _clamp(current_hunger - hunger_drain)
             needs.thirst = _clamp(current_thirst - thirst_drain)
 

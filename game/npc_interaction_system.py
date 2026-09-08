@@ -14604,6 +14604,8 @@ class NPCInteractionSystem(System):
                 )
             elif context.get("local_source") == "rumor":
                 line = self._say("local_rumor", context, topic_id=topic_id, count=ask_count, rumor_line=context["rumor_line"], rumor_line_lc=_dialogue_lower_start(context["rumor_line"]))
+                from game.fishing import remember_fishing_rumor
+                remember_fishing_rumor(self.sim, npc_eid, self.player_eid, context["rumor_line"])
             elif context.get("local_source") == "opportunity":
                 quality = self._dialogue_pressure_intel_quality(context, topic_id)
                 summary = self._opportunity_summary(context, quality=quality)

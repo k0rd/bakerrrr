@@ -1,0 +1,591 @@
+bakerrrr-drawable 2
+
+# Fishing gear and whole-catch states extracted from generic tool, junk, ground and food art.
+# Ground art uses the shared 16-unit canvas. Both variants retain the same silhouette.
+
+# Long tapered rod, hanging line and a visible reel; replaces the tool fallback.
+drawable fishing_pole context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            line fishing_line body width 0.35:
+                12.7, 1.5
+                13.4, 5
+                13.6, 9.4
+            line hook steel width 0.45:
+                13.6, 9.4
+                13.6, 10.5
+                12.7, 11
+                12.2, 10.4
+            strip rod body:
+                start 3, 12.7
+                finish 12.7, 1.5
+                width 1
+                finish_width 0.4
+                outline shadow
+                outline_width 0.35
+            strip cork_grip body:
+                start 2.1, 13.5
+                finish 5.1, 10.3
+                width 1.9
+                finish_width 1.5
+                outline shadow
+                outline_width 0.35
+            line reel_mount steel width 0.75:
+                4.5, 10.9
+                6.8, 11.5
+            circle reel body:
+                center 6.6, 11.4
+                radius 1.7
+                outline shadow
+                width 0.35
+            circle reel_spool steel:
+                center 6.6, 11.4
+                radius 0.8
+            line rod_glint steel width 0.3:
+                5.5, 9.4
+                9.6, 4.8
+        surface item:
+            rod
+            cork_grip
+            reel
+
+    variant detailed:
+        layer silhouette:
+            line fishing_line body width 0.35:
+                12.7, 1.5
+                13.4, 5
+                13.6, 9.4
+            line hook steel width 0.45:
+                13.6, 9.4
+                13.6, 10.5
+                12.7, 11
+                12.2, 10.4
+            strip rod body:
+                start 3, 12.7
+                finish 12.7, 1.5
+                width 1
+                finish_width 0.4
+                outline shadow
+                outline_width 0.35
+            strip cork_grip body:
+                start 2.1, 13.5
+                finish 5.1, 10.3
+                width 1.9
+                finish_width 1.5
+                outline shadow
+                outline_width 0.35
+            line reel_mount steel width 0.75:
+                4.5, 10.9
+                6.8, 11.5
+            circle reel body:
+                center 6.6, 11.4
+                radius 1.7
+                outline shadow
+                width 0.35
+            circle reel_spool steel:
+                center 6.6, 11.4
+                radius 0.8
+            line rod_glint steel width 0.3:
+                5.5, 9.4
+                9.6, 4.8
+        layer detail:
+            circle spool_hub shadow:
+                center 6.6, 11.4
+                radius 0.3
+            line reel_crank steel width 0.3:
+                6.6, 11.4
+                8.2, 12.1
+                8.6, 11.5
+            line grip_wrap shadow width 0.3:
+                2.4, 12.7
+                3.4, 13.5
+            line grip_wrap_upper shadow width 0.3:
+                3.5, 11.4
+                4.5, 12.2
+            circle lower_guide steel:
+                center 8.1, 6.9
+                radius 0.45
+                outline shadow
+                width 0.2
+            circle upper_guide steel:
+                center 10.8, 3.6
+                radius 0.35
+        surface item:
+            rod
+            cork_grip
+            reel
+
+
+# Two separated rod sections with a jagged break and slack line.
+drawable broken_fishing_pole context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            polygon lower_rod body outline shadow width 0.4:
+                1.6, 13.2
+                6.4, 6.1
+                6.3, 7.7
+                7.3, 6.8
+                6.9, 8.4
+                3, 14.1
+            strip cork_grip body:
+                start 2.2, 13.2
+                finish 4.1, 10.5
+                width 1.8
+                finish_width 1.6
+                outline shadow
+                outline_width 0.35
+            polygon snapped_tip body outline shadow width 0.4:
+                9.1, 11
+                9.5, 9.6
+                9, 9.9
+                9.6, 8.5
+                13.6, 3.1
+                10.5, 9.7
+                9.7, 9.6
+            line slack_line steel width 0.35:
+                13.6, 3.1
+                14.3, 7.5
+                13.3, 10.8
+                11.6, 11.5
+            circle reel body:
+                center 5.7, 11.7
+                radius 1.6
+                outline shadow
+                width 0.35
+            circle reel_spool steel:
+                center 5.7, 11.7
+                radius 0.7
+            line break_edge steel width 0.35:
+                6.4, 6.1
+                6.3, 7.7
+                7.3, 6.8
+        surface item:
+            lower_rod
+            cork_grip
+            snapped_tip
+            reel
+
+    variant detailed:
+        layer silhouette:
+            polygon lower_rod body outline shadow width 0.4:
+                1.6, 13.2
+                6.4, 6.1
+                6.3, 7.7
+                7.3, 6.8
+                6.9, 8.4
+                3, 14.1
+            strip cork_grip body:
+                start 2.2, 13.2
+                finish 4.1, 10.5
+                width 1.8
+                finish_width 1.6
+                outline shadow
+                outline_width 0.35
+            polygon snapped_tip body outline shadow width 0.4:
+                9.1, 11
+                9.5, 9.6
+                9, 9.9
+                9.6, 8.5
+                13.6, 3.1
+                10.5, 9.7
+                9.7, 9.6
+            line slack_line steel width 0.35:
+                13.6, 3.1
+                14.3, 7.5
+                13.3, 10.8
+                11.6, 11.5
+            circle reel body:
+                center 5.7, 11.7
+                radius 1.6
+                outline shadow
+                width 0.35
+            circle reel_spool steel:
+                center 5.7, 11.7
+                radius 0.7
+            line break_edge steel width 0.35:
+                6.4, 6.1
+                6.3, 7.7
+                7.3, 6.8
+        layer detail:
+            line loose_fiber steel width 0.25:
+                7, 8
+                8, 7.4
+            line tip_glint steel width 0.25:
+                10.4, 8.7
+                12.7, 4.7
+            line grip_binding shadow width 0.3:
+                2.8, 11.6
+                4, 12.4
+            circle spool_hub shadow:
+                center 5.7, 11.7
+                radius 0.25
+        surface item:
+            lower_rod
+            cork_grip
+            snapped_tip
+            reel
+
+
+# Lidded glass bait jar with curling worms, replacing the generic ground token.
+drawable fishing_bait context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            polygon jar body outline shadow width 0.4:
+                4.6, 4.4
+                11.4, 4.4
+                12.3, 6.1
+                12.3, 12.9
+                11.3, 14
+                4.7, 14
+                3.7, 12.9
+                3.7, 6.1
+            polygon lid steel outline shadow width 0.4:
+                4, 2.4
+                12, 2.4
+                12.2, 4.6
+                3.8, 4.6
+            polygon jar_window shadow:
+                5, 6.1
+                11, 6.1
+                11, 12.1
+                5, 12.1
+            line curled_worm body width 0.85:
+                5.8, 10.9
+                5.8, 9.5
+                7, 9
+                8.3, 9.8
+                9.6, 9.5
+                9.6, 8
+            line second_worm steel width 0.6:
+                5.8, 7.2
+                7.2, 7
+                7.8, 7.6
+            line glass_glint steel width 0.35:
+                4.6, 6.6
+                4.6, 10.7
+        surface item:
+            jar
+            lid
+
+    variant detailed:
+        layer silhouette:
+            polygon jar body outline shadow width 0.4:
+                4.6, 4.4
+                11.4, 4.4
+                12.3, 6.1
+                12.3, 12.9
+                11.3, 14
+                4.7, 14
+                3.7, 12.9
+                3.7, 6.1
+            polygon lid steel outline shadow width 0.4:
+                4, 2.4
+                12, 2.4
+                12.2, 4.6
+                3.8, 4.6
+            polygon jar_window shadow:
+                5, 6.1
+                11, 6.1
+                11, 12.1
+                5, 12.1
+            line curled_worm body width 0.85:
+                5.8, 10.9
+                5.8, 9.5
+                7, 9
+                8.3, 9.8
+                9.6, 9.5
+                9.6, 8
+            line second_worm steel width 0.6:
+                5.8, 7.2
+                7.2, 7
+                7.8, 7.6
+            line glass_glint steel width 0.35:
+                4.6, 6.6
+                4.6, 10.7
+        layer detail:
+            line lid_rib_left body width 0.25:
+                5, 2.8
+                5, 4
+            line lid_rib_middle body width 0.25:
+                8, 2.8
+                8, 4
+            line lid_rib_right body width 0.25:
+                11, 2.8
+                11, 4
+            line worm_tail steel width 0.3:
+                7.4, 11.3
+                8.6, 11.7
+                9.6, 11
+            line glass_base steel width 0.25:
+                5.4, 13.2
+                10.6, 13.2
+        surface item:
+            jar
+            lid
+
+
+# Whole fresh catch with a forked tail, dorsal fin, gill and bright belly.
+drawable fresh_fish context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            polygon tail body outline shadow width 0.4:
+                4.6, 7.7
+                1.2, 5.3
+                1.7, 8
+                1.2, 10.7
+                4.6, 8.8
+            polygon dorsal_fin body outline shadow width 0.4:
+                6.4, 5.9
+                8.2, 3.3
+                10, 5.4
+            polygon lower_fin body outline shadow width 0.4:
+                7.7, 9.5
+                9.2, 12
+                10.2, 10
+            polygon fish body outline shadow width 0.4:
+                4.1, 8
+                5.8, 5.9
+                9.2, 5.1
+                11.5, 5.8
+                14.4, 7.9
+                12.3, 9.8
+                9.5, 10.8
+                6.3, 10
+            polygon belly steel:
+                4.7, 8.9
+                7.1, 9.3
+                10, 9.6
+                13.8, 8.5
+                12.3, 9.8
+                9.5, 10.8
+                6.3, 10
+            line gill shadow width 0.45:
+                11, 6.2
+                10.5, 7.7
+                11.3, 9.4
+            circle eye shadow:
+                center 12.4, 7.2
+                radius 0.55
+        surface item:
+            tail
+            dorsal_fin
+            lower_fin
+            fish
+
+    variant detailed:
+        layer silhouette:
+            polygon tail body outline shadow width 0.4:
+                4.6, 7.7
+                1.2, 5.3
+                1.7, 8
+                1.2, 10.7
+                4.6, 8.8
+            polygon dorsal_fin body outline shadow width 0.4:
+                6.4, 5.9
+                8.2, 3.3
+                10, 5.4
+            polygon lower_fin body outline shadow width 0.4:
+                7.7, 9.5
+                9.2, 12
+                10.2, 10
+            polygon fish body outline shadow width 0.4:
+                4.1, 8
+                5.8, 5.9
+                9.2, 5.1
+                11.5, 5.8
+                14.4, 7.9
+                12.3, 9.8
+                9.5, 10.8
+                6.3, 10
+            polygon belly steel:
+                4.7, 8.9
+                7.1, 9.3
+                10, 9.6
+                13.8, 8.5
+                12.3, 9.8
+                9.5, 10.8
+                6.3, 10
+            line gill shadow width 0.45:
+                11, 6.2
+                10.5, 7.7
+                11.3, 9.4
+            circle eye shadow:
+                center 12.4, 7.2
+                radius 0.55
+        layer detail:
+            circle eye_glint steel:
+                center 12.5, 7.1
+                radius 0.2
+            line fin_ray steel width 0.25:
+                7.4, 5.4
+                8.2, 4.1
+                8.8, 5.2
+            line tail_ray_upper steel width 0.25:
+                1.9, 6.1
+                3.8, 7.8
+            line tail_ray_lower steel width 0.25:
+                1.9, 10
+                3.8, 8.5
+            line lateral_line steel width 0.25:
+                5.9, 7.7
+                7.8, 7
+                9.7, 7
+            line pectoral_fin shadow width 0.25:
+                9.7, 8.1
+                8.5, 9.1
+                10.2, 8.9
+            line mouth shadow width 0.25:
+                13.4, 8.2
+                14.1, 8
+        surface item:
+            tail
+            dorsal_fin
+            lower_fin
+            fish
+
+
+# Cooked whole fish on folded paper, with opened scoring and charred skin.
+drawable prepared_fish context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            polygon paper steel outline shadow width 0.4:
+                1.1, 4.5
+                11.5, 3.2
+                14.3, 5.1
+                14.4, 12
+                4, 13
+                1.4, 11.3
+            line paper_fold body width 0.45:
+                1.1, 4.5
+                3.2, 5.7
+                3, 11.8
+                4, 13
+            polygon tail shadow outline shadow width 0.4:
+                4.6, 7.7
+                1.2, 5.3
+                1.7, 8
+                1.2, 10.7
+                4.6, 8.8
+            polygon fish body outline shadow width 0.4:
+                4.1, 8
+                5.8, 5.9
+                9.2, 5.1
+                11.5, 5.8
+                14.4, 7.9
+                12.3, 9.8
+                9.5, 10.8
+                6.3, 10
+            line cooked_edge shadow width 0.5:
+                4.8, 8.8
+                7, 9.8
+                9.7, 10.3
+                12, 9.5
+            line score_left shadow width 0.65:
+                6.2, 6.7
+                7.2, 9.3
+            line score_middle shadow width 0.65:
+                8.2, 6
+                9.2, 9.8
+            line score_right shadow width 0.65:
+                10.3, 6.1
+                11, 8.6
+            circle eye shadow:
+                center 12.4, 7.2
+                radius 0.45
+        surface item:
+            paper
+            tail
+            fish
+
+    variant detailed:
+        layer silhouette:
+            polygon paper steel outline shadow width 0.4:
+                1.1, 4.5
+                11.5, 3.2
+                14.3, 5.1
+                14.4, 12
+                4, 13
+                1.4, 11.3
+            line paper_fold body width 0.45:
+                1.1, 4.5
+                3.2, 5.7
+                3, 11.8
+                4, 13
+            polygon tail shadow outline shadow width 0.4:
+                4.6, 7.7
+                1.2, 5.3
+                1.7, 8
+                1.2, 10.7
+                4.6, 8.8
+            polygon fish body outline shadow width 0.4:
+                4.1, 8
+                5.8, 5.9
+                9.2, 5.1
+                11.5, 5.8
+                14.4, 7.9
+                12.3, 9.8
+                9.5, 10.8
+                6.3, 10
+            line cooked_edge shadow width 0.5:
+                4.8, 8.8
+                7, 9.8
+                9.7, 10.3
+                12, 9.5
+            line score_left shadow width 0.65:
+                6.2, 6.7
+                7.2, 9.3
+            line score_middle shadow width 0.65:
+                8.2, 6
+                9.2, 9.8
+            line score_right shadow width 0.65:
+                10.3, 6.1
+                11, 8.6
+            circle eye shadow:
+                center 12.4, 7.2
+                radius 0.45
+        layer detail:
+            line paper_crease body width 0.25:
+                12.1, 3.8
+                13.5, 5.4
+                14, 10.7
+            line opened_cut_left steel width 0.3:
+                6.5, 6.7
+                7.4, 9.1
+            line opened_cut_middle steel width 0.3:
+                8.5, 6
+                9.4, 9.5
+            line opened_cut_right steel width 0.3:
+                10.6, 6.1
+                11.2, 8.4
+            line tail_crisp body width 0.3:
+                1.9, 6.5
+                3.6, 8
+                1.9, 9.5
+            line gill shadow width 0.25:
+                11.4, 6.6
+                11.1, 7.4
+                11.8, 8.7
+        surface item:
+            paper
+            tail
+            fish

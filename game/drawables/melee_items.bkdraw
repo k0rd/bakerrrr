@@ -1,0 +1,529 @@
+bakerrrr-drawable 2
+
+# Melee item art extracted from the procedural knife, blade and club families.
+# Ground art uses the shared 16-unit canvas. Both variants retain the same silhouette.
+
+# Improvised narrow blade with an uneven cloth-wrapped grip.
+drawable shiv_knife context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            polygon blade steel outline shadow width 0.4:
+                5.1, 9.4
+                6.4, 6.1
+                12.7, 1.5
+                10.3, 6.1
+                6.9, 10.3
+            polygon tape_grip body outline shadow width 0.4:
+                2.4, 12.6
+                5.7, 8.2
+                7.4, 9.3
+                4.1, 14.1
+                2.5, 14
+            line tape_wrap steel width 0.65:
+                3.4, 11.7
+                5.3, 12.6
+            line grip_binding steel width 0.6:
+                4.6, 10.1
+                6.4, 10.9
+        surface item:
+            blade
+            tape_grip
+
+    variant detailed:
+        layer silhouette:
+            polygon blade steel outline shadow width 0.4:
+                5.1, 9.4
+                6.4, 6.1
+                12.7, 1.5
+                10.3, 6.1
+                6.9, 10.3
+            polygon tape_grip body outline shadow width 0.4:
+                2.4, 12.6
+                5.7, 8.2
+                7.4, 9.3
+                4.1, 14.1
+                2.5, 14
+            line tape_wrap steel width 0.65:
+                3.4, 11.7
+                5.3, 12.6
+            line grip_binding steel width 0.6:
+                4.6, 10.1
+                6.4, 10.9
+        layer detail:
+            line ground_edge body width 0.25:
+                6.7, 8.2
+                10.2, 4.9
+                12.7, 1.5
+            line blade_score shadow width 0.25:
+                7.1, 6.8
+                8.9, 5.7
+            line loose_tape steel width 0.3:
+                2.8, 13.4
+                4.1, 13.8
+                5.3, 13.2
+        surface item:
+            blade
+            tape_grip
+
+
+# Heavy hooked bar; the bent claw and long shaft replace the generic club.
+drawable crowbar_club context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            polygon bar body outline shadow width 0.4:
+                2, 13.7
+                8.4, 4.3
+                8.5, 2.9
+                9.7, 1.3
+                11.4, 1.2
+                12.8, 2.4
+                12.9, 4.6
+                11.7, 5.4
+                11.5, 3.3
+                10.8, 2.8
+                10.1, 3.5
+                10.1, 4.7
+                3.8, 14.2
+            line ridge steel width 0.5:
+                3, 13.6
+                9.2, 4.4
+                9.3, 3
+                10.1, 2
+                11.1, 2
+            polygon claw_face steel:
+                11.7, 4.4
+                12.9, 3.8
+                12.9, 4.6
+                11.7, 5.4
+            line claw_split shadow width 0.45:
+                12.2, 4.4
+                12.4, 5
+        surface item:
+            bar
+
+    variant detailed:
+        layer silhouette:
+            polygon bar body outline shadow width 0.4:
+                2, 13.7
+                8.4, 4.3
+                8.5, 2.9
+                9.7, 1.3
+                11.4, 1.2
+                12.8, 2.4
+                12.9, 4.6
+                11.7, 5.4
+                11.5, 3.3
+                10.8, 2.8
+                10.1, 3.5
+                10.1, 4.7
+                3.8, 14.2
+            line ridge steel width 0.5:
+                3, 13.6
+                9.2, 4.4
+                9.3, 3
+                10.1, 2
+                11.1, 2
+            polygon claw_face steel:
+                11.7, 4.4
+                12.9, 3.8
+                12.9, 4.6
+                11.7, 5.4
+            line claw_split shadow width 0.45:
+                12.2, 4.4
+                12.4, 5
+        layer detail:
+            line shaft_scrape steel width 0.25:
+                5.2, 11.2
+                6.7, 9
+            line hook_bevel steel width 0.25:
+                12.2, 2.6
+                12.3, 3.7
+            line heel_scuff steel width 0.3:
+                2.7, 13.8
+                3.5, 14.1
+        surface item:
+            bar
+
+
+# Rescue bar with a broad split fork and separate adze and pointed pick.
+drawable halligan_bar context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            strip shaft body:
+                start 3.5, 12.4
+                finish 10.3, 4.6
+                width 1.6
+                finish_width 1.6
+                outline shadow
+                outline_width 0.35
+            polygon fork steel outline shadow width 0.4:
+                2.7, 11.3
+                4.6, 12.6
+                3.4, 14.2
+                2.6, 14.1
+                3.1, 13.1
+                2.5, 12.7
+                1.9, 13.7
+                1.1, 13.1
+            polygon adze body outline shadow width 0.4:
+                9.7, 3.6
+                10.7, 4.8
+                8.5, 6.2
+                6.9, 4.8
+                6.6, 3.4
+            polygon pick steel outline shadow width 0.4:
+                9.5, 3.9
+                10.7, 2.7
+                14.2, 2
+                12.2, 3.5
+                10.6, 4.9
+            line shaft_glint steel width 0.45:
+                4.2, 11.1
+                9.8, 4.7
+            line adze_edge steel width 0.4:
+                6.9, 3.6
+                7.2, 4.6
+                8.5, 5.8
+        surface item:
+            shaft
+            fork
+            adze
+            pick
+
+    variant detailed:
+        layer silhouette:
+            strip shaft body:
+                start 3.5, 12.4
+                finish 10.3, 4.6
+                width 1.6
+                finish_width 1.6
+                outline shadow
+                outline_width 0.35
+            polygon fork steel outline shadow width 0.4:
+                2.7, 11.3
+                4.6, 12.6
+                3.4, 14.2
+                2.6, 14.1
+                3.1, 13.1
+                2.5, 12.7
+                1.9, 13.7
+                1.1, 13.1
+            polygon adze body outline shadow width 0.4:
+                9.7, 3.6
+                10.7, 4.8
+                8.5, 6.2
+                6.9, 4.8
+                6.6, 3.4
+            polygon pick steel outline shadow width 0.4:
+                9.5, 3.9
+                10.7, 2.7
+                14.2, 2
+                12.2, 3.5
+                10.6, 4.9
+            line shaft_glint steel width 0.45:
+                4.2, 11.1
+                9.8, 4.7
+            line adze_edge steel width 0.4:
+                6.9, 3.6
+                7.2, 4.6
+                8.5, 5.8
+        layer detail:
+            circle head_pin shadow:
+                center 10.2, 3.8
+                radius 0.4
+            line pick_spine body width 0.25:
+                11.2, 3.1
+                13.9, 2.2
+            line fork_bevel body width 0.25:
+                1.8, 13
+                2.6, 11.9
+                4, 12.8
+            line shaft_score steel width 0.2:
+                6.3, 9.4
+                7.9, 7.5
+        surface item:
+            shaft
+            fork
+            adze
+            pick
+
+
+# Extended baton with three stepped sections and a ribbed rubber handle.
+drawable telescopic_baton context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            strip tip_section steel:
+                start 8.6, 7
+                finish 13.6, 1.7
+                width 0.85
+                finish_width 0.65
+                outline shadow
+                outline_width 0.35
+            circle tip_cap steel:
+                center 13.6, 1.7
+                radius 0.6
+                outline shadow
+                width 0.35
+            strip middle_section body:
+                start 6.1, 9.7
+                finish 10.4, 5.1
+                width 1.35
+                finish_width 1.05
+                outline shadow
+                outline_width 0.35
+            strip grip shadow:
+                start 2.8, 13.5
+                finish 6.7, 9.3
+                width 2.4
+                finish_width 2.1
+                outline shadow
+                outline_width 0.35
+            line grip_rib steel width 0.5:
+                3.1, 11.8
+                4.9, 13.1
+            line grip_collar steel width 0.6:
+                5.4, 9.3
+                7.1, 10.6
+        surface item:
+            tip_section
+            tip_cap
+            middle_section
+            grip
+
+    variant detailed:
+        layer silhouette:
+            strip tip_section steel:
+                start 8.6, 7
+                finish 13.6, 1.7
+                width 0.85
+                finish_width 0.65
+                outline shadow
+                outline_width 0.35
+            circle tip_cap steel:
+                center 13.6, 1.7
+                radius 0.6
+                outline shadow
+                width 0.35
+            strip middle_section body:
+                start 6.1, 9.7
+                finish 10.4, 5.1
+                width 1.35
+                finish_width 1.05
+                outline shadow
+                outline_width 0.35
+            strip grip shadow:
+                start 2.8, 13.5
+                finish 6.7, 9.3
+                width 2.4
+                finish_width 2.1
+                outline shadow
+                outline_width 0.35
+            line grip_rib steel width 0.5:
+                3.1, 11.8
+                4.9, 13.1
+            line grip_collar steel width 0.6:
+                5.4, 9.3
+                7.1, 10.6
+        layer detail:
+            line tube_glint steel width 0.25:
+                7.5, 8.5
+                9.8, 6
+            line upper_rib body width 0.3:
+                4.5, 10.3
+                6.2, 11.6
+            line middle_rib body width 0.3:
+                3.8, 11
+                5.6, 12.3
+            line heel body width 0.3:
+                2.3, 13.1
+                3.7, 14.1
+        surface item:
+            tip_section
+            tip_cap
+            middle_section
+            grip
+
+
+# Broad forward-heavy blade, curved cutting belly and a riveted handle.
+drawable trail_machete context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            polygon blade body outline shadow width 0.4:
+                5.3, 9.3
+                10.5, 1.7
+                12.5, 1.1
+                13.6, 2.4
+                13.3, 4.9
+                10.9, 8
+                7.2, 10.7
+            polygon cutting_edge steel:
+                13.6, 2.4
+                13.3, 4.9
+                10.9, 8
+                7.2, 10.7
+                6.7, 10
+                10.3, 7.4
+                12.6, 4.6
+            polygon handle shadow outline shadow width 0.4:
+                2, 12.8
+                5.3, 8.5
+                7.2, 10
+                4, 14.4
+                2.5, 14.2
+            circle upper_rivet steel:
+                center 5.3, 10.1
+                radius 0.4
+            circle lower_rivet steel:
+                center 3.5, 12.6
+                radius 0.4
+        surface item:
+            blade
+            handle
+
+    variant detailed:
+        layer silhouette:
+            polygon blade body outline shadow width 0.4:
+                5.3, 9.3
+                10.5, 1.7
+                12.5, 1.1
+                13.6, 2.4
+                13.3, 4.9
+                10.9, 8
+                7.2, 10.7
+            polygon cutting_edge steel:
+                13.6, 2.4
+                13.3, 4.9
+                10.9, 8
+                7.2, 10.7
+                6.7, 10
+                10.3, 7.4
+                12.6, 4.6
+            polygon handle shadow outline shadow width 0.4:
+                2, 12.8
+                5.3, 8.5
+                7.2, 10
+                4, 14.4
+                2.5, 14.2
+            circle upper_rivet steel:
+                center 5.3, 10.1
+                radius 0.4
+            circle lower_rivet steel:
+                center 3.5, 12.6
+                radius 0.4
+        layer detail:
+            line blade_spine steel width 0.25:
+                6.1, 8.7
+                11, 2.2
+                12.3, 1.7
+            line blade_scuff shadow width 0.25:
+                9.3, 6.7
+                10.6, 5.2
+            line grip_seam body width 0.25:
+                2.8, 13.4
+                5.5, 9.7
+            circle lanyard_hole body:
+                center 2.8, 13.4
+                radius 0.3
+        surface item:
+            blade
+            handle
+
+
+# L-shaped lug wrench with a thick socket mouth and flattened opposite end.
+drawable tire_iron context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            polygon wrench body outline shadow width 0.4:
+                2, 12.6
+                9.3, 3
+                10.4, 2.7
+                13.4, 5
+                12.4, 6.4
+                10.2, 4.8
+                3.6, 13.6
+                1.7, 14.4
+                1.2, 13.6
+            polygon socket steel outline shadow width 0.4:
+                12.5, 4.5
+                14.4, 5.9
+                13, 7.6
+                11.3, 6.1
+            polygon socket_mouth shadow:
+                13.6, 5.8
+                14, 6.1
+                13, 7.1
+                12.5, 6.7
+            line shaft_ridge steel width 0.45:
+                2.5, 12.9
+                9.7, 3.8
+                10.2, 3.6
+                12.3, 5.2
+        surface item:
+            wrench
+            socket
+
+    variant detailed:
+        layer silhouette:
+            polygon wrench body outline shadow width 0.4:
+                2, 12.6
+                9.3, 3
+                10.4, 2.7
+                13.4, 5
+                12.4, 6.4
+                10.2, 4.8
+                3.6, 13.6
+                1.7, 14.4
+                1.2, 13.6
+            polygon socket steel outline shadow width 0.4:
+                12.5, 4.5
+                14.4, 5.9
+                13, 7.6
+                11.3, 6.1
+            polygon socket_mouth shadow:
+                13.6, 5.8
+                14, 6.1
+                13, 7.1
+                12.5, 6.7
+            line shaft_ridge steel width 0.45:
+                2.5, 12.9
+                9.7, 3.8
+                10.2, 3.6
+                12.3, 5.2
+        layer detail:
+            line socket_lip body width 0.25:
+                12, 6.1
+                13, 7.1
+            line flattened_tip steel width 0.3:
+                1.6, 13.6
+                2.7, 13.1
+                3.2, 13.4
+            line shaft_wear steel width 0.25:
+                5.2, 10.4
+                6.6, 8.6
+        surface item:
+            wrench
+            socket

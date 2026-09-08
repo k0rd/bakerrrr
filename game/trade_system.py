@@ -4530,6 +4530,10 @@ class TradeSystem(System):
         invalidate_item_quotes(self.sim, prop, removed["item_id"])
         self.sim.emit(Event("npc_fish_sold", npc_eid=eid, property_id=prop["id"],
                             item_id=removed["item_id"], species_id=metadata.get("fish_species"), price=price))
+        self.sim.emit(Event("trade_sold", eid=eid, property_id=prop["id"],
+                            store_name=prop.get("name", "shop"), item_id=removed["item_id"],
+                            item_name=metadata.get("display_name", "fish"), quantity=1,
+                            price=price, stock_now=1, owner_transfer=False))
         return True
 
     def _trade_sell(self, eid, pos, target_instance_id=None):

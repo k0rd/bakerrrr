@@ -169,6 +169,14 @@ def fishing_rumor(sim, speaker_eid, listener_eid=None):
     return prefix + fish_fact(state["species"][sid])
 
 
+def remember_fishing_rumor(sim, speaker_eid, listener_eid, line):
+    state = ensure_fishing(sim)
+    for sid in state["knowledge"].get(speaker_eid, {}):
+        if str(line).endswith(fish_fact(state["species"][sid])):
+            learn_fish(sim, listener_eid, sid, "rumor")
+            break
+
+
 def bait_shop_rumor(sim, eid, prop):
     state = ensure_fishing(sim)
     rng = random.Random(f"{sim.seed}:fish-advice:{prop.get('id')}")
@@ -184,9 +192,9 @@ def seed_fisher(sim, eid, role, *, workplace_prop=None, home_prop=None):
     ai = sim.ecs.get(AI).get(eid)
     if inv is None or ai is None or role not in {"worker", "civilian", "drunk"}:
         return
-    archetype = str((workplace_prop or {}).get("archetype", ""))
+    archetype = str(((workplace_prop or {}).get("metadata") or {}).get("archetype", ""))
     rng = random.Random(f"{sim.seed}:angler:{eid}")
-    professional = archetype in {"net_house", "dock_shack", "bait_shop"} and rng.random() < .6
+    professional = archetype in {"net_house", "dock_shack"} and rng.random() < .6
     if not professional and rng.random() >= .12:
         return
     inv.capacity += 3  # Rod, bait, and space for the catch in a fisher's kit.
@@ -480,6 +488,12 @@ class FishingSystem(System):
     def __init__(self, sim):
         super().__init__(sim)
         state = ensure_fishing(sim)
+        player_pos = sim.ecs.get(Position).get(getattr(sim, "player_eid", None))
+        if player_pos is not None:
+            nearby = {sim.chunk_coords(player_pos.x + dx, player_pos.y + dy) for dx, dy in ((0, 0),) + DIRS}
+            for key in sorted(nearby):
+                if key in sim.realized_chunks and key not in state["chunks"]:
+                    index_fishing_chunk(sim, *key)
         # Older saves acquire the index one materialized chunk at a time.
         self._unindexed = deque(k for k in sim.realized_chunks if k not in state["chunks"])
         self._next_invite = 0
@@ -517,7 +531,9 @@ class FishingSystem(System):
         trade = next((s for s in self.sim.systems if callable(getattr(s, "npc_sell_fish", None))), None)
         catches = [e for e in (inv.items if inv else ()) if e["item_id"] == "fresh_fish"][:2]
         services = set(site_services_for_property(prop))
-        can_cook = str(prop.get("archetype", "")) in PREP_ARCHETYPES or "campfire_cook" in services
+        can_cook = str((prop.get("metadata") or {}).get("archetype", "")) in PREP_ARCHETYPES or "campfire_cook" in services
+        if can_cook and "campfire_cook" not in services:
+            can_cook = bool(trade and trade._npc_store_accessible(eid, prop, x=pos.x, y=pos.y, z=pos.z)[0])
         if not getattr(ai, "fishing_livelihood", False) and can_cook:
             prepare_fish(self.sim, eid, prop)
         elif trade:
@@ -596,9 +612,9 @@ class FishingSystem(System):
         banks = state["chunks"].get(key, {}).get("banks", ())
         if not banks:
             return
-        ids = sorted(self.sim.entity_ids_in_chunk(key))
-        start = self._actor_cursor.get(key, 0)
-        candidates = (ids + ids)[start:start + min(16, len(ids))]
+        ids = self.sim.entity_ids_in_chunk(key)
+        start = self._actor_cursor.get(key, 0) % max(1, len(ids))
+        candidates = [ids[(start + i) % len(ids)] for i in range(min(16, len(ids)))]
         self._actor_cursor[key] = (start + 16) % max(1, len(ids))
         for eid in candidates:
             if eid == getattr(self.sim, "player_eid", None) or state["npc_cooldowns"].get(eid, 0) > self.sim.tick:
@@ -647,7 +663,7 @@ class FishingSystem(System):
             return
         ai.fishing_catch_pending = True
         for prop in self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=16)[:12]:
-            archetype = str(prop.get("archetype", ""))
+            archetype = str((prop.get("metadata") or {}).get("archetype", ""))
             services = set(site_services_for_property(prop))
             if archetype not in {"bait_shop", "butcher_shop", "restaurant", "corner_store"} and "campfire_cook" not in services:
                 continue

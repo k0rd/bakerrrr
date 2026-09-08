@@ -1,0 +1,853 @@
+bakerrrr-drawable 2
+
+# Wire interface hardware extracted from the procedural deck, socket and cable families.
+# Ground art uses the shared 16-unit canvas. Both variants retain the same silhouette.
+
+# Pocket deck: a broad display above two rows of tactile keys.
+drawable cheap_deck context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            polygon casing body outline shadow width 0.4:
+                2, 3.6
+                3, 2.8
+                12.9, 2.8
+                14, 3.8
+                14, 11.9
+                13, 13
+                2.8, 13
+                1.8, 12
+            polygon display_bezel steel:
+                3, 4
+                12.8, 4
+                12.8, 8.4
+                3, 8.4
+            rect display shadow:
+                x 3.7
+                y 4.7
+                w 8.4
+                h 3
+            line screen_glint body width 0.35:
+                4.3, 5.4
+                7.3, 5.4
+            line upper_keys steel width 0.65:
+                3.5, 9.5
+                9.5, 9.5
+            line lower_keys steel width 0.65:
+                3.5, 11
+                9.5, 11
+            rect enter_key shadow:
+                x 11
+                y 9.3
+                w 1.5
+                h 2.2
+        surface item:
+            casing
+
+    variant detailed:
+        layer silhouette:
+            polygon casing body outline shadow width 0.4:
+                2, 3.6
+                3, 2.8
+                12.9, 2.8
+                14, 3.8
+                14, 11.9
+                13, 13
+                2.8, 13
+                1.8, 12
+            polygon display_bezel steel:
+                3, 4
+                12.8, 4
+                12.8, 8.4
+                3, 8.4
+            rect display shadow:
+                x 3.7
+                y 4.7
+                w 8.4
+                h 3
+            line screen_glint body width 0.35:
+                4.3, 5.4
+                7.3, 5.4
+            line upper_keys steel width 0.65:
+                3.5, 9.5
+                9.5, 9.5
+            line lower_keys steel width 0.65:
+                3.5, 11
+                9.5, 11
+            rect enter_key shadow:
+                x 11
+                y 9.3
+                w 1.5
+                h 2.2
+        layer detail:
+            line left_key_gap body width 0.35:
+                5, 9
+                5, 11.5
+            line middle_key_gap body width 0.35:
+                7, 9
+                7, 11.5
+            line right_key_gap body width 0.35:
+                9, 9
+                9, 11.5
+            line lower_case_lip shadow width 0.25:
+                2.8, 12.2
+                12.8, 12.2
+                13.3, 11.6
+            circle case_screw steel:
+                center 2.5, 3.8
+                radius 0.25
+            line port shadow width 0.3:
+                10.6, 3.3
+                12.1, 3.3
+        surface item:
+            casing
+
+
+# Round neural socket and its looping insulated lead with a narrow jack plug.
+drawable wetwire_jack context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            line lead_outline shadow width 1.5:
+                5, 8.8
+                3, 7.1
+                2.8, 4.3
+                4.8, 2.3
+                8.2, 1.8
+                11.1, 3
+                12.3, 5.4
+                11.7, 7.1
+            line insulated_lead body width 0.9:
+                5, 8.8
+                3, 7.1
+                2.8, 4.3
+                4.8, 2.3
+                8.2, 1.8
+                11.1, 3
+                12.3, 5.4
+                11.7, 7.1
+            circle socket_housing body:
+                center 5.4, 10.8
+                radius 3
+                outline shadow
+                width 0.45
+            circle socket_ring steel:
+                center 5.4, 10.8
+                radius 2
+            circle socket_well shadow:
+                center 5.4, 10.8
+                radius 1.15
+            polygon plug_grip body outline shadow width 0.4:
+                10.8, 6.5
+                12.7, 7.2
+                11.9, 10.4
+                10, 9.7
+            polygon jack_tip steel outline shadow width 0.4:
+                10.5, 9.9
+                11.5, 10.3
+                10.7, 13.2
+                9.7, 12.8
+            line contact_separator shadow width 0.35:
+                9.9, 12.1
+                11, 12.5
+        surface item:
+            lead_outline
+            socket_housing
+            plug_grip
+            jack_tip
+
+    variant detailed:
+        layer silhouette:
+            line lead_outline shadow width 1.5:
+                5, 8.8
+                3, 7.1
+                2.8, 4.3
+                4.8, 2.3
+                8.2, 1.8
+                11.1, 3
+                12.3, 5.4
+                11.7, 7.1
+            line insulated_lead body width 0.9:
+                5, 8.8
+                3, 7.1
+                2.8, 4.3
+                4.8, 2.3
+                8.2, 1.8
+                11.1, 3
+                12.3, 5.4
+                11.7, 7.1
+            circle socket_housing body:
+                center 5.4, 10.8
+                radius 3
+                outline shadow
+                width 0.45
+            circle socket_ring steel:
+                center 5.4, 10.8
+                radius 2
+            circle socket_well shadow:
+                center 5.4, 10.8
+                radius 1.15
+            polygon plug_grip body outline shadow width 0.4:
+                10.8, 6.5
+                12.7, 7.2
+                11.9, 10.4
+                10, 9.7
+            polygon jack_tip steel outline shadow width 0.4:
+                10.5, 9.9
+                11.5, 10.3
+                10.7, 13.2
+                9.7, 12.8
+            line contact_separator shadow width 0.35:
+                9.9, 12.1
+                11, 12.5
+        layer detail:
+            circle socket_pin steel:
+                center 5.4, 10.8
+                radius 0.35
+            line socket_notch shadow width 0.35:
+                5.3, 8.6
+                5.3, 9.4
+            line grip_rib_upper steel width 0.25:
+                10.9, 7.6
+                12.2, 8
+            line grip_rib_lower steel width 0.25:
+                10.5, 8.8
+                11.9, 9.2
+            line cable_glint steel width 0.25:
+                3.4, 4.2
+                5, 2.9
+                7.3, 2.5
+        surface item:
+            lead_outline
+            socket_housing
+            plug_grip
+            jack_tip
+
+
+# Two flat electrode pads linked to a small rectangular controller.
+drawable skin_contact_rig context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            line left_lead_outline shadow width 1.1:
+                5.9, 7.2
+                4.3, 5.4
+                3.5, 5.9
+                3.3, 8.5
+            line left_lead body width 0.65:
+                5.9, 7.2
+                4.3, 5.4
+                3.5, 5.9
+                3.3, 8.5
+            line right_lead_outline shadow width 1.1:
+                10.6, 7.1
+                12.6, 5.6
+                13.6, 6.8
+                12.7, 9.4
+            line right_lead body width 0.65:
+                10.6, 7.1
+                12.6, 5.6
+                13.6, 6.8
+                12.7, 9.4
+            polygon controller body outline shadow width 0.4:
+                5.5, 2.3
+                10.7, 2.3
+                11.4, 3.1
+                10.7, 8
+                5.5, 8
+                4.9, 7.2
+                4.9, 3.1
+            rect controller_face shadow:
+                x 6
+                y 3.5
+                w 3.8
+                h 1.8
+            circle dial steel:
+                center 8.1, 6.6
+                radius 0.7
+            circle left_pad steel:
+                center 3.6, 10.6
+                radius 2.2
+                outline shadow
+                width 0.35
+            circle left_contact body:
+                center 3.6, 10.6
+                radius 1.25
+            circle right_pad steel:
+                center 11.9, 11.4
+                radius 2.2
+                outline shadow
+                width 0.35
+            circle right_contact body:
+                center 11.9, 11.4
+                radius 1.25
+        surface item:
+            left_lead_outline
+            right_lead_outline
+            controller
+            left_pad
+            right_pad
+
+    variant detailed:
+        layer silhouette:
+            line left_lead_outline shadow width 1.1:
+                5.9, 7.2
+                4.3, 5.4
+                3.5, 5.9
+                3.3, 8.5
+            line left_lead body width 0.65:
+                5.9, 7.2
+                4.3, 5.4
+                3.5, 5.9
+                3.3, 8.5
+            line right_lead_outline shadow width 1.1:
+                10.6, 7.1
+                12.6, 5.6
+                13.6, 6.8
+                12.7, 9.4
+            line right_lead body width 0.65:
+                10.6, 7.1
+                12.6, 5.6
+                13.6, 6.8
+                12.7, 9.4
+            polygon controller body outline shadow width 0.4:
+                5.5, 2.3
+                10.7, 2.3
+                11.4, 3.1
+                10.7, 8
+                5.5, 8
+                4.9, 7.2
+                4.9, 3.1
+            rect controller_face shadow:
+                x 6
+                y 3.5
+                w 3.8
+                h 1.8
+            circle dial steel:
+                center 8.1, 6.6
+                radius 0.7
+            circle left_pad steel:
+                center 3.6, 10.6
+                radius 2.2
+                outline shadow
+                width 0.35
+            circle left_contact body:
+                center 3.6, 10.6
+                radius 1.25
+            circle right_pad steel:
+                center 11.9, 11.4
+                radius 2.2
+                outline shadow
+                width 0.35
+            circle right_contact body:
+                center 11.9, 11.4
+                radius 1.25
+        layer detail:
+            circle left_contact_snap shadow:
+                center 3.6, 10.6
+                radius 0.35
+            circle right_contact_snap shadow:
+                center 11.9, 11.4
+                radius 0.35
+            line dial_slot shadow width 0.25:
+                7.7, 6.7
+                8.5, 6.5
+            line controller_seam steel width 0.25:
+                5.5, 7.3
+                10.1, 7.3
+            line left_pad_rim shadow width 0.2:
+                2.4, 9.6
+                2, 10.6
+                2.5, 11.6
+            line right_pad_rim shadow width 0.2:
+                10.7, 10.4
+                10.3, 11.4
+                10.8, 12.4
+        surface item:
+            left_lead_outline
+            right_lead_outline
+            controller
+            left_pad
+            right_pad
+
+
+# Heavy looped cable with two keyed connector blocks and strain relief collars.
+drawable corp_interface_cable context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            line cable_outline shadow width 2.1:
+                4.1, 5.5
+                2.4, 7.2
+                2.1, 10.5
+                3.9, 12.8
+                7, 13.1
+                10.3, 12.5
+                12.1, 10.4
+                11.6, 8.2
+                10.2, 7.1
+            line cable body width 1.4:
+                4.1, 5.5
+                2.4, 7.2
+                2.1, 10.5
+                3.9, 12.8
+                7, 13.1
+                10.3, 12.5
+                12.1, 10.4
+                11.6, 8.2
+                10.2, 7.1
+            polygon left_connector body outline shadow width 0.4:
+                3.2, 2.1
+                6.6, 2.1
+                6.6, 5.6
+                5.5, 6.7
+                3.2, 5.5
+            rect left_plug_face steel:
+                x 3.8
+                y 1.4
+                w 2.3
+                h 1.6
+            polygon right_connector body outline shadow width 0.4:
+                8.9, 3.7
+                12.8, 3.7
+                13.4, 4.5
+                12.4, 7.8
+                9.3, 7.8
+                8.6, 6.9
+            rect right_plug_face steel:
+                x 9.7
+                y 2.3
+                w 2.5
+                h 1.7
+            line left_keyway shadow width 0.4:
+                4.5, 1.7
+                4.5, 2.6
+            line right_keyway shadow width 0.4:
+                10.8, 2.5
+                10.8, 3.8
+        surface item:
+            cable_outline
+            left_connector
+            left_plug_face
+            right_connector
+            right_plug_face
+
+    variant detailed:
+        layer silhouette:
+            line cable_outline shadow width 2.1:
+                4.1, 5.5
+                2.4, 7.2
+                2.1, 10.5
+                3.9, 12.8
+                7, 13.1
+                10.3, 12.5
+                12.1, 10.4
+                11.6, 8.2
+                10.2, 7.1
+            line cable body width 1.4:
+                4.1, 5.5
+                2.4, 7.2
+                2.1, 10.5
+                3.9, 12.8
+                7, 13.1
+                10.3, 12.5
+                12.1, 10.4
+                11.6, 8.2
+                10.2, 7.1
+            polygon left_connector body outline shadow width 0.4:
+                3.2, 2.1
+                6.6, 2.1
+                6.6, 5.6
+                5.5, 6.7
+                3.2, 5.5
+            rect left_plug_face steel:
+                x 3.8
+                y 1.4
+                w 2.3
+                h 1.6
+            polygon right_connector body outline shadow width 0.4:
+                8.9, 3.7
+                12.8, 3.7
+                13.4, 4.5
+                12.4, 7.8
+                9.3, 7.8
+                8.6, 6.9
+            rect right_plug_face steel:
+                x 9.7
+                y 2.3
+                w 2.5
+                h 1.7
+            line left_keyway shadow width 0.4:
+                4.5, 1.7
+                4.5, 2.6
+            line right_keyway shadow width 0.4:
+                10.8, 2.5
+                10.8, 3.8
+        layer detail:
+            line cable_glint steel width 0.25:
+                2.9, 9.7
+                4.4, 12
+                7.1, 12.9
+                9.7, 12
+            line left_collar steel width 0.35:
+                3.7, 5.2
+                5.3, 5.9
+            line right_collar steel width 0.35:
+                9.5, 6.7
+                12.3, 6.7
+            rect connector_latch shadow:
+                x 10
+                y 4.7
+                w 1.8
+                h 0.7
+            line left_case_seam steel width 0.25:
+                5.9, 3.4
+                5.9, 5.1
+        surface item:
+            cable_outline
+            left_connector
+            left_plug_face
+            right_connector
+            right_plug_face
+
+
+# Short service key with exposed plug contacts and a recessed programming panel.
+drawable cracked_service_dongle context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            polygon plug steel outline shadow width 0.4:
+                7.3, 4.4
+                10.2, 1.6
+                12.6, 4
+                9.7, 6.8
+            polygon casing body outline shadow width 0.4:
+                2.2, 10.2
+                7.8, 4.6
+                11.2, 8
+                5.6, 13.6
+                3.7, 13.6
+                2.2, 12.1
+            polygon programming_panel shadow:
+                4.2, 9.6
+                7.8, 6
+                9.7, 7.9
+                6.1, 11.5
+            line contact_one shadow width 0.45:
+                9, 3.7
+                10, 4.7
+            line contact_two shadow width 0.45:
+                10, 2.7
+                11, 3.7
+            circle lanyard_eye shadow:
+                center 4.1, 11.7
+                radius 0.7
+            line programming_pads steel width 0.55:
+                6.4, 8.3
+                7.5, 9.4
+        surface item:
+            plug
+            casing
+
+    variant detailed:
+        layer silhouette:
+            polygon plug steel outline shadow width 0.4:
+                7.3, 4.4
+                10.2, 1.6
+                12.6, 4
+                9.7, 6.8
+            polygon casing body outline shadow width 0.4:
+                2.2, 10.2
+                7.8, 4.6
+                11.2, 8
+                5.6, 13.6
+                3.7, 13.6
+                2.2, 12.1
+            polygon programming_panel shadow:
+                4.2, 9.6
+                7.8, 6
+                9.7, 7.9
+                6.1, 11.5
+            line contact_one shadow width 0.45:
+                9, 3.7
+                10, 4.7
+            line contact_two shadow width 0.45:
+                10, 2.7
+                11, 3.7
+            circle lanyard_eye shadow:
+                center 4.1, 11.7
+                radius 0.7
+            line programming_pads steel width 0.55:
+                6.4, 8.3
+                7.5, 9.4
+        layer detail:
+            line panel_trace body width 0.25:
+                6.1, 9.6
+                6.1, 8.1
+                7.5, 6.7
+            line case_seam steel width 0.25:
+                3, 10.4
+                7.8, 5.6
+            line plug_seam body width 0.25:
+                8.6, 5
+                10.2, 6.1
+            circle service_pad steel:
+                center 8.1, 7.5
+                radius 0.3
+        surface item:
+            plug
+            casing
+
+
+# Upright radio bridge with a tall whip antenna, tuning knob and a side data port.
+drawable drone_radio_bridge context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            line antenna_outline shadow width 1.3:
+                5.3, 6
+                3.4, 1.7
+            line antenna steel width 0.7:
+                5.3, 6
+                3.4, 1.7
+            polygon casing body outline shadow width 0.4:
+                4.1, 5.2
+                10.9, 5.2
+                12, 6.3
+                12, 12.8
+                10.9, 13.8
+                4.1, 13.8
+                3.2, 12.8
+                3.2, 6.3
+            rect display shadow:
+                x 4.6
+                y 6.7
+                w 5.4
+                h 2.7
+            circle tuning_knob steel:
+                center 9.7, 11.4
+                radius 1
+            line grille steel width 0.6:
+                4.7, 11.1
+                7.1, 11.1
+            rect data_port steel:
+                x 12
+                y 8.8
+                w 1.5
+                h 2.6
+            line port_socket shadow width 0.4:
+                12.8, 9.5
+                12.8, 10.7
+        surface item:
+            antenna_outline
+            casing
+            data_port
+
+    variant detailed:
+        layer silhouette:
+            line antenna_outline shadow width 1.3:
+                5.3, 6
+                3.4, 1.7
+            line antenna steel width 0.7:
+                5.3, 6
+                3.4, 1.7
+            polygon casing body outline shadow width 0.4:
+                4.1, 5.2
+                10.9, 5.2
+                12, 6.3
+                12, 12.8
+                10.9, 13.8
+                4.1, 13.8
+                3.2, 12.8
+                3.2, 6.3
+            rect display shadow:
+                x 4.6
+                y 6.7
+                w 5.4
+                h 2.7
+            circle tuning_knob steel:
+                center 9.7, 11.4
+                radius 1
+            line grille steel width 0.6:
+                4.7, 11.1
+                7.1, 11.1
+            rect data_port steel:
+                x 12
+                y 8.8
+                w 1.5
+                h 2.6
+            line port_socket shadow width 0.4:
+                12.8, 9.5
+                12.8, 10.7
+        layer detail:
+            line knob_slot shadow width 0.25:
+                9.3, 11.7
+                10.1, 11.1
+            line lower_grille shadow width 0.25:
+                4.7, 12.1
+                7.1, 12.1
+            line screen_glint body width 0.25:
+                5.2, 7.3
+                7.1, 7.3
+            line antenna_collar body width 0.35:
+                3.8, 4.4
+                5.1, 4
+            circle lower_screw steel:
+                center 4.1, 12.8
+                radius 0.25
+        surface item:
+            antenna_outline
+            casing
+            data_port
+
+
+# Broad trapezoidal diagnostic plug joined to a smaller adapter by a short bent lead.
+drawable vehicle_bus_coupler context ground:
+    paint body = fill
+    paint steel = edge
+    paint shadow = shade
+
+    variant compact:
+        layer silhouette:
+            line lead_outline shadow width 1.8:
+                7.6, 7.6
+                7.4, 9.8
+                9.3, 11
+                11.6, 10.5
+            line lead body width 1.1:
+                7.6, 7.6
+                7.4, 9.8
+                9.3, 11
+                11.6, 10.5
+            polygon diagnostic_plug body outline shadow width 0.4:
+                1.6, 3.1
+                2.4, 2.2
+                11.4, 2.2
+                12.2, 3.1
+                10.6, 7.8
+                3.2, 7.8
+            polygon socket_face shadow:
+                3, 3.4
+                10.8, 3.4
+                9.9, 6.3
+                3.9, 6.3
+            line upper_pin_row steel width 0.5:
+                4, 4.2
+                9.9, 4.2
+            line lower_pin_row steel width 0.5:
+                4.4, 5.5
+                9.5, 5.5
+            polygon adapter body outline shadow width 0.4:
+                10.6, 9.1
+                13, 8.3
+                14, 9
+                14.1, 12.8
+                11.3, 13.5
+                10.5, 12.8
+            polygon adapter_tip steel outline shadow width 0.4:
+                11.4, 12.7
+                13.6, 12.2
+                13.8, 13.7
+                11.6, 14.2
+            rect locking_clip steel:
+                x 5.5
+                y 1.4
+                w 3
+                h 1.3
+        surface item:
+            lead_outline
+            diagnostic_plug
+            adapter
+            adapter_tip
+            locking_clip
+
+    variant detailed:
+        layer silhouette:
+            line lead_outline shadow width 1.8:
+                7.6, 7.6
+                7.4, 9.8
+                9.3, 11
+                11.6, 10.5
+            line lead body width 1.1:
+                7.6, 7.6
+                7.4, 9.8
+                9.3, 11
+                11.6, 10.5
+            polygon diagnostic_plug body outline shadow width 0.4:
+                1.6, 3.1
+                2.4, 2.2
+                11.4, 2.2
+                12.2, 3.1
+                10.6, 7.8
+                3.2, 7.8
+            polygon socket_face shadow:
+                3, 3.4
+                10.8, 3.4
+                9.9, 6.3
+                3.9, 6.3
+            line upper_pin_row steel width 0.5:
+                4, 4.2
+                9.9, 4.2
+            line lower_pin_row steel width 0.5:
+                4.4, 5.5
+                9.5, 5.5
+            polygon adapter body outline shadow width 0.4:
+                10.6, 9.1
+                13, 8.3
+                14, 9
+                14.1, 12.8
+                11.3, 13.5
+                10.5, 12.8
+            polygon adapter_tip steel outline shadow width 0.4:
+                11.4, 12.7
+                13.6, 12.2
+                13.8, 13.7
+                11.6, 14.2
+            rect locking_clip steel:
+                x 5.5
+                y 1.4
+                w 3
+                h 1.3
+        layer detail:
+            line first_pin_gap shadow width 0.3:
+                5.4, 3.8
+                5.4, 5.9
+            line second_pin_gap shadow width 0.3:
+                7.3, 3.8
+                7.3, 5.9
+            line third_pin_gap shadow width 0.3:
+                9, 3.8
+                9, 5.9
+            line plug_seam steel width 0.25:
+                3.7, 7.1
+                10.1, 7.1
+            line adapter_grip steel width 0.35:
+                11.3, 10
+                13.2, 9.5
+            line adapter_grip_lower steel width 0.35:
+                11.4, 11.2
+                13.3, 10.7
+        surface item:
+            lead_outline
+            diagnostic_plug
+            adapter
+            adapter_tip
+            locking_clip

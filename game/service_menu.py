@@ -4164,7 +4164,7 @@ class ServiceMenuSystem(System):
                     options.append({"id": "market_report", "label": f"Local market report ({MARKET_REPORT_COST} cr)"})
 
         from game.fishing import PREP_ARCHETYPES
-        archetype = str(prop.get("archetype", ""))
+        archetype = str((prop.get("metadata") or {}).get("archetype", ""))
         staffed = not _property_is_storefront(prop) or bool((storefront_service or {}).get("available"))
         if access.can_use_services and staffed:
             if archetype in PREP_ARCHETYPES or "campfire_cook" in advertised_site_services or "butcher_prepare" in advertised_site_services:
