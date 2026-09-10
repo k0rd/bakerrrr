@@ -1921,6 +1921,8 @@ class ItemActionRuntime:
             "item_extra_energy_delta",
             "item_extra_safety_delta",
             "item_extra_social_delta",
+            "item_extra_hunger_delta",
+            "item_extra_thirst_delta",
         )
         has_metadata_effect = False
         for key in metadata_effect_keys:

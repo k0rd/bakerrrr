@@ -2177,6 +2177,11 @@ class WildlifeBehavior:
         rest_bias=0.3,
         threat_response="flee",
         movement_style="roam",
+        hibernating=False,
+        hibernation_since_tick=-1,
+        hibernation_last_wake_tick=-1,
+        hibernation_roused_until_tick=-1,
+        hibernation_last_weather_tick=-1,
     ):
         self.home_radius = max(1, int(home_radius))
         self.flee_radius = max(1, int(flee_radius))
@@ -2195,6 +2200,11 @@ class WildlifeBehavior:
         self.threat_response = response if response in {"flee", "freeze_bolt", "brace", "display"} else "flee"
         movement = str(movement_style or "roam").strip().lower() or "roam"
         self.movement_style = movement if movement in {"roam", "dart", "stalk", "amble"} else "roam"
+        self.hibernating = bool(hibernating)
+        self.hibernation_since_tick = int(-1 if hibernation_since_tick is None else hibernation_since_tick)
+        self.hibernation_last_wake_tick = int(-1 if hibernation_last_wake_tick is None else hibernation_last_wake_tick)
+        self.hibernation_roused_until_tick = int(-1 if hibernation_roused_until_tick is None else hibernation_roused_until_tick)
+        self.hibernation_last_weather_tick = int(-1 if hibernation_last_weather_tick is None else hibernation_last_weather_tick)
 
 
 @dataclass

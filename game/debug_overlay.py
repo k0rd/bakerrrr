@@ -17,6 +17,7 @@ from game.human_identity import identity_debug_summary, is_human_identity
 from game.incident_runtime import incident_knowledge_label, incident_record
 from game.lighting import lighting_state, update_lighting_state
 from game.opportunities import evaluate_opportunity_facts
+from game.overworld_runtime import _player_overworld_chunk
 from game.organization_presence import format_property_org_presence
 from game.organization_production import organization_production_profile
 from game.organization_reputation import organization_snapshot, top_organization_snapshots
@@ -42,6 +43,7 @@ from game.service_runtime import _overworld_discovery_profile, _overworld_travel
 from game.skill_ui import skill_debug_lines
 from game.status_ui_runtime import _survival_indicator_chunks
 from game.system_support.actor_attention_runtime import warmth_debug_summary
+from game.weather_runtime import weather_map_label, weather_snapshot
 from ui.text_attrs import A_BOLD
 
 
@@ -579,6 +581,16 @@ def build_debug_overlay(
         chunk_x = chunk_y = 0
         lines.append("Player position unavailable.")
 
+    weather_chunk_x, weather_chunk_y = chunk_x, chunk_y
+    if zoom_mode == "overworld" and player_pos:
+        weather_chunk_x, weather_chunk_y = _player_overworld_chunk(sim, player_eid, pos=player_pos)
+    atmosphere = weather_snapshot(sim, weather_chunk_x, weather_chunk_y)
+    lines.append(
+        f"Atmosphere {weather_map_label(atmosphere)} {atmosphere['condition']} | "
+        f"{atmosphere['pressure_hpa']:.1f} hPa {atmosphere['pressure_tendency']} | "
+        f"W opens labeled map"
+    )
+
     realized_count = len(getattr(sim, "realized_chunks", ()))
     saved_chunk_count = len(getattr(sim, "chunk_saved_states", {}))
     lines.append(
@@ -714,10 +726,17 @@ def build_debug_overlay(
         lines.append("No current or adjacent property anchor.")
 
     if zoom_mode == "overworld" and player_pos and world is not None:
-        desc = world.overworld_descriptor(chunk_x, chunk_y)
-        interest = world.overworld_interest(chunk_x, chunk_y, descriptor=desc)
-        travel = _overworld_travel_profile(sim, chunk_x, chunk_y, desc=desc, interest=interest)
-        discovery = _overworld_discovery_profile(sim, chunk_x, chunk_y, desc=desc, interest=interest, travel=travel)
+        desc = world.overworld_descriptor(weather_chunk_x, weather_chunk_y)
+        interest = world.overworld_interest(weather_chunk_x, weather_chunk_y, descriptor=desc)
+        travel = _overworld_travel_profile(sim, weather_chunk_x, weather_chunk_y, desc=desc, interest=interest)
+        discovery = _overworld_discovery_profile(
+            sim,
+            weather_chunk_x,
+            weather_chunk_y,
+            desc=desc,
+            interest=interest,
+            travel=travel,
+        )
         landmark = desc.get("landmark") or desc.get("nearest_landmark") or {}
         lines.extend([
             "",

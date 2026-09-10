@@ -14,6 +14,10 @@ from game.components import AnimalGenome
 from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
 from game.system_support.player_feedback import _log_player_feedback
+from game.weather_effects import (
+    food_weather_availability,
+    hibernation_weather_state,
+)
 
 AI = _systems.AI
 AnimalBehaviorContext = _systems.AnimalBehaviorContext
@@ -1569,14 +1573,30 @@ def _wildlife_best_scavenge_target(sim, eid, pos, ecology, context):
         food_bonus = 16.0 if "food" in tags else (9.0 if "drink" in tags else 0.0)
         if food_bonus <= 0.0:
             continue
+        weather_food = food_weather_availability(
+            sim,
+            "ground_food",
+            target_x,
+            target_y,
+            target_z,
+        )
+        access_factor = float(weather_food.get("weather_factor", 1.0) or 1.0)
+        food_bonus *= 0.64 + (access_factor * 0.36)
         dist = _grid_distance(pos.x, pos.y, target_x, target_y)
-        score = (float(getattr(ecology, "scavenger_score", 0.0) or 0.0) * 0.72) + (hunger * 0.34) + food_bonus - (dist * 6.0)
+        score = (
+            (float(getattr(ecology, "scavenger_score", 0.0) or 0.0) * 0.72)
+            + (hunger * 0.34)
+            + food_bonus
+            - (dist * 6.0)
+            - ((1.0 - access_factor) * 14.0)
+        )
         if score > best_score:
             best_score = score
             best = {
                 "score": score,
                 "target": (target_x, target_y, target_z),
                 "ground_item_id": str(ground.get("ground_item_id", "")).strip() or None,
+                "weather_food_factor": access_factor,
             }
     return best
 
@@ -2184,6 +2204,45 @@ def _wildlife_is_active(behavior, hour):
     if period == "crepuscular":
         return (5 <= hour < 8) or (17 <= hour < 20)
     return True
+
+
+def _wildlife_hibernation_intent(sim, eid, pos, routine, behavior):
+    """Return the seasonal intent for animals expressing cold hibernation."""
+
+    genome = sim.ecs.get(AnimalGenome).get(eid)
+    preview = hibernation_weather_state(
+        sim,
+        genome,
+        behavior,
+        pos,
+        commit=False,
+    )
+    if not bool(preview.get("inherited", False)):
+        hibernation_weather_state(sim, genome, behavior, pos, commit=True)
+        return None
+
+    home = _wildlife_home_position(pos, routine) or (int(pos.x), int(pos.y), int(pos.z))
+    wants_hibernation = bool(preview.get("wants_hibernation", False))
+    if wants_hibernation and _manhattan(pos.x, pos.y, home[0], home[1]) > 1:
+        behavior.hibernating = False
+        return {
+            "intent": "seeking_safety",
+            "score": 93.0,
+            "target": home,
+            "target_eid": None,
+            "hibernation": dict(preview, active=False, preparing=True),
+        }
+
+    state = hibernation_weather_state(sim, genome, behavior, pos, commit=True)
+    if not bool(state.get("active", False)):
+        return None
+    return {
+        "intent": "resting",
+        "score": 99.0,
+        "target": home,
+        "target_eid": None,
+        "hibernation": state,
+    }
 
 
 def _wildlife_flock_anchor(sim, eid, pos, identity, behavior):

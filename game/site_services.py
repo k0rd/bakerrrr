@@ -2332,6 +2332,19 @@ class SiteServiceSystem(System):
 
     def _run_site_service(self, eid, prop, pos, service, request=None):
         service = str(service or "").strip().lower()
+        from game.weather_runtime import campfire_weather_block
+
+        weather_block = campfire_weather_block(self.sim, prop, service=service)
+        if weather_block is not None:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                **weather_block,
+            ))
+            return True
         # Electronic fixtures are offline when their power supply is cut.
         if _fixture_is_electronic(prop) and _property_power_cut_active(self.sim, prop):
             self.sim.emit(Event(

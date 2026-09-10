@@ -881,6 +881,12 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
                 f"stats:p{int(profile['power'])}/d{int(profile['durability'])}/e{int(profile['fuel_efficiency'])}"
             )
             bits.append(f"fuel:{fuel}/{fuel_capacity}")
+        wetness = max(0.0, min(1.0, float(metadata.get("weather_wetness", 0.0) or 0.0)))
+        if wetness >= 0.08:
+            bits.append(f"wet:{wetness:.0%}")
+        stuck = metadata.get("weather_stuck") if isinstance(metadata.get("weather_stuck"), dict) else None
+        if stuck:
+            bits.append(f"bogged:{str(stuck.get('effect', 'soft ground')).replace('_', ' ')}")
         return " ".join(bits)
 
     access_modes = _property_access_summary(sim, prop, viewer_eid=viewer_eid)

@@ -2002,7 +2002,48 @@ class PygameView:
                 self.pygame.Rect(max(3, px // 4), px - max(3, px // 8), max(5, px // 2), max(2, px // 12)),
                 alpha=54,
             )
-        if kind == "seedling":
+        if kind.startswith("fruiting_"):
+            fruit_shape = kind.removeprefix("fruiting_") or "berry"
+            stem_w = max(1, px // 19)
+            self.pygame.draw.line(overlay, stem, (px // 2, px - 2), (px // 2, max(3, px // 4)), stem_w)
+            leaf = (74, 158, 88, 186)
+            self.pygame.draw.ellipse(overlay, leaf, (max(2, px // 7), max(4, px // 2), max(5, px // 3), max(3, px // 6)))
+            self.pygame.draw.ellipse(overlay, leaf, (px // 2, max(3, px // 3), max(5, px // 3), max(3, px // 6)))
+            fruit = (frame[0], frame[1], frame[2], 226)
+            outline = (max(0, frame[0] // 2), max(0, frame[1] // 2), max(0, frame[2] // 2), 190)
+            center = (px // 2, max(4, px // 2))
+            if fruit_shape == "pear":
+                self.pygame.draw.circle(overlay, outline, (center[0], center[1] + max(2, px // 10)), max(3, px // 6) + 1)
+                self.pygame.draw.circle(overlay, fruit, (center[0], center[1] + max(2, px // 10)), max(3, px // 6))
+                self.pygame.draw.circle(overlay, fruit, (center[0], center[1] - max(1, px // 12)), max(2, px // 10))
+            elif fruit_shape == "squash":
+                body = self.pygame.Rect(center[0] - max(4, px // 4), center[1] - max(2, px // 8), max(8, px // 2), max(5, px // 3))
+                self.pygame.draw.ellipse(overlay, outline, body.inflate(2, 2))
+                self.pygame.draw.ellipse(overlay, fruit, body)
+                self.pygame.draw.line(overlay, soft, (body.centerx, body.top + 1), (body.centerx, body.bottom - 1), max(1, px // 28))
+            elif fruit_shape == "pod":
+                points = ((center[0] - max(4, px // 5), center[1]), (center[0], center[1] - max(2, px // 8)), (center[0] + max(4, px // 5), center[1] + max(2, px // 10)), (center[0], center[1] + max(3, px // 7)))
+                self.pygame.draw.polygon(overlay, outline, tuple((x + 1, y + 1) for x, y in points))
+                self.pygame.draw.polygon(overlay, fruit, points)
+                for offset in (-1, 0, 1):
+                    self.pygame.draw.circle(overlay, soft, (center[0] + offset * max(2, px // 9), center[1] + max(1, px // 14)), max(1, px // 24))
+            elif fruit_shape == "starfruit":
+                points = []
+                for index in range(10):
+                    angle = (-math.pi / 2.0) + (index * math.pi / 5.0)
+                    radius = max(3, px // 5) if index % 2 == 0 else max(2, px // 10)
+                    points.append((int(center[0] + math.cos(angle) * radius), int(center[1] + math.sin(angle) * radius)))
+                self.pygame.draw.polygon(overlay, outline, tuple((x + 1, y + 1) for x, y in points))
+                self.pygame.draw.polygon(overlay, fruit, points)
+            elif fruit_shape == "berry":
+                for dx, dy in ((-1, 0), (1, 0), (0, 1)):
+                    self.pygame.draw.circle(overlay, outline, (center[0] + dx * max(2, px // 9) + 1, center[1] + dy * max(2, px // 10) + 1), max(2, px // 11) + 1)
+                    self.pygame.draw.circle(overlay, fruit, (center[0] + dx * max(2, px // 9), center[1] + dy * max(2, px // 10)), max(2, px // 11))
+            else:
+                self.pygame.draw.circle(overlay, outline, (center[0] + 1, center[1] + 1), max(3, px // 5) + 1)
+                self.pygame.draw.circle(overlay, fruit, center, max(3, px // 5))
+            self.pygame.draw.circle(overlay, soft, (center[0] - max(1, px // 15), center[1] - max(1, px // 14)), max(1, px // 28))
+        elif kind == "seedling":
             stem_w = max(1, px // 20)
             base_y = px - max(2, px // 6)
             self.pygame.draw.line(overlay, stem, (px // 2, base_y), (px // 2, max(4, px // 2)), stem_w)
@@ -3966,7 +4007,7 @@ class PygameView:
         return dx, dy
 
     def _draw_vehicle_overlay(self, x, y, color=None, attrs=0, *, heading=None, headlights=True,
-                              vehicle_class="sedan", medium="land"):
+                              vehicle_class="sedan", medium="land", wet=False, bogged=False):
         overlay = rasterize_vehicle(
             self.pygame,
             cell_px=self.cell_px,
@@ -3979,6 +4020,26 @@ class PygameView:
             status=str(color or "").strip().lower(),
             headlights=headlights,
         )
+        if wet:
+            shine = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+            stroke = max(1, self.cell_px // 20)
+            self.pygame.draw.line(
+                shine,
+                (194, 226, 255, 132),
+                (max(2, self.cell_px // 4), max(2, self.cell_px // 4)),
+                (self.cell_px - max(3, self.cell_px // 4), max(2, self.cell_px // 3)),
+                stroke,
+            )
+            for offset in (0, 1):
+                px = self.cell_px - max(3, self.cell_px // 5) - offset * max(2, self.cell_px // 4)
+                py = self.cell_px - max(3, self.cell_px // 5)
+                self.pygame.draw.circle(shine, (128, 184, 220, 112), (px, py), max(1, self.cell_px // 24))
+            overlay.blit(shine, (0, 0))
+        if bogged:
+            mud = (70, 51, 34, 184)
+            radius = max(1, self.cell_px // 18)
+            for px in (max(2, self.cell_px // 5), self.cell_px - max(3, self.cell_px // 5)):
+                self.pygame.draw.circle(overlay, mud, (px, self.cell_px - max(2, self.cell_px // 7)), radius)
         self.surface.blit(overlay, (int(x) * self.cell_px, int(y) * self.cell_px))
 
     def _draw_infrastructure_overlay(self, x, y, color=None, attrs=0, *, kind="lamp"):
@@ -6480,7 +6541,10 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_campfire_ring_overlay(self, x, y, color=None, attrs=0):
+    def _draw_campfire_ring_overlay(self, x, y, color=None, attrs=0, effects=()):
+        extinguished = "weather_extinguished" in {
+            str(effect).strip().lower() for effect in (effects or ()) if str(effect).strip()
+        }
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.04)
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
@@ -6526,30 +6590,36 @@ class PygameView:
         ):
             self.pygame.draw.circle(overlay, stone, (mid + ox, mid + oy), radius)
 
-        flame = (
-            (mid, max(2, px // 5)),
-            (mid - max(3, px // 7), mid + max(2, px // 8)),
-            (mid - max(1, px // 12), mid + max(3, px // 10)),
-            (mid, px - max(3, px // 5)),
-            (mid + max(1, px // 12), mid + max(3, px // 10)),
-            (mid + max(3, px // 7), mid + max(2, px // 8)),
-        )
-        self.pygame.draw.polygon(overlay, ember, flame)
-        inner_flame = (
-            (mid, mid - max(1, px // 10)),
-            (mid - max(1, px // 9), mid + max(2, px // 9)),
-            (mid, mid + max(3, px // 10)),
-            (mid + max(1, px // 9), mid + max(2, px // 9)),
-        )
-        self.pygame.draw.polygon(overlay, ember_hot, inner_flame)
-        self.pygame.draw.arc(
-            overlay,
-            smoke,
-            (mid - max(4, px // 3), max(1, px // 10), max(8, px // 2), max(7, px // 2)),
-            4.0,
-            5.5,
-            max(1, stroke_w),
-        )
+        if extinguished:
+            wet_coal = (30, 37, 40, 218)
+            if inner.w > 2 and inner.h > 2:
+                self.pygame.draw.ellipse(overlay, wet_coal, inner)
+                self.pygame.draw.arc(overlay, (122, 163, 176, 148), inner.inflate(max(2, px // 7), max(2, px // 9)), 3.3, 5.8, max(1, stroke_w))
+        else:
+            flame = (
+                (mid, max(2, px // 5)),
+                (mid - max(3, px // 7), mid + max(2, px // 8)),
+                (mid - max(1, px // 12), mid + max(3, px // 10)),
+                (mid, px - max(3, px // 5)),
+                (mid + max(1, px // 12), mid + max(3, px // 10)),
+                (mid + max(3, px // 7), mid + max(2, px // 8)),
+            )
+            self.pygame.draw.polygon(overlay, ember, flame)
+            inner_flame = (
+                (mid, mid - max(1, px // 10)),
+                (mid - max(1, px // 9), mid + max(2, px // 9)),
+                (mid, mid + max(3, px // 10)),
+                (mid + max(1, px // 9), mid + max(2, px // 9)),
+            )
+            self.pygame.draw.polygon(overlay, ember_hot, inner_flame)
+            self.pygame.draw.arc(
+                overlay,
+                smoke,
+                (mid - max(4, px // 3), max(1, px // 10), max(8, px // 2), max(7, px // 2)),
+                4.0,
+                5.5,
+                max(1, stroke_w),
+            )
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
@@ -9363,7 +9433,7 @@ class PygameView:
             self._draw_service_security_fixture_overlay(x, y, color=color, attrs=attrs, kind="security_booth")
             return "service_fixture_security_booth"
         if semantic_key == "prop_campfire_ring":
-            self._draw_campfire_ring_overlay(x, y, color=color, attrs=attrs)
+            self._draw_campfire_ring_overlay(x, y, color=color, attrs=attrs, effects=effect_set)
             return "campfire_ring"
         if semantic_key == "prop_notice_board":
             self._draw_notice_board_overlay(x, y, color=color, attrs=attrs)
@@ -9491,6 +9561,8 @@ class PygameView:
                 vehicle_class=next((effect.removeprefix("vehicle_class_") for effect in effect_set
                                     if effect.startswith("vehicle_class_")), "sedan"),
                 medium="water" if "vehicle_medium_water" in effect_set else "land",
+                wet="vehicle_wet" in effect_set,
+                bogged="vehicle_bogged" in effect_set,
             )
             heading_label = _PYGAME_VEHICLE_HEADING_LABELS.get(self._normalized_vehicle_heading(heading))
             return f"vehicle_{heading_label}" if heading_label and heading is not None else "vehicle"
@@ -10199,6 +10271,236 @@ class PygameView:
             return
         self._flush_queued_draws()
         self._draw_light_tint_now(x, y, tint)
+
+    def draw_weather_field(self, cells):
+        """Composite all outdoor weather artifacts in one transparent frame surface."""
+
+        cells = tuple(cell for cell in (cells or ()) if isinstance(cell, dict))
+        if not cells:
+            return
+        self._flush_queued_draws()
+        overlay = self.pygame.Surface(self.surface.get_size(), self.pygame.SRCALPHA)
+        cell_px = max(1, int(self.cell_px))
+        rain = self._alpha_color("weather_rain", 210)
+        sleet = self._alpha_color("weather_sleet", 220)
+        snow = self._alpha_color("weather_snow", 230)
+        fog = self._alpha_color("weather_fog", 255)
+        funnel = self._alpha_color("weather_tornado", 230)
+        debris = self._alpha_color("weather_tornado_debris", 235)
+        tick = int(self._animation_tick)
+
+        for cell in cells:
+            try:
+                sx = int(cell.get("x", 0))
+                sy = int(cell.get("y", 0))
+                darkness = max(0.0, min(1.0, float(cell.get("storm_darkness", 0.0) or 0.0)))
+                flash = max(0.0, min(1.0, float(cell.get("lightning_flash", 0.0) or 0.0)))
+                strike = max(0.0, min(1.0, float(cell.get("lightning_strike", 0.0) or 0.0)))
+            except (TypeError, ValueError):
+                continue
+            px = sx * cell_px
+            py = sy * cell_px
+            rect = self.pygame.Rect(px, py, cell_px, cell_px)
+            if darkness > 0.0:
+                self.pygame.draw.rect(overlay, (9, 15, 28, int(28 + (darkness * 82))), rect)
+
+            for artifact in tuple(cell.get("artifacts", ()) or ()):
+                if not isinstance(artifact, dict):
+                    continue
+                kind = str(artifact.get("kind", "") or "")
+                band = str(artifact.get("band", "light") or "light")
+                variant = int(artifact.get("variant", 0) or 0) & 3
+                strength = max(0.0, min(1.0, float(artifact.get("strength", 0.0) or 0.0)))
+                if kind == "tornado_funnel":
+                    sway = ((tick + variant * 3) % 5) - 2
+                    top_y = py + max(1, cell_px // 10)
+                    bottom_y = py + cell_px - max(1, cell_px // 12)
+                    wide = max(4, int(cell_px * (0.34 + strength * 0.10)))
+                    narrow = max(2, int(cell_px * 0.10))
+                    center_x = px + cell_px // 2
+                    body = [
+                        (center_x - wide + sway, top_y),
+                        (center_x + wide + sway, top_y),
+                        (center_x + narrow - sway, bottom_y),
+                        (center_x - narrow - sway, bottom_y),
+                    ]
+                    self.pygame.draw.polygon(
+                        overlay,
+                        (funnel[0], funnel[1], funnel[2], int(70 + strength * 92)),
+                        body,
+                    )
+                    stroke = max(1, cell_px // 16)
+                    for band_index in range(3):
+                        band_y = top_y + ((bottom_y - top_y) * (band_index + 1) // 4)
+                        band_w = max(narrow, wide - (band_index + 1) * max(1, (wide - narrow) // 4))
+                        band_rect = self.pygame.Rect(center_x - band_w + sway, band_y, band_w * 2, max(2, cell_px // 7))
+                        self.pygame.draw.arc(overlay, funnel, band_rect, 0.15, 3.05, stroke)
+                    continue
+                if kind == "tornado_debris":
+                    count = 2 + int(strength * 3)
+                    stroke = max(1, cell_px // 18)
+                    for index in range(count):
+                        ox = (variant * 11 + index * 7 + tick * (index + 1)) % cell_px
+                        oy = (variant * 5 + index * 13 - tick * 2) % cell_px
+                        length = max(2, cell_px // (5 + (index & 1)))
+                        self.pygame.draw.line(
+                            overlay,
+                            debris,
+                            (px + ox, py + oy),
+                            (min(px + cell_px - 1, px + ox + length), max(py, py + oy - length // 2)),
+                            stroke,
+                        )
+                    continue
+                if kind == "fog":
+                    alpha = int(15 + (strength * (48 if band == "dense" else 32)))
+                    self.pygame.draw.rect(overlay, (fog[0], fog[1], fog[2], alpha), rect)
+                    wisp_y = py + ((variant * max(1, cell_px // 5) + tick) % cell_px)
+                    wisp_rect = self.pygame.Rect(
+                        px - (cell_px // 3),
+                        wisp_y - max(1, cell_px // 7),
+                        cell_px + (cell_px // 2),
+                        max(2, cell_px // 3),
+                    )
+                    self.pygame.draw.ellipse(
+                        overlay,
+                        (fog[0], fog[1], fog[2], min(88, alpha + 22)),
+                        wisp_rect,
+                    )
+                    continue
+                if kind == "snow":
+                    flake_count = 2 if band == "heavy" else 1
+                    for index in range(flake_count):
+                        fx = px + ((variant * 7 + index * 11 + tick) % cell_px)
+                        fy = py + ((variant * 13 + index * 5 + tick * 2) % cell_px)
+                        radius = max(1, cell_px // (11 if band == "heavy" else 15))
+                        self.pygame.draw.circle(overlay, snow, (fx, fy), radius)
+                    continue
+                stroke_color = sleet if kind == "sleet" else rain
+                stroke_count = 3 if band == "heavy" else 1
+                stroke_w = max(1, cell_px // 18)
+                slant = max(2, cell_px // (4 if kind == "rain" else 7))
+                length = max(3, cell_px // (2 if band == "heavy" else 3))
+                for index in range(stroke_count):
+                    rx = px + ((variant * 9 + index * 7 + tick * 3) % cell_px)
+                    ry = py + ((variant * 5 + index * 11 + tick * 5) % cell_px)
+                    self.pygame.draw.line(
+                        overlay,
+                        stroke_color,
+                        (rx, ry),
+                        (min(px + cell_px - 1, rx + slant), min(py + cell_px - 1, ry + length)),
+                        stroke_w,
+                    )
+
+            if flash > 0.0:
+                flash_alpha = min(232, int(72 + (flash * 166)))
+                self.pygame.draw.rect(overlay, (224, 238, 255, flash_alpha), rect)
+            if strike > 0.0:
+                center = (px + (50 * cell_px) // 100, py + (52 * cell_px) // 100)
+                radius = max(3, int(cell_px * (0.20 + (strike * 0.18))))
+                self.pygame.draw.circle(overlay, (255, 255, 255, 248), center, radius)
+                bolt_width = max(1, cell_px // 10)
+                for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0)):
+                    end = (center[0] + (dx * radius * 2), center[1] + (dy * radius * 2))
+                    self.pygame.draw.line(overlay, (220, 238, 255, 228), center, end, bolt_width)
+
+        self.surface.blit(overlay, (0, 0))
+
+    def draw_ground_weather_field(self, cells):
+        """Composite accumulated surface weather beneath flora, props, and actors."""
+
+        cells = tuple(cell for cell in (cells or ()) if isinstance(cell, dict))
+        if not cells:
+            return
+        self._flush_queued_draws()
+        overlay = self.pygame.Surface(self.surface.get_size(), self.pygame.SRCALPHA)
+        cell_px = max(1, int(self.cell_px))
+        snow = self._alpha_color("weather_ground_snow", 220)
+        ice = self._alpha_color("weather_ground_ice", 210)
+        soft = self._alpha_color("weather_ground_soft", 180)
+        puddle = self._alpha_color("weather_ground_puddle", 190)
+        flood = self._alpha_color("weather_ground_flood", 190)
+
+        for cell in cells:
+            try:
+                sx = int(cell.get("x", 0))
+                sy = int(cell.get("y", 0))
+                effect = str(cell.get("effect", "none") or "none")
+                strength = max(0.0, min(1.0, float(cell.get("strength", 0.0) or 0.0)))
+                world = tuple(cell.get("world", (sx, sy, 0)) or (sx, sy, 0))
+                variant = abs((int(world[0]) * 17) + (int(world[1]) * 31)) % 4
+            except (TypeError, ValueError, IndexError):
+                continue
+            px = sx * cell_px
+            py = sy * cell_px
+            rect = self.pygame.Rect(px, py, cell_px, cell_px)
+            inset = max(1, cell_px // 12)
+
+            if effect == "snow_cover":
+                self.pygame.draw.rect(overlay, (snow[0], snow[1], snow[2], int(36 + strength * 72)), rect)
+                patch_r = max(2, cell_px // 5)
+                for ox, oy in ((2 + variant, cell_px - patch_r), (cell_px - patch_r, 3 + variant)):
+                    self.pygame.draw.circle(overlay, (snow[0], snow[1], snow[2], int(105 + strength * 95)), (px + ox, py + oy), patch_r)
+                continue
+
+            if effect in {"ground_ice", "frozen_water"}:
+                alpha = int((50 if effect == "ground_ice" else 88) + strength * 72)
+                self.pygame.draw.rect(overlay, (ice[0], ice[1], ice[2], alpha), rect)
+                glint = (232, 248, 255, min(225, alpha + 58))
+                self.pygame.draw.line(
+                    overlay,
+                    glint,
+                    (px + inset, py + cell_px - inset - variant),
+                    (px + cell_px - inset, py + inset + variant),
+                    max(1, cell_px // 24),
+                )
+                if effect == "frozen_water":
+                    crack = (80, 143, 174, min(180, alpha + 26))
+                    center = (px + cell_px // 2, py + cell_px // 2)
+                    self.pygame.draw.line(overlay, crack, center, (px + inset, py + cell_px // 3), max(1, cell_px // 30))
+                    self.pygame.draw.line(overlay, crack, center, (px + cell_px - inset, py + (cell_px * 3) // 4), max(1, cell_px // 30))
+                continue
+
+            if effect == "soft_ground":
+                alpha = int(48 + strength * 64)
+                mud_rect = self.pygame.Rect(
+                    px + inset,
+                    py + cell_px // 2 + (variant % 2),
+                    max(3, cell_px - (inset * 2)),
+                    max(2, cell_px // 3),
+                )
+                self.pygame.draw.ellipse(overlay, (soft[0], soft[1], soft[2], alpha), mud_rect)
+                for dot in range(2):
+                    dx = px + inset + ((variant * 5 + dot * 7) % max(1, cell_px - (inset * 2)))
+                    dy = py + cell_px - inset - ((variant + dot) % max(1, cell_px // 5))
+                    self.pygame.draw.circle(overlay, (55, 45, 35, min(170, alpha + 34)), (dx, dy), max(1, cell_px // 16))
+                continue
+
+            if effect == "puddle":
+                alpha = int(76 + strength * 82)
+                puddle_rect = self.pygame.Rect(
+                    px + inset,
+                    py + cell_px // 2 + (variant % 2),
+                    max(4, cell_px - (inset * 2)),
+                    max(3, cell_px // 3),
+                )
+                self.pygame.draw.ellipse(overlay, (puddle[0], puddle[1], puddle[2], alpha), puddle_rect)
+                self.pygame.draw.arc(overlay, (190, 226, 238, min(210, alpha + 52)), puddle_rect, 3.35, 5.75, max(1, cell_px // 28))
+                continue
+
+            if effect == "shallow_flood":
+                alpha = int(78 + strength * 92)
+                self.pygame.draw.rect(overlay, (flood[0], flood[1], flood[2], alpha), rect)
+                wave_y = py + cell_px // 2 + (variant - 2)
+                self.pygame.draw.arc(
+                    overlay,
+                    (174, 218, 232, min(220, alpha + 58)),
+                    (px - cell_px // 4, wave_y - cell_px // 5, cell_px + cell_px // 2, max(3, cell_px // 2)),
+                    3.35,
+                    5.95,
+                    max(1, cell_px // 24),
+                )
+
+        self.surface.blit(overlay, (0, 0))
 
     def _should_use_grid_text(self, text):
         content = str(text or "")

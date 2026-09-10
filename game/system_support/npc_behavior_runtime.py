@@ -445,16 +445,23 @@ def _nutrition_capabilities_for_property(prop):
     }
 
 
-def _nutrition_item_score(item_def, need):
+def _nutrition_item_score(item_def, need, item_metadata=None):
     tags = _item_tags(item_def)
     need = str(need or "").strip().lower()
+    metadata = item_metadata if isinstance(item_metadata, dict) else {}
+    metadata_direct = 0.0
+    for key in (f"item_extra_{need}_delta", f"herbal_{need}_delta"):
+        try:
+            metadata_direct += max(0.0, float(metadata.get(key, 0.0) or 0.0))
+        except (TypeError, ValueError):
+            continue
     if need == "hunger":
-        direct = _item_positive_need_delta(item_def, "hunger")
+        direct = _item_positive_need_delta(item_def, "hunger") + metadata_direct
         if direct <= 0.0 and "food" not in tags:
             return 0.0
         return direct + (4.0 if "food" in tags else 0.0)
     if need == "thirst":
-        direct = _item_positive_need_delta(item_def, "thirst")
+        direct = _item_positive_need_delta(item_def, "thirst") + metadata_direct
         if direct <= 0.0 and "drink" not in tags:
             return 0.0
         return direct + (4.0 if "drink" in tags else 0.0)
@@ -509,7 +516,11 @@ def _npc_try_consume_nutrition(sim, actor_eid, needs, *, low_threshold=45.0, coo
         for entry in list(getattr(inventory, "items", ()) or ()):
             item_id = str(entry.get("item_id", "") or "").strip()
             item_def = ITEM_CATALOG.get(item_id)
-            score = _nutrition_item_score(item_def, need)
+            score = _nutrition_item_score(
+                item_def,
+                need,
+                entry.get("metadata") if isinstance(entry, dict) else None,
+            )
             if item_id == "prepared_fish" and need == "hunger":
                 from game.fishing import species_for_entry
                 fish = species_for_entry(sim, entry)

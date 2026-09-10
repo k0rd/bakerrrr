@@ -81,7 +81,7 @@ from game.item_semantics import (
 )
 from game.item_compatibility import set_drone_compatibility_target
 from game.opportunities import _item_label, bounty_restraint_jab_status
-from game.overworld_runtime import _player_overworld_chunk
+from game.overworld_runtime import _player_overworld_chunk, _set_player_overworld_chunk
 from game.player_action_system import PlayerActionSystem
 from game.player_interactions import (
     CAMPFIRE_HERB_CACHE_CAPACITY,
@@ -124,6 +124,7 @@ from game.player_config import (
 )
 from game.report_runtime import build_progress_report as _build_progress_report
 from game.release_runtime import debug_disabled_hint, debug_mode_enabled
+from game.weather_runtime import ensure_weather_debug_ui_state, weather_debug_lines
 from game.run_objectives import reveal_run_objective
 from game.dialogue_runtime import (
     _dialog_backup_cursor_payload,
@@ -935,6 +936,9 @@ class InputSystem(System):
 
     def _debug_state(self):
         return _report_debug_ui.ensure_debug_ui_state(self.sim)
+
+    def _weather_debug_state(self):
+        return ensure_weather_debug_ui_state(self.sim)
 
     def _service_survey_state(self):
         return _chunk_service_survey_ui.ensure_service_survey_ui_state(self.sim)
@@ -5079,6 +5083,184 @@ class InputSystem(System):
     def _close_debug_ui(self):
         _report_debug_ui.close_debug_ui(self._debug_state())
 
+    def _weather_debug_target_chunk(self):
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(self.player_eid)
+        fallback = _player_overworld_chunk(self.sim, self.player_eid, pos=pos)
+        look_state = self._look_state()
+        if bool(look_state.get("active")) and str(look_state.get("mode", "")).strip().lower() == "overworld":
+            return (
+                int(look_state.get("chunk_x", fallback[0])),
+                int(look_state.get("chunk_y", fallback[1])),
+            )
+        return fallback
+
+    def _refresh_weather_debug_ui(self):
+        if not debug_mode_enabled(self.sim):
+            return False
+        state = self._weather_debug_state()
+        cx, cy = self._weather_debug_target_chunk()
+        state["title"] = f"Atmosphere Debug - chunk {cx},{cy}"
+        state["lines"] = weather_debug_lines(self.sim, cx, cy)
+        state["scroll"] = 0
+        return True
+
+    def _open_weather_debug_ui(self):
+        if not debug_mode_enabled(self.sim):
+            debug_disabled_hint(self.sim)
+            return False
+
+        state = self._weather_debug_state()
+        source_zoom = str(getattr(self.sim, "zoom_mode", "city") or "city").strip().lower()
+        state["open"] = True
+        state["detail_open"] = False
+        state["return_to_city"] = source_zoom != "overworld"
+        state["scroll"] = 0
+        self._close_debug_ui()
+
+        if source_zoom != "overworld":
+            self._emit_player_action("debug_weather_zoom_overworld", consume_turn=False, reason="weather_debug")
+
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(self.player_eid)
+        cx, cy = _player_overworld_chunk(self.sim, self.player_eid, pos=pos)
+        look_state = self._look_state()
+        look_state.update({
+            "active": True,
+            "mode": "overworld",
+            "purpose": "weather_debug",
+            "chunk_x": int(cx),
+            "chunk_y": int(cy),
+            "z": 0,
+            "inspect_text": "",
+            "controller_cursor": False,
+        })
+        self.sim.emit(Event(
+            "look_mode_toggled",
+            eid=self.player_eid,
+            active=True,
+            mode="overworld",
+            purpose="weather_debug",
+        ))
+        return self._refresh_weather_debug_ui()
+
+    def _close_weather_debug_ui(self, *, return_to_source=True):
+        state = self._weather_debug_state()
+        should_return = bool(state.get("return_to_city")) and bool(return_to_source)
+        state["open"] = False
+        state["detail_open"] = False
+        state["scroll"] = 0
+        state["return_to_city"] = False
+        look_state = self._look_state()
+        if (
+            bool(look_state.get("active"))
+            and str(look_state.get("purpose", "")).strip().lower() == "weather_debug"
+        ):
+            self._deactivate_look_mode()
+        if should_return and str(getattr(self.sim, "zoom_mode", "city")).strip().lower() == "overworld":
+            self._emit_player_action("debug_weather_zoom_city", consume_turn=False, reason="weather_debug_close")
+        return True
+
+    def _teleport_weather_debug_target(self):
+        if not debug_mode_enabled(self.sim):
+            self._close_weather_debug_ui(return_to_source=False)
+            return False
+        if str(getattr(self.sim, "zoom_mode", "city")).strip().lower() != "overworld":
+            return False
+        target = self._weather_debug_target_chunk()
+        _set_player_overworld_chunk(self.sim, self.player_eid, target)
+        state = self._weather_debug_state()
+        state["last_teleport_chunk"] = tuple(target)
+        self._close_weather_debug_ui(return_to_source=False)
+        self._emit_player_action(
+            "debug_weather_zoom_city",
+            consume_turn=False,
+            reason="weather_debug_teleport",
+            debug_weather_teleport=True,
+        )
+        return True
+
+    def _toggle_weather_debug_tornado(self):
+        if not debug_mode_enabled(self.sim):
+            return False
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            return False
+        debug = traits.get("weather_debug")
+        if not isinstance(debug, dict):
+            debug = {}
+            traits["weather_debug"] = debug
+        forced = debug.get("force_tornado")
+        if isinstance(forced, dict) and bool(forced.get("enabled")):
+            debug["force_tornado"] = {"enabled": False}
+        else:
+            from game.weather_runtime import weather_snapshot
+
+            cx, cy = self._weather_debug_target_chunk()
+            span = max(1, int(getattr(self.sim, "chunk_size", 16) or 16))
+            weather = weather_snapshot(self.sim, cx, cy)
+            vectors = {
+                "n": (0.0, -1.0), "ne": (0.707, -0.707), "e": (1.0, 0.0), "se": (0.707, 0.707),
+                "s": (0.0, 1.0), "sw": (-0.707, 0.707), "w": (-1.0, 0.0), "nw": (-0.707, -0.707),
+            }
+            dx, dy = vectors.get(str(weather.get("wind_direction", "e") or "e").lower(), (1.0, 0.0))
+            debug["force_tornado"] = {
+                "enabled": True,
+                "id": f"debug-tornado-{int(getattr(self.sim, 'tick', 0) or 0)}-{cx}-{cy}",
+                "start_tick": int(getattr(self.sim, "tick", 0) or 0),
+                "duration_ticks": 480,
+                "x": (int(cx) * span) + (span // 2),
+                "y": (int(cy) * span) + (span // 2),
+                "dx": dx,
+                "dy": dy,
+                "travel_tiles": 22,
+                "intensity": 0.88,
+                "radius": 2,
+            }
+        self.sim._weather_alert_cache = {}
+        self._refresh_weather_debug_ui()
+        return True
+
+    def _handle_weather_debug_input(self, key):
+        state = self._weather_debug_state()
+        if not state.get("open"):
+            return False
+        if not debug_mode_enabled(self.sim):
+            self._close_weather_debug_ui(return_to_source=True)
+            return True
+
+        if key in (ord("?"), ord("/")):
+            self._help_state()["open"] = True
+            return True
+        if key in (ord("w"), ord("W"), ord("q"), ord("Q")):
+            return self._close_weather_debug_ui(return_to_source=True)
+        if key == ord("D"):
+            self._close_weather_debug_ui(return_to_source=True)
+            self._refresh_debug_ui(reset_scroll=True)
+            return True
+        if key in (ord("t"), ord("T")):
+            return self._teleport_weather_debug_target()
+        if key in (ord("f"), ord("F")):
+            return self._toggle_weather_debug_tornado()
+        if key in ENTER_KEYS or key == ord("x"):
+            state["detail_open"] = not bool(state.get("detail_open"))
+            self._refresh_weather_debug_ui()
+            return True
+        if key == 27:
+            if state.get("detail_open"):
+                state["detail_open"] = False
+                return True
+            return self._close_weather_debug_ui(return_to_source=True)
+
+        delta = self.movement_keys.get(key)
+        if delta:
+            look_state = self._look_state()
+            look_state["chunk_x"] = int(look_state.get("chunk_x", 0)) + int(delta[0])
+            look_state["chunk_y"] = int(look_state.get("chunk_y", 0)) + int(delta[1])
+            self._refresh_weather_debug_ui()
+            return True
+        return True
+
     def _refresh_service_survey_ui(self, reset_scroll=False, tab=None):
         if not debug_mode_enabled(self.sim):
             debug_disabled_hint(self.sim)
@@ -8363,6 +8545,7 @@ class InputSystem(System):
         report_state = self._report_state()
         log_state = self._log_state()
         debug_state = self._debug_state()
+        weather_debug_state = self._weather_debug_state()
         service_survey_state = self._service_survey_state()
         action_menu_state = self._action_menu_state()
         drone_command_state = self._drone_command_state()
@@ -8551,6 +8734,10 @@ class InputSystem(System):
 
         if wire_connection_state.get("open"):
             self._handle_wire_connection_input(physical_input, zoom_mode)
+            return
+
+        if weather_debug_state.get("open"):
+            self._handle_weather_debug_input(key)
             return
 
         if look_state.get("active"):

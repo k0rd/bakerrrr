@@ -7950,6 +7950,22 @@
       }
     ]
   },
+  "wild_produce": {
+    "name": "Wild Produce",
+    "description": "A run-specific fruit or vegetable harvested from living flora.",
+    "item_drawable": "wild_produce",
+    "glyph": "%",
+    "stack_max": 12,
+    "tags": [
+      "consumable",
+      "food",
+      "plant_material",
+      "produce",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
   "fresh_blossoms": {
     "name": "Fresh Blossoms",
     "item_drawable": "fresh_blossoms",

@@ -26,6 +26,7 @@ from game.property_runtime import (
     property_covering as _property_covering,
 )
 from game.system_support.fire_runtime import fire_cell_state, fire_state
+from game.weather_runtime import ground_weather_snapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,6 +257,7 @@ def _animal_npc_cannot_cross_doorway(sim, moving_eid, from_x, from_y, to_x, to_y
 
 
 def _is_traversable_for(sim, moving_eid, x, y, z, *, planning_context=None):
+    tile = None
     if isinstance(planning_context, MovementPlanningContext):
         chunk_coord = (x // planning_context.chunk_size, y // planning_context.chunk_size)
         if planning_context.chunk_detail.get(chunk_coord, "unloaded") == "unloaded":
@@ -269,14 +271,25 @@ def _is_traversable_for(sim, moving_eid, x, y, z, *, planning_context=None):
             return False, "out_of_bounds"
         floor = planning_context.tiles_by_floor.get(z)
         tile = floor.get((tile_x, tile_y)) if isinstance(floor, dict) else None
-        if not bool(tile and tile.walkable):
+        frozen_passage = bool(
+            tile
+            and str(getattr(tile, "glyph", "") or "")[:1] == "~"
+            and ground_weather_snapshot(sim, tile_x, tile_y, z=z, tile=tile).get("supports_foot_traffic", False)
+        )
+        if not bool(tile and (tile.walkable or frozen_passage)):
             return False, "blocked_tile"
     else:
         if sim.detail_for_xy(x, y) == "unloaded":
             return False, "out_of_bounds"
         if not sim.tilemap.in_bounds(x, y):
             return False, "out_of_bounds"
-        if not sim.tilemap.is_walkable(x, y, z):
+        tile = sim.tilemap.tile_at(int(x), int(y), int(z))
+        frozen_passage = bool(
+            tile
+            and str(getattr(tile, "glyph", "") or "")[:1] == "~"
+            and ground_weather_snapshot(sim, int(x), int(y), z=int(z), tile=tile).get("supports_foot_traffic", False)
+        )
+        if not sim.tilemap.is_walkable(x, y, z) and not frozen_passage:
             return False, "blocked_tile"
     if isinstance(planning_context, MovementPlanningContext):
         is_nonplayer_ai = planning_context.is_nonplayer_ai

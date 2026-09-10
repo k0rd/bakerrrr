@@ -3721,6 +3721,24 @@ class Simulation:
             self._unindex_ground_item_record(ground_item_id, removed, drop_order=True)
         return removed
 
+    def move_ground_item(self, ground_item_id, x, y, z=0):
+        """Move one ground stack while preserving the indexed lookup contract."""
+
+        ground_item_id = str(ground_item_id or "").strip()
+        item = self.ground_items.get(ground_item_id)
+        if not ground_item_id or not isinstance(item, dict):
+            return False
+        self._unindex_ground_item_record(ground_item_id, item)
+        try:
+            item["x"] = int(x)
+            item["y"] = int(y)
+            item["z"] = int(z)
+        except (TypeError, ValueError):
+            self._index_ground_item_record(ground_item_id, item)
+            return False
+        self._index_ground_item_record(ground_item_id, item)
+        return True
+
     def rotate_ground_item_to_back(self, ground_item_id):
         ground_item_id = str(ground_item_id or "").strip()
         if not ground_item_id or ground_item_id not in self.ground_items:

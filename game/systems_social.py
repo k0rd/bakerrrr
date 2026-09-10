@@ -790,6 +790,56 @@ class NPCSocialDynamicsSystem(System):
         }
 
     def _rumor_weather_chatter_payload(self, speaker_eid, partner_eid, tone):
+        pos = self.sim.ecs.get(Position).get(speaker_eid)
+        if pos is not None:
+            from game.tornado_runtime import weather_alert_at
+            from game.weather_runtime import weather_snapshot
+
+            cx, cy = self.sim.chunk_coords(pos.x, pos.y)
+            alert = weather_alert_at(self.sim, cx, cy)
+            weather = weather_snapshot(self.sim, cx, cy)
+            level = str(alert.get("level", "none") or "none")
+            condition = str(weather.get("condition", "clear") or "clear").replace("_", " ")
+            lines = ()
+            if level == "warning":
+                lines = (
+                    "The warning is live. Get into a strong building and stay away from the glass.",
+                    "They have a funnel reported. Interior room, low floor, right now.",
+                    "Do not wait around looking for it. Concrete and no windows.",
+                )
+            elif level == "watch":
+                lines = (
+                    "There is a tornado watch up. The air can make one, so know where you are going if the warning sounds.",
+                    "This is watch weather. Nothing reported yet, but I would keep a strong building close.",
+                    "The forecast says the ingredients are there. Watch first, shelter if it turns into a warning.",
+                )
+            elif level == "advisory":
+                lines = (
+                    "The forecast has rough weather in it. I would not leave loose work sitting outside.",
+                    "Strong wind and storms are on the report. Travel could get ugly before this clears.",
+                    "There is a severe-weather advisory up. Nothing to panic over, but I would pay attention.",
+                )
+            elif bool(weather.get("precipitation_active")) or bool(weather.get("fog_active")):
+                lines = (
+                    f"Looks like {condition} has settled in for a while.",
+                    f"This {condition} is making the whole block feel smaller.",
+                    f"If you are heading out in this {condition}, give yourself more time.",
+                )
+            if lines:
+                rng = random.Random(
+                    f"{getattr(self.sim, 'seed', 0)}:forecast-chatter:{speaker_eid}:{partner_eid}:{level}:{condition}:{int(getattr(self.sim, 'tick', 0) or 0) // 60}"
+                )
+                quote = lines[rng.randrange(len(lines))]
+                return {
+                    "topic": "weather_report",
+                    "quote": quote,
+                    "summary": str(alert.get("headline") or f"local {condition}"),
+                    "detail": str(alert.get("summary") or f"The local weather is {condition}."),
+                    "channel": "social",
+                    "priority": "high" if level == "warning" else "normal" if level in {"watch", "advisory"} else "low",
+                    "source_domain": "public_weather_report",
+                    "confidence_hint": 0.92,
+                }
         anchor = strongest_rumor_weather_anchor(
             self.sim,
             actor_eid=speaker_eid,

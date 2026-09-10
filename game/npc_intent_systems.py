@@ -162,6 +162,7 @@ from game.movement_runtime import (
 )
 from game.vertical_navigation import next_vertical_route_segment, try_vertical_transition
 from game.system_support.altered_state_runtime import bonus_move_available, control_lapse_active, spend_bonus_move
+from game.weather_effects import actor_is_hibernating
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
     building_id_from_structure as _building_id_from_structure,
@@ -836,6 +837,10 @@ def _wildlife_home_position(*args, **kwargs):
 
 def _wildlife_is_active(*args, **kwargs):
     return _wildlife_module()._wildlife_is_active(*args, **kwargs)
+
+
+def _wildlife_hibernation_intent(*args, **kwargs):
+    return _wildlife_module()._wildlife_hibernation_intent(*args, **kwargs)
 
 
 def _wildlife_social_intent(*args, **kwargs):
@@ -2296,8 +2301,10 @@ class NPCNeedsSystem(System):
             ai = ais.get(eid)
             state = ai.state if ai else "idle"
 
-            needs.energy = _clamp(needs.energy - 0.07)
-            needs.social = _clamp(needs.social - 0.05)
+            hibernating = actor_is_hibernating(self.sim, eid)
+            metabolic_factor = 0.18 if hibernating else 1.0
+            needs.energy = _clamp(needs.energy - (0.07 * metabolic_factor))
+            needs.social = _clamp(needs.social - (0.05 * (0.12 if hibernating else 1.0)))
             hunger_drain = self.HUNGER_DRAIN_PER_TICK
             thirst_drain = self.THIRST_DRAIN_PER_TICK
             if state in {
@@ -2314,6 +2321,8 @@ class NPCNeedsSystem(System):
             if state in {"resting", "socializing", "lounging"}:
                 hunger_drain *= self.RESTING_SURVIVAL_DRAIN_MULT
                 thirst_drain *= self.RESTING_SURVIVAL_DRAIN_MULT
+            hunger_drain *= metabolic_factor
+            thirst_drain *= metabolic_factor
             current_hunger = getattr(needs, "hunger", 86.0)
             current_thirst = getattr(needs, "thirst", 90.0)
             current_hunger = 86.0 if current_hunger is None else float(current_hunger)
@@ -2989,6 +2998,49 @@ class NPCWillSystem(System):
             until = 0
         if until > int(self.sim.tick):
             return False
+        if int(pos.z) == 0:
+            from game.tornado_runtime import tornado_shelter_score, tornado_shelter_target, weather_alert_at
+
+            cx, cy = self.sim.chunk_coords(pos.x, pos.y)
+            alert = weather_alert_at(self.sim, cx, cy)
+            if str(alert.get("level", "none") or "none") == "warning":
+                current_prop = _property_covering(self.sim, pos.x, pos.y, pos.z)
+                already_sheltered = bool(
+                    isinstance(current_prop, dict)
+                    and tornado_shelter_score(current_prop) >= 0.60
+                )
+                if already_sheltered:
+                    ai.weather_alert_level = "warning"
+                    ai.weather_shelter_property_id = current_prop.get("id")
+                    cooldowns[key] = int(self.sim.tick) + 60
+                    will.last_tick = self.sim.tick
+                    return True
+                shelter = None if already_sheltered else tornado_shelter_target(
+                    self.sim,
+                    pos.x,
+                    pos.y,
+                    pos.z,
+                    radius=18,
+                )
+                target = shelter.get("target") if isinstance(shelter, dict) else None
+                if isinstance(target, (tuple, list)) and len(target) >= 3:
+                    target_tuple = (int(target[0]), int(target[1]), int(target[2]))
+                    self._set_intent(eid, ai, will, "seeking_safety", 98.0, target_tuple, None)
+                    ai.weather_alert_level = "warning"
+                    ai.weather_shelter_property_id = shelter.get("property_id")
+                    cooldowns[key] = int(self.sim.tick) + 60
+                    _mark_actor_urgent(self.sim, eid, family="move", reason="tornado_warning", ttl_ticks=24)
+                    _schedule_actor_due(self.sim, eid, "move", delay_ticks=0, reason="tornado_warning")
+                    self.sim.emit(Event(
+                        "npc_weather_shelter_sought",
+                        npc_eid=eid,
+                        property_id=shelter.get("property_id"),
+                        x=int(pos.x),
+                        y=int(pos.y),
+                        z=int(pos.z),
+                        alert_level="warning",
+                    ))
+                    return True
         anchor = strongest_rumor_weather_anchor(self.sim, actor_eid=eid, radius=8)
         if not isinstance(anchor, dict) or not anchor:
             return False
@@ -3220,6 +3272,8 @@ class NPCWillSystem(System):
                 home = _wildlife_home_position(pos, routine)
                 damage_reaction = _wildlife_recent_damage_reaction(self.sim, eid)
                 if damage_reaction:
+                    from game.weather_effects import rouse_hibernating_animal
+                    rouse_hibernating_animal(wildlife, self.sim)
                     reaction_intent = str(damage_reaction.get("intent", "") or "").strip().lower()
                     reaction_target = damage_reaction.get("target")
                     reaction_target_eid = damage_reaction.get("target_eid")
@@ -3244,6 +3298,24 @@ class NPCWillSystem(System):
                             reaction_target_eid,
                         )
                         continue
+                hibernation_intent = _wildlife_hibernation_intent(
+                    self.sim,
+                    eid,
+                    pos,
+                    routine,
+                    wildlife,
+                )
+                if hibernation_intent:
+                    self._set_intent(
+                        eid,
+                        ai,
+                        will,
+                        hibernation_intent["intent"],
+                        hibernation_intent["score"],
+                        hibernation_intent["target"],
+                        hibernation_intent["target_eid"],
+                    )
+                    continue
                 if ai.state == "seeking_safety" and ai.target:
                     try:
                         safety_age = int(self.sim.tick) - int(getattr(will, "last_tick", -1) or -1)

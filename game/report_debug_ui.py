@@ -585,6 +585,10 @@ def handle_debug_input(host, key, *, line_text_fn, wrap_display_lines_fn):
             host._close_debug_ui()
         return True
 
+    if key in (ord("w"), ord("W")):
+        host._open_weather_debug_ui()
+        return True
+
     if key == ord("L"):
         host._close_debug_ui()
         host._refresh_log_ui(reset_scroll=True, focus_end=True)
@@ -971,7 +975,7 @@ def draw_debug_modal(
     if scroll + body_h < len(display_lines):
         footer_bits.append("more below")
     footer = " | ".join(footer_bits) if footer_bits else ""
-    actions = str(footer_actions or "D close | E surveys | O ops | Y notebooks | L log | Up/Down scroll | ? help")
+    actions = str(footer_actions or "D close | W weather | E surveys | O ops | Y notebooks | L log | Up/Down scroll | ? help")
     if footer_actions:
         footer = f"{actions} | {footer}" if footer else actions
     else:

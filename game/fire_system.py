@@ -211,6 +211,7 @@ class FireSystem(System):
         self._loaded_chunk_cache = None
         self._fire_behavior_cache = None
         self.sim.events.subscribe("explosion_triggered", self.on_explosion_triggered)
+        self.sim.events.subscribe("tornado_debris_impact", self.on_tornado_debris_impact)
         self.sim.events.subscribe("smoke_cloud_released", self.on_smoke_cloud_released)
         self.sim.events.subscribe("incident_authority_reported", self.on_incident_authority_reported)
         # Reconcile persisted response seeds/scenes against canonical reports on
@@ -227,6 +228,27 @@ class FireSystem(System):
             state["dirty_response_properties"].add(property_id)
         else:
             state["fire_response_dirty"] = True
+
+    def on_tornado_debris_impact(self, event):
+        """Let a physical sparking debris impact enter the ordinary fire system."""
+
+        if not bool(event.data.get("spark_source")):
+            return
+        try:
+            x = int(event.data.get("x"))
+            y = int(event.data.get("y"))
+            z = int(event.data.get("z", 0))
+        except (TypeError, ValueError):
+            return
+        self._ignite_cell(
+            x,
+            y,
+            z,
+            source_kind="tornado_debris",
+            source_item_id=event.data.get("ground_item_id"),
+            intensity=2,
+            sync_protected=False,
+        )
 
     def _begin_update_caches(self):
         self._loaded_chunk_cache = set(_loaded_chunk_keys(self.sim))

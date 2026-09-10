@@ -2,6 +2,323 @@ bakerrrr-drawable 1
 
 # Harvested botanical materials retain their physical identity on the ground;
 # ingredients should be distinguishable before the player opens a text panel.
+drawable wild_produce context ground:
+    paint skin = fill
+    paint shadow = shade
+    paint shine = edge
+    paint stem = shade
+
+    variant compact:
+        layer produce:
+            ellipse body skin:
+                x 3.3
+                y 4.1
+                w 9.4
+                h 8.8
+            line stalk stem width 0.7:
+                8.1, 4.6
+                8.8, 2.2
+            ellipse glint shine:
+                x 5.2
+                y 5.5
+                w 2.2
+                h 1.3
+        surface item:
+            body
+
+    variant detailed:
+        layer produce:
+            ellipse body skin:
+                x 2.8
+                y 4.2
+                w 10.4
+                h 9
+            polygon lower_lobe skin outline shadow width 0.4:
+                4, 8.3
+                8, 13.7
+                12, 8.3
+            line stalk stem width 0.75:
+                8, 4.9
+                8.9, 1.8
+            polygon leaf stem:
+                8.7, 2.6
+                11.7, 2.2
+                10.3, 4.2
+            ellipse glint shine:
+                x 5
+                y 5.4
+                w 2.5
+                h 1.5
+        surface item:
+            body
+            lower_lobe
+            leaf
+
+drawable wild_produce_orb context ground:
+    paint skin = fill
+    paint shadow = shade
+    paint shine = edge
+    paint stem = shade
+    variant compact:
+        layer produce:
+            circle body skin:
+                center 8, 8.5
+                radius 5
+            line stalk stem width 0.7:
+                8, 4
+                8.8, 2
+            circle glint shine:
+                center 6.2, 6.7
+                radius 0.9
+        surface item:
+            body
+    variant detailed:
+        layer produce:
+            circle body skin:
+                center 8, 8.5
+                radius 5.2
+            line stalk stem width 0.75:
+                8, 4
+                9, 1.8
+            polygon leaf stem:
+                8.8, 2.7
+                12, 2.3
+                10.3, 4.3
+            ellipse glint shine:
+                x 5
+                y 5.3
+                w 2.5
+                h 1.5
+        surface item:
+            body
+            leaf
+
+drawable wild_produce_pear context ground:
+    paint skin = fill
+    paint shadow = shade
+    paint shine = edge
+    paint stem = shade
+    variant compact:
+        layer produce:
+            ellipse crown skin:
+                x 5.2
+                y 3.7
+                w 5.6
+                h 5.8
+            ellipse belly skin:
+                x 3.2
+                y 7
+                w 9.6
+                h 6.7
+            line stalk stem width 0.7:
+                8, 4.1
+                8.8, 1.8
+            circle glint shine:
+                center 6.3, 8.2
+                radius 0.75
+        surface item:
+            crown
+            belly
+    variant detailed:
+        layer produce:
+            ellipse crown skin:
+                x 5
+                y 3.5
+                w 6
+                h 6.2
+            ellipse belly skin:
+                x 3
+                y 6.8
+                w 10
+                h 7
+            line stalk stem width 0.8:
+                8, 4
+                9, 1.6
+            polygon leaf stem:
+                8.7, 2.5
+                12, 2.1
+                10.2, 4.2
+            ellipse glint shine:
+                x 5.1
+                y 7.4
+                w 2.2
+                h 1.4
+        surface item:
+            crown
+            belly
+            leaf
+
+drawable wild_produce_berry context ground:
+    paint skin = fill
+    paint shadow = shade
+    paint shine = edge
+    paint stem = shade
+    variant compact:
+        layer produce:
+            circle left skin:
+                center 5.7, 8.5
+                radius 3.2
+            circle right skin:
+                center 10.3, 8.5
+                radius 3.2
+            circle lower skin:
+                center 8, 11.2
+                radius 3.2
+            line stalk stem width 0.65:
+                8, 6.4
+                8.7, 2.2
+        surface item:
+            left
+            right
+            lower
+    variant detailed:
+        layer produce:
+            circle left skin:
+                center 5.5, 8.2
+                radius 3.3
+            circle right skin:
+                center 10.5, 8.2
+                radius 3.3
+            circle lower skin:
+                center 8, 11.1
+                radius 3.4
+            line stalk stem width 0.7:
+                8, 6.2
+                8.8, 1.9
+            circle glint shine:
+                center 4.8, 7.3
+                radius 0.7
+        surface item:
+            left
+            right
+            lower
+
+drawable wild_produce_pod context ground:
+    paint skin = fill
+    paint shadow = shade
+    paint shine = edge
+    paint stem = shade
+    variant compact:
+        layer produce:
+            polygon body skin outline shadow width 0.5:
+                2.4, 10.7
+                4.4, 6
+                9.8, 3.8
+                13.5, 5.1
+                10.8, 9.8
+                5.2, 12.3
+            line seam shine width 0.45:
+                4.1, 9.8
+                11.6, 5.3
+        surface item:
+            body
+    variant detailed:
+        layer produce:
+            polygon body skin outline shadow width 0.55:
+                2, 11
+                4.1, 5.8
+                9.8, 3.3
+                14, 4.8
+                11, 10
+                5, 12.8
+            line seam shine width 0.5:
+                3.8, 10.2
+                12.2, 5
+            circle seed_0 shine:
+                center 6.1, 8.6
+                radius 0.6
+            circle seed_1 shine:
+                center 8.5, 7.2
+                radius 0.6
+            circle seed_2 shine:
+                center 10.7, 5.9
+                radius 0.6
+        surface item:
+            body
+
+drawable wild_produce_squash context ground:
+    paint skin = fill
+    paint shadow = shade
+    paint shine = edge
+    paint stem = shade
+    variant compact:
+        layer produce:
+            ellipse body skin:
+                x 2.4
+                y 5.2
+                w 11.2
+                h 8.2
+            ellipse rib shadow:
+                x 6.1
+                y 5.6
+                w 3.8
+                h 7.4
+            line stalk stem width 0.8:
+                8, 5.4
+                8.5, 2
+        surface item:
+            body
+    variant detailed:
+        layer produce:
+            ellipse body skin:
+                x 2
+                y 5
+                w 12
+                h 8.6
+            ellipse left_rib shadow:
+                x 3.8
+                y 5.4
+                w 4.8
+                h 7.8
+            ellipse right_rib shadow:
+                x 7.4
+                y 5.4
+                w 4.8
+                h 7.8
+            line stalk stem width 0.85:
+                8, 5.2
+                8.7, 1.8
+        surface item:
+            body
+
+drawable wild_produce_starfruit context ground:
+    paint skin = fill
+    paint shadow = shade
+    paint shine = edge
+    variant compact:
+        layer produce:
+            polygon body skin outline shadow width 0.5:
+                8, 2
+                9.7, 6.1
+                14, 6.5
+                10.7, 9.3
+                11.7, 13.5
+                8, 11.2
+                4.3, 13.5
+                5.3, 9.3
+                2, 6.5
+                6.3, 6.1
+        surface item:
+            body
+    variant detailed:
+        layer produce:
+            polygon body skin outline shadow width 0.55:
+                8, 1.5
+                9.8, 5.8
+                14.5, 6.1
+                10.9, 9.3
+                12, 14
+                8, 11.5
+                4, 14
+                5.1, 9.3
+                1.5, 6.1
+                6.2, 5.8
+            circle center shine:
+                center 8, 8
+                radius 1
+        surface item:
+            body
+
 drawable fresh_blossoms context ground:
     paint petals = fill
     paint stems = shade

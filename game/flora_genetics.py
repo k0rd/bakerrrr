@@ -18,6 +18,14 @@ from game.color_words import (
     normalize_color_word,
     parse_color_value,
 )
+from game.flora_produce_runtime import (
+    PRODUCE_KINDS,
+    PRODUCE_SHAPES,
+    PRODUCE_TOXICITY,
+    WEATHER_MOISTURE_AFFINITIES,
+    WEATHER_SKY_AFFINITIES,
+    WEATHER_TEMPERATURE_AFFINITIES,
+)
 
 
 GENETICS_SCHEMA_VERSION = 1
@@ -524,6 +532,22 @@ def _legacy_genes_for_row(plant_id, row, raw_genetics, seed):
     shape = _shape_value(row, raw_genetics)
     main_class = _chemistry_class_for_row(plant_id, row, raw_genetics, seed)
     effects = _legacy_effect_traits(raw_genetics)
+    produce_profile = row.get("produce_profile") if isinstance(row.get("produce_profile"), Mapping) else {}
+    produce_kind = _key(produce_profile.get("kind"), "none")
+    produce_shape = _key(produce_profile.get("shape"), "berry")
+    produce_toxicity = _key(produce_profile.get("toxicity"), "safe")
+    produce_color_word = normalize_color_word(produce_profile.get("color")) or color.get("word") or "green"
+    produce_rgb = color_word_rgb(produce_color_word, fallback=(90, 176, 94)) or (90, 176, 94)
+    produce_color = {
+        "word": produce_color_word,
+        "rgb": [int(channel) for channel in produce_rgb],
+        "render_key_hint": flora_render_key_for_color_word(produce_color_word, fallback=color.get("render_key_hint") or "flora_leaf"),
+    }
+    weather_affinity = row.get("weather_affinity") if isinstance(row.get("weather_affinity"), Mapping) else {}
+    growth_traits = row.get("growth_traits") if isinstance(row.get("growth_traits"), Mapping) else {}
+    moisture_hint = _key(weather_affinity.get("moisture") or growth_traits.get("moisture"), "balanced")
+    moisture_aliases = {"wet": "humid", "moderate": "balanced", "damp": "humid", "salty": "dry"}
+    moisture_affinity = moisture_aliases.get(moisture_hint, moisture_hint)
     return {
         "visual": {
             "color": [_allele(color, locus="visual.color", tags=("visual", "color"))],
@@ -552,6 +576,17 @@ def _legacy_genes_for_row(plant_id, row, raw_genetics, seed):
                 )
                 for trait in effects
             ],
+        },
+        "produce": {
+            "kind": [_allele(produce_kind, locus="produce.kind", tags=("produce", produce_kind))],
+            "shape": [_allele(produce_shape, locus="produce.shape", tags=("produce", "shape"))],
+            "color": [_allele(produce_color, locus="produce.color", tags=("produce", "color"))],
+            "toxicity": [_allele(produce_toxicity, locus="produce.toxicity", tags=("produce", produce_toxicity))],
+        },
+        "climate": {
+            "temperature": [_allele(_key(weather_affinity.get("temperature"), "mild"), locus="climate.temperature", tags=("weather", "temperature"))],
+            "moisture": [_allele(moisture_affinity, locus="climate.moisture", tags=("weather", "moisture"))],
+            "sky": [_allele(_key(weather_affinity.get("sky"), "cloud"), locus="climate.sky", tags=("weather", "sky"))],
         },
         "social": {
             "notability": [_allele(_key(raw_genetics.get("notability"), "ordinary"), locus="social.notability")],
@@ -937,6 +972,13 @@ def _all_parent_loci(seed_parent, pollen_parent):
         ("handling", "blendability"),
         ("handling", "inheritability"),
         ("effects", "traits"),
+        ("produce", "kind"),
+        ("produce", "shape"),
+        ("produce", "color"),
+        ("produce", "toxicity"),
+        ("climate", "temperature"),
+        ("climate", "moisture"),
+        ("climate", "sky"),
         ("social", "notability"),
     ):
         loci.add((group, locus))
@@ -1212,6 +1254,13 @@ def validate_flora_genetics(genetics) -> list[str]:
         ("handling", "blendability"),
         ("handling", "inheritability"),
         ("effects", "traits"),
+        ("produce", "kind"),
+        ("produce", "shape"),
+        ("produce", "color"),
+        ("produce", "toxicity"),
+        ("climate", "temperature"),
+        ("climate", "moisture"),
+        ("climate", "sky"),
         ("social", "notability"),
     )
     for group, locus in required:
@@ -1247,6 +1296,28 @@ def validate_flora_genetics(genetics) -> list[str]:
                     word = value.get("word") if isinstance(value, Mapping) else value
                     if not normalize_color_word(word):
                         errors.append(f"{prefix}.value.word must be a known color word")
+                elif group == "produce" and locus == "color":
+                    word = value.get("word") if isinstance(value, Mapping) else value
+                    if not normalize_color_word(word):
+                        errors.append(f"{prefix}.value.word must be a known color word")
+                elif group == "produce" and locus == "kind":
+                    if _key(value) not in PRODUCE_KINDS:
+                        errors.append(f"{prefix}.value must be one of {sorted(PRODUCE_KINDS)}")
+                elif group == "produce" and locus == "shape":
+                    if _key(value) not in PRODUCE_SHAPES:
+                        errors.append(f"{prefix}.value must be one of {sorted(PRODUCE_SHAPES)}")
+                elif group == "produce" and locus == "toxicity":
+                    if _key(value) not in PRODUCE_TOXICITY:
+                        errors.append(f"{prefix}.value must be one of {sorted(PRODUCE_TOXICITY)}")
+                elif group == "climate" and locus == "temperature":
+                    if _key(value) not in WEATHER_TEMPERATURE_AFFINITIES:
+                        errors.append(f"{prefix}.value must be one of {sorted(WEATHER_TEMPERATURE_AFFINITIES)}")
+                elif group == "climate" and locus == "moisture":
+                    if _key(value) not in WEATHER_MOISTURE_AFFINITIES:
+                        errors.append(f"{prefix}.value must be one of {sorted(WEATHER_MOISTURE_AFFINITIES)}")
+                elif group == "climate" and locus == "sky":
+                    if _key(value) not in WEATHER_SKY_AFFINITIES:
+                        errors.append(f"{prefix}.value must be one of {sorted(WEATHER_SKY_AFFINITIES)}")
                 elif group == "chemistry" and locus == "main_class":
                     if _key(value) not in CHEMISTRY_CLASSES:
                         errors.append(f"{prefix}.value must be a known chemistry class")

@@ -644,6 +644,8 @@ def _building_light_profile(sim, prop, clock):
 
 
 def _authored_fixture_light_sources(sim, clock):
+    from game.weather_runtime import campfire_weather_block
+
     phase = str(clock.get("phase", "day")).strip().lower() or "day"
     bounds = _loaded_property_bounds(sim)
     sources = []
@@ -655,6 +657,8 @@ def _authored_fixture_light_sources(sim, clock):
             continue
         metadata = _property_metadata(prop)
         if not _light_active_for_phase(metadata, phase):
+            continue
+        if campfire_weather_block(sim, prop, service="campfire_cook", tick=clock.get("tick")) is not None:
             continue
         if _property_power_cut_active(sim, prop, tick=clock.get("tick")):
             continue
@@ -1011,11 +1015,18 @@ def _local_light_sources(sim, clock=None, *, z=None):
     state = lighting_state(sim)
     z_key = None if z is None else int(z)
     tick = int(clock.get("tick", getattr(sim, "tick", 0)) or 0)
+    clock_config = getattr(sim, "world_traits", {}).get("clock", {})
+    try:
+        ticks_per_hour = max(1, int(clock_config.get("ticks_per_hour", DEFAULT_TICKS_PER_HOUR)))
+    except (AttributeError, TypeError, ValueError):
+        ticks_per_hour = DEFAULT_TICKS_PER_HOUR
+    weather_light_bucket = tick // max(1, ticks_per_hour // 6)
     fire_key = _active_fire_cache_key(sim, z=z_key)
     base_cache_key = (
         z_key,
         str(clock.get("phase", "day")),
         int(clock.get("hour", 0)),
+        int(weather_light_bucket),
         _loaded_property_bounds(sim),
         int(len(getattr(sim, "properties", {}))),
         _active_power_cut_cache_key(sim, tick=tick),

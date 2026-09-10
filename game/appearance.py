@@ -1295,6 +1295,10 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None, sim=N
         effects = (f"vehicle_class_{vehicle_class}",)
         if str(metadata.get("vehicle_medium", "land")).strip().lower() == "water":
             effects += ("vehicle_medium_water",)
+        if float(metadata.get("weather_wetness", 0.0) or 0.0) >= 0.08:
+            effects += ("vehicle_wet",)
+        if isinstance(metadata.get("weather_stuck"), dict):
+            effects += ("vehicle_bogged",)
         quality = str(metadata.get("vehicle_quality", "used")).strip().lower()
         paint_color = str(metadata.get("vehicle_paint", "")).strip()
         owner_tag = str(prop.get("owner_tag", "")).strip().lower()
@@ -1970,8 +1974,13 @@ def _item_shape_effects(item_def, render_kind, metadata=None):
     tags = _item_tags(item_def)
     effects = []
     drawable_id = str(item_def.get("item_drawable", "") or "").strip().lower()
+    produce_shape = str((metadata or {}).get("produce_shape", "") or "").strip().lower() if isinstance(metadata, Mapping) else ""
+    if drawable_id and produce_shape:
+        drawable_id = f"{drawable_id}_{produce_shape}"
     if drawable_id:
         effects.append(f"item_drawable_{drawable_id}")
+    if produce_shape:
+        effects.append(f"produce_shape_{produce_shape}")
     effect = _ITEM_SHAPE_EFFECTS.get(item_id)
     if effect and (render_kind == "tool" and effect.startswith("tool_shape_")):
         effects.append(effect)
@@ -2049,6 +2058,10 @@ def item_render_snapshot(item_def, *, metadata=None, catalog=None):
     if clothing_color:
         color = clothing_color
         color_word = clothing_word
+    produce_color = str(metadata.get("produce_color_key", "") or "").strip().lower()
+    if produce_color:
+        color = produce_color
+        color_word = str(metadata.get("produce_color_word", "") or "").strip().lower() or None
     return _semantic_snapshot(
         glyph,
         color=color,

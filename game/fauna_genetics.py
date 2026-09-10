@@ -27,6 +27,7 @@ DEFAULT_TRAIT_BUDGET = 6
 ABILITY_TRAIT_COSTS = {
     "keen_senses": 1,
     "herd_mind": 1,
+    "hibernates_cold": 1,
     "fleet_limb": 2,
     "camouflage": 2,
     "fright_display": 2,
@@ -39,6 +40,7 @@ ABILITY_TRAIT_COSTS = {
 ABILITY_CHANNELS = {
     "keen_senses": "senses",
     "herd_mind": "social",
+    "hibernates_cold": "metabolism",
     "fleet_limb": "locomotion",
     "camouflage": "skin",
     "fright_display": "display",
@@ -48,7 +50,7 @@ ABILITY_CHANNELS = {
     "shock_glands": "skin",
 }
 
-GENERIC_BODY_CHANNELS = frozenset(("display", "locomotion", "mouth", "senses", "skin", "social"))
+GENERIC_BODY_CHANNELS = frozenset(("display", "locomotion", "metabolism", "mouth", "senses", "skin", "social"))
 
 PATTERN_VALUES = (
     "plain",

@@ -14,6 +14,7 @@ from game.components import AI, Inventory, NPCNeeds, Occupation, Position
 from game.color_words import color_word_display_name, normalize_color_word
 from game.flora_genetics import normalize_flora_genetics
 from game.flora_genetics import inherit_flora_genetics
+from game.flora_produce_runtime import flora_weather_response
 from game.flora_runtime import (
     EXHAUSTED_FLORA_STAGES,
     DEFAULT_GLYPH_BY_FORM,
@@ -613,6 +614,12 @@ def _flora_record_from_cultivation(sim, record):
         "stability_score": record.get("stability_score") if record.get("stability_score") is not None else row.get("stability_score"),
         "stability_band": _key(record.get("stability_band") or row.get("stability_band")),
         "notability": _key(record.get("notability") or row.get("notability")),
+        "growth_progress_ticks": _safe_float(record.get("growth_progress_ticks"), 0.0),
+        "last_growth_tick": record.get("last_growth_tick"),
+        "growth_pause_baseline": _safe_int(record.get("growth_pause_baseline"), 0),
+        "weather_growth_multiplier": _safe_float(record.get("weather_growth_multiplier"), 1.0),
+        "weather_growth_fit": _safe_float(record.get("weather_growth_fit"), 0.5),
+        "weather_growth_label": str(record.get("weather_growth_label") or "steady"),
         "container_kind": _key(record.get("container_kind"), "ground"),
         "tended_tick": record.get("tended_tick"),
         "tend_count": max(0, _safe_int(record.get("tend_count"), 0)),
@@ -681,6 +688,12 @@ def sync_cultivation_from_flora_patch(sim, flora_record):
         "stability_score",
         "stability_band",
         "notability",
+        "growth_progress_ticks",
+        "last_growth_tick",
+        "growth_pause_baseline",
+        "weather_growth_multiplier",
+        "weather_growth_fit",
+        "weather_growth_label",
     ):
         if key in flora_record:
             record[key] = flora_record[key]
@@ -703,10 +716,29 @@ def _advance_record(sim, record):
     now = _safe_int(getattr(sim, "tick", 0), 0)
     planted = _safe_int(record.get("planted_tick"), now)
     paused_total = _safe_int(record.get("paused_ticks"), 0)
-    elapsed = max(0, now - planted - paused_total)
+    last_tick = record.get("last_growth_tick")
+    if last_tick is None:
+        # Existing saves enter the weather-aware clock with their earned time
+        # intact.  New records initialize these fields at planting below.
+        progress = float(max(0, now - planted - paused_total))
+        elapsed_since_sample = 0
+    else:
+        progress = max(0.0, _safe_float(record.get("growth_progress_ticks"), 0.0))
+        pause_baseline = max(0, _safe_int(record.get("growth_pause_baseline"), paused_total))
+        paused_since_sample = max(0, paused_total - pause_baseline)
+        elapsed_since_sample = max(0, now - _safe_int(last_tick, now) - paused_since_sample)
+    response = flora_weather_response(sim, record, tick=now)
+    multiplier = max(0.55, min(1.40, _safe_float(response.get("growth_multiplier"), 1.0)))
+    progress += float(elapsed_since_sample) * multiplier
+    record["growth_progress_ticks"] = round(progress, 3)
+    record["last_growth_tick"] = now
+    record["growth_pause_baseline"] = paused_total
+    record["weather_growth_multiplier"] = round(multiplier, 3)
+    record["weather_growth_fit"] = round(_safe_float(response.get("fit"), 0.5), 3)
+    record["weather_growth_label"] = str(response.get("label", "steady") or "steady")
     next_stage = "seeded"
     for stage_name, threshold in GROWTH_STAGE_TICKS:
-        if elapsed >= threshold:
+        if progress >= threshold:
             next_stage = stage_name
     record["stage"] = next_stage
     record["growth_paused"] = False
@@ -771,6 +803,9 @@ def _new_cultivation_record(sim, source, *, container_kind, x=None, y=None, z=0,
         "pot_item_instance_id": pot_instance_id,
         "stage": stage,
         "planted_tick": now,
+        "last_growth_tick": now,
+        "growth_progress_ticks": 0.0,
+        "growth_pause_baseline": 0,
         "maturity_tick": now + 36 * 600 if not failed else None,
         "biome_fit": dict(biome_fit or {"ok": True}),
         "lineage": dict((source.get("metadata") or {}).get("lineage") or {}),
@@ -1129,6 +1164,8 @@ def _expressed_child_profile_values(genetics, *, fallback_form="flower", fallbac
     shape = visual.get("shape") if isinstance(visual.get("shape"), Mapping) else {}
     chemistry = expressed.get("chemistry") if isinstance(expressed.get("chemistry"), Mapping) else {}
     effects = expressed.get("effects") if isinstance(expressed.get("effects"), Mapping) else {}
+    produce = expressed.get("produce") if isinstance(expressed.get("produce"), Mapping) else {}
+    climate = expressed.get("climate") if isinstance(expressed.get("climate"), Mapping) else {}
     growth_form = _key(shape.get("growth_form"), fallback_form)
     color_key = _key(color.get("render_key_hint"), fallback_color or DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_leaf"))
     traits = tuple(_key(trait) for trait in tuple(effects.get("traits") or ()) if _key(trait) in SECONDARY_TRAIT_IDS)
@@ -1144,6 +1181,15 @@ def _expressed_child_profile_values(genetics, *, fallback_form="flower", fallbac
         "stability_score": _safe_float(genetics.get("stability_score"), 100.0),
         "stability_band": _key(genetics.get("stability_band") or handling.get("stability"), "stable"),
         "notability": _key(social.get("notability"), "ordinary"),
+        "produce_kind": _key(produce.get("kind"), "none"),
+        "produce_shape": _key(produce.get("shape"), "berry"),
+        "produce_color": dict(produce.get("color") or {}) if isinstance(produce.get("color"), Mapping) else produce.get("color"),
+        "produce_toxicity": _key(produce.get("toxicity"), "safe"),
+        "weather_affinity": {
+            "temperature": _key(climate.get("temperature"), "mild"),
+            "moisture": _key(climate.get("moisture"), "balanced"),
+            "sky": _key(climate.get("sky"), "cloud"),
+        },
     }
 
 
@@ -1217,6 +1263,11 @@ def _hybrid_profile(sim, source, target, *, source_kind="hybrid_seed"):
         "stability_score": expressed["stability_score"],
         "stability_band": expressed["stability_band"],
         "notability": expressed["notability"],
+        "produce_kind": expressed["produce_kind"],
+        "produce_shape": expressed["produce_shape"],
+        "produce_color": expressed["produce_color"],
+        "produce_toxicity": expressed["produce_toxicity"],
+        "weather_affinity": dict(expressed["weather_affinity"]),
     }
     register_dynamic_flora_profile(sim, hybrid)
     return hybrid
@@ -1514,6 +1565,23 @@ def _natural_crossbreed_loaded_flora_batched(sim):
             continue
         pollen_options.sort(key=lambda row: (abs(_safe_int(row.get("x"), 0) - tx) + abs(_safe_int(row.get("y"), 0) - ty), str(row.get("id") or "")))
         pollen = pollen_options[0]
+        target_weather = flora_weather_response(sim, target, tick=now)
+        pollen_weather = flora_weather_response(sim, pollen, tick=now)
+        breeding_multiplier = max(
+            0.42,
+            min(
+                1.30,
+                (_safe_float(target_weather.get("breeding_multiplier"), 1.0)
+                 * _safe_float(pollen_weather.get("breeding_multiplier"), 1.0)) ** 0.5,
+            ),
+        )
+        if breeding_multiplier < 1.0:
+            roll = random.Random(
+                f"{getattr(sim, 'seed', 0)}:natural-weather-breeding:{target_id}:{pollen.get('id')}:{now // 600}"
+            ).random()
+            if roll > breeding_multiplier:
+                cooldowns[target_id] = now + 600
+                continue
         site = next(_natural_seedling_sites(sim, target, pollen), None)
         if site is None:
             cooldowns[target_id] = now + 600
@@ -1534,10 +1602,11 @@ def _natural_crossbreed_loaded_flora_batched(sim):
         sync_cultivation_flora_patch(sim, record)
         register_native_flora_line(sim, profile, source="natural_crossbreed")
         _update_target_fertility(sim, target, _target_fertility_remaining(target) - 1)
-        cooldowns[target_id] = now + 2400
+        weather_cooldown = max(600, int(round(2400 / breeding_multiplier)))
+        cooldowns[target_id] = now + weather_cooldown
         pollen_id = str(pollen.get("id") or "")
         if pollen_id:
-            cooldowns[pollen_id] = now + 2400
+            cooldowns[pollen_id] = now + weather_cooldown
         _seed_natural_flora_rumor(sim, profile, record, target, pollen)
         created_by_chunk.add(target_chunk)
         created.append(record)
@@ -1551,6 +1620,7 @@ def _natural_crossbreed_loaded_flora_batched(sim):
             x=record.get("x"),
             y=record.get("y"),
             z=record.get("z", 0),
+            weather_breeding_multiplier=round(breeding_multiplier, 3),
         ))
     return {"ok": bool(created), "created": len(created), "records": created, "reason": "" if created else "no_pairs"}
 

@@ -382,6 +382,7 @@ def _ambient_animal_profile(
     social_profile=None,
     genetic_patterns=None,
     genetic_displays=None,
+    genetic_abilities=None,
 ):
     """Compact authored fauna profile with the full live ecology vocabulary."""
 
@@ -429,6 +430,8 @@ def _ambient_animal_profile(
         profile["genetic_patterns"] = tuple(genetic_patterns)
     if genetic_displays:
         profile["genetic_displays"] = tuple(genetic_displays)
+    if genetic_abilities:
+        profile["genetic_abilities"] = tuple(genetic_abilities)
     return profile
 
 
@@ -1263,6 +1266,7 @@ AMBIENT_CREATURE_PROFILES = (
         max_hp=(22, 34), speed=(0.9, 1.08), size_score=24, speed_score=42,
         prey_score=56, territorial_score=24, pack_score=28, flee_bias=78,
         activity_period="day", rest_bias=0.4, threat_response="freeze_bolt", movement_style="dart",
+        genetic_abilities=("hibernates_cold",),
     ),
     _ambient_animal_profile(
         "barn_owl", "avian", "tyto alba",

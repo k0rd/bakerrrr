@@ -174,6 +174,7 @@ from game.npc_emergency_runtime import NPCEmergencyActionSystem
 from game.environment_hazard_system import EnvironmentalHazardSystem
 from game.contamination_runtime import ContaminationSystem
 from game.fire_system import FireSystem
+from game.tornado_runtime import TornadoSystem
 from game.aerosol_trap_runtime import AerosolTrapSystem
 from game.mechanical_device_runtime import MechanicalDeviceSystem
 from game.vehicle_explosion_runtime import VehicleExplosionSystem
@@ -747,6 +748,7 @@ def _register_runtime_systems(sim, view, player, *, audio_progress_callback=None
     environmental_hazard_system = EnvironmentalHazardSystem(sim)
     contamination_system = ContaminationSystem(sim)
     fire_system = FireSystem(sim)
+    tornado_system = TornadoSystem(sim)
     vehicle_explosion_system = VehicleExplosionSystem(sim)
     aerosol_trap_system = AerosolTrapSystem(sim)
     mechanical_device_system = MechanicalDeviceSystem(sim)
@@ -944,6 +946,7 @@ def _register_runtime_systems(sim, view, player, *, audio_progress_callback=None
     sim.register_system(environmental_hazard_system)
     sim.register_system(contamination_system)
     sim.register_system(fire_system)
+    sim.register_system(tornado_system)
     sim.register_system(vehicle_explosion_system)
     sim.register_system(aerosol_trap_system)
     sim.register_system(mechanical_device_system)

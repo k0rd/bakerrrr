@@ -27,6 +27,11 @@ from game.flora_runtime import (
     load_flora_catalog,
     normalize_flora_harvest_state,
 )
+from game.flora_produce_runtime import (
+    PRODUCE_ITEM_ID,
+    expressed_produce_traits,
+    produce_item_metadata,
+)
 from game.ecology_registry import native_flora_effect_channels
 from game.item_semantics import identify_item_for_actor, item_display_name_for_actor
 from game.items import ITEM_CATALOG, item_display_name, prepare_item_stack_metadata
@@ -1476,7 +1481,9 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         sim.emit(Event("flora_harvest_blocked", eid=eid, flora_id=record.get("id"), plant_name=record.get("name"), reason="picked"))
         return False
     form = str(record.get("growth_form", "") or "").strip().lower()
-    method = HARVEST_METHOD_BY_FORM.get(form, "pluck")
+    produce_traits = expressed_produce_traits(record)
+    is_produce = bool(produce_traits.get("produces_food"))
+    method = "pluck" if is_produce else HARVEST_METHOD_BY_FORM.get(form, "pluck")
     tool = _tool_for_method(inventory, method)
     if not tool:
         sim.emit(Event(
@@ -1489,7 +1496,7 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
             reason="no_tool",
         ))
         return False
-    item_id = _key(record.get("harvest_item_id")) or INGREDIENT_ITEM_BY_FORM.get(form, "leaf_clippings")
+    item_id = PRODUCE_ITEM_ID if is_produce else (_key(record.get("harvest_item_id")) or INGREDIENT_ITEM_BY_FORM.get(form, "leaf_clippings"))
     plant_id = _key(record.get("plant_id"))
     class_id = _key(record.get("chemistry_class")) or plant_chemistry_class(sim, plant_id)
     secondary_traits = tuple(
@@ -1543,6 +1550,8 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
         "harvested_tick": _safe_int(getattr(sim, "tick", 0), 0),
         "legal_status": "legal",
     }
+    if is_produce:
+        metadata.update(produce_item_metadata(sim, record))
     cultivation_id = str(record.get("cultivation_id", "") or "").strip()
     cultivated_product = bool(
         record.get("cultivated_product")
@@ -1577,7 +1586,8 @@ def harvest_flora_patch(sim, eid, flora_id=None, *, preferred_dir=None, exact_di
             metadata[key] = record.get(key)
     if isinstance(record.get("genetics"), Mapping):
         metadata["genetics"] = copy.deepcopy(dict(record.get("genetics") or {}))
-    metadata["display_name"] = herbal_ingredient_display_name(item_id, metadata["source_plant_name"])
+    if not is_produce:
+        metadata["display_name"] = herbal_ingredient_display_name(item_id, metadata["source_plant_name"])
     if tool.get("item_id"):
         metadata["tool_item_id"] = tool.get("item_id")
     owner_tag = "player" if eid == getattr(sim, "player_eid", None) else "npc"

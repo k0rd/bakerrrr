@@ -114,6 +114,18 @@ from game.lighting import (
 import game.report_debug_ui as _report_debug_ui
 import game.chunk_service_survey_ui as _chunk_service_survey_ui
 from game.release_runtime import debug_mode_enabled, release_control_text
+from game.weather_runtime import (
+    campfire_weather_block,
+    ensure_weather_debug_ui_state,
+    ground_weather_snapshot,
+    weather_cell_artifacts,
+    weather_debug_lines,
+    weather_map_edge_lines,
+    weather_map_label,
+    weather_snapshot,
+)
+from game.weather_effects import update_vehicle_wetness
+from game.tornado_runtime import tornado_render_cells
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
     append_external_opportunity,
@@ -1184,6 +1196,53 @@ class RenderSystem(System):
         self._hud_previous_section_texts = {}
         self._hud_flash_ranges_by_line = {}
         self._hud_render_frame = 0
+        self._ground_weather_cache = {}
+        self._ground_weather_cell_cache = {}
+        self._ground_weather_cache_hour = None
+
+    def _ground_weather_at(self, world_x, world_y, *, z=0, tile=None):
+        """Return the current hourly ground state without rebuilding it every frame."""
+
+        clock_config = getattr(self.sim, "world_traits", {}).get("clock", {})
+        try:
+            ticks_per_hour = max(1, int(clock_config.get("ticks_per_hour", 600)))
+        except (AttributeError, TypeError, ValueError):
+            ticks_per_hour = 600
+        ground_hour = int(getattr(self.sim, "tick", 0) or 0) // ticks_per_hour
+        if self._ground_weather_cache_hour != ground_hour:
+            self._ground_weather_cache.clear()
+            self._ground_weather_cell_cache.clear()
+            self._ground_weather_cache_hour = ground_hour
+
+        world_x = int(world_x)
+        world_y = int(world_y)
+        z = int(z)
+        if tile is None:
+            tile = self.sim.tilemap.tile_at(world_x, world_y, z)
+        cache_key = (
+            world_x,
+            world_y,
+            z,
+            str(getattr(tile, "glyph", "") or "")[:1],
+            str(getattr(tile, "semantic_id", "") or ""),
+            str(getattr(tile, "color", "") or ""),
+            bool(getattr(tile, "walkable", False)),
+        )
+        cached = self._ground_weather_cell_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        ground = ground_weather_snapshot(
+            self.sim,
+            world_x,
+            world_y,
+            z=z,
+            tile=tile,
+            cache=self._ground_weather_cache,
+        )
+        if len(self._ground_weather_cell_cache) >= 8192:
+            self._ground_weather_cell_cache.clear()
+        self._ground_weather_cell_cache[cache_key] = ground
+        return ground
 
     def _hud_flash_clock(self):
         try:
@@ -1781,7 +1840,7 @@ class RenderSystem(System):
         ):
             _append_help_section(lines, line)
         if debug_mode_enabled(self.sim):
-            debug_line = "Debug: D live telemetry for lighting, stealth, pressure, property access, and objective state."
+            debug_line = "Debug: D opens live telemetry; press W there for the labeled atmospheric map and forecast modal."
             character_line = lines.pop()
             if lines and lines[-1] == "":
                 lines.pop()
@@ -3033,6 +3092,7 @@ class RenderSystem(System):
             "scroll": 0,
         })
         debug_ui = _report_debug_ui.ensure_debug_ui_state(self.sim)
+        weather_debug_ui = ensure_weather_debug_ui_state(self.sim)
         service_survey_ui = _chunk_service_survey_ui.refresh_service_survey_ui_if_stale(
             self.sim,
             self.player_eid,
@@ -3057,6 +3117,7 @@ class RenderSystem(System):
                 log_ui,
                 service_survey_ui,
                 debug_ui,
+                weather_debug_ui if weather_debug_ui.get("detail_open") else {},
             )
             if isinstance(state, dict)
         )
@@ -3081,6 +3142,11 @@ class RenderSystem(System):
         live_timeskip = getattr(self.sim, "live_timeskip", {})
         vision_scene = vision_scene_render_state(self.sim)
         zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
+        weather_debug_active = bool(
+            weather_debug_ui.get("open")
+            and debug_mode_enabled(self.sim)
+            and zoom_mode == "overworld"
+        )
         try:
             requested_world_magnification = int(getattr(self.view, "world_magnification", 1) or 1)
         except (TypeError, ValueError):
@@ -3248,8 +3314,30 @@ class RenderSystem(System):
             )
             debug_ui["title"] = str(debug_panel.get("title", "Debug Overlay")).strip() or "Debug Overlay"
             debug_ui["lines"] = list(debug_panel.get("lines", ()) or ())
+        if weather_debug_active:
+            weather_cx = int(look_ui.get("chunk_x", 0))
+            weather_cy = int(look_ui.get("chunk_y", 0))
+            weather_debug_ui["title"] = f"Atmosphere Debug - chunk {weather_cx},{weather_cy}"
+            weather_debug_ui["lines"] = weather_debug_lines(self.sim, weather_cx, weather_cy)
         ambient_cache = {}
         ambient_dim_attr = A_DIM
+        weather_cache = {}
+
+        def _weather_sample(x, y):
+            chunk_coords = getattr(self.sim, "chunk_coords", None)
+            if not callable(chunk_coords):
+                return {}
+            try:
+                cx, cy = chunk_coords(int(x), int(y))
+            except (TypeError, ValueError):
+                return {}
+            key = (int(cx), int(cy))
+            cached = weather_cache.get(key)
+            if isinstance(cached, dict):
+                return cached
+            sampled = weather_snapshot(self.sim, key[0], key[1])
+            weather_cache[key] = sampled
+            return sampled
 
         def _ambient_sample(x, y, z):
             key = (int(x), int(y), int(z))
@@ -3400,6 +3488,221 @@ class RenderSystem(System):
                 if 0 <= sx < map_w and 0 <= sy < map_h:
                     light_tint_drawer(sx, sy, tint, layer="fx", priority=-650)
 
+        def _draw_ground_weather():
+            if zoom_mode == "overworld" or int(active_z) != 0:
+                return
+            cells = []
+            for sy in range(map_h):
+                for sx in range(map_w):
+                    wx = camera_x + sx
+                    wy = camera_y + sy
+                    if self.sim.detail_for_xy(wx, wy) == "unloaded" or not _is_visible(wx, wy, active_z):
+                        continue
+                    if bool(_ambient_sample(wx, wy, active_z).get("inside")):
+                        continue
+                    tile = self.sim.tilemap.tile_at(wx, wy, active_z)
+                    if tile is None or (not bool(getattr(tile, "walkable", False)) and str(getattr(tile, "glyph", "")) != "~"):
+                        continue
+                    ground = self._ground_weather_at(wx, wy, z=active_z, tile=tile)
+                    if not bool(ground.get("active")):
+                        continue
+                    cells.append({
+                        "x": sx,
+                        "y": sy,
+                        "world": (wx, wy, int(active_z)),
+                        "effect": str(ground.get("effect", "none") or "none"),
+                        "strength": float(ground.get("strength", 0.0) or 0.0),
+                        "height": float(ground.get("relative_height", 0.5) or 0.5),
+                        "saturation": float(ground.get("soil_saturation", 0.0) or 0.0),
+                    })
+
+            if not cells:
+                return
+            draw_ground_weather_field = getattr(self.view, "draw_ground_weather_field", None)
+            if callable(draw_ground_weather_field):
+                draw_ground_weather_field(cells)
+                return
+            glyphs = {
+                "frozen_water": "=",
+                "shallow_flood": "~",
+                "snow_cover": "*",
+                "ground_ice": "-",
+                "puddle": "o",
+                "soft_ground": ";",
+            }
+            colors = {
+                "frozen_water": "weather_ground_ice",
+                "shallow_flood": "weather_ground_flood",
+                "snow_cover": "weather_ground_snow",
+                "ground_ice": "weather_ground_ice",
+                "puddle": "weather_ground_puddle",
+                "soft_ground": "weather_ground_soft",
+            }
+            for cell in cells:
+                effect = str(cell.get("effect", "none") or "none")
+                self._draw(
+                    cell["x"],
+                    cell["y"],
+                    glyphs.get(effect, "."),
+                    color=colors.get(effect, "weather_ground_soft"),
+                    attrs=A_BOLD if float(cell.get("strength", 0.0) or 0.0) >= 0.62 else A_DIM,
+                    semantic_id=f"weather_ground_{effect}",
+                    layer="ground_overlay",
+                    priority=-500,
+                )
+
+        def _draw_weather_artifacts():
+            if zoom_mode == "overworld" or int(active_z) < 0:
+                return
+            chunk_coords = getattr(self.sim, "chunk_coords", None)
+            if not callable(chunk_coords):
+                return
+            try:
+                min_cx, min_cy = chunk_coords(camera_x, camera_y)
+                max_cx, max_cy = chunk_coords(camera_x + map_w - 1, camera_y + map_h - 1)
+            except (TypeError, ValueError):
+                return
+            chunk_span = int(getattr(self.sim, "chunk_size", 16) or 16)
+            visible_weather = [
+                _weather_sample(cx * chunk_span, cy * chunk_span)
+                for cy in range(min(int(min_cy), int(max_cy)), max(int(min_cy), int(max_cy)) + 1)
+                for cx in range(min(int(min_cx), int(max_cx)), max(int(min_cx), int(max_cx)) + 1)
+            ]
+            tornado_cells = tornado_render_cells(
+                self.sim,
+                camera_x,
+                camera_y,
+                camera_x + map_w - 1,
+                camera_y + map_h - 1,
+                z=active_z,
+            )
+            if not any(
+                bool(weather.get("precipitation_active"))
+                or bool(weather.get("fog_active"))
+                or float(weather.get("storm_darkness", 0.0) or 0.0) > 0.0
+                or float(weather.get("lightning_flash", 0.0) or 0.0) > 0.0
+                for weather in visible_weather
+            ) and not tornado_cells:
+                return
+            cells = []
+            cells_by_screen = {}
+            outdoor_cells = []
+            strongest_flash = 0.0
+            strike_world = None
+            for sy in range(map_h):
+                for sx in range(map_w):
+                    wx = camera_x + sx
+                    wy = camera_y + sy
+                    if self.sim.detail_for_xy(wx, wy) == "unloaded" or not _is_visible(wx, wy, active_z):
+                        continue
+                    ambient = _ambient_sample(wx, wy, active_z)
+                    if bool(ambient.get("inside")):
+                        continue
+                    outdoor_cells.append((sx, sy, wx, wy))
+                    weather = _weather_sample(wx, wy)
+                    flash = float(weather.get("lightning_flash", 0.0) or 0.0)
+                    if flash > strongest_flash:
+                        strongest_flash = flash
+                        strike_world = weather.get("lightning_strike_world")
+                    artifacts = weather_cell_artifacts(
+                        weather,
+                        wx,
+                        wy,
+                        animation_tick=self._hud_render_frame,
+                    )
+                    darkness = float(weather.get("storm_darkness", 0.0) or 0.0)
+                    if artifacts or darkness > 0.0 or flash > 0.0:
+                        cell = {
+                            "x": sx,
+                            "y": sy,
+                            "world": (wx, wy, int(active_z)),
+                            "artifacts": artifacts,
+                            "storm_darkness": darkness,
+                            "lightning_flash": flash,
+                        }
+                        cells.append(cell)
+                        cells_by_screen[(sx, sy)] = cell
+
+            for tornado_cell in tornado_cells:
+                wx = int(tornado_cell.get("x", 0))
+                wy = int(tornado_cell.get("y", 0))
+                if self.sim.detail_for_xy(wx, wy) == "unloaded" or not _is_visible(wx, wy, active_z):
+                    continue
+                if bool(_ambient_sample(wx, wy, active_z).get("inside")):
+                    continue
+                sx, sy = wx - camera_x, wy - camera_y
+                cell = cells_by_screen.get((sx, sy))
+                artifact = {
+                    "kind": f"tornado_{str(tornado_cell.get('kind', 'debris'))}",
+                    "band": "violent",
+                    "variant": abs(wx * 17 + wy * 31 + self._hud_render_frame) % 4,
+                    "strength": float(tornado_cell.get("strength", 0.0) or 0.0),
+                }
+                if cell is None:
+                    cell = {
+                        "x": sx,
+                        "y": sy,
+                        "world": (wx, wy, int(active_z)),
+                        "artifacts": (artifact,),
+                        "storm_darkness": 0.16,
+                        "lightning_flash": 0.0,
+                    }
+                    cells.append(cell)
+                    cells_by_screen[(sx, sy)] = cell
+                else:
+                    cell["artifacts"] = tuple(cell.get("artifacts", ()) or ()) + (artifact,)
+
+            if strongest_flash > 0.0:
+                existing = {(int(cell["x"]), int(cell["y"])) for cell in cells}
+                for sx, sy, wx, wy in outdoor_cells:
+                    if (sx, sy) not in existing:
+                        cells.append({
+                            "x": sx,
+                            "y": sy,
+                            "world": (wx, wy, int(active_z)),
+                            "artifacts": (),
+                            "storm_darkness": 0.0,
+                            "lightning_flash": 0.0,
+                        })
+                for cell in cells:
+                    flash = strongest_flash
+                    if isinstance(strike_world, (list, tuple)) and len(strike_world) >= 2:
+                        distance = abs(int(cell["world"][0]) - int(strike_world[0])) + abs(int(cell["world"][1]) - int(strike_world[1]))
+                        flash *= max(0.72, 1.0 - (distance / 180.0))
+                        if (int(cell["world"][0]), int(cell["world"][1])) == (int(strike_world[0]), int(strike_world[1])):
+                            cell["lightning_strike"] = strongest_flash
+                    cell["lightning_flash"] = max(float(cell.get("lightning_flash", 0.0) or 0.0), flash)
+
+            draw_weather_field = getattr(self.view, "draw_weather_field", None)
+            if callable(draw_weather_field):
+                draw_weather_field(cells)
+                return
+            glyphs = {
+                "rain": "/", "sleet": ":", "snow": "*", "fog": "~",
+                "tornado_funnel": "@", "tornado_debris": "*",
+            }
+            colors = {
+                "rain": "weather_rain",
+                "sleet": "weather_sleet",
+                "snow": "weather_snow",
+                "fog": "weather_fog",
+                "tornado_funnel": "weather_tornado",
+                "tornado_debris": "weather_tornado_debris",
+            }
+            for cell in cells:
+                for artifact in tuple(cell.get("artifacts", ()) or ()):
+                    kind = str(artifact.get("kind", "") or "")
+                    self._draw(
+                        cell["x"],
+                        cell["y"],
+                        glyphs.get(kind, "."),
+                        color=colors.get(kind, "weather_fog"),
+                        attrs=A_BOLD if str(artifact.get("band", "")) == "heavy" else A_DIM,
+                        semantic_id=f"weather_{kind}_{artifact.get('band', 'light')}_{int(artifact.get('variant', 0) or 0)}",
+                        layer="fx",
+                        priority=60,
+                    )
+
         if zoom_mode == "overworld":
             player_cx, player_cy = _overworld_anchor_chunk()
             view_only = bool(getattr(self.sim, "overworld_view_only_by_eid", {}).get(int(self.player_eid), False))
@@ -3516,6 +3819,7 @@ class RenderSystem(System):
                         "interest": interest,
                         "landmark": landmark,
                         "region_key": region_key,
+                        "weather": weather_snapshot(self.sim, cx, cy) if weather_debug_active else None,
                     }
 
             def _draw_overworld_frame(cell_origin_x, cell_origin_y, color, attrs, semantic_prefix, *, priority_base):
@@ -3727,7 +4031,7 @@ class RenderSystem(System):
                         selector_attr = A_BOLD
                         _draw_overworld_frame(cell_origin_x, cell_origin_y, "player", selector_attr, "overworld_selector", priority_base=-40)
 
-                    if glyph:
+                    if glyph and not weather_debug_active:
                         reserve_badge = (cx, cy) in badge_chunks
                         screen_x, screen_y, _badge_x, _badge_y = _overworld_cell_slots(
                             cell_origin_x,
@@ -3761,6 +4065,24 @@ class RenderSystem(System):
                                 layer="actor",
                                 priority=-120,
                             )
+
+                    if weather_debug_active:
+                        weather_label = weather_map_label(data.get("weather"))
+                        label_x = cell_origin_x + max(0, (cell_w - len(weather_label)) // 2)
+                        label_y = cell_origin_y + (cell_h // 2)
+                        for label_offset, label_glyph in enumerate(weather_label):
+                            screen_x = label_x + label_offset
+                            if 0 <= screen_x < map_w and 0 <= label_y < map_h:
+                                self._draw(
+                                    screen_x,
+                                    label_y,
+                                    label_glyph,
+                                    color="human",
+                                    attrs=A_BOLD,
+                                    semantic_id="weather_debug_label",
+                                    layer="ui_overlay",
+                                    priority=70,
+                                )
 
             for marker in markers:
                 cx, cy = marker["chunk"]
@@ -3822,6 +4144,13 @@ class RenderSystem(System):
                     markers=markers,
                     look_ui=look_ui,
                 )
+                if weather_debug_active:
+                    selected_chunk = cursor_chunk or (player_cx, player_cy)
+                    edge_header, edge_footer = weather_map_edge_lines(
+                        self.sim,
+                        selected_chunk[0],
+                        selected_chunk[1],
+                    )
                 if legend_top_rows:
                     edge_segments = _line_segments(edge_header)
                     if edge_segments:
@@ -3921,6 +4250,8 @@ class RenderSystem(System):
                         _draw_light_tint_overlay(sx, sy, wx, wy, active_z)
                         _draw_glare_wash_overlay(sx, sy, wx, wy, active_z)
 
+            _draw_ground_weather()
+
             for flora in flora_records_in_rect(
                 self.sim,
                 camera_x,
@@ -3995,10 +4326,20 @@ class RenderSystem(System):
                 if not visible_now and not explored:
                     continue
                 tile = self.sim.tilemap.tile_at(display_pos[0], display_pos[1], active_z)
+                if visible_now and str(prop.get("kind", "") or "").strip().lower() == "vehicle":
+                    update_vehicle_wetness(
+                        self.sim,
+                        prop,
+                        display_pos[0],
+                        display_pos[1],
+                        active_z,
+                    )
                 appearance = self.sim.appearance.property(
                     prop,
                     active_quest_target=active_quest_target,
                 )
+                if campfire_weather_block(self.sim, prop, service="campfire_cook") is not None:
+                    appearance = _appearance_with_effect(appearance, "weather_extinguished")
                 if str(prop.get("kind", "") or "").strip().lower() == "vehicle":
                     appearance = _vehicle_appearance_with_heading(appearance, vehicle_property_heading(prop))
                 if (
@@ -4222,6 +4563,8 @@ class RenderSystem(System):
                     if 0 <= sx < map_w and 0 <= sy < map_h and 0 <= wx < map_w and 0 <= wy < map_h:
                         draw_line(sx, sy, wx, wy, phase=session["phase"], tick=int(self.sim.tick))
 
+            _draw_weather_artifacts()
+
             radio_scan = getattr(self.sim, "world_traits", {}).get("justice_radio_scan", {})
             if isinstance(radio_scan, dict) and int(radio_scan.get("expires_tick", -1) or -1) >= int(getattr(self.sim, "tick", 0)):
                 ping_attr = A_BOLD | A_REVERSE
@@ -4411,6 +4754,34 @@ class RenderSystem(System):
             district_type=district_type,
             security=security,
         )
+        weather_anchor = _overworld_anchor_chunk() if zoom_mode == "overworld" else (
+            self.sim.chunk_coords(int(player_pos.x), int(player_pos.y)) if player_pos else (0, 0)
+        )
+        if zoom_mode != "overworld" and player_pos:
+            current_weather = _weather_sample(int(player_pos.x), int(player_pos.y))
+        else:
+            current_weather = weather_snapshot(self.sim, int(weather_anchor[0]), int(weather_anchor[1]))
+        status_chunks.append(
+            f"Weather {str(current_weather.get('condition', 'clear')).title()} "
+            f"{float(current_weather.get('temperature_c', 0.0)):.0f} C"
+        )
+        if zoom_mode != "overworld" and player_pos and int(player_pos.z) == 0 and not bool(lighting_state.get("player_inside", False)):
+            ground = self._ground_weather_at(
+                int(player_pos.x),
+                int(player_pos.y),
+                z=0,
+                tile=self.sim.tilemap.tile_at(int(player_pos.x), int(player_pos.y), 0),
+            )
+            ground_label = {
+                "frozen_water": "Frozen water",
+                "shallow_flood": "Shallow flooding",
+                "snow_cover": "Snow cover",
+                "ground_ice": "Icy ground",
+                "puddle": "Puddled ground",
+                "soft_ground": "Soft ground",
+            }.get(str(ground.get("effect", "none") or "none"))
+            if ground_label:
+                status_chunks.append(f"Ground {ground_label}")
         aim_lock_target_eid, aim_lock_target_pos = _aim_lock_target_pos()
         if not bool(look_ui.get("active")) and aim_lock_target_eid is not None and aim_lock_target_pos is not None:
             target_name = self._npc_label(aim_lock_target_eid)
@@ -6035,6 +6406,22 @@ class RenderSystem(System):
                 modal_theme=modal_theme,
                 draw_box_fn=lambda view, x, y, w, h: self._draw_modal_frame(x, y, w, h, modal_theme),
                 footer_actions="Tab | F follow | R cache | E close | D back",
+            )
+        elif weather_debug_active and weather_debug_ui.get("detail_open"):
+            _report_debug_ui.draw_debug_modal(
+                self.view,
+                weather_debug_ui,
+                screen_w=screen_w,
+                map_w=map_w,
+                map_h=map_h,
+                view_text_wrap_width_fn=_view_text_wrap_width,
+                draw_display_line_fn=self._draw_display_line,
+                clip_display_line_fn=_clip_display_line,
+                wrap_display_lines_fn=_wrap_display_lines,
+                line_text_fn=_line_text,
+                modal_theme=modal_theme,
+                draw_box_fn=lambda view, x, y, w, h: self._draw_modal_frame(x, y, w, h, modal_theme),
+                footer_actions="Enter map | T teleport | W close | arrows move",
             )
         elif debug_ui.get("open"):
             _report_debug_ui.draw_debug_modal(

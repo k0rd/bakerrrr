@@ -18,6 +18,7 @@ from game.overworld_runtime import (
     _player_overworld_visit_state,
     _remember_overworld_chunk_memory,
 )
+from game.release_runtime import debug_mode_enabled
 from game.dialogue_runtime import (
     _career_label,
     _infrastructure_target_property,
@@ -1289,6 +1290,22 @@ class PlayerActionSystem(System):
         if not pos:
             return
         zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
+
+        if action == "debug_weather_zoom_overworld":
+            if debug_mode_enabled(self.sim):
+                self._set_zoom_mode(
+                    eid=eid,
+                    pos=pos,
+                    mode="overworld",
+                    view_only=True,
+                    entry_reason="weather_debug",
+                )
+            return
+
+        if action == "debug_weather_zoom_city":
+            if debug_mode_enabled(self.sim) and zoom_mode == "overworld":
+                self._set_zoom_mode(eid=eid, pos=pos, mode="city")
+            return
 
         if _entity_is_downed(self.sim, eid):
             _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)

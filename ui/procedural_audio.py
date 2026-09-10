@@ -24,7 +24,7 @@ SAMPLE_WIDTH = 2
 DEFAULT_SAMPLE_RATE = 22_050
 DEFAULT_CHANNEL_COUNT = 2
 DEFAULT_MIXER_BUFFER = 512
-MIN_MIXER_CHANNEL_COUNT = 24
+MIN_MIXER_CHANNEL_COUNT = 25
 OPEN_RUN_BPM = 92
 OPEN_RUN_BEATS = 16
 OPEN_RUN_DURATION = OPEN_RUN_BEATS * (60.0 / OPEN_RUN_BPM)
@@ -59,7 +59,9 @@ AMBIENT_CHANNEL_INDEX = {
     "biome": 4,
     "crowd": 5,
     "engine": 6,
+    "weather": 7,
 }
+STATIONARY_NOISE_LOOP_CUES = frozenset({"ambient_weather_rain", "ambient_weather_storm"})
 RESERVED_CHANNEL_COUNT = 1 + len(AMBIENT_CHANNEL_INDEX)
 CROWD_CHATTER_RADIUS = 7
 CROWD_CHATTER_MIN_NPCS = 4
@@ -250,6 +252,37 @@ def _add_noise(
         if decay > 0.0:
             gain *= math.exp(-float(decay) * progress)
         samples[start_frame + offset] += value * float(amplitude) * gain
+
+
+def _add_looping_noise(
+    samples: list[float],
+    *,
+    amplitude: float,
+    seed: int,
+    color: str = "white",
+) -> None:
+    """Add a stationary noise bed whose filter state is continuous at the loop seam."""
+
+    count = len(samples)
+    if count <= 0:
+        return
+    rng = random.Random(int(seed))
+    white_values = [rng.uniform(-1.0, 1.0) for _ in range(count)]
+    if color == "white":
+        values = white_values
+    elif color in {"low", "high"}:
+        low = 0.0
+        values = [0.0] * count
+        # Replaying the same ring settles the low-pass state onto its periodic
+        # orbit, so wrapping from the last frame to the first has no envelope.
+        for _cycle in range(3):
+            for index, white in enumerate(white_values):
+                low += 0.12 * (white - low)
+                values[index] = low if color == "low" else white - low
+    else:
+        raise ValueError(f"unknown noise color: {color}")
+    for index, value in enumerate(values):
+        samples[index] += value * float(amplitude)
 
 
 def _footstep(duration: float, sample_rate: int) -> list[float]:
@@ -675,6 +708,62 @@ def _ambient_night(duration: float, sample_rate: int) -> list[float]:
     return samples
 
 
+def _ambient_weather_rain(duration: float, sample_rate: int) -> list[float]:
+    """A steady close rain bed: no slow swell that could read as surf."""
+
+    samples = _blank(duration, sample_rate)
+    _add_looping_noise(samples, amplitude=0.096, seed=432, color="high")
+    _add_looping_noise(samples, amplitude=0.042, seed=433, color="white")
+    drop_count = max(18, int(round(duration * 12.0)))
+    rng = random.Random(434)
+    for index in range(drop_count):
+        start = 0.02 + (rng.random() * max(0.001, duration - 0.075))
+        grain = 0.016 + (rng.random() * 0.022)
+        _add_noise(samples, sample_rate=sample_rate, start=start, duration=grain, amplitude=0.065 + (rng.random() * 0.055), seed=435 + index, color="high", attack=0.002, release=grain * 0.62, decay=4.8)
+    return samples
+
+
+def _ambient_weather_storm(duration: float, sample_rate: int) -> list[float]:
+    """Dense wind-driven rain; thunder remains a spatial one-shot."""
+
+    samples = _blank(duration, sample_rate)
+    _add_looping_noise(samples, amplitude=0.168, seed=442, color="high")
+    _add_looping_noise(samples, amplitude=0.070, seed=443, color="white")
+    _add_looping_noise(samples, amplitude=0.028, seed=444, color="low")
+    drop_count = max(24, int(round(duration * 16.0)))
+    rng = random.Random(445)
+    for index in range(drop_count):
+        start = 0.025 + (rng.random() * max(0.001, duration - 0.10))
+        grain = 0.022 + (rng.random() * 0.032)
+        _add_noise(samples, sample_rate=sample_rate, start=start, duration=grain, amplitude=0.11 + (rng.random() * 0.10), seed=446 + index, color="high", attack=0.002, release=grain * 0.68, decay=4.2)
+    return samples
+
+
+def _ambient_weather_snow(duration: float, sample_rate: int) -> list[float]:
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.052, seed=452, color="low", attack=0.44, release=0.46)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.021, seed=453, color="high", attack=0.50, release=0.50)
+    _add_tone(samples, sample_rate=sample_rate, start=0.0, duration=duration, frequency=92.0, end_frequency=104.0, amplitude=0.026, attack=0.54, release=0.54)
+    return samples
+
+
+def _thunder_near(duration: float, sample_rate: int) -> list[float]:
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.018, duration=0.14, amplitude=0.92, seed=461, color="high", attack=0.002, release=0.10, decay=8.0)
+    _add_noise(samples, sample_rate=sample_rate, start=0.04, duration=duration - 0.04, amplitude=0.44, seed=462, color="low", attack=0.012, release=0.60, decay=1.4)
+    for index, start in enumerate((0.04, 0.29, 0.67, 1.18)):
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.46 + (index * 0.16), frequency=58.0 - (index * 4.0), end_frequency=31.0, amplitude=0.34 / (index + 1), attack=0.008, release=0.28, decay=2.8)
+    return samples
+
+
+def _thunder_far(duration: float, sample_rate: int) -> list[float]:
+    samples = _blank(duration, sample_rate)
+    _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.29, seed=471, color="low", attack=0.12, release=0.72, decay=1.3)
+    for index, start in enumerate((0.10, 0.55, 1.10, 1.72)):
+        _add_tone(samples, sample_rate=sample_rate, start=start, duration=0.74, frequency=43.0 + (index * 3.0), end_frequency=27.0, amplitude=0.25 / (1.0 + index * 0.35), attack=0.06, release=0.38, decay=2.0)
+    return samples
+
+
 def _ambient_biome_city(duration: float, sample_rate: int) -> list[float]:
     samples = _blank(duration, sample_rate)
     _add_noise(samples, sample_rate=sample_rate, start=0.0, duration=duration, amplitude=0.024, seed=441, color="low", attack=0.24, release=0.26)
@@ -981,6 +1070,8 @@ SFX_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
     CueDefinition("tire_scrub_long", 0.36, _tire_scrub, gain=0.46, cooldown=0.30),
     CueDefinition("breaking_glass", 0.55, _breaking_glass, gain=0.76, cooldown=0.10),
     CueDefinition("explosion", 0.90, _explosion, gain=0.92, cooldown=0.12),
+    CueDefinition("thunder_near", 2.0, _thunder_near, gain=0.76, cooldown=0.18),
+    CueDefinition("thunder_far", 2.0, _thunder_far, gain=0.58, cooldown=0.18),
 )
 
 AMBIENT_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
@@ -998,6 +1089,9 @@ AMBIENT_CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
     CueDefinition("ambient_engine_idle", 2.0, _ambient_engine_idle, gain=0.30, loop=True, bus="ambient"),
     CueDefinition("ambient_engine_cruise", 2.0, _ambient_engine_cruise, gain=0.31, loop=True, bus="ambient"),
     CueDefinition("ambient_engine_fast", 2.0, _ambient_engine_fast, gain=0.32, loop=True, bus="ambient"),
+    CueDefinition("ambient_weather_rain", 2.0, _ambient_weather_rain, gain=0.34, loop=True, bus="ambient"),
+    CueDefinition("ambient_weather_storm", 2.0, _ambient_weather_storm, gain=0.42, loop=True, bus="ambient"),
+    CueDefinition("ambient_weather_snow", 2.0, _ambient_weather_snow, gain=0.28, loop=True, bus="ambient"),
 )
 
 CUE_DEFINITIONS: tuple[CueDefinition, ...] = (
@@ -1020,6 +1114,7 @@ AMBIENT_CUE_BY_GROUP: dict[str, tuple[str, ...]] = {
     ),
     "crowd": ("ambient_crowd_chatter",),
     "engine": ("ambient_engine_idle", "ambient_engine_cruise", "ambient_engine_fast"),
+    "weather": ("ambient_weather_rain", "ambient_weather_storm", "ambient_weather_snow"),
 }
 
 EVENT_CUE_MAP: dict[str, str] = {
@@ -1192,7 +1287,11 @@ def validate_cues(cues: Iterable[RenderedCue], *, progress_callback=None) -> dic
             raise AssertionError(f"{cue.definition.name}: effectively silent")
         if audible_peak > 30_200:
             raise AssertionError(f"{cue.definition.name}: lost synthesis headroom")
-        if cue.definition.loop and (abs(pcm_values[0]) > 4 or abs(pcm_values[-1]) > 4):
+        if (
+            cue.definition.loop
+            and cue.definition.name not in STATIONARY_NOISE_LOOP_CUES
+            and (abs(pcm_values[0]) > 4 or abs(pcm_values[-1]) > 4)
+        ):
             raise AssertionError(f"{cue.definition.name}: loop boundary is not at zero")
         total_pcm += len(cue.pcm)
         largest_peak = max(largest_peak, audible_peak)
@@ -1407,6 +1506,12 @@ def sample_environment_context(sim, player_eid, *, descriptor=None) -> dict[str,
             "vehicle_top_speed": 0,
             "vehicle_medium": "",
             "indoors": False,
+            "weather_condition": "clear",
+            "weather_precipitation_kind": "none",
+            "weather_precipitation_intensity": 0.0,
+            "weather_storm_intensity": 0.0,
+            "weather_fog_density": 0.0,
+            "weather_lightning_events": (),
         }
 
     x, y, z = int(pos.x), int(pos.y), int(pos.z)
@@ -1475,6 +1580,37 @@ def sample_environment_context(sim, player_eid, *, descriptor=None) -> dict[str,
 
     vehicle_context = _active_combustion_vehicle_context(sim, player_eid)
 
+    weather = {}
+    lightning_events = []
+    chunk_coords = getattr(sim, "chunk_coords", None)
+    if callable(chunk_coords):
+        try:
+            from game.weather_runtime import weather_snapshot
+
+            player_cx, player_cy = chunk_coords(x, y)
+            weather = weather_snapshot(sim, int(player_cx), int(player_cy))
+            seen_event_ids = set()
+            for chunk_y in range(int(player_cy) - 1, int(player_cy) + 2):
+                for chunk_x in range(int(player_cx) - 1, int(player_cx) + 2):
+                    sample = weather if (chunk_x, chunk_y) == (int(player_cx), int(player_cy)) else weather_snapshot(sim, chunk_x, chunk_y)
+                    event_id = str(sample.get("lightning_event_id", "") or "")
+                    strike = sample.get("lightning_strike_world")
+                    if not event_id or event_id in seen_event_ids or not isinstance(strike, (list, tuple)) or len(strike) < 2:
+                        continue
+                    seen_event_ids.add(event_id)
+                    distance_tiles = math.hypot(float(int(strike[0]) - x), float(int(strike[1]) - y))
+                    chunk_size = max(1, int(getattr(sim, "chunk_size", 16) or 16))
+                    lightning_events.append({
+                        "event_id": event_id,
+                        "strike_world": tuple(strike),
+                        "distance_tiles": round(distance_tiles, 3),
+                        "delay_seconds": round(0.22 + (distance_tiles / 17.0), 3),
+                        "volume": round(max(0.18, 1.0 - (distance_tiles / float(chunk_size * 4))), 3),
+                    })
+        except (AttributeError, TypeError, ValueError):
+            weather = {}
+            lightning_events = []
+
     return {
         "available": True,
         "phase": phase,
@@ -1492,6 +1628,12 @@ def sample_environment_context(sim, player_eid, *, descriptor=None) -> dict[str,
         "vehicle_id": str(vehicle_context.get("vehicle_id", "") or ""),
         "indoors": indoors,
         "position": (x, y, z),
+        "weather_condition": str(weather.get("condition", "clear") or "clear"),
+        "weather_precipitation_kind": str(weather.get("precipitation_kind", "none") or "none"),
+        "weather_precipitation_intensity": round(float(weather.get("precipitation_intensity", 0.0) or 0.0), 4),
+        "weather_storm_intensity": round(float(weather.get("storm_intensity", 0.0) or 0.0), 4),
+        "weather_fog_density": round(float(weather.get("fog_density", 0.0) or 0.0), 4),
+        "weather_lightning_events": tuple(sorted(lightning_events, key=lambda row: (float(row["delay_seconds"]), str(row["event_id"])))),
     }
 
 
@@ -1571,6 +1713,10 @@ class PygameAudioRuntime:
         self._last_ambient_update_at = time.perf_counter()
         self._descriptor_coord = None
         self._descriptor_cache: dict[str, object] = {}
+        self._seen_lightning_events: dict[str, float] = {}
+        self._pending_thunder: list[dict[str, object]] = []
+        self.thunder_scheduled_count = 0
+        self.thunder_play_count = 0
 
         _report_audio_progress(progress_callback, "audio_prepare", 0, 1, "Checking audio mixer")
         if not self.enabled:
@@ -1981,12 +2127,16 @@ class PygameAudioRuntime:
         water = float(context.get("water", 0.0) or 0.0)
         campfire = float(context.get("campfire", 0.0) or 0.0)
         crowd = float(context.get("crowd", 0.0) or 0.0)
+        precipitation_kind = str(context.get("weather_precipitation_kind", "none") or "none")
+        precipitation_intensity = max(0.0, min(1.0, float(context.get("weather_precipitation_intensity", 0.0) or 0.0)))
+        storm_intensity = max(0.0, min(1.0, float(context.get("weather_storm_intensity", 0.0) or 0.0)))
         engine_active = bool(context.get("engine"))
         vehicle_speed = max(0, int(context.get("vehicle_speed", 0) or 0))
         vehicle_top_speed = max(1, int(context.get("vehicle_top_speed", 1) or 1))
         outside_scale = 0.28 if indoors else 1.0
         if biome == "underground":
             outside_scale = 0.18
+        weather_scale = 0.06 if biome == "underground" else outside_scale
         time_cue = "ambient_night" if phase in {"dusk", "night"} else "ambient_day"
         time_level = {"dawn": 0.78, "day": 1.0, "dusk": 0.82, "night": 1.0}.get(phase, 1.0)
         if biome == "underground":
@@ -2005,6 +2155,18 @@ class PygameAudioRuntime:
         else:
             engine_cue = "ambient_engine_cruise"
         engine_level = min(1.0, 0.58 + (0.42 * vehicle_speed / float(vehicle_top_speed)))
+        if storm_intensity >= 0.16:
+            weather_cue = "ambient_weather_storm"
+            weather_level = 0.50 + (storm_intensity * 0.50)
+        elif precipitation_kind == "snow" and precipitation_intensity > 0.0:
+            weather_cue = "ambient_weather_snow"
+            weather_level = 0.38 + (precipitation_intensity * 0.52)
+        elif precipitation_kind in {"rain", "sleet"} and precipitation_intensity > 0.0:
+            weather_cue = "ambient_weather_rain"
+            weather_level = 0.34 + (precipitation_intensity * 0.62)
+        else:
+            weather_cue = ""
+            weather_level = 0.0
         return {
             "water": ("ambient_water" if water > 0.01 else "", water * outside_scale),
             "campfire": ("ambient_campfire" if campfire > 0.01 else "", campfire * (0.45 if indoors else 1.0)),
@@ -2012,7 +2174,57 @@ class PygameAudioRuntime:
             "biome": (biome_cue, 1.0 if biome == "underground" else (0.36 if indoors else 1.0)),
             "crowd": ("ambient_crowd_chatter" if crowd > 0.01 else "", crowd),
             "engine": (engine_cue if engine_active else "", engine_level if engine_active else 0.0),
+            "weather": (weather_cue, weather_level * weather_scale),
         }
+
+    def _observe_weather_lightning(self, context: dict[str, object], now: float) -> None:
+        biome = str(context.get("biome", "") or "").strip().lower()
+        if biome == "underground":
+            exposure = 0.08
+        elif bool(context.get("indoors")):
+            exposure = 0.34
+        else:
+            exposure = 1.0
+        for event in tuple(context.get("weather_lightning_events", ()) or ()):
+            if not isinstance(event, dict):
+                continue
+            event_id = str(event.get("event_id", "") or "")
+            if not event_id or event_id in self._seen_lightning_events:
+                continue
+            try:
+                delay = max(0.12, min(6.0, float(event.get("delay_seconds", 0.4) or 0.4)))
+                distance = max(0.0, float(event.get("distance_tiles", 0.0) or 0.0))
+                volume = max(0.0, min(1.0, float(event.get("volume", 1.0) or 1.0)))
+            except (TypeError, ValueError):
+                continue
+            cue_name = "thunder_near" if distance <= max(8.0, float(getattr(self.sim, "chunk_size", 16) or 16) * 0.80) else "thunder_far"
+            self._seen_lightning_events[event_id] = float(now)
+            self._pending_thunder.append({
+                "event_id": event_id,
+                "due_at": float(now) + delay,
+                "cue_name": cue_name,
+                "volume": volume * exposure,
+            })
+            self.thunder_scheduled_count += 1
+        self._pending_thunder.sort(key=lambda row: (float(row.get("due_at", math.inf)), str(row.get("event_id", ""))))
+        if len(self._pending_thunder) > 8:
+            self._pending_thunder = self._pending_thunder[:8]
+        if len(self._seen_lightning_events) > 96:
+            oldest = sorted(self._seen_lightning_events.items(), key=lambda row: row[1])[:32]
+            for event_id, _seen_at in oldest:
+                self._seen_lightning_events.pop(event_id, None)
+
+    def _update_pending_thunder(self, now: float) -> None:
+        while self._pending_thunder and float(self._pending_thunder[0].get("due_at", math.inf)) <= float(now):
+            pending = self._pending_thunder.pop(0)
+            played = self.play(
+                str(pending.get("cue_name", "thunder_far") or "thunder_far"),
+                source_event="weather_lightning",
+                volume_scale=float(pending.get("volume", 1.0) or 1.0) * self.ambient_volume,
+                cooldown_key=f"thunder:{pending.get('event_id', '')}",
+            )
+            if played:
+                self.thunder_play_count += 1
 
     def _play_ambient_one_shot(self, group: str, cue_name: str, now: float) -> None:
         channel = self._ambient_channels.get(group)
@@ -2124,10 +2336,12 @@ class PygameAudioRuntime:
             self.environment_sample_count += 1
             self.last_environment_sample_ms = sample_ms
             self.max_environment_sample_ms = max(self.max_environment_sample_ms, sample_ms)
-            previous_signature = tuple(self._ambient_context.get(key) for key in ("phase", "biome", "water", "campfire", "crowd_count", "engine", "vehicle_speed", "indoors"))
-            next_signature = tuple(context.get(key) for key in ("phase", "biome", "water", "campfire", "crowd_count", "engine", "vehicle_speed", "indoors"))
+            signature_keys = ("phase", "biome", "water", "campfire", "crowd_count", "engine", "vehicle_speed", "indoors", "weather_condition")
+            previous_signature = tuple(self._ambient_context.get(key) for key in signature_keys)
+            next_signature = tuple(context.get(key) for key in signature_keys)
             self._ambient_context = context
             self._ambient_desired = self._environment_targets(context)
+            self._observe_weather_lightning(context, now)
             self._environment_dirty = False
             self._next_environment_sample_at = now + ENVIRONMENT_SAMPLE_INTERVAL
             sampled = True
@@ -2139,8 +2353,10 @@ class PygameAudioRuntime:
                     f"campfire={float(context.get('campfire', 0.0)):.2f} "
                     f"crowd={int(context.get('crowd_count', 0))} "
                     f"engine={bool(context.get('engine'))}:{int(context.get('vehicle_speed', 0))} "
+                    f"weather={context.get('weather_condition')} "
                     f"indoors={bool(context.get('indoors'))} scan={sample_ms:.2f}ms"
                 )
+        self._update_pending_thunder(now)
         self._apply_ambient_fades(now, immediate=immediate)
         return sampled
 
@@ -2239,6 +2455,9 @@ class PygameAudioRuntime:
             "last_environment_sample_ms": round(self.last_environment_sample_ms, 3),
             "max_environment_sample_ms": round(self.max_environment_sample_ms, 3),
             "ambient_switch_count": self.ambient_switch_count,
+            "thunder_scheduled_count": self.thunder_scheduled_count,
+            "thunder_play_count": self.thunder_play_count,
+            "pending_thunder_count": len(self._pending_thunder),
             "submit_count": self.submit_count,
             "suppressed_count": self.suppressed_count,
             "no_channel_count": self.no_channel_count,

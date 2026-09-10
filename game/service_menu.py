@@ -4113,7 +4113,12 @@ class ServiceMenuSystem(System):
         options, storefront_service = self._service_menu_options(self.player_eid, prop, pos)
         if options:
             option_ids = [str(option.get("id", "")).strip().lower() for option in options]
-            if _property_infrastructure_role(prop) == "service_terminal" and option_ids == ["banking"]:
+            direct_banking_terminal = (
+                _property_infrastructure_role(prop) == "service_terminal"
+                and "banking" in option_ids
+                and set(option_ids).issubset({"banking", "weather_report"})
+            )
+            if direct_banking_terminal:
                 self._open_banking_menu(prop)
             else:
                 self._open_service_menu(prop, options, storefront_service=storefront_service)
@@ -4167,6 +4172,8 @@ class ServiceMenuSystem(System):
         archetype = str((prop.get("metadata") or {}).get("archetype", ""))
         staffed = not _property_is_storefront(prop) or bool((storefront_service or {}).get("available"))
         if access.can_use_services and staffed:
+            if _property_infrastructure_role(prop) == "service_terminal" or report_counter(prop):
+                options.append({"id": "weather_report", "label": "Weather forecast"})
             if archetype in PREP_ARCHETYPES or "campfire_cook" in advertised_site_services or "butcher_prepare" in advertised_site_services:
                 options.append({"id": "prepare_fish", "label": "Prepare a whole fish"})
             if archetype == "bait_shop":
@@ -4221,6 +4228,8 @@ class ServiceMenuSystem(System):
         wallet_credits = int(getattr(assets, "credits", 0)) if assets else 0
         bank_balance = int(getattr(profile, "bank_balance", 0)) if profile else 0
         options = self._bank_menu_options(self.player_eid, business_contexts=business_contexts)
+        if _property_infrastructure_role(prop) == "service_terminal":
+            options.append({"id": "weather_report", "label": "Weather forecast"})
         transcript = [
             f"Choose how much to move at {prop_name}.",
             f"Wallet {_credit_amount_label(wallet_credits)} | Bank {_credit_amount_label(bank_balance)}.",
@@ -5675,6 +5684,12 @@ class ServiceMenuSystem(System):
         if reason == "cooldown":
             ready_in = int(event.data.get("ready_in", 0))
             return title, [f"{_site_service_label(service).title()} is not available again yet.", f"Ready in {ready_in}t."]
+        if reason == "weather_exposed":
+            condition = str(event.data.get("condition", "steady rain") or "steady rain").strip().lower()
+            return f"Campfire: {prop_name}", [
+                f"The exposed fire ring will not stay lit in this {condition}.",
+                "Wait for it to ease or find a roofed place to rest and prepare food.",
+            ]
         if service in TRANSIT_SERVICE_IDS and reason == "no_destinations":
             profile = _transit_service_profile(service) or {}
             title = _transit_service_title(service)
@@ -6721,6 +6736,31 @@ class ServiceMenuSystem(System):
                 return
             action = {"prepare_fish": prepare_fish, "identify_fish": identify_fish, "fish_rumor": bait_shop_rumor}[option_id]
             self._present_service_result("Fishing", [action(self.sim, self.player_eid, prop)], property_id=property_id)
+            return
+        if option_id == "weather_report":
+            if state.get("close_pending"):
+                return
+            from game.property_runtime import property_distance
+            from game.tornado_runtime import weather_report_lines
+            pos = self._position_for(self.player_eid)
+            covered = _property_covering(self.sim, pos.x, pos.y, pos.z) if pos is not None else None
+            inside = isinstance(covered, dict) and str(covered.get("id")) == str(property_id)
+            if (not isinstance(prop, dict) or pos is None
+                    or str(property_id) != str(state.get("property_id"))
+                    or int(prop.get("z", 0)) != int(pos.z)
+                    or (not inside and property_distance(pos.x, pos.y, prop) > 2)):
+                self._present_service_result("Weather forecast", ["You need to be at an information point to check the forecast."], property_id=property_id)
+                return
+            options, _service = self._service_menu_options(self.player_eid, prop, pos)
+            if not any(row["id"] == "weather_report" for row in options):
+                self._present_service_result("Weather forecast", ["No current forecast is available here."], property_id=property_id)
+                return
+            cx, cy = self.sim.chunk_coords(pos.x, pos.y)
+            self._present_service_result(
+                "Weather forecast",
+                weather_report_lines(self.sim, cx, cy),
+                property_id=property_id,
+            )
             return
         if option_id == "market_report":
             if state.get("close_pending"):

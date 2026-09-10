@@ -444,6 +444,11 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
         vehicle_class = str(profile.get("vehicle_class", "vehicle")).replace("_", " ").strip() or "vehicle"
         speed = int(getattr(vehicle_state, "speed", 0) or 0)
         headlights = "on" if bool(getattr(vehicle_state, "headlights_on", True)) else "off"
+        vehicle_metadata = active_vehicle_prop.get("metadata") if isinstance(active_vehicle_prop.get("metadata"), dict) else {}
+        wetness = max(0.0, min(1.0, float(vehicle_metadata.get("weather_wetness", 0.0) or 0.0)))
+        weather_state = f"Wetness {wetness:.0%}"
+        if isinstance(vehicle_metadata.get("weather_stuck"), dict):
+            weather_state += " | Bogged"
         loadout_lines.extend([
             "",
             "VEHICLE",
@@ -456,6 +461,7 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
                 f"Power {int(profile.get('power', 5))} | Durability {int(profile.get('durability', 5))} | "
                 f"Efficiency {int(profile.get('fuel_efficiency', 5))}"
             ),
+            weather_state,
         ])
 
     appearance_lines = [

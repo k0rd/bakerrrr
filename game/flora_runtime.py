@@ -20,6 +20,7 @@ from game.flora_genetics import (
     normalize_flora_genetics,
     preroll_fungal_mutation_glow,
 )
+from game.flora_produce_runtime import expressed_produce_traits, flora_weather_response
 from game.json_metadata import split_object_document
 
 
@@ -308,6 +309,8 @@ def _normalize_flora_row(plant_id, raw):
         "district_weights": _normalize_weight_map(raw.get("district_weights")),
         "tags": tuple(sorted(tags)),
         "growth_traits": _normalize_dict(raw.get("growth_traits")),
+        "produce_profile": _normalize_dict(raw.get("produce_profile")),
+        "weather_affinity": _normalize_dict(raw.get("weather_affinity")),
         "genetics": _normalize_dict(raw.get("genetics")),
         "harvest_potential": _normalize_dict(raw.get("harvest_potential")),
         "crossbreed_tags": _normalize_string_tuple(raw.get("crossbreed_tags")),
@@ -871,6 +874,9 @@ def flora_harvest_updates_after_pick(record, *, eid=None, tick=0, method="", ite
         ) + 1,
         "regrowth_started_tick": _safe_int(tick, 0),
         "regrowth_pause_baseline": max(0, _safe_int(row.get("paused_ticks"), 0)),
+        "regrowth_progress_ticks": 0.0,
+        "last_regrowth_weather_tick": _safe_int(tick, 0),
+        "regrowth_weather_pause_baseline": max(0, _safe_int(row.get("paused_ticks"), 0)),
         "harvest_method": str(method or "").strip().lower(),
         "output_item_id": str(item_id or "").strip().lower(),
         "output_instance_id": str(instance_id or "").strip(),
@@ -884,7 +890,7 @@ def flora_harvest_updates_after_pick(record, *, eid=None, tick=0, method="", ite
     return updates
 
 
-def flora_regrowth_interval_ticks(record):
+def flora_regrowth_interval_ticks(record, *, sim=None):
     """Return the active-world ticks needed to recover one harvest use."""
 
     if not isinstance(record, dict):
@@ -990,7 +996,7 @@ def _store_flora_record(sim, record):
     chunk_records[key] = bucket
 
 
-def _advance_flora_record_regrowth(record, now):
+def _advance_flora_record_regrowth(record, now, *, sim=None):
     row = normalize_flora_harvest_state(record)
     stage = _str_key(row.get("stage"), "mature")
     if stage in FAILED_FLORA_STAGES or stage in IMMATURE_FLORA_STAGES or bool(row.get("growth_paused")):
@@ -1009,28 +1015,50 @@ def _advance_flora_record_regrowth(record, now):
     if not anchor_values:
         row["regrowth_started_tick"] = int(now)
         row["regrowth_pause_baseline"] = int(paused_total)
+        row["regrowth_progress_ticks"] = 0.0
+        row["last_regrowth_weather_tick"] = int(now)
+        row["regrowth_weather_pause_baseline"] = int(paused_total)
         return row, 0, True
 
     anchor = max(anchor_values)
     pause_baseline = max(0, _safe_int(row.get("regrowth_pause_baseline"), paused_total))
     paused_since_anchor = max(0, paused_total - pause_baseline)
     active_elapsed = max(0, int(now) - int(anchor) - int(paused_since_anchor))
+    if row.get("regrowth_progress_ticks") is None:
+        progress = float(active_elapsed)
+        elapsed_since_sample = 0
+    else:
+        progress = max(0.0, _safe_float(row.get("regrowth_progress_ticks"), 0.0))
+        last_sample = _safe_int(row.get("last_regrowth_weather_tick"), anchor)
+        weather_pause_baseline = max(0, _safe_int(row.get("regrowth_weather_pause_baseline"), paused_total))
+        paused_since_sample = max(0, paused_total - weather_pause_baseline)
+        elapsed_since_sample = max(0, int(now) - int(last_sample) - int(paused_since_sample))
+    response = flora_weather_response(sim, row, tick=now) if sim is not None else {}
+    multiplier = max(0.55, min(1.40, _safe_float(response.get("growth_multiplier"), 1.0)))
+    progress += float(elapsed_since_sample) * multiplier
+    row["regrowth_progress_ticks"] = round(progress, 3)
+    row["last_regrowth_weather_tick"] = int(now)
+    row["regrowth_weather_pause_baseline"] = int(paused_total)
+    row["weather_growth_multiplier"] = round(multiplier, 3)
+    row["weather_growth_fit"] = round(_safe_float(response.get("fit"), 0.5), 3)
+    row["weather_growth_label"] = str(response.get("label", "steady") or "steady")
     interval = flora_regrowth_interval_ticks(row)
-    recovered = min(limit - remaining, active_elapsed // interval)
+    recovered = min(limit - remaining, int(progress // interval))
     if recovered <= 0:
-        return row, 0, False
+        return row, 0, bool(elapsed_since_sample or record.get("regrowth_progress_ticks") is None)
 
     row["lifetime_harvest_count"] = max(
         _safe_int(row.get("lifetime_harvest_count"), 0),
         _safe_int(row.get("harvest_count"), 0),
     )
     remaining += int(recovered)
-    residual = active_elapsed - int(recovered) * interval
+    residual = max(0.0, progress - int(recovered) * interval)
     row["harvest_remaining"] = int(remaining)
     row["harvest_count"] = max(0, int(limit) - int(remaining))
     row["harvest_exhausted"] = False
-    row["regrowth_started_tick"] = int(now) - int(residual)
+    row["regrowth_started_tick"] = int(now)
     row["regrowth_pause_baseline"] = int(paused_total)
+    row["regrowth_progress_ticks"] = round(residual, 3)
     row["last_regrowth_tick"] = int(now)
     row["regrowth_count"] = max(0, _safe_int(row.get("regrowth_count"), 0)) + int(recovered)
     row.pop("exhaustion_kind", None)
@@ -1056,7 +1084,7 @@ def advance_loaded_flora_regrowth(sim, *, now=None):
         if not isinstance(record, dict):
             continue
         checked += 1
-        updated, recovered, changed = _advance_flora_record_regrowth(record, now)
+        updated, recovered, changed = _advance_flora_record_regrowth(record, now, sim=sim)
         if not changed:
             continue
         _store_flora_record(sim, updated)
@@ -1480,6 +1508,8 @@ def flora_render_data(record, *, sim=None):
     exhausted = stage in EXHAUSTED_FLORA_STAGES or _safe_int(record.get("harvest_remaining"), 0) <= 0
     failed = stage in FAILED_FLORA_STAGES
     bloom_state = flora_bloom_state(sim, record)
+    produce = expressed_produce_traits(record)
+    visibly_fruiting = bool(produce.get("produces_food") and not exhausted and not failed and stage not in IMMATURE_FLORA_STAGES)
     environmental_morph = _str_key(record.get("environmental_morph"))
     if failed:
         semantic = "flora_withered"
@@ -1491,6 +1521,8 @@ def flora_render_data(record, *, sim=None):
         semantic = "flora_accumulator"
     elif environmental_morph == "contaminant_indicator":
         semantic = "flora_indicator"
+    elif visibly_fruiting:
+        semantic = f"flora_fruiting_{produce.get('shape', 'berry')}"
     elif growth_form == "lichen":
         semantic = "flora_moss"
     elif growth_form == "flower" and bloom_state == "closed" and not exhausted:
@@ -1512,6 +1544,8 @@ def flora_render_data(record, *, sim=None):
         color = _str_key(record.get("color_key"), "flora_leaf")
     elif exhausted:
         color = "flora_spent"
+    elif visibly_fruiting:
+        color = _str_key(produce.get("color_key"), record.get("color_key") or "flora_leaf")
     elif growth_form == "flower" and bloom_state == "closed":
         color = "flora_flower_closed"
     elif growth_form == "flower" and bloom_state == "night_open":
@@ -1519,6 +1553,8 @@ def flora_render_data(record, *, sim=None):
     else:
         color = _str_key(record.get("color_key"), record.get("render_key") or DEFAULT_RENDER_KEY_BY_FORM.get(growth_form, "flora_leaf"))
     effects = [effect for effect in (record.get("spread_state"),) if effect in {"creeping", "trailing", "flowering"}]
+    if visibly_fruiting:
+        effects.extend((f"produce_{produce.get('kind', 'fruit')}", f"produce_shape_{produce.get('shape', 'berry')}"))
     if bloom_state in {"open", "closed", "night_open"} and (growth_form == "flower" or bloom_state != "open"):
         effects.append(f"flower_{bloom_state}" if growth_form == "flower" else bloom_state)
     if exhausted and not failed:
@@ -1593,6 +1629,10 @@ def flora_look_text(records, *, sim=None):
     if len(rows) > 1:
         text += f" +{len(rows) - 1}"
     ecology_note = str(record.get("ecology_note", "") or "").strip()
+    produce = expressed_produce_traits(record)
+    if produce.get("produces_food") and stage not in EXHAUSTED_FLORA_STAGES:
+        fruit_label = f"{str(produce.get('color_word', '')).replace('_', ' ')} {str(produce.get('shape', 'fruit')).replace('_', ' ')}".strip()
+        text += f" bearing {fruit_label}"
     if ecology_note:
         text += f". {ecology_note}"
     return text

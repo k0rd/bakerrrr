@@ -454,6 +454,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("fire_started", self.on_fire_started)
         self.sim.events.subscribe("fire_contained", self.on_fire_contained)
         self.sim.events.subscribe("fire_burned_out", self.on_fire_burned_out)
+        self.sim.events.subscribe("tornado_reported", self.on_tornado_reported)
+        self.sim.events.subscribe("tornado_impact", self.on_tornado_impact)
+        self.sim.events.subscribe("npc_weather_shelter_sought", self.on_npc_weather_shelter_sought)
         self.sim.events.subscribe("world_condition_triggered", self.on_world_condition_triggered)
         self.sim.events.subscribe("scan_report", self.on_scan_report)
         self.sim.events.subscribe("look_mode_toggled", self.on_look_mode_toggled)
@@ -2412,6 +2415,47 @@ class EventLogSystem(System):
         place = self._event_fire_place_name(event)
         self._log(f"The fire at {place} burns down to smoke and cleanup.", channel="world", priority="normal")
 
+    def on_tornado_reported(self, event):
+        if not self._player_can_perceive_event_position(event):
+            return
+        self._log(
+            "A tornado warning sounds nearby. People are moving for strong shelter.",
+            channel="alerts",
+            priority="critical",
+            dedupe_window=90,
+            dedupe_key=f"tornado-warning:{event.data.get('tornado_id')}",
+        )
+
+    def on_tornado_impact(self, event):
+        if not self._player_can_perceive_event_position(event):
+            return
+        impacts = (
+            _int_or_default(event.data.get("vehicles_hit"), 0)
+            + _int_or_default(event.data.get("structures_hit"), 0)
+            + _int_or_default(event.data.get("debris_tossed"), 0)
+        )
+        message = "The funnel tears through the area."
+        if impacts:
+            message = "The funnel is throwing debris and tearing into the street."
+        self._log(
+            message,
+            channel="world",
+            priority="critical",
+            dedupe_window=24,
+            dedupe_key=f"tornado-impact:{event.data.get('tornado_id')}",
+        )
+
+    def on_npc_weather_shelter_sought(self, event):
+        if not self._player_can_perceive_event_position(event):
+            return
+        self._log(
+            "People nearby are abandoning what they were doing and heading into stronger buildings.",
+            channel="world",
+            priority="high",
+            dedupe_window=90,
+            dedupe_key="weather-shelter-movement",
+        )
+
     def on_world_condition_triggered(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -4206,6 +4250,10 @@ class EventLogSystem(System):
             return
         if reason == "power_cut":
             self.sim.log.add(f"{prop_name} is offline. Power is out.")
+            return
+        if reason == "weather_exposed":
+            condition = str(event.data.get("condition", "steady rain") or "steady rain").strip().lower()
+            self.sim.log.add(f"Campfire: the exposed ring at {prop_name} will not stay lit in this {condition}.")
             return
         if reason == "no_return_path" and service == "underground_access":
             self.sim.log.add(f"Passage: {prop_name} is not safe to enter right now. No verified way back to ground could be confirmed.")
@@ -8641,6 +8689,15 @@ class EventLogSystem(System):
         if reason == "vehicle_broken":
             name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             self.sim.log.add(f"{name} is broken and will not move.")
+            return
+        if reason == "weather_stuck":
+            self.sim.log.add("The tires dig into the wet or snowy ground. Ease it out; repeated attempts can find purchase.")
+            return
+        if reason == "weather_skid":
+            self.sim.log.add("The tires slip across the slick surface and the vehicle loses its movement.")
+            return
+        if reason == "frozen_water":
+            self.sim.log.add("The frozen water blocks the boat's hull.")
             return
         if reason in {"blocked_tile", "closed_door", "locked_door", "locked_property", "closed_property", "door_access_denied", "active_fire"}:
             self.sim.log.add("The vehicle cannot pass that way.")

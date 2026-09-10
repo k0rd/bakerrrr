@@ -30,6 +30,8 @@ from game.system_support.structure_damage_runtime import (
     structure_is_broken as _structure_is_broken,
 )
 from game.vehicle_explosion_runtime import arm_vehicle_explosion
+from game.weather_effects import update_vehicle_wetness, vehicle_weather_control
+from game.weather_runtime import ground_weather_snapshot
 
 
 MAX_VEHICLE_SPEED = 4
@@ -394,14 +396,22 @@ def vehicle_local_block_reason(sim, eid, vehicle_prop, x, y, z=0, *, medium=None
     glyph = str(getattr(tile, "glyph", "") or "")[:1]
     if not tile:
         return "chunk_unready"
+    ground = None
+    if glyph in WATER_TILE_GLYPHS:
+        ground = ground_weather_snapshot(sim, x, y, z=z, tile=tile)
     structure_prop, _aperture, structure_kind, structure_broken = _vehicle_structural_surface(sim, x, y, z)
     if medium == "water":
         if glyph not in WATER_TILE_GLYPHS:
             return "blocked_tile"
+        if bool((ground or {}).get("water_frozen", False)):
+            return "frozen_water"
     elif not bool(getattr(tile, "walkable", False)):
-        if structure_kind in {"window", "door", "wall"} and not structure_broken:
+        if glyph in WATER_TILE_GLYPHS and bool((ground or {}).get("supports_vehicle_traffic", False)):
+            pass
+        elif structure_kind in {"window", "door", "wall"} and not structure_broken:
             return structure_kind
-        return "blocked_tile"
+        else:
+            return "blocked_tile"
 
     fire_cell = fire_cell_state(sim, x, y, z)
     if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
@@ -1128,6 +1138,20 @@ def try_vehicle_step(sim, eid, vehicle_prop, target_x, target_y, target_z=0, *, 
             )
             return False, "crash"
         return False, block_reason
+
+    if medium == "land":
+        weather_control = vehicle_weather_control(
+            sim,
+            vehicle_prop,
+            target_x,
+            target_y,
+            target_z,
+            speed=speed,
+        )
+        if not bool(weather_control.get("allowed", True)):
+            return False, str(weather_control.get("blocked_reason", "weather_stuck") or "weather_stuck")
+    else:
+        update_vehicle_wetness(sim, vehicle_prop, target_x, target_y, target_z)
 
     if medium == "water":
         positions = sim.ecs.get(Position)

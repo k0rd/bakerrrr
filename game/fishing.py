@@ -14,6 +14,7 @@ from engine.systems import System
 from game.components import AI, Inventory, NPCNeeds, NPCTraits, NPCWill, Occupation, Position, SkillProfile, Vitality
 from game.items import ITEM_CATALOG
 from game.system_support.player_feedback import _log_player_feedback
+from game.weather_runtime import campfire_weather_block, ground_weather_snapshot, weather_snapshot
 
 SPECIES_COUNT = 36
 MAX_NPC_FISHERS = 12
@@ -107,6 +108,60 @@ def water_at(sim, x, y, z=0):
     state = ensure_fishing(sim)
     wid = state["chunks"].get(sim.chunk_coords(x, y), {}).get("cells", {}).get((x, y))
     return state["waters"].get(wid)
+
+
+def fishing_weather_context(sim, x, y, z=0, *, tick=None):
+    """Return grounded water availability and bite pacing for one cast site."""
+
+    if int(z) != 0:
+        return {"available": True, "bite_time_factor": 1.0, "bite_window_factor": 1.0, "note": ""}
+    tile = sim.tilemap.tile_at(int(x), int(y), int(z))
+    ground = ground_weather_snapshot(sim, int(x), int(y), z=int(z), tick=tick, tile=tile)
+    cx, cy = sim.chunk_coords(int(x), int(y))
+    weather = weather_snapshot(sim, cx, cy, tick=tick)
+    if bool(ground.get("water_frozen")):
+        return {
+            "available": False,
+            "bite_time_factor": 1.0,
+            "bite_window_factor": 1.0,
+            "note": "The water has frozen solid; there is nowhere to cast.",
+            "ground": ground,
+            "weather": weather,
+        }
+
+    precipitation_kind = str(weather.get("precipitation_kind", "none") or "none")
+    precipitation = max(0.0, min(1.0, float(weather.get("precipitation_intensity", 0.0) or 0.0)))
+    storm = max(0.0, min(1.0, float(weather.get("storm_intensity", 0.0) or 0.0)))
+    wind = max(0.0, float(weather.get("wind_speed_kph", 0.0) or 0.0))
+    try:
+        temperature = float(weather.get("temperature_c", ground.get("temperature_c", 12.0)))
+    except (TypeError, ValueError):
+        temperature = 12.0
+    bite_time_factor = 1.0
+    bite_window_factor = 1.0
+    note = ""
+    if precipitation_kind == "rain" and 0.08 <= precipitation < 0.68 and storm < 0.16:
+        bite_time_factor *= 0.80
+        bite_window_factor *= 1.10
+        note = "Rain stipples the water; fish are moving beneath it."
+    elif precipitation_kind in {"rain", "sleet"} and precipitation > 0.0:
+        bite_time_factor *= 0.94
+    if storm >= 0.16 or wind >= 38.0:
+        bite_time_factor *= 1.28
+        bite_window_factor *= 0.78
+        note = "The churn makes the float difficult to read."
+    if temperature <= 4.0:
+        bite_time_factor *= 1.18
+    elif temperature >= 29.0:
+        bite_time_factor *= 1.10
+    return {
+        "available": True,
+        "bite_time_factor": max(0.70, min(1.55, bite_time_factor)),
+        "bite_window_factor": max(0.68, min(1.24, bite_window_factor)),
+        "note": note,
+        "ground": ground,
+        "weather": weather,
+    }
 
 
 def recover_stock(sim, water):
@@ -224,6 +279,10 @@ def identify_fish(sim, eid, prop):
 
 def prepare_fish(sim, eid, prop):
     """Prepare one whole specimen in place; identity and inventory slot survive."""
+    weather_block = campfire_weather_block(sim, prop, service="prepare_fish")
+    if weather_block is not None:
+        condition = str(weather_block.get("condition", "steady rain") or "steady rain").lower()
+        return f"The exposed fire ring will not stay lit in this {condition}."
     inv = sim.ecs.get(Inventory).get(eid)
     entry = next((e for e in inv.items if e.get("item_id") == "fresh_fish"), None) if inv else None
     if entry is None:
@@ -322,8 +381,13 @@ def begin_fishing(sim, eid, pole_id, direction=None, *, water=None, motive="rela
     if max(abs(water[0] - pos.x), abs(water[1] - pos.y)) != 1 or water[2] != pos.z or water_at(sim, *water) is None:
         feedback(sim, eid, "Face the water from the bank, then use your fishing pole.")
         return False
+    weather_context = fishing_weather_context(sim, *water)
+    if not bool(weather_context.get("available", True)):
+        feedback(sim, eid, str(weather_context.get("note", "The water is frozen solid.")))
+        return False
     session = dict(eid=eid, pole=pole_id, origin=(pos.x, pos.y, pos.z), water=tuple(water),
-                   phase="bait", motive=motive, created=int(sim.tick), bait=None)
+                   phase="bait", motive=motive, created=int(sim.tick), bait=None,
+                   weather_check_tick=int(sim.tick))
     state["sessions"][eid] = session
     if eid == getattr(sim, "player_eid", None):
         sim.fishing_ui = {"open": True, "selected": 0, "message": "Choose bait, or cast with a bare hook."}
@@ -362,6 +426,10 @@ def cast_line(sim, eid, bait_id=None):
     if not water or not pole or pole["item_id"] != "fishing_pole":
         end_fishing(sim, eid)
         return False
+    weather_context = fishing_weather_context(sim, *session["water"])
+    if not bool(weather_context.get("available", True)):
+        end_fishing(sim, eid, str(weather_context.get("note", "The water is frozen solid.")))
+        return False
     if bait_id is not None:
         entry = inv.find(instance_id=bait_id)
         if entry is None or entry["item_id"] not in {"fishing_bait", "fresh_fish"}:
@@ -374,13 +442,21 @@ def cast_line(sim, eid, bait_id=None):
     recover_stock(sim, water)
     available = [sid for sid, count in water["stock"].items() if count > 0]
     sid = rng.choices(available, weights=[water["stock"][sid] / state["species"][sid]["rarity"] for sid in available])[0] if available else None
-    wait = rng.randint(50, 160) if bait_id else rng.randint(120, 280)
+    base_wait = rng.randint(50, 160) if bait_id else rng.randint(120, 280)
+    wait = max(20, int(round(base_wait * float(weather_context.get("bite_time_factor", 1.0) or 1.0))))
+    bite_window = max(8, int(round(
+        (max(12, 32 - state["species"][sid]["rarity"] * 4) if sid else 24)
+        * float(weather_context.get("bite_window_factor", 1.0) or 1.0)
+    )))
     session.update(phase="waiting", bait=bait_id, species=sid, cast_tick=int(sim.tick),
                    approach_tick=int(sim.tick) + max(20, wait - 25), bite_tick=int(sim.tick) + wait,
-                   deadline=int(sim.tick) + wait + (max(12, 32 - state["species"][sid]["rarity"] * 4) if sid else 24),
-                   rng_seed=state["serial"])
+                   deadline=int(sim.tick) + wait + bite_window,
+                   weather_bite_time_factor=float(weather_context.get("bite_time_factor", 1.0) or 1.0),
+                   weather_bite_window_factor=float(weather_context.get("bite_window_factor", 1.0) or 1.0),
+                   weather_check_tick=int(sim.tick), rng_seed=state["serial"])
     if eid == getattr(sim, "player_eid", None):
-        sim.fishing_ui["message"] = "Your float settles. Wait for it to dip."
+        weather_note = str(weather_context.get("note", "") or "").strip()
+        sim.fishing_ui["message"] = weather_note or "Your float settles. Wait for it to dip."
         sim.set_time_paused(False, reason="fishing")
     return True
 
@@ -512,8 +588,15 @@ class FishingSystem(System):
         ai = self.sim.ecs.get(AI).get(eid)
         inv = self.sim.ecs.get(Inventory).get(eid)
         pole = inv.find(item_id="fishing_pole") if inv else None
-        if ai and pole:
-            begin_fishing(self.sim, eid, pole["instance_id"], water=getattr(ai, "fishing_water", None), motive=getattr(ai, "fishing_motive", "relaxation"))
+        if ai and pole and not begin_fishing(
+            self.sim,
+            eid,
+            pole["instance_id"],
+            water=getattr(ai, "fishing_water", None),
+            motive=getattr(ai, "fishing_motive", "relaxation"),
+        ):
+            ai.state, ai.target, ai.target_eid = "idle", None, None
+            ensure_fishing(self.sim)["npc_cooldowns"][eid] = int(self.sim.tick) + 300
 
     def on_buyer_arrived(self, event):
         from game.property_access import evaluate_property_access, site_services_for_property
@@ -557,6 +640,12 @@ class FishingSystem(System):
                 end_fishing(self.sim, eid, "You reel in as you leave the bank.")
                 continue
             tick = int(self.sim.tick)
+            if tick >= int(session.get("weather_check_tick", tick) or tick) + 60:
+                session["weather_check_tick"] = tick
+                weather_context = fishing_weather_context(self.sim, *session["water"])
+                if not bool(weather_context.get("available", True)):
+                    end_fishing(self.sim, eid, str(weather_context.get("note", "The water freezes around the line.")))
+                    continue
             phase = session["phase"]
             if phase in {"waiting", "approach", "bite"}:
                 if tick > session["deadline"]:
@@ -687,4 +776,10 @@ class FishingSystem(System):
             return
 
 
-__all__ = ["FishingSystem", "ensure_fishing", "index_fishing_chunk", "begin_fishing"]
+__all__ = [
+    "FishingSystem",
+    "ensure_fishing",
+    "index_fishing_chunk",
+    "begin_fishing",
+    "fishing_weather_context",
+]
