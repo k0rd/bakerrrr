@@ -127,7 +127,7 @@ _PYGAME_AUDIO_RATE_ENV = "BAKERRRR_AUDIO_RATE"
 _PYGAME_AUDIO_BUFFER_ENV = "BAKERRRR_AUDIO_BUFFER"
 _PYGAME_AUDIO_DEFAULT_RATE = 22_050
 _PYGAME_AUDIO_DEFAULT_BUFFER = 512
-_OUTDOOR_GROUND_OPACITY_SCALE = 0.5
+_OUTDOOR_GROUND_OPACITY_SCALE = 0.25
 _OUTDOOR_GROUND_COLOR_KEYS = frozenset({
     "floor_industrial",
     "floor_residential",
@@ -10311,7 +10311,7 @@ class PygameView:
         self._flush_queued_draws()
         overlay = self.pygame.Surface(self.surface.get_size(), self.pygame.SRCALPHA)
         cell_px = max(1, int(self.cell_px))
-        rain = self._alpha_color("weather_rain", 210)
+        rain = self._alpha_color("weather_rain", 90)
         sleet = self._alpha_color("weather_sleet", 220)
         snow = self._alpha_color("weather_snow", 230)
         fog = self._alpha_color("weather_fog", 255)
@@ -10447,8 +10447,8 @@ class PygameView:
         snow = self._alpha_color("weather_ground_snow", 220)
         ice = self._alpha_color("weather_ground_ice", 210)
         soft = self._alpha_color("weather_ground_soft", 180)
-        puddle = self._alpha_color("weather_ground_puddle", 190)
-        flood = self._alpha_color("weather_ground_flood", 190)
+        puddle = self._alpha_color("weather_ground_puddle", 105)
+        flood = self._alpha_color("weather_ground_flood", 110)
 
         for cell in cells:
             try:
