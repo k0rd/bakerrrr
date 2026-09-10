@@ -127,6 +127,19 @@ _PYGAME_AUDIO_RATE_ENV = "BAKERRRR_AUDIO_RATE"
 _PYGAME_AUDIO_BUFFER_ENV = "BAKERRRR_AUDIO_BUFFER"
 _PYGAME_AUDIO_DEFAULT_RATE = 22_050
 _PYGAME_AUDIO_DEFAULT_BUFFER = 512
+_OUTDOOR_GROUND_OPACITY_SCALE = 0.5
+_OUTDOOR_GROUND_COLOR_KEYS = frozenset({
+    "floor_industrial",
+    "floor_residential",
+    "floor_downtown",
+    "floor_slums",
+    "floor_corporate",
+    "floor_military",
+    "floor_entertainment",
+    "floor_frontier",
+    "floor_wilderness",
+    "floor_coastal",
+})
 
 
 def _resource_path(*parts):
@@ -8193,7 +8206,16 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_district_floor_overlay(self, x, y, color=None, attrs=0, *, kind="downtown"):
+    def _draw_district_floor_overlay(
+        self,
+        x,
+        y,
+        color=None,
+        attrs=0,
+        *,
+        kind="downtown",
+        opacity_scale=1.0,
+    ):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.04)
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
@@ -8272,6 +8294,9 @@ class PygameView:
             for point in confetti:
                 self.pygame.draw.circle(overlay, dot, point, dot_r)
 
+        opacity_scale = max(0.0, min(1.0, float(opacity_scale)))
+        if opacity_scale < 1.0:
+            overlay.set_alpha(int(round(255 * opacity_scale)))
         self.surface.blit(overlay, (cell_x, cell_y))
 
     def _overworld_pattern_variant(self, x, y, mod=4):
@@ -9267,6 +9292,11 @@ class PygameView:
                 color=color,
                 attrs=attrs,
                 kind=color_key.removeprefix("floor_") or "generic",
+                opacity_scale=(
+                    _OUTDOOR_GROUND_OPACITY_SCALE
+                    if color_key in _OUTDOOR_GROUND_COLOR_KEYS
+                    else 1.0
+                ),
             )
             return color_key
         if semantic_key == "ui_actor_identity_rune":

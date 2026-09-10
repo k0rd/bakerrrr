@@ -25,6 +25,7 @@ DEFAULT_SAMPLE_RATE = 22_050
 DEFAULT_CHANNEL_COUNT = 2
 DEFAULT_MIXER_BUFFER = 512
 MIN_MIXER_CHANNEL_COUNT = 25
+MAX_CACHED_BANK_SECONDS = 145.0
 OPEN_RUN_BPM = 92
 OPEN_RUN_BEATS = 16
 OPEN_RUN_DURATION = OPEN_RUN_BEATS * (60.0 / OPEN_RUN_BPM)
@@ -1304,11 +1305,16 @@ def validate_cues(cues: Iterable[RenderedCue], *, progress_callback=None) -> dic
         )
 
     bytes_per_second = cues[0].sample_rate * cues[0].channel_count * SAMPLE_WIDTH if cues else 1
-    if total_pcm > bytes_per_second * 130:
-        raise AssertionError("the cached bank exceeded its one-hundred-thirty-second PCM budget")
+    total_pcm_seconds = float(total_pcm) / float(bytes_per_second)
+    if total_pcm_seconds > MAX_CACHED_BANK_SECONDS:
+        raise AssertionError(
+            f"the cached bank used {total_pcm_seconds:.2f}s, exceeding its "
+            f"{MAX_CACHED_BANK_SECONDS:.0f}s PCM budget"
+        )
     return {
         "cue_count": len(cues),
         "total_pcm_bytes": total_pcm,
+        "total_pcm_seconds": total_pcm_seconds,
         "largest_pcm_peak": largest_peak,
     }
 
@@ -2489,6 +2495,7 @@ __all__ = [
     "DEFAULT_SAMPLE_RATE",
     "EVENT_CUE_MAP",
     "EVENT_CUE_VARIANTS",
+    "MAX_CACHED_BANK_SECONDS",
     "MUSIC_BIOME_CUE_BY_KEY",
     "MUSIC_CUE_NAMES",
     "MUSIC_HOME_CUE_NAMES",
