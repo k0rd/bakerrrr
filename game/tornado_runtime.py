@@ -315,7 +315,7 @@ def weather_report_lines(sim, cx, cy, *, tick=None):
             f"+{_safe_int(sample.get('forecast_offset_hours'))}h: {str(sample.get('condition', 'clear'))}; "
             f"{_safe_float(sample.get('temperature_c')):.0f} C; wind {_safe_float(sample.get('wind_speed_kph')):.0f} km/h."
         )
-    lines.append("Watches describe favorable conditions; warnings mean a funnel has actually been reported. Exact tracks remain uncertain.")
+    lines.append("Severe weather watches and warnings indicate the presence of severe weather in this region. If listed above, take appropriate action as instructed in the advisory.")
     return lines
 
 
