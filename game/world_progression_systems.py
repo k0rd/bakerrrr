@@ -232,7 +232,7 @@ from game.vehicles import (
     vehicle_metadata,
     vehicle_services_for_archetype,
 )
-from game.run_objectives import evaluate_run_objective
+from game.run_objectives import evaluate_run_objective, reveal_run_objective
 
 
 def _generate_human_personal_name(*args, **kwargs):
@@ -4112,6 +4112,25 @@ class FinalOperationSystem(System):
         self.sim.events.subscribe("player_downed", self.on_player_downed)
         self.sim.events.subscribe("player_killed", self.on_player_killed)
         self.sim.events.subscribe("item_picked_up", self.on_item_picked_up)
+        self.sim.events.subscribe("property_owner_changed", self.on_property_owner_changed)
+        self.sim.events.subscribe("player_business_acquired", self.on_player_business_acquired)
+
+    def _reveal_matching_objective(self, objective_id, source):
+        traits = getattr(self.sim, "world_traits", {})
+        objective = traits.get("run_objective", {}) if isinstance(traits, dict) else {}
+        if str(objective.get("id", "")).strip().lower() != str(objective_id).strip().lower():
+            return False
+        return reveal_run_objective(self.sim, source=source)
+
+    def on_property_owner_changed(self, event):
+        if event.data.get("new_owner_eid") != self.player_eid:
+            return
+        self._reveal_matching_objective("neighborhood_control", "owned_property")
+
+    def on_player_business_acquired(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._reveal_matching_objective("working_owner", "owned_business")
 
     def _conclude_run(self, *, outcome, reason, objective_title, summary_lines):
         from game.custom_content import custom_content_allows_post_game_traces, custom_content_post_game_block_lines
@@ -4289,6 +4308,7 @@ class FinalOperationSystem(System):
             eid=self.player_eid,
             objective_id=str(completed.get("objective_id", "")),
             objective_title=str(completed.get("objective_title", "")),
+            culmination_title=str(completed.get("culmination_title", "")),
             target_chunk=tuple(completed.get("target_chunk", (0, 0))),
             target_label=str(completed.get("target_label", "")),
             target_property_id=str(completed.get("target_property_id", "")),
@@ -4348,6 +4368,7 @@ class FinalOperationSystem(System):
                 eid=self.player_eid,
                 objective_id=str(unlocked.get("objective_id", "")),
                 objective_title=str(unlocked.get("objective_title", "")),
+                culmination_title=str(unlocked.get("culmination_title", "")),
                 target_chunk=tuple(unlocked.get("target_chunk", (0, 0))),
                 target_label=str(unlocked.get("target_label", "")),
             ))

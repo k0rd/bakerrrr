@@ -107,6 +107,7 @@ CULMINATION_TITLES = {
     "networked_extraction": "The Rendezvous",
     "high_value_retrieval": "The Recovery",
     "neighborhood_control": "Home Ground",
+    "working_owner": "Closing Time",
 }
 
 
@@ -277,6 +278,15 @@ def _same_target_label(sim, chunk, target_label):
 
 
 def _non_retrieval_target_area_reached(sim, player_eid, state):
+    if _text(state.get("objective_id")).lower() in {"neighborhood_control", "working_owner"}:
+        target_property_id = _text(state.get("target_property_id"))
+        if target_property_id:
+            pos = sim.ecs.get(Position).get(player_eid) if sim is not None else None
+            if pos is None or not hasattr(sim, "property_covering"):
+                return False
+            current_property = sim.property_covering(int(pos.x), int(pos.y), int(pos.z))
+            return isinstance(current_property, dict) and _text(current_property.get("id")) == target_property_id
+
     target = _chunk_tuple(state.get("target_chunk"))
     current = _current_chunk(sim, player_eid)
     if not target or not current:
@@ -314,6 +324,15 @@ def _ground_item_by_instance(sim, instance_id):
 def _property_chunk(sim, prop):
     if sim is None or not isinstance(prop, dict):
         return None
+    metadata = prop.get("metadata")
+    if isinstance(metadata, dict):
+        chunk = _chunk_tuple(metadata.get("chunk"))
+        if chunk:
+            return chunk
+    try:
+        return sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+    except (TypeError, ValueError):
+        return None
 
 
 def _owned_neighborhood_home(sim, player_eid, objective_eval):
@@ -347,16 +366,27 @@ def _owned_neighborhood_home(sim, player_eid, objective_eval):
     if not candidates:
         return None
     candidates.sort(key=lambda row: row[:3])
-    return candidates[0][4], candidates[0][3]
-    metadata = prop.get("metadata")
-    if isinstance(metadata, dict):
-        chunk = _chunk_tuple(metadata.get("chunk"))
-        if chunk:
-            return chunk
-    try:
-        return sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
-    except (TypeError, ValueError):
+    return candidates[0][4], candidates[0][3], candidates[0][2]
+
+
+def _owned_business_home(sim, player_eid, objective_eval):
+    metrics = objective_eval.get("metrics", {}) if isinstance(objective_eval, dict) else {}
+    property_id = _text(metrics.get("best_business_property_id")) if isinstance(metrics, dict) else ""
+    prop = getattr(sim, "properties", {}).get(property_id) if sim is not None and property_id else None
+    if not isinstance(prop, dict):
         return None
+    assets = sim.ecs.get(PlayerAssets).get(player_eid)
+    owned_ids = {
+        _text(raw_id)
+        for raw_id in getattr(assets, "owned_property_ids", set()) or set()
+        if _text(raw_id)
+    }
+    if prop.get("owner_eid") != player_eid and property_id not in owned_ids:
+        return None
+    chunk = _property_chunk(sim, prop)
+    if not chunk:
+        return None
+    return prop, chunk, property_id
 
 
 def _room_kind_at(sim, x, y, z):
@@ -1129,19 +1159,38 @@ def ensure_final_operation_unlocked(sim, player_eid, objective_eval=None):
 
     objective_id = str(objective_eval.get("id", "")).strip().lower()
     objective_title = str(objective_eval.get("title", "Run Objective")).strip() or "Run Objective"
+    variant_id = str(objective_eval.get("variant_id", "")).strip().lower()
+    culmination_title = (
+        str(objective_eval.get("culmination_title", "")).strip()
+        or CULMINATION_TITLES.get(objective_id, "Final Move")
+    )
     seed = f"{getattr(sim, 'seed', 'seed')}:final_op:{objective_id}:{getattr(sim, 'tick', 0)}"
     rng = random.Random(seed)
-    target_chunk = _pick_target_chunk(sim, player_eid, rng=rng)
-    target_label = _target_label(sim, target_chunk)
+    target_property_id = ""
+    target_property_name = ""
+    owned_home = None
+    if objective_id == "neighborhood_control":
+        owned_home = _owned_neighborhood_home(sim, player_eid, objective_eval)
+    elif objective_id == "working_owner":
+        owned_home = _owned_business_home(sim, player_eid, objective_eval)
+    if owned_home:
+        target_property, target_chunk, target_property_id = owned_home
+        target_property_name = _text(target_property.get("name")) or target_property_id or "your property"
+        target_label = target_property_name
+    else:
+        target_chunk = _pick_target_chunk(sim, player_eid, rng=rng)
+        target_label = _target_label(sim, target_chunk)
 
     state["unlocked"] = True
     state["unlock_tick"] = _safe_int(getattr(sim, "tick", 0), default=0)
     state["objective_id"] = objective_id
     state["objective_title"] = objective_title
+    state["variant_id"] = variant_id
+    state["culmination_title"] = culmination_title
     state["target_chunk"] = target_chunk
     state["target_label"] = target_label
-    state["target_property_id"] = ""
-    state["target_property_name"] = ""
+    state["target_property_id"] = target_property_id
+    state["target_property_name"] = target_property_name
     state["target_item_id"] = ""
     state["target_item_name"] = ""
     state["target_item_instance_id"] = ""
@@ -1158,8 +1207,12 @@ def ensure_final_operation_unlocked(sim, player_eid, objective_eval=None):
     return {
         "objective_id": objective_id,
         "objective_title": objective_title,
+        "variant_id": variant_id,
+        "culmination_title": culmination_title,
         "target_chunk": target_chunk,
         "target_label": target_label,
+        "target_property_id": target_property_id,
+        "target_property_name": target_property_name,
     }
 
 
@@ -1307,6 +1360,10 @@ def evaluate_final_operation(sim, player_eid):
     distance_text = _distance_text(distance)
     unlocked = bool(state["unlocked"])
     completed = bool(state["completed"])
+    culmination_title = (
+        _text(state.get("culmination_title"))
+        or CULMINATION_TITLES.get(objective_id, "Final Move")
+    )
     target_property_id = _text(state.get("target_property_id"))
     target_property_name = _text(state.get("target_property_name"))
     target_item_name = _text(state.get("target_item_name"))
@@ -1328,26 +1385,26 @@ def evaluate_final_operation(sim, player_eid):
                 target_entry_detail = refreshed_detail
 
     if completed:
-        summary_line = "Final operation complete."
-        next_step = "Run completed. Review summary."
+        summary_line = f"{culmination_title} complete."
+        next_step = "You made it. Review what happened along the way."
     elif state["failed"]:
-        summary_line = "Final operation failed."
-        next_step = "Run failed."
+        summary_line = f"{culmination_title} fell apart."
+        next_step = "The run is over. Review what happened along the way."
     elif objective_id == "high_value_retrieval":
         label = target_property_name or "target site"
         item_label = target_item_name or "target asset"
         if state.get("target_recovered"):
-            summary_line = f"Final operation: recovered {item_label}."
+            summary_line = f"{culmination_title}: recovered {item_label}."
             next_step = "Hold the target. Run will conclude."
         elif target_property_id:
             if distance > 0:
                 summary_line = (
-                    f"Final operation: recover {item_label} from {label}. "
+                    f"{culmination_title}: recover {item_label} from {label}. "
                     f"Target area is {destination}, {distance_text}."
                 )
                 next_step = f"Travel to {destination} and hit {label}."
             elif str(getattr(sim, "zoom_mode", "city")).strip().lower() == "overworld":
-                summary_line = f"Final operation: recover {item_label} from {label}."
+                summary_line = f"{culmination_title}: recover {item_label} from {label}."
                 next_step = f"Enter local area and hit {label}."
             else:
                 pos = sim.ecs.get(Position).get(player_eid) if sim is not None else None
@@ -1356,7 +1413,7 @@ def evaluate_final_operation(sim, player_eid):
                     next_step = f"Recover {item_label} from inside {label}."
                 else:
                     next_step = f"Enter {label} and recover {item_label}."
-                summary_line = f"Final operation: recover {item_label} from {label}."
+                summary_line = f"{culmination_title}: recover {item_label} from {label}."
             guidance_bits = []
             if target_reason:
                 guidance_bits.append(f"Why this site: {target_reason}.")
@@ -1368,23 +1425,65 @@ def evaluate_final_operation(sim, player_eid):
                 next_step = " ".join([next_step] + guidance_bits)
         else:
             summary_line = (
-                f"Final operation: reach {destination} and identify the retrieval site "
+                f"{culmination_title}: reach {destination} and identify the retrieval site "
                 f"({distance_text})."
             )
             next_step = f"Travel to {destination} and identify the retrieval site."
+    elif objective_id == "debt_exit":
+        if target_area_reached:
+            summary_line = f"{culmination_title}: you reached {destination}."
+            next_step = "Your passage is covered. The run will conclude."
+        else:
+            summary_line = f"{culmination_title}: your paid route leaves from {destination} ({distance_text})."
+            next_step = f"Travel to {destination}, enter the local area, and leave cleanly."
+    elif objective_id == "networked_extraction":
+        if target_area_reached:
+            summary_line = f"{culmination_title}: your people are assembled at {destination}."
+            next_step = "Meet the route on the ground. The run will conclude."
+        else:
+            summary_line = f"{culmination_title}: meet your extraction contacts at {destination} ({distance_text})."
+            next_step = f"Travel to {destination} and make the rendezvous in person."
+    elif objective_id == "neighborhood_control":
+        home = target_property_name or state.get("target_label") or "your strongest holding"
+        if target_area_reached:
+            summary_line = f"{culmination_title}: you are back inside {home}."
+            next_step = "You came home to the block you built. The run will conclude."
+        elif distance > 0:
+            summary_line = f"{culmination_title}: return to {home} ({distance_text})."
+            next_step = f"Travel back to {home} and step inside your own front door."
+        elif str(getattr(sim, "zoom_mode", "city")).strip().lower() == "overworld":
+            summary_line = f"{culmination_title}: return to {home}."
+            next_step = f"Enter the local area, then go inside {home}."
+        else:
+            summary_line = f"{culmination_title}: {home} is nearby."
+            next_step = f"Step inside {home} to finish where you put down roots."
+    elif objective_id == "working_owner":
+        business = target_property_name or state.get("target_label") or "your business"
+        if target_area_reached:
+            summary_line = f"{culmination_title}: you are back inside {business}."
+            next_step = "The books are sound and the crew is paid. The run will conclude."
+        elif distance > 0:
+            summary_line = f"{culmination_title}: return to {business} ({distance_text})."
+            next_step = f"Travel back to {business} and go inside the business you kept running."
+        elif str(getattr(sim, "zoom_mode", "city")).strip().lower() == "overworld":
+            summary_line = f"{culmination_title}: return to {business}."
+            next_step = f"Enter the local area, then go inside {business}."
+        else:
+            summary_line = f"{culmination_title}: {business} is nearby."
+            next_step = f"Step inside {business} and finish the shift as its owner."
     else:
         if target_area_reached:
-            summary_line = f"Final operation: reached {destination}."
-            next_step = "Hold position. Run will conclude."
+            summary_line = f"{culmination_title}: you reached {destination}."
+            next_step = "Hold position. The run will conclude."
         else:
-            summary_line = (
-                f"Final operation: reach {destination} ({distance_text})."
-            )
+            summary_line = f"{culmination_title}: reach {destination} ({distance_text})."
             next_step = f"Travel to {destination} and enter the local area."
 
     return {
         "unlocked": unlocked,
         "completed": completed,
+        "culmination_title": culmination_title,
+        "variant_id": _text(state.get("variant_id")).lower(),
         "target_chunk": target,
         "target_label": state.get("target_label", ""),
         "target_property_id": target_property_id,
@@ -1425,10 +1524,25 @@ def _summary_lines(sim, player_eid, state):
     intel_bonus = _safe_int(objective_progress.get("intel_marks"), default=0) if isinstance(objective_progress, dict) else 0
     network_bonus = _safe_int(objective_progress.get("network_marks"), default=0) if isinstance(objective_progress, dict) else 0
 
-    lines = [
-        f"Final operation complete: {state.get('objective_title', 'Run Objective')}.",
-    ]
-    if state.get("objective_id") == "high_value_retrieval":
+    objective_id = _text(state.get("objective_id")).lower()
+    culmination_title = _text(state.get("culmination_title")) or CULMINATION_TITLES.get(objective_id, "Final Move")
+    objective_title = _text(state.get("objective_title")) or "the run"
+    if objective_id == "debt_exit":
+        lines = [f"{culmination_title} complete: you financed a clean way out through {objective_title}."]
+    elif objective_id == "networked_extraction":
+        lines = [f"{culmination_title} complete: the contacts, money, and route came together."]
+    elif objective_id == "neighborhood_control":
+        property_name = _text(state.get("target_property_name")) or "your strongest holding"
+        lines = [f"{culmination_title} complete: you came home through {property_name}."]
+    elif objective_id == "working_owner":
+        property_name = _text(state.get("target_property_name")) or "your business"
+        lines = [f"{culmination_title} complete: you kept {property_name} running and came back through its door."]
+    elif objective_id == "high_value_retrieval":
+        lines = [f"{culmination_title} complete: the target is in your hands."]
+    else:
+        lines = [f"{culmination_title} complete: {objective_title}."]
+
+    if objective_id == "high_value_retrieval":
         item_name = _text(state.get("target_item_name")) or "target asset"
         property_name = _text(state.get("target_property_name")) or _text(state.get("target_label")) or "target site"
         lines.append(f"Recovered target: {item_name} from {property_name}.")
@@ -1451,7 +1565,7 @@ def _summary_lines(sim, player_eid, state):
         f"Travel footprint: {len(visited)} chunks visited.",
         f"Opportunities completed: {len(completed_opps) if isinstance(completed_opps, list) else 0}.",
         f"Peak attention: {pressure_peak}.",
-        f"Objective bonus track: reserve {reserve_bonus}, network {network_bonus}, intel {intel_bonus}.",
+        f"Help gathered along the way: reserve {reserve_bonus}, network {network_bonus}, intel {intel_bonus}.",
     ])
     return lines
 
@@ -1521,6 +1635,8 @@ def try_complete_final_operation(sim, player_eid):
     return {
         "objective_id": state.get("objective_id", ""),
         "objective_title": state.get("objective_title", ""),
+        "variant_id": state.get("variant_id", ""),
+        "culmination_title": state.get("culmination_title", ""),
         "target_chunk": target,
         "target_label": state.get("target_label", ""),
         "target_property_id": state.get("target_property_id", ""),

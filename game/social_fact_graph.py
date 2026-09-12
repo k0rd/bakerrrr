@@ -499,6 +499,15 @@ def occurrence_record(sim, occurrence_id: str) -> dict[str, Any] | None:
     return copy.deepcopy(record) if isinstance(record, dict) else None
 
 
+def occurrence_record_for_dedupe_key(sim, dedupe_key: str) -> dict[str, Any] | None:
+    """Return an existing source-idempotent occurrence without recreating it."""
+
+    state = social_fact_graph_state(sim)
+    occurrence_id = state["occurrence_by_dedupe_key"].get(_text(dedupe_key))
+    record = state["occurrences"].get(occurrence_id) if occurrence_id else None
+    return copy.deepcopy(record) if isinstance(record, dict) else None
+
+
 def _reduce_perspective(row: dict[str, Any], occurrences: Mapping[str, Any]) -> dict[str, Any]:
     evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
     attention = row.get("attention") if isinstance(row.get("attention"), dict) else {}
@@ -1470,6 +1479,7 @@ __all__ = [
     "ensure_proposition",
     "ensure_social_edge",
     "occurrence_record",
+    "occurrence_record_for_dedupe_key",
     "open_social_thread",
     "proposition_record",
     "record_actor_evidence",

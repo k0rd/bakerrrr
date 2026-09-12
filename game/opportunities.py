@@ -202,6 +202,20 @@ OBJECTIVE_PREFERENCES = {
         "tool_pickup",
         "supply_grab",
     },
+    "working_owner": {
+        "trade_loop",
+        "supply_shortage",
+        "service_friction",
+        "backroom_buyback",
+        "claims_chase",
+        "paper_trail",
+        "tool_procurement",
+        "tool_pickup",
+        "supply_grab",
+        "parts_recovery",
+        "field_repair_call",
+        "district_contract",
+    },
 }
 
 SPECIALTY_OPPORTUNITY_THEMES = {
@@ -3696,6 +3710,10 @@ def _contact_variant_candidate(sim, prop, property_id, entry, objective_id):
             pool.extend(["claims_chase", "paper_trail"])
         if is_storefront or site_services:
             pool.append("backroom_buyback")
+    elif objective_id == "working_owner":
+        pool = ["supply_shortage", "service_friction", "backroom_buyback"]
+        if finance_services:
+            pool.extend(["claims_chase", "paper_trail"])
     elif objective_id == "high_value_retrieval":
         pool = ["service_friction", "property_dispute"]
         if finance_services or "intel" in site_services:
@@ -3930,6 +3948,7 @@ def _intel_variant_candidate(sim, prop, property_id, entry, objective_id):
             "networked_extraction": ("property_dispute", "missing_person", "lead_followup", "contact_run", "records_pull"),
             "neighborhood_control": ("property_dispute", "contact_run", "service_friction", "claims_chase", "paper_trail"),
             "high_value_retrieval": ("missing_person", "service_friction", "lead_followup", "records_pull", "watch_post"),
+            "working_owner": ("supply_shortage", "service_friction", "backroom_buyback", "claims_chase", "paper_trail"),
         }
         pool = pools.get(objective_id, ("lead_followup", "missing_person", "property_dispute", "service_friction"))
         kind = chooser.choice(pool)
@@ -8594,6 +8613,13 @@ def _objective_support_reason(objective_id, entry, current_chunk=None):
             reasons.append("keeps you working the same block")
         elif distance > 2:
             reasons.append("is farther from your core holdings")
+    elif objective_id == "working_owner":
+        if credits > 0:
+            reasons.append("can fund the operating account")
+        if kind in {"trade_loop", "supply_shortage", "service_friction", "backroom_buyback"}:
+            reasons.append("supports ordinary shop trade")
+        if kind in {"tool_procurement", "tool_pickup", "supply_grab", "parts_recovery", "field_repair_call"}:
+            reasons.append("supports stock and upkeep")
 
     seen = []
     for reason in reasons:
@@ -8646,6 +8672,11 @@ def objective_focus_facts(sim, player_eid, objective_id, limit=3):
             score += min(2.4, credits / 16.0)
             score += min(1.2, standing)
             score += max(0.0, 1.8 - (distance * 0.35))
+        elif objective_id == "working_owner":
+            score += min(2.8, credits / 14.0)
+            score += max(0.0, 1.4 - (distance * 0.25))
+            if kind in {"trade_loop", "supply_shortage", "service_friction", "backroom_buyback"}:
+                score += 1.0
         elif objective_id == "high_value_retrieval":
             score += min(2.5, intel * 1.25)
             score += min(1.5, distance * 0.16)

@@ -17,6 +17,7 @@ from game.components import IncidentKnowledge, NPCSocial, SocialKnowledge
 from game.social_fact_graph import (
     apply_social_effect,
     ensure_social_edge,
+    occurrence_record_for_dedupe_key,
     record_occurrence,
     register_referent,
 )
@@ -74,6 +75,30 @@ def record_player_known_firsthand_witness(
     if isinstance(existing, dict):
         return dict(existing)
 
+    dedupe_key = f"incident-witness-awareness:{player}:{witness}:{incident}"
+    durable_occurrence = occurrence_record_for_dedupe_key(sim, dedupe_key)
+    durable_payload = (
+        durable_occurrence.get("payload", {})
+        if isinstance(durable_occurrence, dict) and isinstance(durable_occurrence.get("payload"), dict)
+        else {}
+    )
+    durable_actors = set(durable_occurrence.get("actor_eids", ())) if isinstance(durable_occurrence, dict) else set()
+    if (
+        isinstance(durable_occurrence, dict)
+        and _key(durable_occurrence.get("kind")) == "witness_awareness"
+        and player in durable_actors
+        and _int(durable_payload.get("incident_id"), 0) == incident
+        and _int(durable_payload.get("witness_eid"), 0) == witness
+    ):
+        entry = {
+            "actor_eid": witness,
+            "learned_tick": _int(durable_occurrence.get("tick"), 0),
+            "basis": _key(durable_payload.get("basis")) or "direct_scene_awareness",
+            "occurrence_id": durable_occurrence["id"],
+        }
+        known[str(witness)] = entry
+        return dict(entry)
+
     adapted = ensure_actor_incident_perspective(sim, player, incident)
     if not isinstance(adapted, dict):
         return None
@@ -91,7 +116,7 @@ def record_player_known_firsthand_witness(
             "basis": _key(basis) or "direct_scene_awareness",
         },
         flags=("actor_owned", "grounded_access"),
-        dedupe_key=f"incident-witness-awareness:{player}:{witness}:{incident}",
+        dedupe_key=dedupe_key,
     )
     entry = {
         "actor_eid": witness,

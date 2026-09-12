@@ -9413,16 +9413,33 @@ class EventLogSystem(System):
         target_label = str(event.data.get("target_label", "")).strip()
         objective_title = str(event.data.get("objective_title", "Run Objective")).strip() or "Run Objective"
         objective_id = str(event.data.get("objective_id", "")).strip().lower()
+        culmination_title = str(event.data.get("culmination_title", "")).strip() or {
+            "debt_exit": "Departure",
+            "networked_extraction": "The Rendezvous",
+            "high_value_retrieval": "The Recovery",
+            "neighborhood_control": "Home Ground",
+            "working_owner": "Closing Time",
+        }.get(objective_id, "Final Move")
         destination = self._final_operation_destination_text(target, target_label)
         if objective_id == "high_value_retrieval":
             self._log(
-                f"Final operation unlocked: {objective_title}. Head for {destination}, enter the local area, and identify the retrieval site.",
+                f"{culmination_title}: head for {destination}, enter the local area, and identify the retrieval site.",
                 channel="mission",
                 priority="critical",
             )
             return
+        if objective_id == "debt_exit":
+            message = f"{culmination_title}: your paid route leaves from {destination}. Get there and leave cleanly."
+        elif objective_id == "networked_extraction":
+            message = f"{culmination_title}: your contacts named {destination}. Meet them there in person."
+        elif objective_id == "neighborhood_control":
+            message = f"{culmination_title}: return to {target_label or destination} and step inside your own front door."
+        elif objective_id == "working_owner":
+            message = f"{culmination_title}: return to {target_label or destination} and go inside the business you kept running."
+        else:
+            message = f"{culmination_title}: head for {destination} and enter the local area."
         self._log(
-            f"Final operation unlocked: {objective_title}. Head for {destination} and enter the local area.",
+            message,
             channel="mission",
             priority="critical",
         )
@@ -9460,7 +9477,8 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         objective_title = str(event.data.get("objective_title", "Run Objective")).strip() or "Run Objective"
-        self._log(f"Run success: final operation complete ({objective_title}).", channel="mission", priority="critical")
+        culmination_title = str(event.data.get("culmination_title", "")).strip() or "Final move"
+        self._log(f"Run success: {culmination_title} complete ({objective_title}).", channel="mission", priority="critical")
         lines = [str(line).strip() for line in event.data.get("summary_lines", ()) if str(line).strip()]
         for line in lines[:5]:
             self.sim.log.add(f"  {line}")
