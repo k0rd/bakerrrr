@@ -5,31 +5,34 @@ bakerrrr-drawable 2
 # Ordinary tops share body anchors, while every family retains a distinct cut.
 
 drawable tee context garment:
-    let body_unit = body_height / 14
-    let (body_mid_x, crown_y) = crown
-    let (shoulder_anchor_x, shoulder_y) = shoulder_left
-    let (crotch_x, hip_y) = crotch
-    let shoulder_half = upper_torso_width / 2
-    let waist_half = waist_width / 2
     paint fabric = fill
     paint trim = edge
-    let top_y = shoulder_y
-    let bottom_y = hip_y - body_unit * 2
+    point neck_center = between(neck_left, neck_right, 0.5)
+    point waist_center = between(waist_left, waist_right, 0.5)
+    point collar_left = between(shoulder_left, neck_left, 0.7)
+    point collar_right = between(shoulder_right, neck_right, 0.7)
+    point neckline = between(neck_center, waist_center, 0.35)
+    point hem_left = between(waist_left, hip_left, 0.15)
+    point hem_right = between(waist_right, hip_right, 0.15)
+    point sleeve_outer = between(shoulder_left, elbow_outer_left, 0.4)
+    point sleeve_inner = between(armpit_left, elbow_inner_left, 0.4)
     variant compact:
         layer body:
             polygon torso fabric:
-                body_mid_x - shoulder_half + body_unit * 0.5, top_y
-                body_mid_x - body_unit * 1, top_y
-                body_mid_x, top_y + body_unit * 1
-                body_mid_x + body_unit * 1, top_y
-                body_mid_x + shoulder_half - body_unit * 0.5, top_y
-                body_mid_x + waist_half, bottom_y
-                body_mid_x - waist_half, bottom_y
+                shoulder_left
+                collar_left
+                neckline
+                collar_right
+                shoulder_right
+                armpit_right
+                hem_right
+                hem_left
+                armpit_left
             polygon left_sleeve fabric:
-                body_mid_x - shoulder_half + body_unit * 0.5, top_y
-                body_mid_x - shoulder_half - body_unit * 0.5, top_y + body_unit * 0.75
-                body_mid_x - shoulder_half, top_y + body_unit * 1.5
-                body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1.25
+                shoulder_left
+                sleeve_outer
+                sleeve_inner
+                armpit_left
             mirror left_sleeve as right_sleeve
         surface garment:
             torso
@@ -38,23 +41,25 @@ drawable tee context garment:
     variant detailed:
         layer body:
             polygon torso fabric outline trim width 0.3:
-                body_mid_x - shoulder_half + body_unit * 0.25, top_y
-                body_mid_x - body_unit * 1, top_y
-                body_mid_x, top_y + body_unit * 1.25
-                body_mid_x + body_unit * 1, top_y
-                body_mid_x + shoulder_half - body_unit * 0.25, top_y
-                body_mid_x + waist_half, bottom_y
-                body_mid_x - waist_half, bottom_y
+                shoulder_left
+                collar_left
+                neckline
+                collar_right
+                shoulder_right
+                armpit_right
+                hem_right
+                hem_left
+                armpit_left
             polygon left_sleeve fabric outline trim width 0.3:
-                body_mid_x - shoulder_half + body_unit * 0.25, top_y
-                body_mid_x - shoulder_half - body_unit * 0.25, top_y + body_unit * 0.75
-                body_mid_x - shoulder_half, top_y + body_unit * 1.5
-                body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1.25
+                shoulder_left
+                sleeve_outer
+                sleeve_inner
+                armpit_left
             mirror left_sleeve as right_sleeve
         layer seam:
             line hem trim width 0.25:
-                body_mid_x - waist_half, bottom_y
-                body_mid_x + waist_half, bottom_y
+                hem_left
+                hem_right
         surface garment:
             torso
             left_sleeve

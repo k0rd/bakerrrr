@@ -128,7 +128,6 @@ from game.report_runtime import (
 )
 from game.release_runtime import debug_disabled_hint, debug_mode_enabled
 from game.weather_runtime import ensure_weather_debug_ui_state, weather_debug_lines
-from game.run_objectives import reveal_run_objective
 from game.dialogue_runtime import (
     _dialog_backup_cursor_payload,
     _dialog_backup_mark_from_state,
@@ -4745,10 +4744,6 @@ class InputSystem(System):
         return body_w, body_h
 
     def _refresh_report_ui(self, reset_scroll=False, kind=None):
-        report_state = self._report_state()
-        target_kind = str(kind or report_state.get("kind") or "progress").strip().lower() or "progress"
-        if target_kind == "progress":
-            reveal_run_objective(self.sim, source="ops_report")
         return _report_debug_ui.refresh_report_ui(
             self,
             reset_scroll=reset_scroll,

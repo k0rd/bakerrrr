@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 
-from game.components import Inventory, Position, PropertyKnowledge
+from game.components import Inventory, PlayerAssets, Position, PropertyKnowledge
 from game.items import item_display_name
 from game.opportunities import opportunity_intel_for_observer
 from game.property_access import property_access_controller, property_apertures
@@ -100,6 +100,13 @@ FRONT_ROOM_KINDS = {
     "dining",
     "seating",
     "common_room",
+}
+
+CULMINATION_TITLES = {
+    "debt_exit": "Departure",
+    "networked_extraction": "The Rendezvous",
+    "high_value_retrieval": "The Recovery",
+    "neighborhood_control": "Home Ground",
 }
 
 
@@ -203,6 +210,8 @@ def _state(sim):
     state["fail_reason"] = str(state.get("fail_reason", "")).strip().lower()
     state["objective_id"] = str(state.get("objective_id", "")).strip().lower()
     state["objective_title"] = str(state.get("objective_title", "")).strip()
+    state["variant_id"] = str(state.get("variant_id", "")).strip().lower()
+    state["culmination_title"] = str(state.get("culmination_title", "")).strip()
     target_chunk = _chunk_tuple(state.get("target_chunk"))
     state["target_chunk"] = target_chunk
     state["target_label"] = str(state.get("target_label", "")).strip()
@@ -305,6 +314,40 @@ def _ground_item_by_instance(sim, instance_id):
 def _property_chunk(sim, prop):
     if sim is None or not isinstance(prop, dict):
         return None
+
+
+def _owned_neighborhood_home(sim, player_eid, objective_eval):
+    metrics = objective_eval.get("metrics", {}) if isinstance(objective_eval, dict) else {}
+    anchor = _chunk_tuple(metrics.get("largest_property_cluster_anchor")) if isinstance(metrics, dict) else None
+    assets = sim.ecs.get(PlayerAssets).get(player_eid) if sim is not None else None
+    owned_ids = {
+        _text(raw_id)
+        for raw_id in getattr(assets, "owned_property_ids", set()) or set()
+        if _text(raw_id)
+    }
+    candidates = []
+    for raw_id, prop in getattr(sim, "properties", {}).items():
+        if not isinstance(prop, dict):
+            continue
+        property_id = _text(raw_id or prop.get("id"))
+        if prop.get("owner_eid") != player_eid and property_id not in owned_ids:
+            continue
+        chunk = _property_chunk(sim, prop)
+        if not chunk:
+            continue
+        if anchor and _manhattan(anchor, chunk) > 1:
+            continue
+        candidates.append((
+            _manhattan(anchor, chunk) if anchor else 0,
+            _text(prop.get("name")).casefold(),
+            property_id,
+            chunk,
+            prop,
+        ))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: row[:3])
+    return candidates[0][4], candidates[0][3]
     metadata = prop.get("metadata")
     if isinstance(metadata, dict):
         chunk = _chunk_tuple(metadata.get("chunk"))

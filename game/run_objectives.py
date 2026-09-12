@@ -4,6 +4,90 @@ from game.components import ContactLedger, FinancialProfile, PlayerAssets, Prope
 from game.objective_progress import objective_metric_bonuses
 
 
+RUN_OBJECTIVE_VARIANTS = {
+    "debt_exit": (
+        {
+            "id": "clean_break",
+            "title": "A Clean Break",
+            "summary": "Leaving cleanly will take passage money and enough reserve to land on your feet.",
+            "culmination_title": "Departure",
+        },
+        {
+            "id": "bought_time",
+            "title": "Bought Time",
+            "summary": "You have a little room to move. Turn it into enough money to leave on your own terms.",
+            "culmination_title": "The Way Out",
+        },
+        {
+            "id": "last_fare",
+            "title": "The Last Fare",
+            "summary": "A route out exists, but the fare and a safe landing cost more than you have.",
+            "culmination_title": "Last Departure",
+        },
+    ),
+    "networked_extraction": (
+        {
+            "id": "quiet_arrangement",
+            "title": "A Quiet Arrangement",
+            "summary": "A safe departure needs trusted people, money behind it, and a route everyone understands.",
+            "culmination_title": "The Rendezvous",
+        },
+        {
+            "id": "chain_of_favors",
+            "title": "A Chain of Favors",
+            "summary": "No single contact can get you clear. Build the chain, finance it, and learn the way through.",
+            "culmination_title": "The Handoff",
+        },
+        {
+            "id": "people_who_answer",
+            "title": "People Who Answer",
+            "summary": "Find people who will answer when it matters, then give them the resources and route to move.",
+            "culmination_title": "The Meeting Place",
+        },
+    ),
+    "high_value_retrieval": (
+        {
+            "id": "buried_lead",
+            "title": "The Buried Lead",
+            "summary": "A valuable asset is out there. Build a reliable lead chain before committing to the recovery.",
+            "culmination_title": "The Recovery",
+        },
+        {
+            "id": "marked_asset",
+            "title": "The Marked Asset",
+            "summary": "Enough fragments point toward something valuable, but not yet toward the right door.",
+            "culmination_title": "The Retrieval",
+        },
+        {
+            "id": "missing_piece",
+            "title": "The Missing Piece",
+            "summary": "Somewhere in the city is the piece that makes this run worthwhile. Find the trail before the site.",
+            "culmination_title": "The Final Lead",
+        },
+    ),
+    "neighborhood_control": (
+        {
+            "id": "put_down_roots",
+            "title": "Put Down Roots",
+            "summary": "Turn a handful of nearby properties into a place where your name has weight.",
+            "culmination_title": "Home Ground",
+        },
+        {
+            "id": "hold_the_corner",
+            "title": "Hold the Corner",
+            "summary": "Scattered holdings are not a neighborhood. Build a block you can return to and call yours.",
+            "culmination_title": "Back on the Block",
+        },
+        {
+            "id": "block_of_your_own",
+            "title": "A Block of Your Own",
+            "summary": "Acquire a real local foothold: several holdings close enough to reinforce one another.",
+            "culmination_title": "The Front Door",
+        },
+    ),
+}
+
+
 def _safe_int(value, default=0):
     try:
         return int(value)
@@ -183,9 +267,9 @@ def _objective_eval_debt_exit(objective, metrics):
         if done
         else "Build reserves via trade, contracts, salvage, or theft."
     )
-    summary_line = f"Objective Debt Exit: {reserve_now}/{reserve_target} cr reserve"
+    summary_line = f"Exit reserve: {reserve_now} of {reserve_target} credits ready"
     if reserve_bonus > 0:
-        summary_line = f"{summary_line} (+{reserve_bonus} objective)"
+        summary_line = f"{summary_line}, including {reserve_bonus} earned through completed work"
     why_lines = (
         "You are trying to finance a clean exit before the district closes around you.",
     )
@@ -244,10 +328,10 @@ def _objective_eval_networked_extraction(objective, metrics):
         + _ratio(visit_now, visit_target)
     ) / 3.0
     summary_line = (
-        "Objective Networked Extraction: "
-        f"c{contact_now}/{contact_target} "
-        f"r{reserve_now}/{reserve_target} "
-        f"v{visit_now}/{visit_target}"
+        "Extraction preparations: "
+        f"{contact_now} of {contact_target} trusted contacts, "
+        f"{reserve_now} of {reserve_target} credits, "
+        f"{visit_now} of {visit_target} districts scouted"
     )
     bonus_bits = []
     if contact_bonus > 0:
@@ -255,7 +339,7 @@ def _objective_eval_networked_extraction(objective, metrics):
     if reserve_bonus > 0:
         bonus_bits.append(f"r+{reserve_bonus}")
     if bonus_bits:
-        summary_line = f"{summary_line} ({' '.join(bonus_bits)} objective)"
+        summary_line = f"{summary_line} ({', '.join(bonus_bits)} from completed work)"
     why_lines = (
         "Extraction needs more than cash: you need people, logistics, and route familiarity.",
     )
@@ -306,12 +390,12 @@ def _objective_eval_high_value_retrieval(objective, metrics):
         + _ratio(visit_now, visit_target)
     ) / 2.0
     summary_line = (
-        "Objective High-Value Retrieval: "
-        f"leads {leads_now}/{lead_target} "
-        f"scout {visit_now}/{visit_target}"
+        "Lead chain: "
+        f"{leads_now} of {lead_target} useful leads, "
+        f"{visit_now} of {visit_target} districts searched"
     )
     if lead_bonus > 0:
-        summary_line = f"{summary_line} (leads +{lead_bonus} objective)"
+        summary_line = f"{summary_line} ({lead_bonus} leads came from completed work)"
     why_lines = (
         "This run is about building a lead chain before you commit to the retrieval strike.",
     )
@@ -364,9 +448,9 @@ def _objective_eval_neighborhood_control(objective, metrics):
         + _ratio(cluster_now, cluster_target)
     ) / 2.0
     summary_line = (
-        "Objective Neighborhood Control: "
-        f"owned {owned_now}/{owned_target} "
-        f"cluster {cluster_now}/{cluster_target}"
+        "Local foothold: "
+        f"{owned_now} of {owned_target} properties owned, "
+        f"strongest cluster {cluster_now} of {cluster_target}"
     )
     if cluster_chunks > 0:
         summary_line = f"{summary_line} ({cluster_chunks} local chunks{anchor_text})"
@@ -422,8 +506,10 @@ def evaluate_run_objective(sim, player_eid, objective=None):
 
     return {
         "id": objective_id,
+        "variant_id": str(objective.get("variant_id", "")).strip().lower(),
         "title": title,
         "summary": summary,
+        "culmination_title": str(objective.get("culmination_title", "")).strip() or "Final Move",
         "metrics": metrics,
         "completed": bool(result["completed"]),
         "progress_ratio": float(result["progress_ratio"]),
@@ -448,12 +534,11 @@ def seed_run_objective(sim, rng, *, visible=True):
     objective_roll = rng.choice(
         ("debt_exit", "networked_extraction", "high_value_retrieval", "neighborhood_control")
     )
+    variant = dict(rng.choice(RUN_OBJECTIVE_VARIANTS[objective_roll]))
 
     if objective_roll == "debt_exit":
         objective = {
             "id": "debt_exit",
-            "title": "Debt Exit",
-            "summary": "Build enough reserve credits to buy a clean way out.",
             "targets": {
                 "reserve_credits": rng.randint(440, 760),
             },
@@ -461,8 +546,6 @@ def seed_run_objective(sim, rng, *, visible=True):
     elif objective_roll == "networked_extraction":
         objective = {
             "id": "networked_extraction",
-            "title": "Networked Extraction",
-            "summary": "Build trusted contacts, reserves, and route familiarity for extraction.",
             "targets": {
                 "contact_count": rng.randint(3, 5),
                 "reserve_credits": rng.randint(180, 320),
@@ -472,8 +555,6 @@ def seed_run_objective(sim, rng, *, visible=True):
     elif objective_roll == "neighborhood_control":
         objective = {
             "id": "neighborhood_control",
-            "title": "Neighborhood Control",
-            "summary": "Assemble a tight local cluster of owned properties instead of scattered holdings.",
             "targets": {
                 "owned_property_count": rng.randint(4, 6),
                 "largest_property_cluster": rng.randint(3, 5),
@@ -482,13 +563,18 @@ def seed_run_objective(sim, rng, *, visible=True):
     else:
         objective = {
             "id": "high_value_retrieval",
-            "title": "High-Value Retrieval",
-            "summary": "Gather strong leads, scout the city, and locate a retrieval chain.",
             "targets": {
                 "intel_leads": rng.randint(3, 5),
                 "chunks_visited": rng.randint(6, 10),
             },
         }
+
+    objective.update({
+        "variant_id": str(variant.get("id", "")).strip().lower(),
+        "title": str(variant.get("title", "")).strip() or "A Way Forward",
+        "summary": str(variant.get("summary", "")).strip(),
+        "culmination_title": str(variant.get("culmination_title", "")).strip() or "Final Move",
+    })
 
     traits = getattr(sim, "world_traits", None)
     if not isinstance(traits, dict):

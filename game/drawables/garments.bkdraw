@@ -301,38 +301,49 @@ drawable coverall context garment:
             right_sleeve
 
 drawable jumpsuit context garment:
-    let body_unit = body_height / 14
-    let (body_mid_x, crown_y) = crown
-    let (shoulder_anchor_x, shoulder_y) = shoulder_left
-    let (crotch_x, hip_y) = crotch
-    let (left_toe_x, foot_y) = toe_tip_left
-    let shoulder_half = upper_torso_width / 2
-    let hip_half = hip_width / 2
     paint fabric = fill
     paint trim = edge
-    let top_y = shoulder_y
-    let waist_y = hip_y - body_unit * 1
-    let ankle_y = foot_y - body_unit * 1
-    let sleeve_y = top_y + body_unit * 3
+    point shoulder_center = between(shoulder_left, shoulder_right, 0.5)
+    point suit_waist_left = between(waist_left, hip_left, 0.5)
+    point suit_waist_right = between(waist_right, hip_right, 0.5)
+    point suit_waist_center = between(suit_waist_left, suit_waist_right, 0.5)
+    point left_collar = between(shoulder_left, shoulder_right, 0.35)
+    point right_collar = between(shoulder_left, shoulder_right, 0.65)
+    point neckline = between(shoulder_center, suit_waist_center, 0.2)
+    point knee_in = between(knee_outer_left, knee_inner_left, 1.2)
+    point knee_out = between(knee_inner_left, knee_outer_left, 1.2)
+    point ankle_in = between(ankle_outer_left, ankle_inner_left, 1.3)
+    point ankle_out = between(ankle_inner_left, ankle_outer_left, 1.3)
+    point cuff_outer = between(elbow_outer_left, wrist_outer_left, 0.15)
+    point cuff_inner = between(elbow_inner_left, wrist_inner_left, 0.15)
     variant compact:
         layer body:
             polygon torso fabric:
-                body_mid_x - shoulder_half, top_y
-                body_mid_x + shoulder_half, top_y
-                body_mid_x + hip_half, waist_y
-                body_mid_x - hip_half, waist_y
+                shoulder_left
+                shoulder_right
+                armpit_right
+                suit_waist_right
+                suit_waist_left
+                armpit_left
             polygon left_leg fabric:
-                body_mid_x - hip_half, waist_y
-                body_mid_x, waist_y
-                body_mid_x - body_unit * 0.5, ankle_y
-                body_mid_x - body_unit * 2.5, ankle_y
+                suit_waist_left
+                suit_waist_center
+                crotch
+                thigh_inner_left
+                knee_in
+                ankle_in
+                ankle_out
+                knee_out
+                thigh_outer_left
+                hip_left
             mirror left_leg as right_leg
             polygon left_sleeve fabric:
-                body_mid_x - shoulder_half, top_y
-                body_mid_x - shoulder_half - body_unit * 1.5, top_y + body_unit * 1
-                body_mid_x - shoulder_half - body_unit * 1, sleeve_y
-                body_mid_x - shoulder_half + body_unit * 0.75, sleeve_y - body_unit * 0.5
-                body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1
+                shoulder_left
+                elbow_outer_left
+                cuff_outer
+                cuff_inner
+                elbow_inner_left
+                armpit_left
             mirror left_sleeve as right_sleeve
         surface garment:
             torso
@@ -343,33 +354,42 @@ drawable jumpsuit context garment:
     variant detailed:
         layer body:
             polygon torso fabric outline trim width 0.3:
-                body_mid_x - shoulder_half, top_y
-                body_mid_x - body_unit * 1, top_y
-                body_mid_x, top_y + body_unit * 1
-                body_mid_x + body_unit * 1, top_y
-                body_mid_x + shoulder_half, top_y
-                body_mid_x + hip_half, waist_y
-                body_mid_x - hip_half, waist_y
+                shoulder_left
+                left_collar
+                neckline
+                right_collar
+                shoulder_right
+                armpit_right
+                suit_waist_right
+                suit_waist_left
+                armpit_left
             polygon left_leg fabric outline trim width 0.3:
-                body_mid_x - hip_half, waist_y
-                body_mid_x, waist_y
-                body_mid_x - body_unit * 0.5, ankle_y
-                body_mid_x - body_unit * 2.5, ankle_y
+                suit_waist_left
+                suit_waist_center
+                crotch
+                thigh_inner_left
+                knee_in
+                ankle_in
+                ankle_out
+                knee_out
+                thigh_outer_left
+                hip_left
             mirror left_leg as right_leg
             polygon left_sleeve fabric outline trim width 0.3:
-                body_mid_x - shoulder_half, top_y
-                body_mid_x - shoulder_half - body_unit * 1.5, top_y + body_unit * 1
-                body_mid_x - shoulder_half - body_unit * 1, sleeve_y
-                body_mid_x - shoulder_half + body_unit * 0.75, sleeve_y - body_unit * 0.5
-                body_mid_x - shoulder_half + body_unit * 1, top_y + body_unit * 1
+                shoulder_left
+                elbow_outer_left
+                cuff_outer
+                cuff_inner
+                elbow_inner_left
+                armpit_left
             mirror left_sleeve as right_sleeve
         layer detail:
             line front_seam trim width 0.25:
-                body_mid_x, top_y + body_unit * 1
-                body_mid_x, waist_y
+                neckline
+                suit_waist_center
             line waistband trim width 0.25:
-                body_mid_x - hip_half, waist_y
-                body_mid_x + hip_half, waist_y
+                suit_waist_left
+                suit_waist_right
         surface garment:
             torso
             left_leg
