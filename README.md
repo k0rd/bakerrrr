@@ -1,16 +1,13 @@
 # BAKERRRR
 (older screenshots at the end)
+<img width="1530" height="914" alt="image" src="https://github.com/user-attachments/assets/b974fd27-b49d-41b3-9a88-f26ef480a40d" />
+
 <img width="1550" height="973" alt="image" src="https://github.com/user-attachments/assets/4a3aa869-75cc-4203-9b3e-409e8fbf780a" />
 <img width="1502" height="978" alt="Screenshot_20260814_220138" src="https://github.com/user-attachments/assets/28d30ed6-1f7c-4122-bd31-4daaa423717a" />
 <img width="1534" height="1000" alt="Screenshot_20260819_233604" src="https://github.com/user-attachments/assets/5bab6900-7f30-4e2e-ae1c-cd4297a9ed49" />
 <img width="1514" height="983" alt="Screenshot_20260819_060837" src="https://github.com/user-attachments/assets/e2dcb494-a783-442e-9125-05c7ba4245c3" />
 
-<img width="1532" height="981" alt="image" src="https://github.com/user-attachments/assets/372067bc-53c8-499e-af6f-5f68022b1cd0" />
-<img width="1540" height="994" alt="image" src="https://github.com/user-attachments/assets/c8445d84-55b5-4950-a071-59c043523ac1" />
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/109c5f99-cd15-485f-9bff-1b97b323c643" />
 
-
- 
  
 ** video of game : ** https://www.youtube.com/embed/_-nwalnoCQw   (a little old)
 ### BAKERRRR is a python systemic urban roguelike prototype about moving through a procedurally generated society.
@@ -93,7 +90,12 @@ thank u for checking out my game. it is in active ongoing development as of ```a
 ```if that date is far in the past, i may have lost my focus or my mind```.
 
 here are some early screenshots of the gui mode (it is a lot further along but they still capture the feel of the game
+<img width="1532" height="981" alt="image" src="https://github.com/user-attachments/assets/372067bc-53c8-499e-af6f-5f68022b1cd0" />
+<img width="1540" height="994" alt="image" src="https://github.com/user-attachments/assets/c8445d84-55b5-4950-a071-59c043523ac1" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/109c5f99-cd15-485f-9bff-1b97b323c643" />
 
+
+ 
 <img width="1920" height="1068" alt="Screenshot_20260518_233736" src="https://github.com/user-attachments/assets/b30fb754-fac2-451d-a4ea-c10d37ef7554" />
 <img width="1541" height="876" alt="Screenshot_20260610_002447" src="https://github.com/user-attachments/assets/472fc0fa-7090-4711-91bc-ebfe41016d0a" />
 <img width="1541" height="969" alt="Screenshot_20260610_002814" src="https://github.com/user-attachments/assets/2701dc90-9414-4638-ab90-4b8b65f7af49" />
