@@ -26,8 +26,8 @@ from game.local_service_demand import (
     refresh_property_market_supply,
 )
 from game.organizations import (
+    authoritative_property_org_members,
     ensure_property_organization,
-    property_org_members,
     property_organization_eid,
     sync_actor_organization_affiliations,
 )
@@ -1355,6 +1355,11 @@ def _player_business_employee_display_name(sim, actor_eid):
             name = str(getattr(identity, "personal_name", "") or getattr(identity, "common_name", "") or "").strip()
         if name:
             return name
+    identity_record = sim.entity_identity_record(actor_eid) if sim is not None and hasattr(sim, "entity_identity_record") else None
+    if isinstance(identity_record, dict):
+        name = _text(identity_record.get("display_name") or identity_record.get("personal_name") or identity_record.get("common_name"))
+        if name:
+            return name
     return f"Employee #{int(actor_eid)}"
 
 
@@ -1372,6 +1377,8 @@ def player_business_employee_wage_rows(sim, prop):
             continue
         staff_role = _normalized_role(raw_role)
         occupation = occupations.get(actor_eid) if occupations is not None else None
+        if occupation is None and sim is not None and hasattr(sim, "entity_component_anywhere"):
+            occupation = sim.entity_component_anywhere(actor_eid, Occupation)
         career = _text(getattr(occupation, "career", ""))
         wage = player_business_effective_hourly_wage(
             sim,
@@ -2618,7 +2625,7 @@ def _sync_staff_roster(sim, prop, state, *, retain_incumbents=False):
             social_owner_eid = player_eid
 
     if bool(retain_incumbents):
-        for member in property_org_members(sim, prop):
+        for member in authoritative_property_org_members(sim, prop):
             actor_eid = _int_or(member.get("eid"), default=0)
             if actor_eid <= 0 or actor_eid == _int_or(player_eid, default=-1):
                 continue

@@ -31,6 +31,11 @@ from ui.text_attrs import A_DIM, attr_for_name
 
 _DEFAULT_RENDER_SEMANTICS_PATH = DEFAULT_RENDER_SEMANTICS_PATH
 
+_TORNADO_FUNNEL_MIN_HEIGHT_CELLS = 1.8
+_TORNADO_FUNNEL_HEIGHT_STRENGTH_CELLS = 0.45
+_TORNADO_FUNNEL_MIN_TOP_HALF_WIDTH_CELLS = 0.50
+_TORNADO_FUNNEL_TOP_WIDTH_STRENGTH_CELLS = 0.18
+
 _PYGAME_VEHICLE_HEADING_BY_KEY = {
     "n": (0, -1),
     "north": (0, -1),
@@ -10343,10 +10348,17 @@ class PygameView:
                 strength = max(0.0, min(1.0, float(artifact.get("strength", 0.0) or 0.0)))
                 if kind == "tornado_funnel":
                     sway = ((tick + variant * 3) % 5) - 2
-                    top_y = py + max(1, cell_px // 10)
                     bottom_y = py + cell_px - max(1, cell_px // 12)
-                    wide = max(4, int(cell_px * (0.34 + strength * 0.10)))
-                    narrow = max(2, int(cell_px * 0.10))
+                    funnel_height = max(cell_px, int(round(cell_px * (
+                        _TORNADO_FUNNEL_MIN_HEIGHT_CELLS
+                        + strength * _TORNADO_FUNNEL_HEIGHT_STRENGTH_CELLS
+                    ))))
+                    top_y = bottom_y - funnel_height
+                    wide = max(4, int(round(cell_px * (
+                        _TORNADO_FUNNEL_MIN_TOP_HALF_WIDTH_CELLS
+                        + strength * _TORNADO_FUNNEL_TOP_WIDTH_STRENGTH_CELLS
+                    ))))
+                    narrow = max(2, int(round(cell_px * 0.12)))
                     center_x = px + cell_px // 2
                     body = [
                         (center_x - wide + sway, top_y),

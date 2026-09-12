@@ -90,6 +90,8 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "_mechanical_device_ids",
     "_derived_fact_state",
     "_organization_runtime_cache",
+    "_saved_entity_chunk_membership",
+    "_saved_chunk_entity_ids",
     "_property_access_controller_cache",
     "_player_business_runtime_cache",
     "_npc_path_step_cache",
@@ -539,12 +541,16 @@ def unload_chunk_state(sim, key, *, rebuild_indexes=True):
     snapshot = snapshot_chunk_state(sim, key)
     if snapshot is None:
         sim.chunk_saved_states.pop(key, None)
+        if hasattr(sim, "forget_saved_chunk_entities"):
+            sim.forget_saved_chunk_entities(key)
         sim.chunk_property_records.pop(key, None)
         sim.chunk_ground_item_records.pop(key, None)
         sim.chunk_population_records.pop(key, None)
         return None
 
     sim.chunk_saved_states[key] = snapshot
+    if hasattr(sim, "index_saved_chunk_entities"):
+        sim.index_saved_chunk_entities(key, snapshot)
 
     indexes_updated = _remove_snapshot_live_state(sim, snapshot)
 
@@ -717,6 +723,8 @@ def merge_unload_chunk_state(sim, key, *, rebuild_indexes=True):
             existing.get(section, ()),
             snapshot.get(section, ()),
         )
+    if hasattr(sim, "index_saved_chunk_entities"):
+        sim.index_saved_chunk_entities(key, existing)
 
     indexes_updated = _remove_snapshot_live_state(sim, snapshot)
 
@@ -736,6 +744,8 @@ def restore_chunk_state(sim, key):
     snapshot = sim.chunk_saved_states.pop(key, None)
     if not isinstance(snapshot, dict):
         return False
+    if hasattr(sim, "forget_saved_chunk_entities"):
+        sim.forget_saved_chunk_entities(key)
 
     restored_properties = {}
     incremental_indexes = _can_restore_spatial_indexes_incrementally(sim)

@@ -122,7 +122,10 @@ from game.player_config import (
     normalize_world_magnification,
     save_player_config,
 )
-from game.report_runtime import build_progress_report as _build_progress_report
+from game.report_runtime import (
+    build_opportunity_notebook as _build_opportunity_notebook,
+    build_progress_report as _build_progress_report,
+)
 from game.release_runtime import debug_disabled_hint, debug_mode_enabled
 from game.weather_runtime import ensure_weather_debug_ui_state, weather_debug_lines
 from game.run_objectives import reveal_run_objective
@@ -4757,6 +4760,11 @@ class InputSystem(System):
                 include_hidden=include_hidden,
             ),
             build_known_people_report_fn=lambda: _build_known_people_report(
+                self.sim,
+                self.player_eid,
+                limit=None,
+            ),
+            build_opportunity_notebook_fn=lambda: _build_opportunity_notebook(
                 self.sim,
                 self.player_eid,
                 limit=None,

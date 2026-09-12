@@ -5002,10 +5002,65 @@ def opportunity_next_step_text(sim, opportunity):
     return _opportunity_activity_instruction(requirements)
 
 
+def opportunity_contextual_summary(sim, opportunity):
+    """Return descriptive copy that does not preserve an obsolete relative route."""
+
+    opportunity = opportunity if isinstance(opportunity, dict) else {}
+    summary = str(opportunity.get("summary", "") or "").strip()
+    kind = str(opportunity.get("kind", "") or "").strip().lower()
+    requirements = _opportunity_requirements(opportunity)
+    item_id = str(requirements.get("require_item_id", "") or "").strip().lower()
+    item_label = str(requirements.get("item_label", "") or "").strip() or _item_label(item_id)
+
+    if kind == "distance_delivery":
+        return f"Carry {item_label} from the pickup point to the destination."
+    if kind == "distance_delivery_procure":
+        return f"Buy or find {item_label}, then deliver it to the destination."
+    if kind == "distance_pickup":
+        return f"Pick up {item_label} from the remote pickup and bring it back to the handoff point."
+    if kind == "medical_drop":
+        return f"Carry {item_label} to a quiet patient handoff."
+    if kind == "dead_drop_return":
+        return f"Lift {item_label} from a remote dead drop and bring it back to the handoff point."
+
+    pickup_label = _site_label_from_requirement(
+        sim,
+        requirements,
+        property_key="pickup_property_id",
+        building_key="pickup_building_id",
+        name_key="pickup_property_name",
+    )
+    delivery_label = _site_label_from_requirement(
+        sim,
+        requirements,
+        property_key="delivery_property_id",
+        building_key="delivery_building_id",
+        name_key="delivery_property_name",
+    )
+    target_label = _site_label_from_requirement(sim, requirements)
+    if kind == "issuer_delivery":
+        return f"Carry {item_label} from {pickup_label or 'the pickup point'} to {delivery_label or target_label or 'the destination'}."
+    if kind == "issuer_pickup":
+        return f"Pick up {item_label} from {pickup_label or target_label or 'the pickup site'} and bring it to {delivery_label or 'the handoff point'}."
+    if kind == "issuer_pressure":
+        target_name = str(requirements.get("interact_npc_name", "") or "").strip() or "the contact"
+        return f"Find {target_name} at {target_label or 'the target site'} and handle the requested pressure."
+    if kind == "contract_kill":
+        target_name = str(requirements.get("kill_target_name", "") or "").strip() or "the target"
+        target_role = str(requirements.get("kill_target_role", "") or "").strip()
+        target_text = f"{target_name}, a {target_role}" if target_role else target_name
+        reason = str(requirements.get("contract_reason", "") or "").strip()
+        base = f"Locate and neutralize {target_text}."
+        if reason:
+            base = f"{base} {reason}"
+        return f"{base} No noise, no trace."
+    return summary
+
+
 def opportunity_instruction_lines(sim, opportunity):
     opportunity = opportunity if isinstance(opportunity, dict) else {}
     lines = []
-    summary = str(opportunity.get("summary", "") or "").strip()
+    summary = opportunity_contextual_summary(sim, opportunity)
     if summary:
         lines.append(summary)
     next_step = opportunity_next_step_text(sim, opportunity)
@@ -8789,12 +8844,14 @@ def evaluate_opportunity_facts(sim, player_eid, limit=3, observer_eid=None):
             )
             tracked_stage_kind = str(tracked_target.get("stage_kind", "") or "").strip().lower()
             tracked_property_id = str(tracked_target.get("property_id", "") or "").strip()
+        requirements = dict(entry.get("requirements", {})) if isinstance(entry.get("requirements", {}), dict) else {}
+        instruction_lines = opportunity_instruction_lines(sim, entry)
         rows.append(
             {
                 "id": int(entry.get("id", 0)),
                 "kind": str(entry.get("kind", "")).strip().lower(),
                 "title": str(entry.get("title", "Opportunity")).strip() or "Opportunity",
-                "summary": str(entry.get("summary", "")).strip(),
+                "summary": opportunity_contextual_summary(sim, entry),
                 "risk": risk,
                 "source": str(entry.get("source", "unknown")).strip().lower(),
                 "source_text": opportunity_source_label(entry.get("source", "unknown"), short=False),
@@ -8804,7 +8861,7 @@ def evaluate_opportunity_facts(sim, player_eid, limit=3, observer_eid=None):
                 "location": str(entry.get("location", "")).strip(),
                 "reward": dict(entry.get("reward", {})),
                 "reward_text": reward_text,
-                "requirements": dict(entry.get("requirements", {})) if isinstance(entry.get("requirements", {}), dict) else {},
+                "requirements": requirements,
                 "playstyles": playstyles,
                 "risk_score": risk_score,
                 "organization_name": _text(entry.get("organization_name")),
@@ -8821,6 +8878,14 @@ def evaluate_opportunity_facts(sim, player_eid, limit=3, observer_eid=None):
                 "tracked_target_stage_kind": tracked_stage_kind,
                 "tracked_target_property_id": tracked_property_id,
                 "next_step": opportunity_next_step_text(sim, entry),
+                "status": str(entry.get("status", "active") or "active").strip().lower() or "active",
+                "accepted": bool(requirements.get("player_accepted")),
+                "deadline_hours_left": _opportunity_deadline_hours_left(sim, entry),
+                "failure_lines": tuple(
+                    str(line).strip()
+                    for line in instruction_lines
+                    if str(line).strip().lower().startswith("failure:")
+                ),
             }
         )
     return tuple(rows)

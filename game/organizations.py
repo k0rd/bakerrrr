@@ -1381,7 +1381,14 @@ def _refresh_profile_member_cache(sim, organization_eid):
     if profile is None:
         return None
     members = set()
-    for actor_eid, affiliations in sim.ecs.get(OrganizationAffiliations).items():
+    affiliations_map = sim.ecs.get(OrganizationAffiliations)
+    candidate_eids = set(getattr(profile, "member_eids", ()) or ())
+    candidate_eids.update(affiliations_map.keys())
+    component_read = getattr(sim, "entity_component_anywhere", None)
+    for actor_eid in candidate_eids:
+        affiliations = affiliations_map.get(actor_eid)
+        if affiliations is None and callable(component_read):
+            affiliations = component_read(actor_eid, OrganizationAffiliations)
         if not affiliations or not isinstance(getattr(affiliations, "memberships", None), dict):
             continue
         row = affiliations.memberships.get(int(organization_eid))
@@ -8794,3 +8801,95 @@ def property_org_members(sim, prop):
             state["member_read_depth"] = current
         else:
             state.pop("member_read_depth", None)
+
+
+def authoritative_property_org_members(sim, prop):
+    """Return live and saved members for an explicit lifecycle handoff.
+
+    Ordinary site behavior remains scoped to loaded actors. Ownership transfer
+    is different: it needs the organization's already-real employee truth even
+    when a worker is currently in an unloaded chunk.
+    """
+
+    live_members = tuple(property_org_members(sim, prop) or ())
+    organization_eid = property_organization_eid(sim, prop, ensure=True)
+    profile = organization_profile(sim, organization_eid)
+    candidates = {
+        _safe_int(row.get("eid"), default=0): dict(row)
+        for row in live_members
+        if isinstance(row, dict) and _safe_int(row.get("eid"), default=0) > 0
+    }
+    if organization_eid is None or profile is None:
+        return tuple(candidates.values())
+
+    component_read = getattr(sim, "entity_component_anywhere", None)
+    if not callable(component_read):
+        return live_members
+
+    for actor_eid in sorted(
+        _safe_int(value, default=0)
+        for value in tuple(getattr(profile, "member_eids", ()) or ())
+        if _safe_int(value, default=0) > 0
+    ):
+        if actor_eid in candidates:
+            continue
+        affiliations = component_read(actor_eid, OrganizationAffiliations)
+        membership = (
+            getattr(affiliations, "memberships", {}).get(int(organization_eid))
+            if affiliations is not None
+            else None
+        )
+        occupation = component_read(actor_eid, Occupation)
+        membership_matches = _membership_targets_property(prop, organization_eid, membership)
+        occupation_matches = occupation_targets_property(prop, occupation)
+        if not membership_matches and not occupation_matches:
+            continue
+
+        if membership_matches:
+            membership = _normalize_membership_row(membership, organization_eid=organization_eid)
+            candidates[int(actor_eid)] = {
+                "eid": int(actor_eid),
+                "role": _text(membership.get("role")).lower() or "member",
+                "kind": _text(membership.get("kind")).lower() or "membership",
+                "title": _text(membership.get("title")) or None,
+                "primary": bool(membership.get("primary", False)),
+                "authority_rank": int(membership.get("authority_rank", 70)),
+                "supervisor_eid": membership.get("supervisor_eid"),
+                "occupation": occupation,
+                "organization_eid": int(organization_eid),
+                "source": "saved_affiliation",
+            }
+            continue
+
+        workplace = getattr(occupation, "workplace", None)
+        role = _authority_role_from_workplace(
+            workplace,
+            career=getattr(occupation, "career", ""),
+            owner_eid=prop.get("owner_eid"),
+            actor_eid=actor_eid,
+        )
+        candidates[int(actor_eid)] = {
+            "eid": int(actor_eid),
+            "role": role,
+            "kind": "employment",
+            "title": _text(getattr(occupation, "career", "")) or None,
+            "primary": False,
+            "authority_rank": _default_authority_rank(role),
+            "supervisor_eid": (
+                _safe_int(workplace.get("supervisor_eid"), default=0) or None
+                if isinstance(workplace, dict)
+                else None
+            ),
+            "occupation": occupation,
+            "organization_eid": int(organization_eid),
+            "source": "saved_workplace",
+        }
+
+    return tuple(sorted(
+        candidates.values(),
+        key=lambda row: (
+            int(row.get("authority_rank", 70)),
+            0 if row.get("role") == "owner" else 1 if row.get("role") == "manager" else 2,
+            int(row.get("eid", 0)),
+        ),
+    ))

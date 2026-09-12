@@ -669,6 +669,84 @@ def _known_person_list_line(row, *, ordinal=1, selected=False):
     return _rich_line(segments, text=plain)
 
 
+def _opportunity_notebook_detail_lines(row):
+    row = row if isinstance(row, dict) else {}
+    opportunity_id = max(0, int(row.get("id", 0) or 0))
+    title = str(row.get("title", "Opportunity") or "Opportunity").strip() or "Opportunity"
+    summary = str(row.get("summary", "") or "").strip()
+    distance_text = str(row.get("distance_text", "") or "").strip()
+    risk = str(row.get("risk", "low") or "low").strip().replace("_", " ")
+    reward = str(row.get("reward_text", "") or "").strip()
+    awareness = str(row.get("awareness_state", "heard") or "heard").strip().replace("_", " ")
+    confidence = max(0, min(100, int(round(float(row.get("confidence", 0.0) or 0.0) * 100.0))))
+    source_text = str(row.get("source_text", "unknown") or "unknown").strip()
+    intel_source = str(row.get("intel_source", "unknown") or "unknown").strip().replace("_", " ")
+    status = "accepted" if bool(row.get("accepted")) else str(row.get("status", "active") or "active").strip().replace("_", " ")
+    playstyles = [str(style).strip().replace("_", " ") for style in tuple(row.get("playstyles", ()) or ()) if str(style).strip()]
+    site_name = str(row.get("anchor_site_name", "") or "").strip()
+    location = str(row.get("location", "") or "").strip().replace("_", " ").replace("/", " / ")
+    organization = str(row.get("organization_name", "") or "").strip()
+    contact = str(row.get("contact_name", "") or "").strip()
+    contact_role = str(row.get("contact_role", "") or "").strip().replace("_", " ")
+    tracked = str(row.get("tracked_target_detail", "") or "").strip()
+    next_step = str(row.get("next_step", "") or "").strip()
+    deadline = max(0, int(row.get("deadline_hours_left", 0) or 0))
+
+    lines = [f"O{opportunity_id}: {title}"]
+    if summary:
+        lines.append(f"Description: {summary}")
+    where_bits = [bit for bit in (site_name, location, distance_text) if bit]
+    if where_bits:
+        lines.append(f"Where: {' | '.join(where_bits)}")
+    lines.append(f"Status: {status} | Risk: {risk} | Reward: {reward or 'none listed'}")
+    lines.append(f"Intel: {awareness}, {confidence}% | via {intel_source} | posting source {source_text}")
+    if playstyles:
+        lines.append(f"Approaches: {', '.join(playstyles)}")
+    provenance_bits = []
+    if organization:
+        provenance_bits.append(f"organization {organization}")
+    if contact:
+        contact_text = f"contact {contact}"
+        if contact_role:
+            contact_text += f" ({contact_role})"
+        provenance_bits.append(contact_text)
+    if provenance_bits:
+        lines.append("Known parties: " + " | ".join(provenance_bits))
+    if tracked:
+        lines.append(f"Tracked target: {tracked}")
+    if next_step:
+        lines.append(f"Next: {next_step}")
+    if deadline:
+        lines.append(f"Deadline: about {deadline}h remaining")
+    lines.extend(str(line).strip() for line in tuple(row.get("failure_lines", ()) or ()) if str(line).strip())
+    return lines
+
+
+def _opportunity_notebook_list_line(row, *, ordinal=1, selected=False):
+    row = row if isinstance(row, dict) else {}
+    opportunity_id = max(0, int(row.get("id", 0) or 0))
+    title = str(row.get("title", "Opportunity") or "Opportunity").strip() or "Opportunity"
+    distance_text = str(row.get("distance_text", "unknown range") or "unknown range").strip()
+    risk = str(row.get("risk", "low") or "low").strip().replace("_", " ")
+    confidence = max(0, min(100, int(round(float(row.get("confidence", 0.0) or 0.0) * 100.0))))
+    marker_color = "player" if selected else "building_edge"
+    marker_attrs = A_BOLD if selected else 0
+    risk_color = "projectile" if risk in {"exposed", "hazardous", "high"} else "property_service"
+    segments = [
+        _segment(">" if selected else " ", color=marker_color, attrs=marker_attrs),
+        _segment(f"{max(1, int(ordinal)):02d} ", color="building_edge", attrs=marker_attrs),
+        _segment(f"O{opportunity_id} {title}", color="objective", attrs=marker_attrs),
+        _segment(" | ", color="building_edge"),
+        _segment(distance_text, color="player"),
+        _segment(" | ", color="building_edge"),
+        _segment(risk, color=risk_color),
+        _segment(" | ", color="building_edge"),
+        _segment(f"{confidence}%", color="property_service"),
+    ]
+    plain = f"{'>' if selected else ' '}{max(1, int(ordinal)):02d} O{opportunity_id} {title} | {distance_text} | {risk} | {confidence}%"
+    return _rich_line(segments, text=plain)
+
+
 def _wrap_text_lines(text, width):
     width = max(1, int(width))
     raw = _line_text(text)

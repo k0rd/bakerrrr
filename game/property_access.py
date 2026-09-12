@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from engine.derived_facts import cached_derived_fact, derived_fact_revision
+from engine.events import Event
 
 from game.components import ContactLedger, Inventory, NPCSocial, NPCRoutine, Occupation, PlayerAssets, PropertyPortfolio
 from game.justice_runtime import custody_release_grace_active as _custody_release_grace_active
@@ -17,6 +18,7 @@ from game.property_keys import inventory_matching_property_credential, property_
 
 DEFAULT_START_HOUR = 9
 DEFAULT_TICKS_PER_HOUR = 600
+PROPERTY_EGRESS_GRACE_TICKS = DEFAULT_TICKS_PER_HOUR // 2
 ALWAYS_OPEN_SITE_SERVICES = {"rest", "shelter"}
 
 STOREFRONT_ARCHETYPE_HINTS = {
@@ -3279,6 +3281,137 @@ def property_access_transition_event_payload(transition):
         "destination_room_access_level": _clean_key(getattr(destination, "room_access_level", "")),
         "return_position": tuple(getattr(transition, "origin_position", ()) or ()),
     }
+
+
+def _property_egress_grace_key(actor_eid, prop_or_property_id):
+    property_id = (
+        prop_or_property_id.get("id")
+        if isinstance(prop_or_property_id, dict)
+        else prop_or_property_id
+    )
+    property_id = str(property_id or "").strip()
+    try:
+        actor_eid = int(actor_eid)
+    except (TypeError, ValueError):
+        return ""
+    if not property_id or actor_eid <= 0:
+        return ""
+    return f"{property_id}:{actor_eid}"
+
+
+def property_egress_grace_state(sim):
+    state = getattr(sim, "property_egress_grants", None)
+    if not isinstance(state, dict):
+        state = {}
+        sim.property_egress_grants = state
+    return state
+
+
+def grant_property_egress_grace(
+    sim,
+    actor_eid,
+    prop_or_property_id,
+    *,
+    duration_ticks=PROPERTY_EGRESS_GRACE_TICKS,
+    reason="closing_time",
+):
+    """Allow an already-admitted actor time to leave, without reopening entry."""
+
+    key = _property_egress_grace_key(actor_eid, prop_or_property_id)
+    if not key:
+        return False
+    property_id = (
+        prop_or_property_id.get("id")
+        if isinstance(prop_or_property_id, dict)
+        else prop_or_property_id
+    )
+    now = int(getattr(sim, "tick", 0) or 0)
+    until_tick = now + max(1, int(duration_ticks or PROPERTY_EGRESS_GRACE_TICKS))
+    state = property_egress_grace_state(sim)
+    prior = state.get(key)
+    newly_granted = not isinstance(prior, dict) or int(prior.get("until_tick", 0) or 0) <= now
+    state[key] = {
+        "actor_eid": int(actor_eid),
+        "property_id": str(property_id or "").strip(),
+        "granted_tick": int(prior.get("granted_tick", now) if isinstance(prior, dict) and not newly_granted else now),
+        "until_tick": max(until_tick, int(prior.get("until_tick", 0) or 0) if isinstance(prior, dict) else 0),
+        "reason": str(reason or "closing_time").strip().lower() or "closing_time",
+    }
+    if newly_granted:
+        sim.emit(Event(
+            "property_egress_granted",
+            actor_eid=int(actor_eid),
+            property_id=str(property_id or "").strip(),
+            reason=state[key]["reason"],
+            until_tick=state[key]["until_tick"],
+        ))
+    return True
+
+
+def property_egress_grace_active(sim, actor_eid, prop_or_property_id):
+    key = _property_egress_grace_key(actor_eid, prop_or_property_id)
+    if not key:
+        return False
+    state = property_egress_grace_state(sim)
+    row = state.get(key)
+    if not isinstance(row, dict):
+        return False
+    if int(row.get("until_tick", 0) or 0) <= int(getattr(sim, "tick", 0) or 0):
+        state.pop(key, None)
+        return False
+    return True
+
+
+def _property_egress_floor_transition(sim, prop, transition):
+    origin = tuple(getattr(transition, "origin_position", ()) or ())
+    destination = tuple(getattr(transition, "destination_position", ()) or ())
+    if len(origin) < 3 or len(destination) < 3 or int(origin[2]) == int(destination[2]):
+        return False
+    dz = 1 if int(destination[2]) > int(origin[2]) else -1
+    tilemap = getattr(sim, "tilemap", None)
+    link = tilemap.floor_transition(int(origin[0]), int(origin[1]), int(origin[2]), dz) if tilemap is not None else None
+    if not isinstance(link, dict):
+        return False
+    if (
+        int(link.get("x", origin[0])) != int(destination[0])
+        or int(link.get("y", origin[1])) != int(destination[1])
+        or int(link.get("z", origin[2])) != int(destination[2])
+    ):
+        return False
+    try:
+        base_z = int((prop or {}).get("z", 0))
+    except (TypeError, ValueError, AttributeError):
+        base_z = 0
+    return abs(int(destination[2]) - base_z) < abs(int(origin[2]) - base_z)
+
+
+def property_egress_grace_allows_transition(sim, actor_eid, prop, transition):
+    """Apply departure grace only from inside and never into tighter access."""
+
+    if not property_egress_grace_active(sim, actor_eid, prop) or transition is None:
+        return False
+    boundary_kind = str(getattr(transition, "boundary_kind", "") or "").strip().lower()
+    origin_access = getattr(transition, "origin_access", None)
+    destination_access = getattr(transition, "destination_access", None)
+    if boundary_kind == "property_entry" or not bool(getattr(origin_access, "inside_bounds", False)):
+        return False
+    if (
+        bool(getattr(transition, "entered_more_restricted", False))
+        and boundary_kind != "authorization_expired"
+        and not _property_egress_floor_transition(sim, prop, transition)
+    ):
+        return False
+    if boundary_kind == "property_exit" or not bool(getattr(destination_access, "inside_bounds", False)):
+        key = _property_egress_grace_key(actor_eid, prop)
+        row = property_egress_grace_state(sim).pop(key, None)
+        if isinstance(row, dict):
+            sim.emit(Event(
+                "property_egress_completed",
+                actor_eid=int(actor_eid),
+                property_id=row.get("property_id"),
+                reason=row.get("reason", "closing_time"),
+            ))
+    return True
 
 
 def organization_guard_grace_active(sim, actor_eid, prop, current_tick=None):

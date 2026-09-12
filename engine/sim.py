@@ -58,6 +58,8 @@ class Simulation:
         self.chunk_flora_records = {}
         self.chunk_population_membership = {}
         self.chunk_saved_states = {}
+        self._saved_entity_chunk_membership = {}
+        self._saved_chunk_entity_ids = {}
         self._pending_stream_unloads = set()
         self._stream_unload_flush_active = False
         self.chunk_entity_index = {}
@@ -132,6 +134,7 @@ class Simulation:
         self.organization_index = {}
         self.world_rumors = []
         self.active_ejections = {}
+        self.property_egress_grants = {}
         self.overworld_markers_by_eid = {}
         self.next_overworld_marker_id_by_eid = {}
         self.pause_reasons = set()
@@ -203,6 +206,8 @@ class Simulation:
             self.live_timeskip = {}
         if not isinstance(getattr(self, "active_ejections", None), dict):
             self.active_ejections = {}
+        if not isinstance(getattr(self, "property_egress_grants", None), dict):
+            self.property_egress_grants = {}
         if not hasattr(self, "disguise_state"):
             self.disguise_state = None
         if not hasattr(self, "equipped_container"):
@@ -213,6 +218,7 @@ class Simulation:
             self.container_inventories = {}
         if not isinstance(getattr(self, "chunk_population_membership", None), dict):
             self.chunk_population_membership = {}
+        self.rebuild_saved_entity_chunk_membership()
         if not isinstance(getattr(self, "_pending_stream_unloads", None), set):
             self._pending_stream_unloads = set()
         if not isinstance(getattr(self, "_stream_unload_flush_active", None), bool):
@@ -597,6 +603,119 @@ class Simulation:
         if record:
             self.entity_identity_records[key] = dict(record)
             return record
+        return None
+
+    def rebuild_saved_entity_chunk_membership(self):
+        """Index saved actors once so exact offscreen reads do not scan chunks."""
+
+        index = {}
+        chunk_entity_ids = {}
+        for raw_key, snapshot in tuple(getattr(self, "chunk_saved_states", {}).items()):
+            key = self._normalize_chunk_key(raw_key)
+            entities = snapshot.get("entities", {}) if isinstance(snapshot, dict) else {}
+            if key is None or not isinstance(entities, dict):
+                continue
+            indexed_eids = set()
+            for raw_eid in entities:
+                try:
+                    int_eid = int(raw_eid)
+                except (TypeError, ValueError):
+                    continue
+                index[int_eid] = key
+                indexed_eids.add(int_eid)
+            if indexed_eids:
+                chunk_entity_ids[key] = indexed_eids
+        self._saved_entity_chunk_membership = index
+        self._saved_chunk_entity_ids = chunk_entity_ids
+        return len(index)
+
+    def index_saved_chunk_entities(self, key, snapshot):
+        key = self._normalize_chunk_key(key)
+        if key is None:
+            return 0
+        index = getattr(self, "_saved_entity_chunk_membership", None)
+        if not isinstance(index, dict):
+            index = {}
+            self._saved_entity_chunk_membership = index
+        chunk_entity_ids = getattr(self, "_saved_chunk_entity_ids", None)
+        if not isinstance(chunk_entity_ids, dict):
+            chunk_entity_ids = {}
+            self._saved_chunk_entity_ids = chunk_entity_ids
+        for eid in tuple(chunk_entity_ids.pop(key, ()) or ()):
+            if index.get(eid) == key:
+                index.pop(eid, None)
+        entities = snapshot.get("entities", {}) if isinstance(snapshot, dict) else {}
+        if not isinstance(entities, dict):
+            return 0
+        indexed = 0
+        indexed_eids = set()
+        for raw_eid in entities:
+            try:
+                int_eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            index[int_eid] = key
+            indexed_eids.add(int_eid)
+            indexed += 1
+        if indexed_eids:
+            chunk_entity_ids[key] = indexed_eids
+        return indexed
+
+    def forget_saved_chunk_entities(self, key):
+        key = self._normalize_chunk_key(key)
+        index = getattr(self, "_saved_entity_chunk_membership", None)
+        if key is None or not isinstance(index, dict):
+            return 0
+        chunk_entity_ids = getattr(self, "_saved_chunk_entity_ids", None)
+        indexed_eids = (
+            tuple(chunk_entity_ids.pop(key, ()) or ())
+            if isinstance(chunk_entity_ids, dict)
+            else ()
+        )
+        forgotten = 0
+        for eid in indexed_eids:
+            if index.get(eid) != key:
+                continue
+            index.pop(eid, None)
+            forgotten += 1
+        return forgotten
+
+    def saved_entity_components(self, eid):
+        try:
+            int_eid = int(eid)
+        except (TypeError, ValueError):
+            return None
+        index = getattr(self, "_saved_entity_chunk_membership", None)
+        if not isinstance(index, dict):
+            return None
+        key = self._normalize_chunk_key(index.get(int_eid))
+        snapshot = getattr(self, "chunk_saved_states", {}).get(key) if key is not None else None
+        entities = snapshot.get("entities", {}) if isinstance(snapshot, dict) else {}
+        if not isinstance(entities, dict):
+            index.pop(int_eid, None)
+            return None
+        component_map = entities.get(int_eid)
+        if component_map is None:
+            component_map = entities.get(str(int_eid))
+        if not isinstance(component_map, dict):
+            index.pop(int_eid, None)
+            return None
+        return component_map
+
+    def entity_component_anywhere(self, eid, component_type):
+        component = self.ecs.get(component_type).get(eid)
+        if component is not None:
+            return component
+        component_map = self.saved_entity_components(eid)
+        if not isinstance(component_map, dict):
+            return None
+        component = component_map.get(component_type)
+        if component is not None:
+            return component
+        wanted = str(getattr(component_type, "__name__", component_type) or "")
+        for raw_type, value in component_map.items():
+            if str(getattr(raw_type, "__name__", raw_type) or "") == wanted:
+                return value
         return None
 
     def track_population_entity(self, eid, *, chunk=None):

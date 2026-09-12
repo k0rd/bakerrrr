@@ -57,6 +57,7 @@ def default_casino_ui_state():
         "return_to": "",
         "return_option_id": "",
         "result_return_wager": 0,
+        "admitted_while_open": False,
     }
 
 
@@ -89,4 +90,5 @@ def ensure_casino_ui_state(sim):
     state.setdefault("return_to", "")
     state.setdefault("return_option_id", "")
     state.setdefault("result_return_wager", 0)
+    state.setdefault("admitted_while_open", False)
     return state

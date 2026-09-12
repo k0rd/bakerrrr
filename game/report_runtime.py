@@ -841,6 +841,31 @@ def build_progress_report(sim, player_eid, opportunity_limit=8):
     }
 
 
+def build_opportunity_notebook(sim, player_eid, limit=None):
+    """Build the player's bounded, knowledge-filtered active opportunity ledger."""
+
+    known_count = opportunity_known_count(sim, player_eid, observer_eid=player_eid)
+    capped_limit = max(1, int(known_count if limit is None else limit))
+    rows = []
+    for raw in evaluate_opportunity_facts(
+        sim,
+        player_eid,
+        limit=capped_limit,
+        observer_eid=player_eid,
+    ):
+        row = dict(raw)
+        row["distance_text"] = opportunity_distance_text(
+            int(row.get("distance", 0) or 0),
+            str(row.get("direction", "HERE") or "HERE").strip(),
+        )
+        rows.append(row)
+    return {
+        "title": "Opportunities",
+        "lines": [],
+        "rows": rows,
+    }
+
+
 def _known_location_coords_text(prop):
     focus = property_focus_position(prop) or property_display_position(prop)
     if focus is None:

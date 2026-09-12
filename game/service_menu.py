@@ -78,6 +78,8 @@ from game.player_businesses import (
 from game.property_access import (
     JUSTICE_CASHIER_SERVICE_ID,
     evaluate_property_access as _evaluate_property_access,
+    grant_property_egress_grace,
+    property_is_open,
 )
 from game.property_runtime import (
     finance_services_for_property as _finance_services_for_property,
@@ -237,6 +239,7 @@ class ServiceMenuSystem(System):
         state = self._casino_ui_state()
         if not bool(state.get("open")):
             return
+        self._maintain_closed_casino_egress(state)
         service = str(state.get("service", "")).strip().lower()
         if service == HOLDEM_CASH_SERVICE_ID:
             prop = self.sim.properties.get(state.get("property_id"))
@@ -316,8 +319,26 @@ class ServiceMenuSystem(System):
 
     def _close_casino_ui(self):
         state = self._casino_ui_state()
+        self._maintain_closed_casino_egress(state)
         state.update(default_casino_ui_state())
         self.sim.set_time_paused(False, reason="dialog")
+
+    def _maintain_closed_casino_egress(self, state=None):
+        state = state if isinstance(state, dict) else self._casino_ui_state()
+        if not bool(state.get("open")) or not bool(state.get("admitted_while_open")):
+            return False
+        prop = self.sim.properties.get(state.get("property_id"))
+        metadata = prop.get("metadata") if isinstance(prop, dict) else None
+        archetype = str((metadata or {}).get("archetype", "") or "").strip().lower()
+        if archetype not in CASINO_FLOOR_ARCHETYPES or property_is_open(self.sim, prop) is not False:
+            return False
+        return grant_property_egress_grace(
+            self.sim,
+            self.player_eid,
+            prop,
+            duration_ticks=max(120, self._ticks_per_hour() // 2),
+            reason="casino_closed",
+        )
 
     def _assets_for(self, eid):
         return self.sim.ecs.get(PlayerAssets).get(eid)
@@ -645,6 +666,16 @@ class ServiceMenuSystem(System):
         pause_time=True,
     ):
         state = self._casino_ui_state()
+        property_id = prop.get("id") if isinstance(prop, dict) else None
+        continuing_admission = bool(
+            state.get("open")
+            and str(state.get("property_id", "") or "") == str(property_id or "")
+            and state.get("admitted_while_open")
+        )
+        admitted_while_open = bool(
+            continuing_admission
+            or (isinstance(prop, dict) and property_is_open(self.sim, prop) is not False)
+        )
         dialog_state = self._dialog_ui_state()
         dialog_state["open"] = False
         dialog_state["close_pending"] = False
@@ -655,7 +686,7 @@ class ServiceMenuSystem(System):
             "open": True,
             "mode": str(mode or "floor").strip().lower() or "floor",
             "host_style": str(host_style or "floor").strip().lower() or "floor",
-            "property_id": prop.get("id") if isinstance(prop, dict) else None,
+            "property_id": property_id,
             "title": str(title or "Casino").strip() or "Casino",
             "subtitle": str(subtitle or "").strip(),
             "body_lines": list(body_lines or ()),
@@ -674,6 +705,7 @@ class ServiceMenuSystem(System):
             "art": dict(art) if isinstance(art, dict) else None,
             "return_to": str(return_to or "").strip().lower(),
             "return_option_id": str(return_option_id or "").strip().lower(),
+            "admitted_while_open": admitted_while_open,
         })
         if selected_id:
             selected_key = str(selected_id).strip().lower()

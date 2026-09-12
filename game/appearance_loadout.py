@@ -1757,7 +1757,7 @@ def appearance_worn_instance_ids(sim, eid):
 
 
 def public_exposure_profile(sim, eid):
-    """Describe visible clothing coverage without inferring hidden garments."""
+    """Describe visible dress and the anatomical coverage required by law."""
 
     loadout = appearance_loadout_for(sim, eid, create=False)
     if loadout is None:
@@ -1769,6 +1769,7 @@ def public_exposure_profile(sim, eid):
             "uncovered": (),
             "visible_basewear": (),
             "covered": {},
+            "anatomical_coverage": {},
             "basewear": {},
         }
     slots = dict(getattr(loadout, "slots", {}) or {}) if loadout is not None else {}
@@ -1780,14 +1781,18 @@ def public_exposure_profile(sim, eid):
     )
     full_body = bool(str(slots.get("full_body") or "").strip()) or body_armor
     covered = {
-        "top": full_body or bool(str(slots.get("top") or "").strip()),
+        "top": full_body or bool(str(slots.get("top") or "").strip()) or bool(str(slots.get("outer") or "").strip()),
         "bottom": full_body or bool(str(slots.get("bottom") or "").strip()),
     }
     base = {
         "top": bool(str(slots.get("base_top") or "").strip()),
         "bottom": bool(str(slots.get("base_bottom") or "").strip()),
     }
-    uncovered = tuple(part for part in ("top", "bottom") if not covered[part] and not base[part])
+    anatomical_coverage = {
+        "breasts": bool(covered["top"] or base["top"]),
+        "genitals": bool(covered["bottom"] or base["bottom"]),
+    }
+    uncovered = tuple(part for part in ("breasts", "genitals") if not anatomical_coverage[part])
     visible_basewear = tuple(part for part in ("top", "bottom") if not covered[part] and base[part])
     if uncovered:
         level = "uncovered"
@@ -1796,7 +1801,7 @@ def public_exposure_profile(sim, eid):
     elif visible_basewear:
         level = "basewear_only"
         label = "wearing exposed basewear"
-        offense_score = 18
+        offense_score = 0
     else:
         level = "dressed"
         label = "dressed"
@@ -1804,11 +1809,12 @@ def public_exposure_profile(sim, eid):
     return {
         "level": level,
         "label": label,
-        "indecent": level != "dressed",
+        "indecent": bool(uncovered),
         "offense_score": offense_score,
         "uncovered": uncovered,
         "visible_basewear": visible_basewear,
         "covered": dict(covered),
+        "anatomical_coverage": dict(anatomical_coverage),
         "basewear": dict(base),
     }
 

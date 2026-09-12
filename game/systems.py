@@ -312,6 +312,7 @@ from game.property_access import (
     property_claim_reason as _property_claim_reason,
     property_access_transition as _property_access_transition,
     property_access_transition_event_payload as _property_access_transition_event_payload,
+    property_egress_grace_allows_transition as _property_egress_grace_allows_transition,
     room_access_event_payload as _room_access_event_payload,
     room_access_level_for_kind as _room_access_level_for_kind,
     shared_property_interest_event_payload as _shared_property_interest_event_payload,
@@ -2323,6 +2324,12 @@ def _emit_move_access_events(
             departure.get("transition"),
             action=action,
         )
+        _property_egress_grace_allows_transition(
+            sim,
+            eid,
+            departure_prop,
+            departure_transition,
+        )
         _emit_property_access_boundary_crossed(
             sim,
             eid=eid,
@@ -2346,6 +2353,12 @@ def _emit_move_access_events(
         transition,
         action=action,
     )
+    egress_grace = _property_egress_grace_allows_transition(
+        sim,
+        eid,
+        prop,
+        transition,
+    )
     trespass_triggered = False
     if prop and ingress is not None and access is not None:
         transition_payload = (
@@ -2364,6 +2377,8 @@ def _emit_move_access_events(
             z=target_z,
         )
         if access.inside_bounds and access.severity_score > 0:
+            if egress_grace:
+                return False
             if transition is not None and not bool(getattr(transition, "entered_unauthorized", False)):
                 # The factual boundary was already crossed.  Continuing to walk
                 # inside one restricted room must not manufacture a fresh crime
